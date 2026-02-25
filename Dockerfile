@@ -24,6 +24,8 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/app/data/ms-playwright
 ENV npm_config_cache=/app/data/npm-cache
 ENV XDG_CACHE_HOME=/app/data/.cache
 
+RUN mkdir -p "${TMPDIR}" "${PLAYWRIGHT_BROWSERS_PATH}" "${npm_config_cache}" "${XDG_CACHE_HOME}"
+
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     bash \
