@@ -1,5 +1,11 @@
 # Eggent
 
+<p align="center">
+  <a href="./docs/assets/eggent-banner.jpeg">
+    <img src="./docs/assets/eggent-banner.jpeg" alt="Eggent banner" width="980" />
+  </a>
+</p>
+
 Eggent is a local-first AI workspace with:
 - project-based organization
 - chat and tool-driven workflows
