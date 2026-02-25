@@ -19,6 +19,10 @@ ENV PYTHON_VENV=/opt/eggent-python
 ENV PATH="${PYTHON_VENV}/bin:${PATH}"
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
 ENV PIP_NO_CACHE_DIR=1
+ENV TMPDIR=/app/data/tmp
+ENV PLAYWRIGHT_BROWSERS_PATH=/app/data/ms-playwright
+ENV npm_config_cache=/app/data/npm-cache
+ENV XDG_CACHE_HOME=/app/data/.cache
 
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
@@ -46,7 +50,8 @@ COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/next.config.mjs ./next.config.mjs
 COPY --from=builder /app/bundled-skills ./bundled-skills
 
-RUN mkdir -p /app/data && chown -R node:node /app "${PYTHON_VENV}"
+RUN mkdir -p /app/data/tmp /app/data/ms-playwright /app/data/npm-cache /app/data/.cache \
+  && chown -R node:node /app "${PYTHON_VENV}"
 
 USER node
 EXPOSE 3000

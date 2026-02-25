@@ -15,12 +15,14 @@ services:
       NEXT_TELEMETRY_DISABLED: "1"
       HOSTNAME: 0.0.0.0
       PORT: "3000"
+      TMPDIR: ${APP_TMP_DIR:-/app/data/tmp}
+      PLAYWRIGHT_BROWSERS_PATH: ${PLAYWRIGHT_BROWSERS_PATH:-/app/data/ms-playwright}
+      npm_config_cache: ${NPM_CONFIG_CACHE:-/app/data/npm-cache}
+      XDG_CACHE_HOME: ${XDG_CACHE_HOME:-/app/data/.cache}
     ports:
       - "${APP_BIND_HOST:-127.0.0.1}:${APP_PORT:-3000}:3000"
     volumes:
       - ./data:/app/data
-    tmpfs:
-      - /tmp:rw,noexec,nosuid,size=64m
     healthcheck:
       test:
         [

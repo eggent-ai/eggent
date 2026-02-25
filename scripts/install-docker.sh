@@ -103,6 +103,7 @@ docker_cmd() {
 prepare_data_dir() {
   local data_dir="$ROOT_DIR/data"
   mkdir -p "$data_dir"
+  mkdir -p "$data_dir/tmp" "$data_dir/ms-playwright" "$data_dir/npm-cache" "$data_dir/.cache"
 
   # The runtime container runs as user "node" (uid/gid 1000).
   # If setup is executed as root, fix bind-mount ownership to avoid EACCES at runtime.
@@ -120,7 +121,7 @@ ensure_data_dir_writable_for_runtime() {
   local data_dir="$ROOT_DIR/data"
 
   if docker_cmd run --rm --user 1000:1000 -v "$data_dir:/target" eggent:local \
-    sh -lc "test -w /target" >/dev/null 2>&1; then
+    sh -lc "mkdir -p /target/tmp /target/ms-playwright /target/npm-cache /target/.cache && test -w /target && test -w /target/tmp && test -w /target/ms-playwright && test -w /target/npm-cache && test -w /target/.cache" >/dev/null 2>&1; then
     return 0
   fi
 
@@ -128,11 +129,11 @@ ensure_data_dir_writable_for_runtime() {
     sh -lc "chown -R 1000:1000 /target" >/dev/null 2>&1 || true
 
   if docker_cmd run --rm --user 1000:1000 -v "$data_dir:/target" eggent:local \
-    sh -lc "test -w /target" >/dev/null 2>&1; then
+    sh -lc "mkdir -p /target/tmp /target/ms-playwright /target/npm-cache /target/.cache && test -w /target && test -w /target/tmp && test -w /target/ms-playwright && test -w /target/npm-cache && test -w /target/.cache" >/dev/null 2>&1; then
     return 0
   fi
 
-  echo "ERROR: data directory is not writable for runtime user (uid 1000)." >&2
+  echo "ERROR: data directory/cache paths are not writable for runtime user (uid 1000)." >&2
   echo "Fix and rerun:" >&2
   echo "  sudo chown -R 1000:1000 $data_dir" >&2
   exit 1

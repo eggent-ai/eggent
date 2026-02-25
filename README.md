@@ -160,11 +160,16 @@ Main environment variables:
 | `APP_BASE_URL` | Recommended | Public app URL used by integrations |
 | `APP_BIND_HOST` | No | Docker port bind host (default: `127.0.0.1`; set `0.0.0.0` for public access) |
 | `APP_PORT` | No | Published app port (default: `3000`) |
+| `APP_TMP_DIR` | No | Docker temp directory passed as `TMPDIR` (default: `/app/data/tmp`) |
+| `PLAYWRIGHT_BROWSERS_PATH` | No | Browser install/cache path for Playwright (default: `/app/data/ms-playwright`) |
+| `NPM_CONFIG_CACHE` | No | npm cache directory for runtime installs (default: `/app/data/npm-cache`) |
+| `XDG_CACHE_HOME` | No | Generic CLI cache directory (default: `/app/data/.cache`) |
 
 ## Data Persistence
 
 - Runtime state lives in `./data`
 - Docker mounts `./data` into `/app/data`
+- Runtime temp/cache paths are persisted under `./data` (for example: `tmp/`, `ms-playwright/`, `npm-cache/`, `.cache/`)
 - Keep backups of `data/` and `.env` for disaster recovery
 
 ## Security Defaults
@@ -172,7 +177,6 @@ Main environment variables:
 Docker defaults are security-oriented:
 - compose default bind: `127.0.0.1:${APP_PORT:-3000}:3000` (`APP_BIND_HOST=0.0.0.0` exposes publicly)
 - non-root container user (`node`)
-- tmpfs for `/tmp`
 - `node` user has passwordless `sudo` in container to allow AI-driven package installation
 
 ## Health Check
@@ -208,7 +212,15 @@ Try with `sudo docker ...` or add your user to the `docker` group.
 4. Build fails after dependency changes  
 Run `npm install` and retry `npm run build`.
 
-5. `Process error: spawn python3 ENOENT` in Code Execution  
+5. Large downloads fail with `No space left on device` despite free server disk  
+This usually means temp/cache paths are constrained in the runtime environment. Rebuild and restart with current compose defaults, then verify inside container:
+```bash
+docker compose build --no-cache app
+docker compose up -d app
+docker compose exec app sh -lc 'df -h /tmp /app/data && echo "TMPDIR=$TMPDIR" && echo "PLAYWRIGHT_BROWSERS_PATH=$PLAYWRIGHT_BROWSERS_PATH"'
+```
+
+6. `Process error: spawn python3 ENOENT` in Code Execution  
 `python3` is missing in runtime environment.
 
 For Docker deploys:
@@ -224,7 +236,7 @@ sudo apt-get update && sudo apt-get install -y python3
 python3 --version
 ```
 
-6. `sh: 1: curl: not found` in Code Execution (terminal runtime)  
+7. `sh: 1: curl: not found` in Code Execution (terminal runtime)  
 `curl` is missing in runtime environment.
 
 For Docker deploys:
@@ -240,13 +252,13 @@ sudo apt-get update && sudo apt-get install -y curl
 curl --version
 ```
 
-7. `command not found` for common terminal/skill commands (`git`, `jq`, `rg`)  
+8. `command not found` for common terminal/skill commands (`git`, `jq`, `rg`)  
 Install recommended CLI utilities:
 ```bash
 sudo apt-get update && sudo apt-get install -y git jq ripgrep
 ```
 
-8. `ModuleNotFoundError: No module named 'requests'` in Python Code Execution  
+9. `ModuleNotFoundError: No module named 'requests'` in Python Code Execution  
 `requests` is missing in runtime environment.
 
 For Docker deploys:
@@ -262,7 +274,7 @@ sudo apt-get update && sudo apt-get install -y python3-requests
 python3 -c "import requests; print(requests.__version__)"
 ```
 
-9. `/usr/bin/python3: No module named pip` when trying to install Python packages  
+10. `/usr/bin/python3: No module named pip` when trying to install Python packages  
 `pip` is missing in runtime environment.
 
 For Docker deploys:
@@ -278,7 +290,7 @@ sudo apt-get update && sudo apt-get install -y python3-pip
 python3 -m pip --version
 ```
 
-10. `apt-get install ...` fails in Code Execution with `Permission denied`  
+11. `apt-get install ...` fails in Code Execution with `Permission denied`  
 Use sudo in terminal runtime:
 ```bash
 sudo apt-get update && sudo apt-get install -y ffmpeg
