@@ -29,7 +29,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   multimediaModel: {
     provider: "openrouter",
-    model: "google/gemini-2.5-pro-preview-05-06",
+    model: "google/gemini-3.1-pro-preview",
     temperature: 0.5,
     maxTokens: 4096,
   },
