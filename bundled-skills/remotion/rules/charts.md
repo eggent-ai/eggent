@@ -4,12 +4,12 @@ description: Chart and data visualization patterns for Remotion. Use when creati
 metadata:
   tags: charts, data, visualization, bar-chart, pie-chart, line-chart, stock-chart, svg-paths, graphs
 ---
-
+{% raw %}
 # Charts in Remotion
 
 Create charts using React code - HTML, SVG, and D3.js are all supported.
 
-Disable all animations from third party libraries - they cause flickering.  
+Disable all animations from third party libraries - they cause flickering.
 Drive all animations from `useCurrentFrame()`.
 
 ## Bar Chart
@@ -26,7 +26,7 @@ const bars = data.map((item, i) => {
     delay: i * STAGGER_DELAY,
     config: { damping: 200 },
   });
-  return <div style={{ height: height * item.value }} />;
+  return <div key={i} style={{ height: height * item.value }} />;
 });
 ```
 
@@ -42,22 +42,21 @@ const offset = interpolate(progress, [0, 1], [segmentLength, 0]);
 
 <circle
   r={radius}
-  cx={center}
-  cy={center}
+  cx={cx}
+  cy={cy}
+  strokeDasharray={`${segmentLength} ${circumference}`}
+  strokeDashoffset={offset}
   fill="none"
   stroke={color}
   strokeWidth={strokeWidth}
-  strokeDasharray={`${segmentLength} ${circumference}`}
-  strokeDashoffset={offset}
-  transform={`rotate(-90 ${center} ${center})`}
+  transform={`rotate(-90, ${cx}, ${cy})`}
 />;
 ```
 
 ## Line Chart / Path Animation
 
 Use `@remotion/paths` for animating SVG paths (line charts, stock graphs, signatures).
-
-Install: `npx remotion add @remotion/paths`  
+Install: `npx remotion add @remotion/paths`
 Docs: https://remotion.dev/docs/paths.md
 
 ### Convert data points to SVG path
@@ -82,14 +81,13 @@ const progress = interpolate(frame, [0, 2 * fps], [0, 1], {
   extrapolateRight: "clamp",
   easing: Easing.out(Easing.quad),
 });
-
 const { strokeDasharray, strokeDashoffset } = evolvePath(progress, path);
 
 <path
   d={path}
-  fill="none"
-  stroke="#FF3232"
+  stroke="white"
   strokeWidth={4}
+  fill="none"
   strokeDasharray={strokeDasharray}
   strokeDashoffset={strokeDashoffset}
 />;
@@ -109,12 +107,8 @@ const point = getPointAtLength(path, progress * pathLength);
 const tangent = getTangentAtLength(path, progress * pathLength);
 const angle = Math.atan2(tangent.y, tangent.x);
 
-<g
-  style={{
-    transform: `translate(${point.x}px, ${point.y}px) rotate(${angle}rad)`,
-    transformOrigin: "0 0",
-  }}
->
-  <polygon points="0,0 -20,-10 -20,10" fill="#FF3232" />
+<g transform={`translate(${point.x}, ${point.y}) rotate(${(angle * 180) / Math.PI})`}>
+  <polygon points="0,-8 16,0 0,8" fill="white" />
 </g>;
 ```
+{% endraw %}
