@@ -17,3 +17,4 @@ Manage background sessions created by `code_execution`.
 2. For `poll`/`log`/`kill`/`remove`, always pass `session_id`.
 3. If `poll` returns `retryInMs`, wait roughly that long before the next poll.
 4. If status is `completed`/`failed`/`killed`, stop polling and report outcome.
+5. Do not call `kill` unless the user explicitly asked to stop/cancel/terminate the running process.

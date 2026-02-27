@@ -10,6 +10,60 @@ interface BackgroundSyncOptions {
   fallbackIntervalMs?: number;
 }
 
+type SyncSubscriber = (event: UiSyncEvent) => void;
+
+let sharedEventSource: EventSource | null = null;
+let sharedSyncListener: ((event: MessageEvent<string>) => void) | null = null;
+let nextSubscriberId = 1;
+const syncSubscribers = new Map<number, SyncSubscriber>();
+
+function ensureSharedEventSource(): void {
+  if (sharedEventSource) {
+    return;
+  }
+
+  sharedEventSource = new EventSource("/api/events");
+  sharedSyncListener = (event: MessageEvent<string>) => {
+    let parsed: UiSyncEvent | null = null;
+    try {
+      parsed = JSON.parse(event.data) as UiSyncEvent;
+    } catch {
+      return;
+    }
+
+    for (const subscriber of syncSubscribers.values()) {
+      try {
+        subscriber(parsed);
+      } catch {
+        // Keep fan-out resilient to individual listener failures.
+      }
+    }
+  };
+
+  sharedEventSource.addEventListener("sync", sharedSyncListener as EventListener);
+}
+
+function subscribeSharedSync(subscriber: SyncSubscriber): () => void {
+  ensureSharedEventSource();
+  const subscriberId = nextSubscriberId++;
+  syncSubscribers.set(subscriberId, subscriber);
+
+  return () => {
+    syncSubscribers.delete(subscriberId);
+    if (syncSubscribers.size === 0 && sharedEventSource) {
+      if (sharedSyncListener) {
+        sharedEventSource.removeEventListener(
+          "sync",
+          sharedSyncListener as EventListener
+        );
+      }
+      sharedEventSource.close();
+      sharedEventSource = null;
+      sharedSyncListener = null;
+    }
+  };
+}
+
 function matchesScope(
   event: UiSyncEvent,
   options: BackgroundSyncOptions
@@ -49,7 +103,6 @@ export function useBackgroundSync(options: BackgroundSyncOptions = {}): number {
   const [tick, setTick] = useState(0);
 
   useEffect(() => {
-    let eventSource: EventSource | null = null;
     const scope: BackgroundSyncOptions = {
       topics: topicsKey
         ? (topicsKey.split(",").filter(Boolean) as UiSyncTopic[])
@@ -63,24 +116,14 @@ export function useBackgroundSync(options: BackgroundSyncOptions = {}): number {
       setTick((value) => value + 1);
     };
 
-    const onSync = (event: MessageEvent<string>) => {
-      try {
-        const parsed = JSON.parse(event.data) as UiSyncEvent;
-        if (!matchesScope(parsed, scope)) {
-          return;
-        }
-        bump();
-      } catch {
-        // Ignore malformed SSE event payloads.
+    const onSync = (parsed: UiSyncEvent) => {
+      if (!matchesScope(parsed, scope)) {
+        return;
       }
+      bump();
     };
 
-    const connect = () => {
-      eventSource = new EventSource("/api/events");
-      eventSource.addEventListener("sync", onSync as EventListener);
-    };
-
-    connect();
+    const unsubscribeSync = subscribeSharedSync(onSync);
 
     const fallbackTimer =
       fallbackIntervalMs > 0 ? window.setInterval(bump, fallbackIntervalMs) : null;
@@ -101,10 +144,7 @@ export function useBackgroundSync(options: BackgroundSyncOptions = {}): number {
       if (fallbackTimer) {
         window.clearInterval(fallbackTimer);
       }
-      if (eventSource) {
-        eventSource.removeEventListener("sync", onSync as EventListener);
-        eventSource.close();
-      }
+      unsubscribeSync();
       document.removeEventListener("visibilitychange", onVisibilityChange);
       window.removeEventListener("focus", onWindowFocus);
     };

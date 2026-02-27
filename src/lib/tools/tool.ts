@@ -51,6 +51,27 @@ interface TelegramRuntimeData {
   chatId: string | number;
 }
 
+function getCurrentUserMessageText(context: AgentContext): string {
+  const value = context.data?.currentUserMessage;
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function userExplicitlyRequestedProcessKill(context: AgentContext): boolean {
+  const text = getCurrentUserMessageText(context);
+  if (!text) return false;
+
+  const killIntent =
+    /\b(stop|terminate|kill|cancel|abort|end|прервать|прерви|остановить|останови|убить|убей|завершить|заверши|отменить|отмени)\b/i;
+  const negatedIntent =
+    /\b(do not|don't|dont|не)\b.{0,20}\b(stop|terminate|kill|cancel|abort|прерв|останов|убива|заверш|отмен)\b/i;
+
+  if (negatedIntent.test(text)) {
+    return false;
+  }
+
+  return killIntent.test(text);
+}
+
 function getTelegramRuntimeData(context: AgentContext): TelegramRuntimeData | null {
   const raw = context.data?.telegram;
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
@@ -775,6 +796,13 @@ export function createAgentTools(
         if (action === "kill") {
           if (!session_id?.trim()) {
             return { success: false, error: "session_id is required for kill." };
+          }
+          if (!userExplicitlyRequestedProcessKill(context)) {
+            return {
+              success: false,
+              error:
+                "Kill blocked by policy: only stop a background process when the user explicitly asks to stop/cancel it. Continue with poll/log or wait for completion.",
+            };
           }
           return killManagedProcessSession(session_id);
         }
