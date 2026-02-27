@@ -4,7 +4,7 @@ description: Dynamically set composition duration, dimensions, and props
 metadata:
   tags: calculateMetadata, duration, dimensions, props, dynamic
 ---
-
+{% raw %}
 # Using calculateMetadata
 
 Use `calculateMetadata` on a `<Composition>` to dynamically set duration, dimensions, and transform props before rendering.
@@ -34,7 +34,6 @@ const calculateMetadata: CalculateMetadataFunction<Props> = async ({
   props,
 }) => {
   const durationInSeconds = await getVideoDuration(props.videoSrc);
-
   return {
     durationInFrames: Math.ceil(durationInSeconds * 30),
   };
@@ -54,7 +53,6 @@ const calculateMetadata: CalculateMetadataFunction<Props> = async ({
   props,
 }) => {
   const dimensions = await getVideoDimensions(props.videoSrc);
-
   return {
     width: dimensions.width,
     height: dimensions.height,
@@ -72,12 +70,10 @@ const calculateMetadata: CalculateMetadataFunction<Props> = async ({
     getVideoDuration(video.src),
   );
   const allMetadata = await Promise.all(metadataPromises);
-
   const totalDuration = allMetadata.reduce(
     (sum, durationInSeconds) => sum + durationInSeconds,
     0,
   );
-
   return {
     durationInFrames: Math.ceil(totalDuration * 30),
   };
@@ -109,7 +105,6 @@ const calculateMetadata: CalculateMetadataFunction<Props> = async ({
 }) => {
   const response = await fetch(props.dataUrl, { signal: abortSignal });
   const data = await response.json();
-
   return {
     props: {
       ...props,
@@ -132,3 +127,4 @@ All fields are optional. Returned values override the `<Composition>` props:
 - `props`: Transformed props passed to the component
 - `defaultOutName`: Default output filename
 - `defaultCodec`: Default codec for rendering
+{% endraw %}
