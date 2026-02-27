@@ -1,0 +1,81 @@
+name: Bug report
+description: Report a reproducible problem in Eggent
+title: "[Bug]: "
+labels: ["bug", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for reporting a bug. Please provide a minimal and reproducible report.
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Short description of the problem.
+      placeholder: The app crashes when...
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: List exact steps so we can reproduce.
+      placeholder: |
+        1. Go to...
+        2. Click...
+        3. See error...
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      placeholder: It should...
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      placeholder: It actually...
+    validations:
+      required: true
+  - type: dropdown
+    id: install_type
+    attributes:
+      label: Install/runtime mode
+      options:
+        - Docker setup
+        - Local setup (Node + npm)
+        - Other
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: App version, git commit, or branch name.
+      placeholder: main @ 1a2b3c4
+  - type: input
+    id: os
+    attributes:
+      label: OS
+      placeholder: macOS 15.5 / Ubuntu 24.04
+    validations:
+      required: true
+  - type: input
+    id: browser
+    attributes:
+      label: Browser (if relevant)
+      placeholder: Chrome 130, Safari 18, Firefox 130
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs and errors
+      description: Paste stack traces, console logs, or container logs.
+      render: shell
+  - type: textarea
+    id: additional
+    attributes:
+      label: Additional context
+      description: Screenshots, recordings, or related details.
