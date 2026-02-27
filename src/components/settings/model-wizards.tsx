@@ -526,6 +526,10 @@ export function EmbeddingsModelWizard({
     "gte-large": 1024,
     "gte-base": 768,
     "mpnet-base": 768,
+    "qwen3-embedding-8b": 4096,
+    "qwen3-embedding-4b": 2048,
+    "qwen3-embedding-0.6b": 1024,
+    "gemini-embedding": 3072,
   };
 
   return (

@@ -35,7 +35,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   embeddingsModel: {
     provider: "openrouter",
-    model: "openai/text-embedding-3-small",
+    model: "qwen/qwen3-embedding-8b",
     dimensions: 1536,
   },
   codeExecution: {
