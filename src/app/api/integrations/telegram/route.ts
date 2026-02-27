@@ -21,6 +21,12 @@ import {
 } from "@/lib/storage/telegram-integration-store";
 import { saveChatFile } from "@/lib/storage/chat-files-store";
 import { createChat, getChat } from "@/lib/storage/chat-store";
+import { getUserByTelegramId } from "@/lib/storage/users-store";
+import {
+  checkDailyQuota,
+  checkMonthlyTokenQuota,
+  recordMessageUsage,
+} from "@/lib/storage/usage-stats-store";
 import {
   contextKey,
   type ExternalSession,
@@ -160,6 +166,7 @@ function chatBelongsToProject(
 async function ensureTelegramExternalChatContext(params: {
   sessionId: string;
   defaultProjectId?: string;
+  userId?: string;
 }): Promise<TelegramExternalChatContext> {
   const { session, resolvedProjectId } = await resolveTelegramProjectContext({
     sessionId: params.sessionId,
@@ -179,7 +186,8 @@ async function ensureTelegramExternalChatContext(params: {
     await createChat(
       resolvedChatId,
       `External session ${session.id}`,
-      resolvedProjectId
+      resolvedProjectId,
+      params.userId
     );
   }
 
@@ -595,6 +603,21 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // Resolve app user linked to this Telegram account (if any)
+    const appUser = await getUserByTelegramId(fromUserId);
+    const appUserId = appUser?.id;
+
+    // Check telegram permission if user is linked
+    if (appUser && !appUser.permissions.telegram) {
+      await sendTelegramMessage(
+        botToken,
+        chatId,
+        "Доступ к Telegram-боту отключён для вашего аккаунта. Обратитесь к администратору.",
+        messageId
+      );
+      return Response.json({ ok: true, ignored: true, reason: "telegram_permission_denied" });
+    }
+
     let sessionId = await getTelegramChatSessionId(botId, chatId);
     if (!sessionId) {
       sessionId = createDefaultTelegramSessionId(botId, chatId);
@@ -649,6 +672,7 @@ export async function POST(req: NextRequest) {
       externalContext = await ensureTelegramExternalChatContext({
         sessionId,
         defaultProjectId,
+        userId: appUserId,
       });
       const fileBuffer = await downloadTelegramFile(botToken, incomingFile.fileId);
       const saved = await saveChatFile(
@@ -687,6 +711,30 @@ export async function POST(req: NextRequest) {
       return Response.json({ ok: true, ignored: true, reason: "non_text" });
     }
 
+    // Quota check for linked app users
+    if (appUser && appUser.role !== "admin") {
+      const dailyOk = await checkDailyQuota(appUser.id, appUser.quotas.dailyMessageLimit);
+      if (!dailyOk) {
+        await sendTelegramMessage(
+          botToken,
+          chatId,
+          "Дневной лимит сообщений исчерпан. Попробуйте завтра.",
+          messageId
+        );
+        return Response.json({ ok: true, ignored: true, reason: "daily_quota_exceeded" });
+      }
+      const monthlyOk = await checkMonthlyTokenQuota(appUser.id, appUser.quotas.monthlyTokenLimit);
+      if (!monthlyOk) {
+        await sendTelegramMessage(
+          botToken,
+          chatId,
+          "Месячный лимит токенов исчерпан. Обратитесь к администратору.",
+          messageId
+        );
+        return Response.json({ ok: true, ignored: true, reason: "monthly_quota_exceeded" });
+      }
+    }
+
     try {
       const result = await handleExternalMessage({
         sessionId,
@@ -704,6 +752,15 @@ export async function POST(req: NextRequest) {
           },
         },
       });
+
+      // Record usage stats for linked app user
+      if (appUserId) {
+        recordMessageUsage({
+          userId: appUserId,
+          userMessageLength: incomingText.length,
+          assistantMessageLength: result.reply.length,
+        }).catch(() => {});
+      }
 
       await sendTelegramMessage(botToken, chatId, result.reply, messageId);
       return Response.json({ ok: true });
