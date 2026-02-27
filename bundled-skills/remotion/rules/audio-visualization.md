@@ -64,11 +64,16 @@ const frequencies = visualizeAudio({
 });
 
 return (
-  <div style={{ display: "flex", alignItems: "flex-end", height: 200 }}>
+  <div>
     {frequencies.map((v, i) => (
       <div
         key={i}
-        style={{ flex: 1, height: `${v * 100}%`, backgroundColor: "blue" }}
+        style={{
+          flex: 1,
+          height: `${v * 100}%`,
+          backgroundColor: "#0b84f3",
+          margin: "0 1px",
+        }}
       />
     ))}
   </div>
@@ -126,7 +131,7 @@ const path = createSmoothSvgPath({
 
 return (
   <svg width={width} height={HEIGHT}>
-    <path d={path} stroke="white" strokeWidth={2} fill="none" />
+    <path d={path} fill="none" stroke="#0b84f3" strokeWidth={2} />
   </svg>
 );
 ```
@@ -163,6 +168,7 @@ import { useCurrentFrame, useVideoConfig } from "remotion";
 
 const frame = useCurrentFrame();
 const { fps } = useVideoConfig();
+
 const currentTimeInSeconds = frame / fps;
 
 const waveform = getWaveformPortion({
@@ -176,7 +182,7 @@ const waveform = getWaveformPortion({
 waveform.map((bar) => (
   <div
     key={bar.index}
-    style={{ height: `${bar.amplitude * 100}%`, width: 4 }}
+    style={{ height: bar.amplitude * 100 }}
   />
 ));
 ```
