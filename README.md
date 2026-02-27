@@ -318,4 +318,4 @@ Dockerfile          # Multi-stage production image build
 
 ## Notes
 
-- The repository currently has no top-level `LICENSE` file.
+- License: MIT. See `LICENSE` at the repository root.
