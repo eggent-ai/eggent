@@ -671,7 +671,12 @@ export async function loadProjectSkills(
   return skills;
 }
 
-export async function getAllProjects(): Promise<Project[]> {
+/**
+ * Return all projects. When filterUserId is provided, only return projects
+ * that belong to that user OR are shared. Legacy projects without ownerId
+ * are visible to everyone.
+ */
+export async function getAllProjects(filterUserId?: string): Promise<Project[]> {
   await ensureDir(PROJECTS_DIR);
   const entries = await fs.readdir(PROJECTS_DIR, { withFileTypes: true });
   const projects: Project[] = [];
@@ -681,7 +686,11 @@ export async function getAllProjects(): Promise<Project[]> {
     try {
       const metaFile = projectMetaFile(entry.name);
       const content = await fs.readFile(metaFile, "utf-8");
-      projects.push(JSON.parse(content));
+      const project: Project = JSON.parse(content);
+      if (filterUserId && project.ownerId && project.ownerId !== filterUserId && !project.isShared) {
+        continue;
+      }
+      projects.push(project);
     } catch {
       // skip projects without metadata
     }

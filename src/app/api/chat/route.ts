@@ -2,6 +2,12 @@ import { NextRequest } from "next/server";
 import { runAgent } from "@/lib/agent/agent";
 import { createChat, getChat } from "@/lib/storage/chat-store";
 import { ensureCronSchedulerStarted } from "@/lib/cron/runtime";
+import { getCurrentUser } from "@/lib/auth/get-current-user";
+import {
+  checkDailyQuota,
+  checkMonthlyTokenQuota,
+  recordMessageUsage,
+} from "@/lib/storage/usage-stats-store";
 
 export const maxDuration = 300; // 5 min max for long agent runs
 
@@ -36,15 +42,37 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Resolve current user for per-user data isolation
+    const user = await getCurrentUser();
+    const userId = user?.id;
+
+    // Quota checks
+    if (user && user.role !== "admin") {
+      const dailyOk = await checkDailyQuota(user.id, user.quotas.dailyMessageLimit);
+      if (!dailyOk) {
+        return Response.json(
+          { error: "Daily message limit reached. Try again tomorrow." },
+          { status: 429 }
+        );
+      }
+      const monthlyOk = await checkMonthlyTokenQuota(user.id, user.quotas.monthlyTokenLimit);
+      if (!monthlyOk) {
+        return Response.json(
+          { error: "Monthly token limit reached. Contact your administrator." },
+          { status: 429 }
+        );
+      }
+    }
+
     // Create chat if needed
     let resolvedChatId = chatId;
     if (!resolvedChatId) {
       resolvedChatId = crypto.randomUUID();
-      await createChat(resolvedChatId, "New Chat", projectId);
+      await createChat(resolvedChatId, "New Chat", projectId, userId);
     } else {
       const existing = await getChat(resolvedChatId);
       if (!existing) {
-        await createChat(resolvedChatId, "New Chat", projectId);
+        await createChat(resolvedChatId, "New Chat", projectId, userId);
       }
     }
 
@@ -55,6 +83,15 @@ export async function POST(req: NextRequest) {
       projectId,
       currentPath: typeof currentPath === "string" ? currentPath : undefined,
     });
+
+    // Record usage stats (fire-and-forget, don't block the response)
+    if (userId) {
+      recordMessageUsage({
+        userId,
+        userMessageLength: message.length,
+        assistantMessageLength: 500, // estimate; actual length unknown at stream start
+      }).catch(() => {});
+    }
 
     return result.toUIMessageStreamResponse({
       headers: {

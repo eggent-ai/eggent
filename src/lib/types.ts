@@ -83,6 +83,8 @@ export interface Chat {
   id: string;
   title: string;
   projectId?: string;
+  /** Owner user ID — set on creation for per-user data isolation. */
+  userId?: string;
   messages: ChatMessage[];
   createdAt: string;
   updatedAt: string;
@@ -92,6 +94,7 @@ export interface ChatListItem {
   id: string;
   title: string;
   projectId?: string;
+  userId?: string;
   createdAt: string;
   updatedAt: string;
   messageCount: number;
@@ -114,6 +117,10 @@ export interface Project {
   description: string;
   instructions: string;
   memoryMode: "global" | "isolated";
+  /** Owner user ID — set on creation for per-user data isolation. */
+  ownerId?: string;
+  /** When true, all users can see this project (admin-created shared projects). */
+  isShared?: boolean;
   createdAt: string;
   updatedAt: string;
 }

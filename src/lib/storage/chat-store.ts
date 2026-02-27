@@ -10,7 +10,7 @@ async function ensureDir(dir: string) {
   await fs.mkdir(dir, { recursive: true });
 }
 
-export async function getAllChats(): Promise<ChatListItem[]> {
+export async function getAllChats(filterUserId?: string): Promise<ChatListItem[]> {
   await ensureDir(CHATS_DIR);
   const files = await fs.readdir(CHATS_DIR);
   const chats: ChatListItem[] = [];
@@ -20,10 +20,14 @@ export async function getAllChats(): Promise<ChatListItem[]> {
     try {
       const content = await fs.readFile(path.join(CHATS_DIR, file), "utf-8");
       const chat: Chat = JSON.parse(content);
+      // Per-user isolation: skip chats owned by other users.
+      // Chats without userId (legacy) are visible to everyone.
+      if (filterUserId && chat.userId && chat.userId !== filterUserId) continue;
       chats.push({
         id: chat.id,
         title: chat.title,
         projectId: chat.projectId,
+        userId: chat.userId,
         createdAt: chat.createdAt,
         updatedAt: chat.updatedAt,
         messageCount: chat.messages.length,
@@ -109,13 +113,15 @@ export async function deleteChatsByProjectId(projectId: string): Promise<number>
 export async function createChat(
   id: string,
   title: string,
-  projectId?: string
+  projectId?: string,
+  userId?: string
 ): Promise<Chat> {
   const now = new Date().toISOString();
   const chat: Chat = {
     id,
     title,
     projectId,
+    userId,
     messages: [],
     createdAt: now,
     updatedAt: now,
