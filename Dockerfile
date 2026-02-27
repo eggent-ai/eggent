@@ -42,9 +42,6 @@ RUN apt-get update \
   && "${PYTHON_VENV}/bin/python3" -m pip --version \
   && rm -rf /var/lib/apt/lists/*
 
-RUN echo "node ALL=(root) NOPASSWD: ALL" > /etc/sudoers.d/eggent-node \
-  && chmod 440 /etc/sudoers.d/eggent-node
-
 COPY package.json package-lock.json ./
 RUN npm install --omit=dev --no-package-lock
 
