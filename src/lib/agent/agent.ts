@@ -17,6 +17,10 @@ import type { ChatMessage } from "@/lib/types";
 import { publishUiSyncEvent } from "@/lib/realtime/event-bus";
 
 const LLM_LOG_BORDER = "═".repeat(60);
+const MAX_TOOL_STEPS_PER_TURN = 30;
+const MAX_TOOL_STEPS_SUBORDINATE = 15;
+const POLL_NO_PROGRESS_BLOCK_THRESHOLD = 16;
+const POLL_BACKOFF_SCHEDULE_MS = [5000, 10000, 30000, 60000] as const;
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (value == null || typeof value !== "object" || Array.isArray(value)) {
@@ -90,6 +94,9 @@ function extractDeterministicFailureSignature(output: unknown): string | null {
     trimmed.startsWith("[MCP tool error]") ||
     trimmed.startsWith("[Preflight error]") ||
     trimmed.startsWith("[Loop guard]") ||
+    trimmed.includes("Process error:") ||
+    trimmed.includes("[Process killed after timeout]") ||
+    /Exit code:\s*-?[1-9]\d*/.test(trimmed) ||
     /^Failed\b/i.test(trimmed) ||
     /^Skill ".+" not found\./i.test(trimmed) ||
     (/\bnot found\b/i.test(trimmed) &&
@@ -102,8 +109,52 @@ function extractDeterministicFailureSignature(output: unknown): string | null {
   return trimmed.length > 400 ? `${trimmed.slice(0, 400)}...` : trimmed;
 }
 
+function isPollLikeCall(toolName: string, input: unknown): boolean {
+  if (toolName !== "process") {
+    return false;
+  }
+  const record = asRecord(input);
+  if (!record) {
+    return false;
+  }
+  const action = typeof record.action === "string" ? record.action : "";
+  return action === "poll" || action === "log";
+}
+
+function normalizeNoProgressValue(value: unknown): unknown {
+  if (typeof value === "string") {
+    const trimmed = value.trim();
+    return trimmed.length > 1000 ? `${trimmed.slice(0, 1000)}...` : trimmed;
+  }
+
+  if (Array.isArray(value)) {
+    return value.slice(0, 8).map((item) => normalizeNoProgressValue(item));
+  }
+
+  const record = asRecord(value);
+  if (!record) {
+    return value;
+  }
+
+  const out: Record<string, unknown> = {};
+  for (const [key, raw] of Object.entries(record)) {
+    if (key === "output" && typeof raw === "string") {
+      out[key] = raw.length > 1000 ? `${raw.slice(0, 1000)}...` : raw;
+      continue;
+    }
+    if (key === "attempts" && Array.isArray(raw)) {
+      out[key] = raw.slice(0, 3).map((item) => normalizeNoProgressValue(item));
+      continue;
+    }
+    out[key] = normalizeNoProgressValue(raw);
+  }
+
+  return out;
+}
+
 function applyGlobalToolLoopGuard(tools: ToolSet): ToolSet {
   const deterministicFailureByCall = new Map<string, string>();
+  const noProgressByCall = new Map<string, { hash: string; count: number }>();
   const wrappedTools: ToolSet = {};
 
   for (const [toolName, toolDef] of Object.entries(tools)) {
@@ -116,6 +167,24 @@ function applyGlobalToolLoopGuard(tools: ToolSet): ToolSet {
       ...toolDef,
       execute: async (input: unknown, options: ToolExecutionOptions) => {
         const callKey = `${toolName}:${stableSerialize(input)}`;
+        const previousNoProgress = noProgressByCall.get(callKey);
+        if (
+          previousNoProgress &&
+          previousNoProgress.count >= POLL_NO_PROGRESS_BLOCK_THRESHOLD &&
+          isPollLikeCall(toolName, input)
+        ) {
+          const scheduleIdx = Math.min(
+            previousNoProgress.count - POLL_NO_PROGRESS_BLOCK_THRESHOLD,
+            POLL_BACKOFF_SCHEDULE_MS.length - 1
+          );
+          const retryInMs = POLL_BACKOFF_SCHEDULE_MS[scheduleIdx] ?? 60000;
+          return (
+            `[Loop guard] Detected no-progress polling loop for "${toolName}".\n` +
+            `Repeated identical result ${previousNoProgress.count} times.\n` +
+            `Back off for ~${retryInMs}ms or report the background task as stuck.`
+          );
+        }
+
         const previousFailure = deterministicFailureByCall.get(callKey);
         if (previousFailure) {
           return (
@@ -132,6 +201,25 @@ function applyGlobalToolLoopGuard(tools: ToolSet): ToolSet {
         } else {
           deterministicFailureByCall.delete(callKey);
         }
+
+        if (isPollLikeCall(toolName, input)) {
+          const outputHash = stableSerialize(normalizeNoProgressValue(output));
+          const previous = noProgressByCall.get(callKey);
+          if (previous && previous.hash === outputHash) {
+            noProgressByCall.set(callKey, {
+              hash: outputHash,
+              count: previous.count + 1,
+            });
+          } else {
+            noProgressByCall.set(callKey, {
+              hash: outputHash,
+              count: 1,
+            });
+          }
+        } else {
+          noProgressByCall.delete(callKey);
+        }
+
         return output;
       },
     } as typeof toolDef;
@@ -398,7 +486,7 @@ export async function runAgent(options: {
     system: systemPrompt,
     messages,
     tools,
-    stopWhen: stepCountIs(15), // Allow up to 15 tool call rounds
+    stopWhen: stepCountIs(MAX_TOOL_STEPS_PER_TURN),
     temperature: settings.chatModel.temperature ?? 0.7,
     maxOutputTokens: settings.chatModel.maxTokens ?? 4096,
     onFinish: async (event) => {
@@ -528,7 +616,7 @@ export async function runAgentText(options: {
       system: systemPrompt,
       messages,
       tools,
-      stopWhen: stepCountIs(15),
+      stopWhen: stepCountIs(MAX_TOOL_STEPS_PER_TURN),
       temperature: settings.chatModel.temperature ?? 0.7,
       maxOutputTokens: settings.chatModel.maxTokens ?? 4096,
     });
@@ -659,7 +747,7 @@ export async function runSubordinateAgent(options: {
       system: systemPrompt,
       messages,
       tools,
-      stopWhen: stepCountIs(10),
+      stopWhen: stepCountIs(MAX_TOOL_STEPS_SUBORDINATE),
       temperature: settings.chatModel.temperature ?? 0.7,
       maxOutputTokens: settings.chatModel.maxTokens ?? 4096,
     });
