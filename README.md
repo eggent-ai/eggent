@@ -16,6 +16,14 @@ Eggent is a local-first AI workspace with:
 
 The app runs as a Next.js service and stores runtime state on disk (`./data`).
 
+## Contributing and Support
+
+- Contributing guide: [CONTRIBUTING.md](./CONTRIBUTING.md)
+- Report a bug: [Bug report form](https://github.com/eggent-ai/eggent/issues/new?template=bug_report.yml)
+- Request a feature: [Feature request form](https://github.com/eggent-ai/eggent/issues/new?template=feature_request.yml)
+- Code of conduct: [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)
+- Security policy: [SECURITY.md](./SECURITY.md)
+
 ## Installation (All Supported Paths)
 
 | Path | Best for | Command |

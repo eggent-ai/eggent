@@ -1,0 +1,58 @@
+name: Feature request
+description: Suggest an improvement for Eggent
+title: "[Feature]: "
+labels: ["enhancement", "needs-triage"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the suggestion. Clear problem statements help us prioritize better.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What problem are you trying to solve?
+      placeholder: It is hard to...
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed solution
+      description: Describe what you want to happen.
+      placeholder: Add a setting/button/workflow that...
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Workarounds or alternatives you considered.
+  - type: textarea
+    id: impact
+    attributes:
+      label: User impact
+      description: Who benefits and how much?
+      placeholder: This helps users who...
+  - type: dropdown
+    id: area
+    attributes:
+      label: Area
+      options:
+        - UI/UX
+        - Chat/Agents
+        - MCP integration
+        - Memory/Knowledge
+        - Automation/Cron
+        - Install/Deployment
+        - Docs
+        - Other
+    validations:
+      required: true
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Checklist
+      options:
+        - label: I searched existing issues and discussions first.
+          required: true

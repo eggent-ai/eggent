@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Questions and discussions
+    url: https://github.com/eggent-ai/eggent/discussions
+    about: Ask usage questions and discuss ideas.
+  - name: Security vulnerability report
+    url: https://github.com/eggent-ai/eggent/security/advisories/new
+    about: Report sensitive vulnerabilities privately.
