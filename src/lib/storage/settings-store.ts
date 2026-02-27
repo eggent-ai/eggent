@@ -17,15 +17,15 @@ async function ensureDir(dir: string) {
 export const DEFAULT_SETTINGS: AppSettings = {
   chatModel: {
     provider: "openrouter",
-    model: "anthropic/claude-opus-4-6",
+    model: "anthropic/claude-sonnet-4-6",
     temperature: 0.7,
     maxTokens: 4096,
   },
   utilityModel: {
     provider: "openrouter",
-    model: "anthropic/claude-sonnet-4-6",
+    model: "anthropic/claude-opus-4-6",
     temperature: 0.3,
-    maxTokens: 2048,
+    maxTokens: 8192,
   },
   multimediaModel: {
     provider: "openrouter",
