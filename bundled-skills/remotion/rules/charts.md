@@ -4,7 +4,7 @@ description: Chart and data visualization patterns for Remotion. Use when creati
 metadata:
   tags: charts, data, visualization, bar-chart, pie-chart, line-chart, stock-chart, svg-paths, graphs
 ---
-{% raw %}
+{% raw %} 
 # Charts in Remotion
 
 Create charts using React code - HTML, SVG, and D3.js are all supported.
