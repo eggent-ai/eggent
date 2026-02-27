@@ -216,11 +216,11 @@ playwright-cli kill-all
 
 ## Local installation
 
-In some cases user might want to install playwright-cli locally. If running globally available `playwright-cli` binary fails, use `npx playwright-cli` to run the commands. For example:
+In some cases user might want to install playwright-cli locally. If running globally available `playwright-cli` binary fails, use non-interactive `npx -y @playwright/cli` to run the commands. (`playwright-cli` npm package is deprecated for execution.) For example:
 
 ```bash
-npx playwright-cli open https://example.com
-npx playwright-cli click e1
+npx -y @playwright/cli open https://example.com
+npx -y @playwright/cli click e1
 ```
 
 ## Example: Form submission

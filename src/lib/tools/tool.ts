@@ -6,12 +6,21 @@ import { constants as fsConstants } from "fs";
 import path from "path";
 import type { AgentContext } from "@/lib/agent/types";
 import type { AppSettings, McpServerConfig } from "@/lib/types";
-import { executeCode } from "@/lib/tools/code-execution";
+import {
+  clearFinishedManagedProcessSessions,
+  executeCode,
+  killManagedProcessSession,
+  listManagedProcessSessions,
+  pollManagedProcessSession,
+  readManagedProcessSessionLog,
+  removeManagedProcessSession,
+} from "@/lib/tools/code-execution";
 import { memorySave, memoryLoad, memoryDelete } from "@/lib/tools/memory-tools";
 import { knowledgeQuery } from "@/lib/tools/knowledge-query";
 import { searchWeb } from "@/lib/tools/search-engine";
 import { callSubordinate } from "@/lib/tools/call-subordinate";
 import { createCronTool } from "@/lib/tools/cron-tool";
+import { installPackages } from "@/lib/tools/install-orchestrator";
 import { loadPdf } from "@/lib/memory/loaders/pdf-loader";
 import {
   getAllProjects,
@@ -40,6 +49,27 @@ const TELEGRAM_SEND_FILE_MAX_BYTES = 45 * 1024 * 1024;
 interface TelegramRuntimeData {
   botToken: string;
   chatId: string | number;
+}
+
+function getCurrentUserMessageText(context: AgentContext): string {
+  const value = context.data?.currentUserMessage;
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function userExplicitlyRequestedProcessKill(context: AgentContext): boolean {
+  const text = getCurrentUserMessageText(context);
+  if (!text) return false;
+
+  const killIntent =
+    /\b(stop|terminate|kill|cancel|abort|end|прервать|прерви|остановить|останови|убить|убей|завершить|заверши|отменить|отмени)\b/i;
+  const negatedIntent =
+    /\b(do not|don't|dont|не)\b.{0,20}\b(stop|terminate|kill|cancel|abort|прерв|останов|убива|заверш|отмен)\b/i;
+
+  if (negatedIntent.test(text)) {
+    return false;
+  }
+
+  return killIntent.test(text);
 }
 
 function getTelegramRuntimeData(context: AgentContext): TelegramRuntimeData | null {
@@ -618,7 +648,7 @@ export function createAgentTools(
   if (settings.codeExecution.enabled) {
     tools.code_execution = tool({
       description:
-        "Execute code in Python, Node.js, or Shell terminal. Use this to run scripts, install packages, manipulate files, perform calculations, or any task that requires code execution. The code runs in a persistent shell session.",
+        "Execute code in Python, Node.js, or Shell terminal. Use this to run scripts, install packages, manipulate files, perform calculations, or any task that requires code execution. For terminal runtime, session IDs preserve working directory continuity across calls.",
       inputSchema: z.object({
         runtime: z
           .enum(["python", "nodejs", "terminal"])
@@ -632,10 +662,25 @@ export function createAgentTools(
           .number()
           .default(0)
           .describe(
-            "Session ID (0-9). Use different sessions for parallel tasks. Default is 0."
+            "Session ID (0-9). Reuse a session to keep terminal working-directory state between calls. Use different sessions for independent tasks."
+          ),
+        background: z
+          .boolean()
+          .default(false)
+          .describe(
+            "Run execution in background and return immediately with a managed process session id."
+          ),
+        yield_ms: z
+          .number()
+          .int()
+          .min(10)
+          .max(120000)
+          .optional()
+          .describe(
+            "Optional milliseconds to wait before yielding a still-running command to background process management."
           ),
       }),
-      execute: async ({ runtime, code, session }) => {
+      execute: async ({ runtime, code, session, background, yield_ms }) => {
         const normalizedCode = code.replace(/\r\n/g, "\n");
         const sanitizedCode = normalizedCode.replace(/\s+$/, "");
         const lineCount = sanitizedCode.length === 0 ? 0 : sanitizedCode.split("\n").length;
@@ -649,7 +694,125 @@ export function createAgentTools(
           return `[Preflight error] Code payload has too many lines (${lineCount}). Limit is ${CODE_EXEC_MAX_LINES}. Split the task into smaller executions.`;
         }
         const cwd = resolveContextCwd(context);
-        return executeCode(runtime, sanitizedCode, session, settings.codeExecution, cwd);
+        return executeCode(runtime, sanitizedCode, session, settings.codeExecution, cwd, {
+          background,
+          yieldMs: typeof yield_ms === "number" ? yield_ms : undefined,
+        });
+      },
+    });
+
+    tools.install_packages = tool({
+      description:
+        "Install dependencies with installer fallback logic. Supports node (npm/pnpm/yarn/bun), python (pip/uv), go, uv, and apt. Use this when package installation via code_execution is flaky.",
+      inputSchema: z.object({
+        kind: z
+          .enum(["auto", "node", "python", "go", "uv", "apt"])
+          .default("auto")
+          .describe("Dependency ecosystem to install for."),
+        packages: z
+          .array(z.string())
+          .min(1)
+          .describe("List of package names/specifiers to install."),
+        prefer_manager: z
+          .string()
+          .optional()
+          .describe("Optional preferred manager (e.g. pnpm, npm, pip, uv, go, apt-get)."),
+        global: z
+          .boolean()
+          .default(false)
+          .describe("Whether to install globally when supported (mainly node ecosystem)."),
+        timeout_seconds: z
+          .number()
+          .int()
+          .min(1)
+          .max(1800)
+          .default(600)
+          .describe("Timeout per installer attempt in seconds."),
+      }),
+      execute: async ({ kind, packages, prefer_manager, global, timeout_seconds }) => {
+        const cwd = resolveContextCwd(context);
+        return installPackages({
+          kind,
+          packages,
+          preferManager: prefer_manager,
+          global,
+          cwd,
+          timeoutMs: timeout_seconds * 1000,
+        });
+      },
+    });
+
+    tools.process = tool({
+      description:
+        "Manage code_execution background sessions (list, poll, log, kill, clear, remove). Use this after code_execution returns a managed session id.",
+      inputSchema: z.object({
+        action: z
+          .enum(["list", "poll", "log", "kill", "clear", "remove"])
+          .describe("Process management action."),
+        session_id: z
+          .string()
+          .optional()
+          .describe("Managed process session id for poll/log/kill/remove."),
+        timeout_ms: z
+          .number()
+          .int()
+          .min(0)
+          .max(120000)
+          .optional()
+          .describe("Optional wait timeout for poll action."),
+        offset: z
+          .number()
+          .int()
+          .min(0)
+          .optional()
+          .describe("Optional line offset for log action."),
+        limit: z
+          .number()
+          .int()
+          .min(1)
+          .max(5000)
+          .optional()
+          .describe("Optional line count for log action."),
+      }),
+      execute: async ({ action, session_id, timeout_ms, offset, limit }) => {
+        if (action === "list") {
+          return {
+            success: true,
+            sessions: listManagedProcessSessions(),
+          };
+        }
+        if (action === "poll") {
+          if (!session_id?.trim()) {
+            return { success: false, error: "session_id is required for poll." };
+          }
+          return pollManagedProcessSession(session_id, timeout_ms);
+        }
+        if (action === "log") {
+          if (!session_id?.trim()) {
+            return { success: false, error: "session_id is required for log." };
+          }
+          return readManagedProcessSessionLog(session_id, offset, limit);
+        }
+        if (action === "kill") {
+          if (!session_id?.trim()) {
+            return { success: false, error: "session_id is required for kill." };
+          }
+          if (!userExplicitlyRequestedProcessKill(context)) {
+            return {
+              success: false,
+              error:
+                "Kill blocked by policy: only stop a background process when the user explicitly asks to stop/cancel it. Continue with poll/log or wait for completion.",
+            };
+          }
+          return killManagedProcessSession(session_id);
+        }
+        if (action === "remove") {
+          if (!session_id?.trim()) {
+            return { success: false, error: "session_id is required for remove." };
+          }
+          return removeManagedProcessSession(session_id);
+        }
+        return clearFinishedManagedProcessSessions();
       },
     });
   }

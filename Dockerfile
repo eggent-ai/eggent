@@ -33,6 +33,22 @@ RUN apt-get update \
     curl \
     git \
     jq \
+    libasound2 \
+    libatk1.0-0 \
+    libatspi2.0-0 \
+    libdbus-1-3 \
+    libgbm1 \
+    libglib2.0-0 \
+    libnspr4 \
+    libnss3 \
+    libx11-6 \
+    libxcb1 \
+    libxcomposite1 \
+    libxdamage1 \
+    libxext6 \
+    libxfixes3 \
+    libxkbcommon0 \
+    libxrandr2 \
     python3 \
     python3-requests \
     python3-venv \

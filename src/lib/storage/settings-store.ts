@@ -34,8 +34,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   codeExecution: {
     enabled: true,
-    timeout: 180,
-    maxOutputLength: 50000,
+    timeout: 600,
+    maxOutputLength: 120000,
   },
   memory: {
     enabled: true,
