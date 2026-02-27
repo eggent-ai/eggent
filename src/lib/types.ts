@@ -16,6 +16,7 @@ export interface ModelConfig {
 export interface AppSettings {
   chatModel: ModelConfig;
   utilityModel: ModelConfig;
+  multimediaModel: ModelConfig;
   embeddingsModel: {
     provider: "openai" | "openrouter" | "google" | "ollama" | "custom" | "mock";
     model: string;
@@ -192,6 +193,7 @@ export interface KnowledgeFile {
 export interface AgentConfig {
   chatModel: ModelConfig;
   utilityModel: ModelConfig;
+  multimediaModel: ModelConfig;
   embeddingsModel: AppSettings["embeddingsModel"];
   memorySubdir: string;
   knowledgeSubdirs: string[];

@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { TelegramIntegrationManager } from "@/components/telegram-integration-manager";
-import { ChatModelWizard, EmbeddingsModelWizard } from "@/components/settings/model-wizards";
+import { ChatModelWizard, UtilityModelWizard, MultimediaModelWizard, EmbeddingsModelWizard } from "@/components/settings/model-wizards";
 import type { AppSettings } from "@/lib/types";
 import { updateSettingsByPath } from "@/lib/settings/update-settings-path";
 import {
@@ -653,6 +653,14 @@ function ProjectsPageClient() {
                       ) : (
                         <>
                           <ChatModelWizard
+                            settings={settingsDraft}
+                            updateSettings={updateOnboardingSettings}
+                          />
+                          <UtilityModelWizard
+                            settings={settingsDraft}
+                            updateSettings={updateOnboardingSettings}
+                          />
+                          <MultimediaModelWizard
                             settings={settingsDraft}
                             updateSettings={updateOnboardingSettings}
                           />

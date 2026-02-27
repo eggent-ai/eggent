@@ -33,6 +33,12 @@ function maskSettingsKeys(settings: AppSettings): AppSettings {
   if (masked.chatModel.apiKey) {
     masked.chatModel.apiKey = maskKey(masked.chatModel.apiKey);
   }
+  if (masked.utilityModel.apiKey) {
+    masked.utilityModel.apiKey = maskKey(masked.utilityModel.apiKey);
+  }
+  if (masked.multimediaModel.apiKey) {
+    masked.multimediaModel.apiKey = maskKey(masked.multimediaModel.apiKey);
+  }
   if (masked.embeddingsModel.apiKey) {
     masked.embeddingsModel.apiKey = maskKey(masked.embeddingsModel.apiKey);
   }
@@ -56,6 +62,20 @@ function restoreMaskedKeys(
     next.chatModel = {
       ...(next.chatModel || {}),
       apiKey: current.chatModel.apiKey,
+    };
+  }
+
+  if (isMaskedKey(next.utilityModel?.apiKey)) {
+    next.utilityModel = {
+      ...(next.utilityModel || {}),
+      apiKey: current.utilityModel.apiKey,
+    };
+  }
+
+  if (isMaskedKey(next.multimediaModel?.apiKey)) {
+    next.multimediaModel = {
+      ...(next.multimediaModel || {}),
+      apiKey: current.multimediaModel.apiKey,
     };
   }
 
