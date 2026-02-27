@@ -1,15 +1,19 @@
 import { NextRequest } from "next/server";
 import { getAllProjects, createProject } from "@/lib/storage/project-store";
+import { getCurrentUser } from "@/lib/auth/get-current-user";
 
 export async function GET() {
-  const projects = await getAllProjects();
+  const user = await getCurrentUser();
+  // Admins see all projects; regular users see only their own + shared
+  const filterUserId = user?.role === "admin" ? undefined : user?.id;
+  const projects = await getAllProjects(filterUserId);
   return Response.json(projects);
 }
 
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { name, description, instructions, memoryMode } = body;
+    const { name, description, instructions, memoryMode, isShared } = body;
 
     if (!name || typeof name !== "string") {
       return Response.json(
@@ -25,12 +29,16 @@ export async function POST(req: NextRequest) {
       .replace(/^-|-$/g, "")
       || crypto.randomUUID().slice(0, 8);
 
+    const user = await getCurrentUser();
+
     const project = await createProject({
       id,
       name,
       description: description || "",
       instructions: instructions || "",
       memoryMode: memoryMode || "global",
+      ownerId: user?.id,
+      isShared: user?.role === "admin" ? (isShared ?? false) : false,
     });
 
     return Response.json(project, { status: 201 });
