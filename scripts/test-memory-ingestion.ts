@@ -8,6 +8,7 @@ import { AppSettings } from "../src/lib/types";
 const mockSettings: AppSettings = {
     chatModel: { provider: "openai", model: "gpt-4o" },
     utilityModel: { provider: "openai", model: "gpt-4o-mini" },
+    multimediaModel: { provider: "openai", model: "gpt-4o" },
     embeddingsModel: {
         provider: "mock",
         model: "text-embedding-3-small",

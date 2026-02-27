@@ -5,7 +5,7 @@ import { AlertCircle, Check, ChevronDown, Loader2 } from "lucide-react";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MODEL_PROVIDERS } from "@/lib/providers/model-config";
-import type { AppSettings } from "@/lib/types";
+import type { AppSettings, ModelConfig } from "@/lib/types";
 
 export type UpdateSettingsFn = (path: string, value: unknown) => void;
 
@@ -193,16 +193,26 @@ function useModels(
   return { models, loading, error };
 }
 
-export function ChatModelWizard({
-  settings,
+// ---------------------------------------------------------------------------
+// Generic chat-type model wizard (reused for chat, utility, multimedia)
+// ---------------------------------------------------------------------------
+
+function GenericChatModelWizard({
+  title,
+  description,
+  settingsKey,
+  modelConfig,
   updateSettings,
 }: {
-  settings: AppSettings;
+  title: string;
+  description?: string;
+  settingsKey: "chatModel" | "utilityModel" | "multimediaModel";
+  modelConfig: ModelConfig;
   updateSettings: UpdateSettingsFn;
 }) {
-  const provider = settings.chatModel.provider;
-  const apiKey = settings.chatModel.apiKey || "";
-  const model = settings.chatModel.model;
+  const provider = modelConfig.provider;
+  const apiKey = modelConfig.apiKey || "";
+  const model = modelConfig.model;
   const providerConfig = MODEL_PROVIDERS[provider];
   const requiresApiKey = providerConfig?.requiresApiKey ?? true;
 
@@ -226,13 +236,18 @@ export function ChatModelWizard({
     apiKey,
     requiresApiKey,
     "chat",
-    settings.chatModel.baseUrl
+    modelConfig.baseUrl
   );
 
   return (
     <section className="border rounded-xl p-5 bg-card space-y-5 transition-all duration-300">
       <div className="flex items-center justify-between">
-        <h3 className="font-semibold text-lg">Chat Model</h3>
+        <div>
+          <h3 className="font-semibold text-lg">{title}</h3>
+          {description && (
+            <p className="text-xs text-muted-foreground mt-0.5">{description}</p>
+          )}
+        </div>
         <div className="flex items-center gap-4">
           <StepIndicator step={1} currentStep={currentStep} label="Provider" />
           {requiresApiKey && (
@@ -254,14 +269,14 @@ export function ChatModelWizard({
           value={provider}
           onChange={(event) => {
             const nextProvider = event.target.value;
-            updateSettings("chatModel.provider", nextProvider);
-            updateSettings("chatModel.model", "");
+            updateSettings(`${settingsKey}.provider`, nextProvider);
+            updateSettings(`${settingsKey}.model`, "");
 
             if (nextProvider === "ollama") {
-              updateSettings("chatModel.baseUrl", "http://localhost:11434/v1");
-              updateSettings("chatModel.apiKey", "");
+              updateSettings(`${settingsKey}.baseUrl`, "http://localhost:11434/v1");
+              updateSettings(`${settingsKey}.apiKey`, "");
             } else {
-              updateSettings("chatModel.baseUrl", "");
+              updateSettings(`${settingsKey}.baseUrl`, "");
             }
           }}
           className="w-full rounded-md border bg-background px-3 py-2 text-sm"
@@ -287,7 +302,7 @@ export function ChatModelWizard({
         <Input
           type="password"
           value={apiKey}
-          onChange={(event) => updateSettings("chatModel.apiKey", event.target.value)}
+          onChange={(event) => updateSettings(`${settingsKey}.apiKey`, event.target.value)}
           placeholder={
             providerConfig?.envKey
               ? `Enter key or set ${providerConfig.envKey} in .env`
@@ -323,8 +338,8 @@ export function ChatModelWizard({
             Base URL
           </Label>
           <Input
-            value={settings.chatModel.baseUrl || ""}
-            onChange={(event) => updateSettings("chatModel.baseUrl", event.target.value)}
+            value={modelConfig.baseUrl || ""}
+            onChange={(event) => updateSettings(`${settingsKey}.baseUrl`, event.target.value)}
             placeholder={
               provider === "ollama"
                 ? "http://localhost:11434/v1"
@@ -349,7 +364,7 @@ export function ChatModelWizard({
           loading={loading}
           error={error}
           disabled={!hasApiKey}
-          onChange={(value) => updateSettings("chatModel.model", value)}
+          onChange={(value) => updateSettings(`${settingsKey}.model`, value)}
           placeholder="Select model..."
         />
       </div>
@@ -367,15 +382,73 @@ export function ChatModelWizard({
           step="0.1"
           min="0"
           max="2"
-          value={settings.chatModel.temperature || 0.7}
+          value={modelConfig.temperature || 0.7}
           onChange={(event) =>
-            updateSettings("chatModel.temperature", parseFloat(event.target.value))
+            updateSettings(`${settingsKey}.temperature`, parseFloat(event.target.value))
           }
           disabled={!model}
           className="max-w-[120px]"
         />
       </div>
     </section>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Exported wizards
+// ---------------------------------------------------------------------------
+
+export function ChatModelWizard({
+  settings,
+  updateSettings,
+}: {
+  settings: AppSettings;
+  updateSettings: UpdateSettingsFn;
+}) {
+  return (
+    <GenericChatModelWizard
+      title="Chat Model"
+      description="Primary model for conversations (heavy tasks)"
+      settingsKey="chatModel"
+      modelConfig={settings.chatModel}
+      updateSettings={updateSettings}
+    />
+  );
+}
+
+export function UtilityModelWizard({
+  settings,
+  updateSettings,
+}: {
+  settings: AppSettings;
+  updateSettings: UpdateSettingsFn;
+}) {
+  return (
+    <GenericChatModelWizard
+      title="Utility Model"
+      description="Fast model for classification, summarization, and internal tasks"
+      settingsKey="utilityModel"
+      modelConfig={settings.utilityModel}
+      updateSettings={updateSettings}
+    />
+  );
+}
+
+export function MultimediaModelWizard({
+  settings,
+  updateSettings,
+}: {
+  settings: AppSettings;
+  updateSettings: UpdateSettingsFn;
+}) {
+  return (
+    <GenericChatModelWizard
+      title="Multimedia Model"
+      description="Model for processing images, audio, and video content"
+      settingsKey="multimediaModel"
+      modelConfig={settings.multimediaModel}
+      updateSettings={updateSettings}
+    />
   );
 }
 
@@ -453,12 +526,19 @@ export function EmbeddingsModelWizard({
     "gte-large": 1024,
     "gte-base": 768,
     "mpnet-base": 768,
+    "qwen3-embedding-8b": 4096,
+    "qwen3-embedding-4b": 2048,
+    "qwen3-embedding-0.6b": 1024,
+    "gemini-embedding": 3072,
   };
 
   return (
     <section className="border rounded-xl p-5 bg-card space-y-5 transition-all duration-300">
       <div className="flex items-center justify-between">
-        <h3 className="font-semibold text-lg">Embeddings Model</h3>
+        <div>
+          <h3 className="font-semibold text-lg">Embeddings Model</h3>
+          <p className="text-xs text-muted-foreground mt-0.5">Model for vector embeddings (memory &amp; RAG)</p>
+        </div>
         <div className="flex items-center gap-4">
           <StepIndicator step={1} currentStep={currentStep} label="Provider" />
           {requiresApiKey && (

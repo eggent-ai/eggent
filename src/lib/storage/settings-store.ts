@@ -16,20 +16,26 @@ async function ensureDir(dir: string) {
 
 export const DEFAULT_SETTINGS: AppSettings = {
   chatModel: {
-    provider: "openai",
-    model: "gpt-4o",
+    provider: "openrouter",
+    model: "anthropic/claude-sonnet-4-6",
     temperature: 0.7,
     maxTokens: 4096,
   },
   utilityModel: {
-    provider: "openai",
-    model: "gpt-4o-mini",
+    provider: "openrouter",
+    model: "anthropic/claude-opus-4-6",
     temperature: 0.3,
-    maxTokens: 2048,
+    maxTokens: 8192,
+  },
+  multimediaModel: {
+    provider: "openrouter",
+    model: "google/gemini-3.1-pro-preview",
+    temperature: 0.5,
+    maxTokens: 4096,
   },
   embeddingsModel: {
-    provider: "openai",
-    model: "text-embedding-3-small",
+    provider: "openrouter",
+    model: "qwen/qwen3-embedding-8b",
     dimensions: 1536,
   },
   codeExecution: {

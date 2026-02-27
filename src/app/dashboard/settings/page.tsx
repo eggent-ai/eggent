@@ -8,7 +8,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Check, Loader2, Save, ShieldCheck } from "lucide-react";
-import { ChatModelWizard, EmbeddingsModelWizard } from "@/components/settings/model-wizards";
+import { ChatModelWizard, UtilityModelWizard, MultimediaModelWizard, EmbeddingsModelWizard } from "@/components/settings/model-wizards";
 import { updateSettingsByPath } from "@/lib/settings/update-settings-path";
 import type { AppSettings } from "@/lib/types";
 
@@ -168,6 +168,8 @@ export default function SettingsPage() {
               </div>
 
               <ChatModelWizard settings={settings} updateSettings={updateSettings} />
+              <UtilityModelWizard settings={settings} updateSettings={updateSettings} />
+              <MultimediaModelWizard settings={settings} updateSettings={updateSettings} />
               <EmbeddingsModelWizard settings={settings} updateSettings={updateSettings} />
 
               <section className="border rounded-xl p-5 bg-card space-y-4">

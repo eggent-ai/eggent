@@ -15,7 +15,7 @@ export async function POST(req: NextRequest) {
   try {
     await ensureCronSchedulerStarted();
     const body = await req.json();
-    const { chatId, projectId, currentPath } = body;
+    const { chatId, projectId, currentPath, attachments } = body;
     let message: string | undefined = body.message;
 
     // Support AI SDK's DefaultChatTransport format which sends a `messages` array
@@ -82,6 +82,7 @@ export async function POST(req: NextRequest) {
       userMessage: message,
       projectId,
       currentPath: typeof currentPath === "string" ? currentPath : undefined,
+      attachments: Array.isArray(attachments) ? attachments : undefined,
     });
 
     // Record usage stats (fire-and-forget, don't block the response)

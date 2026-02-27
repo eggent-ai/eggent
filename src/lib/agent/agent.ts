@@ -3,6 +3,7 @@ import {
   generateText,
   stepCountIs,
   type ModelMessage,
+  type UserContent,
   type ToolExecutionOptions,
   type ToolSet,
 } from "ai";
@@ -13,8 +14,9 @@ import { getChat, saveChat } from "@/lib/storage/chat-store";
 import { createAgentTools } from "@/lib/tools/tool";
 import { getProjectMcpTools } from "@/lib/mcp/client";
 import type { AgentContext } from "@/lib/agent/types";
-import type { ChatMessage } from "@/lib/types";
+import type { Attachment, ChatMessage } from "@/lib/types";
 import { publishUiSyncEvent } from "@/lib/realtime/event-bus";
+import fs from "fs/promises";
 
 const LLM_LOG_BORDER = "═".repeat(60);
 
@@ -283,6 +285,41 @@ function convertModelMessageToChatMessages(msg: ModelMessage, now: string): Chat
   }];
 }
 
+/**
+ * Check whether the given attachments include any images.
+ */
+function hasImages(attachments?: Attachment[]): boolean {
+  return !!attachments?.some((a) => a.type.startsWith("image/"));
+}
+
+/**
+ * Build a multimodal user message content array from text + image attachments.
+ * Falls back to a plain string when there are no image attachments.
+ */
+async function buildUserContent(
+  text: string,
+  attachments?: Attachment[]
+): Promise<string | UserContent> {
+  if (!hasImages(attachments)) {
+    return text;
+  }
+
+  const parts: UserContent = [{ type: "text", text }];
+
+  for (const att of attachments!) {
+    if (att.type.startsWith("image/") && att.path) {
+      const imageData = await fs.readFile(att.path);
+      parts.push({
+        type: "image",
+        image: imageData,
+        mediaType: att.type,
+      });
+    }
+  }
+
+  return parts;
+}
+
 function logLLMRequest(options: {
   model: string;
   system: string;
@@ -325,9 +362,13 @@ export async function runAgent(options: {
   projectId?: string;
   currentPath?: string;
   agentNumber?: number;
+  attachments?: Attachment[];
 }) {
   const settings = await getSettings();
-  const model = createModel(settings.chatModel);
+  const modelConfig = hasImages(options.attachments)
+    ? settings.multimediaModel
+    : settings.chatModel;
+  const model = createModel(modelConfig);
 
   // Build context
   const context: AgentContext = {
@@ -376,19 +417,20 @@ export async function runAgent(options: {
     tools: toolNames,
   });
 
-  // Append user message to history
+  // Append user message to history (multimodal if image attachments present)
+  const userContent = await buildUserContent(options.userMessage, options.attachments);
   const messages: ModelMessage[] = [
     ...context.history,
-    { role: "user", content: options.userMessage },
+    { role: "user", content: userContent },
   ];
 
   logLLMRequest({
-    model: `${settings.chatModel.provider}/${settings.chatModel.model}`,
+    model: `${modelConfig.provider}/${modelConfig.model}`,
     system: systemPrompt,
     messages,
     toolNames,
-    temperature: settings.chatModel.temperature,
-    maxTokens: settings.chatModel.maxTokens,
+    temperature: modelConfig.temperature,
+    maxTokens: modelConfig.maxTokens,
     label: "LLM Request (stream)",
   });
 
@@ -399,8 +441,8 @@ export async function runAgent(options: {
     messages,
     tools,
     stopWhen: stepCountIs(15), // Allow up to 15 tool call rounds
-    temperature: settings.chatModel.temperature ?? 0.7,
-    maxOutputTokens: settings.chatModel.maxTokens ?? 4096,
+    temperature: modelConfig.temperature ?? 0.7,
+    maxOutputTokens: modelConfig.maxTokens ?? 4096,
     onFinish: async (event) => {
       if (mcpCleanup) {
         try {
@@ -464,9 +506,13 @@ export async function runAgentText(options: {
   currentPath?: string;
   agentNumber?: number;
   runtimeData?: Record<string, unknown>;
+  attachments?: Attachment[];
 }): Promise<string> {
   const settings = await getSettings();
-  const model = createModel(settings.chatModel);
+  const modelConfig = hasImages(options.attachments)
+    ? settings.multimediaModel
+    : settings.chatModel;
+  const model = createModel(modelConfig);
 
   const context: AgentContext = {
     chatId: options.chatId,
@@ -507,18 +553,19 @@ export async function runAgentText(options: {
     tools: toolNames,
   });
 
+  const userContent = await buildUserContent(options.userMessage, options.attachments);
   const messages: ModelMessage[] = [
     ...context.history,
-    { role: "user", content: options.userMessage },
+    { role: "user", content: userContent },
   ];
 
   logLLMRequest({
-    model: `${settings.chatModel.provider}/${settings.chatModel.model}`,
+    model: `${modelConfig.provider}/${modelConfig.model}`,
     system: systemPrompt,
     messages,
     toolNames,
-    temperature: settings.chatModel.temperature,
-    maxTokens: settings.chatModel.maxTokens,
+    temperature: modelConfig.temperature,
+    maxTokens: modelConfig.maxTokens,
     label: "LLM Request (non-stream)",
   });
 
@@ -529,8 +576,8 @@ export async function runAgentText(options: {
       messages,
       tools,
       stopWhen: stepCountIs(15),
-      temperature: settings.chatModel.temperature ?? 0.7,
-      maxOutputTokens: settings.chatModel.maxTokens ?? 4096,
+      temperature: modelConfig.temperature ?? 0.7,
+      maxOutputTokens: modelConfig.maxTokens ?? 4096,
     });
 
     const text = generated.text ?? "";
@@ -598,7 +645,7 @@ export async function runSubordinateAgent(options: {
   parentHistory: ModelMessage[];
 }): Promise<string> {
   const settings = await getSettings();
-  const model = createModel(settings.chatModel);
+  const model = createModel(settings.utilityModel);
 
   const context: AgentContext = {
     chatId: `subordinate-${Date.now()}`,
@@ -644,12 +691,12 @@ export async function runSubordinateAgent(options: {
   ];
 
   logLLMRequest({
-    model: `${settings.chatModel.provider}/${settings.chatModel.model}`,
+    model: `${settings.utilityModel.provider}/${settings.utilityModel.model}`,
     system: systemPrompt,
     messages,
     toolNames,
-    temperature: settings.chatModel.temperature,
-    maxTokens: settings.chatModel.maxTokens,
+    temperature: settings.utilityModel.temperature,
+    maxTokens: settings.utilityModel.maxTokens,
     label: "LLM Request (subordinate)",
   });
 
@@ -660,8 +707,8 @@ export async function runSubordinateAgent(options: {
       messages,
       tools,
       stopWhen: stepCountIs(10),
-      temperature: settings.chatModel.temperature ?? 0.7,
-      maxOutputTokens: settings.chatModel.maxTokens ?? 4096,
+      temperature: settings.utilityModel.temperature ?? 0.7,
+      maxOutputTokens: settings.utilityModel.maxTokens ?? 4096,
     });
     return text;
   } finally {

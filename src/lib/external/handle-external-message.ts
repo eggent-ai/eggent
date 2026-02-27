@@ -7,7 +7,7 @@ import {
   saveExternalSession,
   type ExternalSession,
 } from "@/lib/storage/external-session-store";
-import type { ChatMessage } from "@/lib/types";
+import type { Attachment, ChatMessage } from "@/lib/types";
 
 export interface HandleExternalMessageInput {
   sessionId: string;
@@ -16,6 +16,7 @@ export interface HandleExternalMessageInput {
   chatId?: string;
   currentPath?: string;
   runtimeData?: Record<string, unknown>;
+  attachments?: Attachment[];
 }
 
 interface SwitchProjectSignal {
@@ -258,6 +259,7 @@ export async function handleExternalMessage(
     projectId: resolvedProjectId,
     currentPath: currentPath || undefined,
     runtimeData: input.runtimeData,
+    attachments: input.attachments,
   });
 
   const afterChat = await getChat(resolvedChatId);

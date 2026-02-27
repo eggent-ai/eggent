@@ -663,6 +663,7 @@ export async function POST(req: NextRequest) {
           name: string;
           path: string;
           size: number;
+          type: string;
         }
       | null = null;
 
@@ -684,6 +685,7 @@ export async function POST(req: NextRequest) {
         name: saved.name,
         path: saved.path,
         size: saved.size,
+        type: saved.type,
       };
     }
 
@@ -736,10 +738,24 @@ export async function POST(req: NextRequest) {
     }
 
     try {
+      // Build image attachments for vision model routing
+      const imageAttachments =
+        incomingSavedFile && incomingSavedFile.type.startsWith("image/")
+          ? [
+              {
+                name: incomingSavedFile.name,
+                type: incomingSavedFile.type,
+                path: incomingSavedFile.path,
+              },
+            ]
+          : undefined;
+
       const result = await handleExternalMessage({
         sessionId,
         message: incomingSavedFile
-          ? `${incomingText}\n\nAttached file: ${incomingSavedFile.name}`
+          ? imageAttachments
+            ? incomingText || "Describe this image."
+            : `${incomingText}\n\nAttached file: ${incomingSavedFile.name}`
           : incomingText,
         projectId: externalContext?.projectId ?? defaultProjectId,
         chatId: externalContext?.chatId,
@@ -751,6 +767,7 @@ export async function POST(req: NextRequest) {
             replyToMessageId: messageId ?? null,
           },
         },
+        attachments: imageAttachments,
       });
 
       // Record usage stats for linked app user
