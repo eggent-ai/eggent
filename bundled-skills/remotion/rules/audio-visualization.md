@@ -4,7 +4,7 @@ description: Audio visualization patterns - spectrum bars, waveforms, bass-react
 metadata:
   tags: audio, visualization, spectrum, waveform, bass, music, audiogram, frequency
 ---
-
+{% raw %}
 # Audio Visualization in Remotion
 
 ## Prerequisites
@@ -68,12 +68,7 @@ return (
     {frequencies.map((v, i) => (
       <div
         key={i}
-        style={{
-          flex: 1,
-          height: `${v * 100}%`,
-          backgroundColor: "#0b84f3",
-          margin: "0 1px",
-        }}
+        style={{ flex: 1, height: `${v * 100}%`, backgroundColor: "blue" }}
       />
     ))}
   </div>
@@ -131,7 +126,7 @@ const path = createSmoothSvgPath({
 
 return (
   <svg width={width} height={HEIGHT}>
-    <path d={path} fill="none" stroke="#0b84f3" strokeWidth={2} />
+    <path d={path} stroke="white" strokeWidth={2} fill="none" />
   </svg>
 );
 ```
@@ -179,7 +174,10 @@ const waveform = getWaveformPortion({
 
 // Returns array of { index, amplitude } objects (amplitude: 0-1)
 waveform.map((bar) => (
-  <div key={bar.index} style={{ height: bar.amplitude * 100 }} />
+  <div
+    key={bar.index}
+    style={{ height: `${bar.amplitude * 100}%`, width: 4 }}
+  />
 ));
 ```
 
@@ -196,3 +194,4 @@ const scaled = frequencies.map((value) => {
   return (db - minDb) / (maxDb - minDb);
 });
 ```
+{% endraw %}
