@@ -1,0 +1,7 @@
+# Jekyll configuration
+# Disable Liquid processing globally to prevent errors with JSX/template syntax in markdown files
+defaults:
+  - scope:
+      path: ""
+    values:
+      render_with_liquid: false
