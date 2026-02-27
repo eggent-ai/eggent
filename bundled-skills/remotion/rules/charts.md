@@ -4,7 +4,7 @@ description: Chart and data visualization patterns for Remotion. Use when creati
 metadata:
   tags: charts, data, visualization, bar-chart, pie-chart, line-chart, stock-chart, svg-paths, graphs
 ---
-{% raw %} 
+{% raw %}
 # Charts in Remotion
 
 Create charts using React code - HTML, SVG, and D3.js are all supported.
@@ -42,22 +42,20 @@ const offset = interpolate(progress, [0, 1], [segmentLength, 0]);
 
 <circle
   r={radius}
-  cx={cx}
-  cy={cy}
-  strokeDasharray={`${segmentLength} ${circumference}`}
-  strokeDashoffset={offset}
+  cx={center}
+  cy={center}
   fill="none"
   stroke={color}
   strokeWidth={strokeWidth}
-  transform={`rotate(-90, ${cx}, ${cy})`}
+  strokeDasharray={circumference}
+  strokeDashoffset={offset}
+  transform={`rotate(-90, ${center}, ${center})`}
 />;
 ```
 
 ## Line Chart / Path Animation
 
-Use `@remotion/paths` for animating SVG paths (line charts, stock graphs, signatures).
-Install: `npx remotion add @remotion/paths`
-Docs: https://remotion.dev/docs/paths.md
+Use `@remotion/paths` for animating SVG paths (line charts, stock graphs, signatures). Install: `npx remotion add @remotion/paths` Docs: https://remotion.dev/docs/paths.md
 
 ### Convert data points to SVG path
 
@@ -81,15 +79,16 @@ const progress = interpolate(frame, [0, 2 * fps], [0, 1], {
   extrapolateRight: "clamp",
   easing: Easing.out(Easing.quad),
 });
+
 const { strokeDasharray, strokeDashoffset } = evolvePath(progress, path);
 
 <path
   d={path}
-  stroke="white"
-  strokeWidth={4}
-  fill="none"
   strokeDasharray={strokeDasharray}
   strokeDashoffset={strokeDashoffset}
+  stroke="blue"
+  strokeWidth={3}
+  fill="none"
 />;
 ```
 
@@ -108,7 +107,7 @@ const tangent = getTangentAtLength(path, progress * pathLength);
 const angle = Math.atan2(tangent.y, tangent.x);
 
 <g transform={`translate(${point.x}, ${point.y}) rotate(${(angle * 180) / Math.PI})`}>
-  <polygon points="0,-8 16,0 0,8" fill="white" />
+  <polygon points="0,-8 -5,8 5,8" fill="red" />
 </g>;
 ```
 {% endraw %}
