@@ -1,5 +1,9 @@
 # Jekyll configuration
-# Disable Liquid processing globally to prevent errors with JSX/template syntax in markdown files
+# Use lax error mode to prevent Liquid syntax errors from breaking the build
+# This is needed because markdown files contain JSX code with {{ }} syntax
+liquid:
+  error_mode: lax
+
 defaults:
   - scope:
       path: ""
