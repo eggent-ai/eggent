@@ -7,7 +7,7 @@
 # ]
 # ///
 """
-Generate images using Gemini 3.1 Pro via OpenRouter API (Nano Banana Pro).
+Generate images using Gemini 3.1 Flash Image via OpenRouter API (Nano Banana Pro).
 
 Usage:
     uv run generate_image.py --prompt "your image description" --filename "output.png" [--resolution 1K|2K|4K] [--api-key KEY]
@@ -25,7 +25,7 @@ from io import BytesIO
 from pathlib import Path
 
 OPENROUTER_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = "google/gemini-3.1-pro-preview"
+DEFAULT_MODEL = "google/gemini-3.1-flash-image-preview"
 
 
 def get_api_key(provided_key: str | None) -> str | None:
@@ -49,7 +49,7 @@ def image_to_base64_url(img_path: str) -> tuple[str, tuple[int, int]]:
 
 def main():
     parser = argparse.ArgumentParser(
-        description="Generate images using Nano Banana Pro (Gemini 3.1 Pro via OpenRouter)"
+        description="Generate images using Nano Banana Pro (Gemini 3.1 Flash Image via OpenRouter)"
     )
     parser.add_argument(
         "--prompt", "-p",

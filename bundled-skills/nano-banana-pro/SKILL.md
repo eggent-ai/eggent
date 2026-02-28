@@ -1,6 +1,6 @@
 ---
 name: nano-banana-pro
-description: Generate or edit images via Gemini 3.1 Pro through OpenRouter (Nano Banana Pro).
+description: Generate or edit images via Gemini 3.1 Flash Image through OpenRouter (Nano Banana Pro).
 homepage: https://openrouter.ai/
 metadata:
   {
@@ -23,7 +23,7 @@ metadata:
   }
 ---
 
-# Nano Banana Pro (Gemini 3.1 Pro via OpenRouter)
+# Nano Banana Pro (Gemini 3.1 Flash Image via OpenRouter)
 
 Use the bundled script to generate or edit images. Requests are routed through the shared OpenRouter API key instead of a direct Google Gemini key.
 
@@ -48,7 +48,7 @@ uv run {baseDir}/scripts/generate_image.py --prompt "combine these into one scen
 Override model (optional)
 
 ```bash
-uv run {baseDir}/scripts/generate_image.py --prompt "description" --filename "output.png" --model "google/gemini-3.1-pro-preview"
+uv run {baseDir}/scripts/generate_image.py --prompt "description" --filename "output.png" --model "google/gemini-3.1-flash-image-preview"
 ```
 
 API key
@@ -62,4 +62,4 @@ Notes
 - Use timestamps in filenames: `yyyy-mm-dd-hh-mm-ss-name.png`.
 - The script prints a `MEDIA:` line for eggent to auto-attach on supported chat providers.
 - Do not read the image back; report the saved path only.
-- Default model: `google/gemini-3.1-pro-preview` (can be overridden with `--model`).
+- Default model: `google/gemini-3.1-flash-image-preview` (can be overridden with `--model`).
