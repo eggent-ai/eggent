@@ -65,16 +65,12 @@ const TOOL_LABELS: Record<string, string> = {
   get_current_project: "Current Project",
   switch_project: "Switch Project",
   create_project: "Create Project",
-  response: "Response",
 };
 
 export function ToolOutput({ toolName, args, result }: ToolOutputProps) {
   const [expanded, setExpanded] = useState(false);
   const Icon = TOOL_ICONS[toolName] || Terminal;
   const label = TOOL_LABELS[toolName] || toolName;
-
-  // Don't render the response tool visually
-  if (toolName === "response") return null;
 
   return (
     <div className="border rounded-lg my-2 overflow-hidden bg-card">

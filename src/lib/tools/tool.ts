@@ -372,20 +372,6 @@ export function createAgentTools(
 ): ToolSet {
   const tools: ToolSet = {};
 
-  // Response tool -- always present
-  tools.response = tool({
-    description:
-      "Provide your final response to the user. Use this tool when you have the answer or have completed the task. The message will be displayed to the user as your response.",
-    inputSchema: z.object({
-      message: z
-        .string()
-        .describe("Your final response message to the user in markdown format"),
-    }),
-    execute: async ({ message }) => {
-      return message;
-    },
-  });
-
   // Project navigation tools
   tools.list_projects = tool({
     description:

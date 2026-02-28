@@ -52,7 +52,14 @@ COPY --from=builder /app/bundled-skills ./bundled-skills
 RUN mkdir -p /app/data/tmp /app/data/ms-playwright /app/data/npm-cache /app/data/.cache \
   && chown -R node:node /app "${PYTHON_VENV}"
 
-USER node
+# Install gosu for dropping privileges in entrypoint
+RUN apt-get update && apt-get install -y --no-install-recommends gosu && rm -rf /var/lib/apt/lists/*
+
+COPY entrypoint.sh /app/entrypoint.sh
+RUN chmod +x /app/entrypoint.sh
+
+# Start as root so the entrypoint can fix volume permissions, then drop to node
 EXPOSE 3000
 
+ENTRYPOINT ["/app/entrypoint.sh"]
 CMD ["npm", "run", "start"]

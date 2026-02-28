@@ -11,7 +11,10 @@ import type { ChatMessage } from "@/lib/types";
 import { useBackgroundSync } from "@/hooks/use-background-sync";
 import { generateClientId } from "@/lib/utils";
 
-/** Convert stored ChatMessage to UIMessage (parts format for useChat) */
+/** Convert stored ChatMessage to UIMessage (parts format for useChat).
+ *  Consecutive assistant messages are merged into a single UIMessage so the
+ *  multi-step agent loop does not produce duplicate bubbles in the UI.
+ */
 function chatMessagesToUIMessages(chatMessages: ChatMessage[]): UIMessage[] {
   const result: UIMessage[] = [];
 
@@ -53,8 +56,15 @@ function chatMessagesToUIMessages(chatMessages: ChatMessage[]): UIMessage[] {
         parts.push({ type: "text" as const, text: m.content });
       }
 
-      // Only add message if it has content
-      if (parts.length > 0) {
+      if (parts.length === 0) continue;
+
+      // Merge into the previous assistant message when possible so that
+      // multi-step agent turns (tool call → result → next text) appear as a
+      // single message bubble instead of duplicated responses.
+      const prev = result.length > 0 ? result[result.length - 1] : null;
+      if (prev && prev.role === "assistant") {
+        prev.parts = [...prev.parts, ...parts];
+      } else {
         result.push({
           id: m.id,
           role: "assistant",
