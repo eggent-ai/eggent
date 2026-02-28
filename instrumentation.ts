@@ -61,9 +61,13 @@ export async function register() {
   }
 }
 
+function ensureProtocol(url: string): string {
+  return url.startsWith("http") ? url : `https://${url}`;
+}
+
 function inferBaseUrl(): string {
   const explicit = (process.env.APP_BASE_URL ?? "").trim().replace(/\/+$/, "");
-  if (explicit) return explicit;
+  if (explicit) return ensureProtocol(explicit);
 
   // Vercel
   const vercelUrl = (process.env.VERCEL_URL ?? "").trim();

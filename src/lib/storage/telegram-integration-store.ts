@@ -305,7 +305,12 @@ export async function getTelegramIntegrationRuntimeConfig(): Promise<TelegramInt
   const stored = await getTelegramIntegrationStoredSettings();
   const envBotToken = trimString(process.env.TELEGRAM_BOT_TOKEN);
   const envWebhookSecret = trimString(process.env.TELEGRAM_WEBHOOK_SECRET);
-  const envPublicBaseUrl = trimString(process.env.APP_BASE_URL);
+  const rawBaseUrl = trimString(process.env.APP_BASE_URL);
+  const envPublicBaseUrl = rawBaseUrl
+    ? rawBaseUrl.startsWith("http")
+      ? rawBaseUrl
+      : `https://${rawBaseUrl}`
+    : "";
   const envDefaultProjectId = trimString(process.env.TELEGRAM_DEFAULT_PROJECT_ID);
   const envAllowedUserIds = parseAllowedUserIdsFromEnv(
     trimString(process.env.TELEGRAM_ALLOWED_USER_IDS)
