@@ -109,7 +109,7 @@ function applyGlobalToolLoopGuard(tools: ToolSet): ToolSet {
   const wrappedTools: ToolSet = {};
 
   for (const [toolName, toolDef] of Object.entries(tools)) {
-    if (toolName === "response" || typeof toolDef.execute !== "function") {
+    if (typeof toolDef.execute !== "function") {
       wrappedTools[toolName] = toolDef;
       continue;
     }
@@ -465,10 +465,28 @@ export async function runAgent(options: {
             createdAt: now,
           });
 
-          // Add all response messages (assistant + tool calls + tool results)
+          // Add all response messages (assistant + tool calls + tool results).
+          // Merge consecutive assistant-only (no tool calls) messages so that
+          // multi-step agent turns don't produce duplicate text in the history.
           const responseMessages = event.response.messages;
           for (const msg of responseMessages) {
-            chat.messages.push(...convertModelMessageToChatMessages(msg, now));
+            const converted = convertModelMessageToChatMessages(msg, now);
+            for (const cm of converted) {
+              // If the new message is a text-only assistant message and the
+              // previous stored message is also a text-only assistant message,
+              // merge them to avoid duplicate bubbles in the UI.
+              const prev = chat.messages.length > 0 ? chat.messages[chat.messages.length - 1] : null;
+              if (
+                cm.role === "assistant" &&
+                prev?.role === "assistant" &&
+                !cm.toolCalls?.length &&
+                !prev.toolCalls?.length
+              ) {
+                prev.content = cm.content || prev.content;
+              } else {
+                chat.messages.push(cm);
+              }
+            }
           }
 
           chat.updatedAt = now;
@@ -599,7 +617,20 @@ export async function runAgentText(options: {
 
         if (Array.isArray(responseMessages) && responseMessages.length > 0) {
           for (const msg of responseMessages) {
-            latest.messages.push(...convertModelMessageToChatMessages(msg, now));
+            const converted = convertModelMessageToChatMessages(msg, now);
+            for (const cm of converted) {
+              const prev = latest.messages.length > 0 ? latest.messages[latest.messages.length - 1] : null;
+              if (
+                cm.role === "assistant" &&
+                prev?.role === "assistant" &&
+                !cm.toolCalls?.length &&
+                !prev.toolCalls?.length
+              ) {
+                prev.content = cm.content || prev.content;
+              } else {
+                latest.messages.push(cm);
+              }
+            }
           }
         } else {
           latest.messages.push({
