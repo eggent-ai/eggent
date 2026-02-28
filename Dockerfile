@@ -40,7 +40,10 @@ RUN mkdir -p /app/data/tmp \
     sudo \
     ripgrep \
   && python3 -m venv "${PYTHON_VENV}" \
-  && "${PYTHON_VENV}/bin/pip" install requests \
+  && "${PYTHON_VENV}/bin/pip" install requests httpx pillow \
+  && curl -LsSf https://astral.sh/uv/install.sh | env INSTALLER_NO_MODIFY_PATH=1 sh \
+  && mv /root/.local/bin/uv /usr/local/bin/uv \
+  && mv /root/.local/bin/uvx /usr/local/bin/uvx \
   && rm -rf /var/lib/apt/lists/*
 
 COPY package.json package-lock.json ./
