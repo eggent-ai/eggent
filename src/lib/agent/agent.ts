@@ -440,7 +440,7 @@ export async function runAgent(options: {
     system: systemPrompt,
     messages,
     tools,
-    stopWhen: stepCountIs(15), // Allow up to 15 tool call rounds
+    stopWhen: stepCountIs(6), // Allow up to 6 tool call rounds (reduced from 15 to prevent runaway loops)
     temperature: modelConfig.temperature ?? 0.7,
     maxOutputTokens: modelConfig.maxTokens ?? 4096,
     onFinish: async (event) => {
@@ -593,7 +593,7 @@ export async function runAgentText(options: {
       system: systemPrompt,
       messages,
       tools,
-      stopWhen: stepCountIs(15),
+      stopWhen: stepCountIs(6), // Reduced from 15 to prevent runaway loops
       temperature: modelConfig.temperature ?? 0.7,
       maxOutputTokens: modelConfig.maxTokens ?? 4096,
     });
@@ -737,7 +737,7 @@ export async function runSubordinateAgent(options: {
       system: systemPrompt,
       messages,
       tools,
-      stopWhen: stepCountIs(10),
+      stopWhen: stepCountIs(5), // Reduced from 10 to prevent runaway loops
       temperature: settings.utilityModel.temperature ?? 0.7,
       maxOutputTokens: settings.utilityModel.maxTokens ?? 4096,
     });
