@@ -374,8 +374,7 @@ export function createAgentTools(
 
   // Project navigation tools
   tools.list_projects = tool({
-    description:
-      "List all available projects. Use this when the user asks what projects exist, to browse projects, or before switching projects.",
+    description: "List all projects.",
     inputSchema: z.object({}),
     execute: async () => {
       const projects = await getAllProjects();
@@ -397,8 +396,7 @@ export function createAgentTools(
   });
 
   tools.get_current_project = tool({
-    description:
-      "Get the currently active project context for this chat, including current folder path and work directory.",
+    description: "Get current project context (name, path, workDir).",
     inputSchema: z.object({}),
     execute: async () => {
       if (!context.projectId) {
@@ -426,18 +424,17 @@ export function createAgentTools(
   });
 
   tools.switch_project = tool({
-    description:
-      "Switch chat context to another project by project ID or name. Use this when the user asks to move to another project.",
+    description: "Switch to another project by ID or name.",
     inputSchema: z
       .object({
         project_id: z
           .string()
           .optional()
-          .describe("Exact project ID to switch to"),
+          .describe("Project ID"),
         project_name: z
           .string()
           .optional()
-          .describe("Project name (exact or partial, case-insensitive)"),
+          .describe("Project name"),
       })
       .refine(
         (value) => Boolean(value.project_id?.trim() || value.project_name?.trim()),
@@ -530,26 +527,13 @@ export function createAgentTools(
   });
 
   tools.create_project = tool({
-    description:
-      "Create a new project workspace. Use this when the user asks to create/add a new project, especially if no project exists yet.",
+    description: "Create a new project.",
     inputSchema: z.object({
-      name: z.string().describe("Project name (human-readable)"),
-      description: z
-        .string()
-        .optional()
-        .describe("Optional project description"),
-      instructions: z
-        .string()
-        .optional()
-        .describe("Optional default instructions for the agent in this project"),
-      memory_mode: z
-        .enum(["global", "isolated"])
-        .optional()
-        .describe("Project memory mode; default is isolated"),
-      project_id: z
-        .string()
-        .optional()
-        .describe("Optional custom project id; if taken, a unique suffix is added"),
+      name: z.string().describe("Project name"),
+      description: z.string().optional(),
+      instructions: z.string().optional(),
+      memory_mode: z.enum(["global", "isolated"]).optional(),
+      project_id: z.string().optional(),
     }),
     execute: async ({
       name,
@@ -603,23 +587,17 @@ export function createAgentTools(
   // Code execution tool
   if (settings.codeExecution.enabled) {
     tools.code_execution = tool({
-      description:
-        "Execute code in Python, Node.js, or Shell terminal. Use this to run scripts, install packages, manipulate files, perform calculations, or any task that requires code execution. The code runs in a persistent shell session.",
+      description: "Execute code in a persistent shell session.",
       inputSchema: z.object({
         runtime: z
-          .enum(["python", "nodejs", "terminal"])
-          .describe(
-            "The runtime to use: 'python' for Python code, 'nodejs' for JavaScript/Node.js code, 'terminal' for shell commands"
-          ),
+          .enum(["python", "nodejs", "terminal"]),
         code: z
           .string()
-          .describe("The code to execute"),
+          .describe("Code to execute"),
         session: z
           .number()
           .default(0)
-          .describe(
-            "Session ID (0-9). Use different sessions for parallel tasks. Default is 0."
-          ),
+          .describe("Session ID (0-9), default 0"),
       }),
       execute: async ({ runtime, code, session }) => {
         const normalizedCode = code.replace(/\r\n/g, "\n");
@@ -641,32 +619,12 @@ export function createAgentTools(
   }
 
   tools.read_text_file = tool({
-    description:
-      "Read a local UTF-8 text file (for example .txt, .md, .json, .csv, source code). Use this for file reading tasks instead of code_execution.",
+    description: "Read a local UTF-8 text file.",
     inputSchema: z.object({
-      file_path: z
-        .string()
-        .describe("Absolute path, or path relative to current project cwd."),
-      start_line: z
-        .number()
-        .int()
-        .min(1)
-        .default(1)
-        .describe("1-based line number to start reading from."),
-      max_lines: z
-        .number()
-        .int()
-        .min(1)
-        .max(2000)
-        .default(300)
-        .describe("Maximum number of lines to return."),
-      max_chars: z
-        .number()
-        .int()
-        .min(200)
-        .max(TEXT_FILE_READ_MAX_CHARS)
-        .default(12000)
-        .describe("Maximum number of characters to return."),
+      file_path: z.string().describe("File path (absolute or relative)"),
+      start_line: z.number().int().min(1).default(1),
+      max_lines: z.number().int().min(1).max(2000).default(300),
+      max_chars: z.number().int().min(200).max(TEXT_FILE_READ_MAX_CHARS).default(12000),
     }),
     execute: async ({ file_path, start_line, max_lines, max_chars }) => {
       try {
@@ -723,18 +681,12 @@ export function createAgentTools(
 
   tools.read_pdf_file = tool({
     description:
-      "Extract text from a local PDF file. Use this for reading PDF contents without Python.",
+      "Read text from a local PDF file.",
     inputSchema: z.object({
       file_path: z
         .string()
-        .describe("Absolute path, or path relative to current project cwd."),
-      max_chars: z
-        .number()
-        .int()
-        .min(200)
-        .max(PDF_FILE_READ_MAX_CHARS)
-        .default(15000)
-        .describe("Maximum number of extracted text characters to return."),
+        .describe("File path"),
+      max_chars: z.number().int().min(200).max(PDF_FILE_READ_MAX_CHARS).default(15000),
     }),
     execute: async ({ file_path, max_chars }) => {
       try {
@@ -777,18 +729,11 @@ export function createAgentTools(
 
   tools.write_text_file = tool({
     description:
-      "Create or update a local UTF-8 text file. Use this for writing .md/.txt/.json/code files instead of code_execution.",
+      "Write or overwrite a local UTF-8 text file.",
     inputSchema: z.object({
-      file_path: z
-        .string()
-        .describe("Absolute path, or path relative to current project cwd."),
-      content: z
-        .string()
-        .describe("Full UTF-8 text content to write."),
-      overwrite: z
-        .boolean()
-        .default(true)
-        .describe("Whether to overwrite existing file if it already exists."),
+      file_path: z.string().describe("File path"),
+      content: z.string().describe("File content"),
+      overwrite: z.boolean().default(true),
     }),
     execute: async ({ file_path, content, overwrite }) => {
       try {
@@ -847,18 +792,13 @@ export function createAgentTools(
 
   tools.copy_file = tool({
     description:
-      "Copy (duplicate) a local file from source_path to destination_path.",
+      "Copy a file.",
     inputSchema: z.object({
       source_path: z
         .string()
-        .describe("Source file path (absolute or relative to current project cwd)."),
-      destination_path: z
-        .string()
-        .describe("Destination file path (absolute or relative to current project cwd)."),
-      overwrite: z
-        .boolean()
-        .default(false)
-        .describe("Whether to overwrite destination if it already exists."),
+        .describe("Source path"),
+      destination_path: z.string().describe("Destination path"),
+      overwrite: z.boolean().default(false),
     }),
     execute: async ({ source_path, destination_path, overwrite }) => {
       try {
@@ -910,18 +850,14 @@ export function createAgentTools(
   // Memory tools
   if (settings.memory.enabled) {
     tools.memory_save = tool({
-      description:
-        "Save important information to persistent memory. Use this to remember facts, user preferences, successful solutions, or any information that should persist across conversations.",
+      description: "Save information to persistent memory.",
       inputSchema: z.object({
         text: z
           .string()
-          .describe("The information to save to memory"),
+          .describe("Text to save"),
         area: z
           .enum(["main", "fragments", "solutions", "instruments"])
-          .default("main")
-          .describe(
-            "Memory area: 'main' for general facts, 'fragments' for conversation snippets, 'solutions' for successful solutions, 'instruments' for tool descriptions"
-          ),
+          .default("main"),
       }),
       execute: async ({ text, area }) => {
         return memorySave(text, area, context.memorySubdir, settings);
@@ -929,16 +865,10 @@ export function createAgentTools(
     });
 
     tools.memory_load = tool({
-      description:
-        "Search persistent memory for relevant information. Use this to recall previously saved facts, solutions, or conversation context.",
+      description: "Search persistent memory.",
       inputSchema: z.object({
-        query: z
-          .string()
-          .describe("Search query to find relevant memories"),
-        limit: z
-          .number()
-          .default(5)
-          .describe("Maximum number of results to return"),
+        query: z.string(),
+        limit: z.number().default(5),
       }),
       execute: async ({ query, limit }) => {
         return memoryLoad(query, limit, context.memorySubdir, settings);
@@ -946,12 +876,9 @@ export function createAgentTools(
     });
 
     tools.memory_delete = tool({
-      description:
-        "Delete specific entries from persistent memory.",
+      description: "Delete entries from persistent memory.",
       inputSchema: z.object({
-        query: z
-          .string()
-          .describe("Search query to find memories to delete"),
+        query: z.string(),
       }),
       execute: async ({ query }) => {
         return memoryDelete(query, context.memorySubdir, settings);
@@ -961,16 +888,10 @@ export function createAgentTools(
 
   // Knowledge query tool
   tools.knowledge_query = tool({
-    description:
-      "Search the knowledge base (uploaded documents) for relevant information using semantic search. Use this when you need information from the project's documents.",
+    description: "Search uploaded documents (knowledge base).",
     inputSchema: z.object({
-      query: z
-        .string()
-        .describe("The search query to find relevant documents"),
-      limit: z
-        .number()
-        .default(5)
-        .describe("Maximum number of document chunks to return"),
+      query: z.string(),
+      limit: z.number().default(5),
     }),
     execute: async ({ query, limit }) => {
       return knowledgeQuery(query, limit, context.knowledgeSubdirs, settings);
@@ -980,16 +901,10 @@ export function createAgentTools(
   // Search engine tool
   if (settings.search.enabled && settings.search.provider !== "none") {
     tools.search_web = tool({
-      description:
-        "Search the internet for current information. Use this when you need up-to-date information, facts you're unsure about, or any web-based research.",
+      description: "Search the internet.",
       inputSchema: z.object({
-        query: z
-          .string()
-          .describe("The search query"),
-        limit: z
-          .number()
-          .default(5)
-          .describe("Maximum number of search results"),
+        query: z.string(),
+        limit: z.number().default(5),
       }),
       execute: async ({ query, limit }) => {
         return searchWeb(query, limit, settings.search);
@@ -1000,16 +915,12 @@ export function createAgentTools(
   const telegramRuntime = getTelegramRuntimeData(context);
   if (telegramRuntime) {
     tools.telegram_send_file = tool({
-      description:
-        "Send a local file to the current Telegram chat as a document. Use this when the user asks to send/download a file in Telegram.",
+      description: "Send a file to the current Telegram chat.",
       inputSchema: z.object({
         file_path: z
           .string()
-          .describe("Absolute path to the file, or path relative to current project cwd."),
-        caption: z
-          .string()
-          .optional()
-          .describe("Optional caption to include with the file."),
+          .describe("File path"),
+        caption: z.string().optional(),
       }),
       execute: async ({ file_path, caption }) => {
         try {
@@ -1095,14 +1006,9 @@ export function createAgentTools(
   // Load skill tool — load full instructions when model activates a project skill (Agent Skills integrate-skills)
   if (context.projectId) {
     tools.load_skill = tool({
-      description:
-        "Load the full instructions for a project skill. Call this when the user's task matches one of the available skills (see <available_skills> in context). Use the skill name exactly as listed. This returns SKILL.md plus a manifest of additional skill resource files; load specific files with load_skill_resource when needed.",
+      description: "Load full instructions for a project skill by name.",
       inputSchema: z.object({
-        skill_name: z
-          .string()
-          .describe(
-            "Exact name of the skill to load (from <available_skills>, e.g. pdf-processing)"
-          ),
+        skill_name: z.string().describe("Skill name"),
       }),
       execute: async ({ skill_name }) => {
         const skill = await loadSkillInstructions(
@@ -1143,17 +1049,10 @@ export function createAgentTools(
     });
 
     tools.load_skill_resource = tool({
-      description:
-        "Load a single additional file from a project skill (for example from references/, scripts/, assets/, or another path listed by load_skill). Use this only after loading the skill and only for files relevant to the current task.",
+      description: "Load a resource file from a project skill.",
       inputSchema: z.object({
-        skill_name: z
-          .string()
-          .describe("Exact skill name (same value used for load_skill)."),
-        relative_path: z
-          .string()
-          .describe(
-            "Relative path inside the skill directory, e.g. references/examples.md or scripts/generate.py"
-          ),
+        skill_name: z.string().describe("Skill name"),
+        relative_path: z.string().describe("Path relative to skill dir"),
       }),
       execute: async ({ skill_name, relative_path }) => {
         const skill = await loadSkillInstructions(
@@ -1199,34 +1098,13 @@ export function createAgentTools(
     });
 
     tools.create_skill = tool({
-      description:
-        "Create a new skill in the current project. Use when the user asks to create, add, or write a skill. The skill will be saved in .meta/skills/<skill_name>/SKILL.md following the Agent Skills specification. Skill name must be lowercase with hyphens (e.g. pdf-processing, code-review).",
+      description: "Create a new project skill (lowercase-hyphen name).",
       inputSchema: z.object({
-        skill_name: z
-          .string()
-          .describe(
-            "Name of the skill: only lowercase letters, numbers, and hyphens; 1-64 chars; e.g. pdf-processing, api-conventions"
-          ),
-        description: z
-          .string()
-          .describe(
-            "What the skill does and when to use it (1-1024 chars). Include keywords that help match user tasks."
-          ),
-        body: z
-          .string()
-          .describe(
-            "Markdown instructions: steps, examples, edge cases. This is the content the agent will follow when the skill is activated."
-          ),
-        compatibility: z
-          .string()
-          .optional()
-          .describe(
-            "Optional. Environment requirements (e.g. 'Requires Python 3.10+', 'Designed for Node.js projects'). Max 500 chars."
-          ),
-        license: z
-          .string()
-          .optional()
-          .describe("Optional. License name or reference (e.g. MIT, Apache-2.0)."),
+        skill_name: z.string().describe("lowercase-hyphen name"),
+        description: z.string().describe("What the skill does"),
+        body: z.string().describe("Markdown instructions"),
+        compatibility: z.string().optional(),
+        license: z.string().optional(),
       }),
       execute: async ({ skill_name, description, body, compatibility, license }) => {
         const result = await createSkill(context.projectId!, {
@@ -1244,34 +1122,13 @@ export function createAgentTools(
     });
 
     tools.update_skill = tool({
-      description:
-        "Update an existing project's skill SKILL.md (frontmatter and/or body). Use this when the user asks to edit or revise an existing skill.",
+      description: "Update an existing project skill.",
       inputSchema: z.object({
-        skill_name: z
-          .string()
-          .describe("Exact name of the existing skill to update."),
-        description: z
-          .string()
-          .optional()
-          .describe(
-            "Optional new skill description (what the skill does and when to use it)."
-          ),
-        body: z
-          .string()
-          .optional()
-          .describe("Optional new markdown body/instructions for SKILL.md."),
-        compatibility: z
-          .string()
-          .nullable()
-          .optional()
-          .describe(
-            "Optional compatibility value. Use null to remove compatibility from frontmatter."
-          ),
-        license: z
-          .string()
-          .nullable()
-          .optional()
-          .describe("Optional license value. Use null to remove license from frontmatter."),
+        skill_name: z.string().describe("Skill name"),
+        description: z.string().optional(),
+        body: z.string().optional(),
+        compatibility: z.string().nullable().optional(),
+        license: z.string().nullable().optional(),
       }),
       execute: async ({ skill_name, description, body, compatibility, license }) => {
         const payload: {
@@ -1295,8 +1152,7 @@ export function createAgentTools(
     });
 
     tools.delete_skill = tool({
-      description:
-        "Delete an existing skill directory from the current project. This permanently removes SKILL.md and all optional resources in that skill.",
+      description: "Delete a project skill.",
       inputSchema: z.object({
         skill_name: z.string().describe("Exact skill name to delete."),
         confirm: z
@@ -1317,18 +1173,11 @@ export function createAgentTools(
     });
 
     tools.write_skill_file = tool({
-      description:
-        "Add an optional file to a project skill: scripts (e.g. scripts/extract.py), references (e.g. references/REFERENCE.md), or assets. Use when the user asks to add a script, reference doc, or asset to a skill. Only SKILL.md is required; everything else is optional and added with this tool when needed.",
+      description: "Write a file into a project skill directory (scripts/, references/, assets/).",
       inputSchema: z.object({
-        skill_name: z
-          .string()
-          .describe("Exact name of the skill (from <available_skills> or one you just created)"),
-        relative_path: z
-          .string()
-          .describe(
-            "Path relative to the skill directory, e.g. scripts/extract.py, references/REFERENCE.md, assets/template.json"
-          ),
-        content: z.string().describe("Full file content (code, markdown, or text)"),
+        skill_name: z.string().describe("Skill name"),
+        relative_path: z.string().describe("Path relative to skill dir"),
+        content: z.string().describe("File content"),
       }),
       execute: async ({ skill_name, relative_path, content }) => {
         const result = await writeSkillFile(
@@ -1346,46 +1195,17 @@ export function createAgentTools(
     });
 
     tools.upsert_mcp_server = tool({
-      description:
-        "Create or update one MCP server entry in this project's .meta/mcp/servers.json. Use this when the user asks to add/edit MCP server settings.",
+      description: "Create or update an MCP server entry for this project.",
       inputSchema: z
         .object({
-          id: z
-            .string()
-            .describe("MCP server id (for example firecrawl-mcp or my-http-server)."),
-          transport: z
-            .enum(["stdio", "http"])
-            .describe("Transport type: stdio or http."),
-          command: z
-            .string()
-            .nullable()
-            .optional()
-            .describe("Required for stdio transport: executable command."),
-          args: z
-            .array(z.string())
-            .nullable()
-            .optional()
-            .describe("Optional command arguments for stdio transport."),
-          env: z
-            .record(z.string(), z.string())
-            .nullable()
-            .optional()
-            .describe("Optional environment variables for stdio transport."),
-          cwd: z
-            .string()
-            .nullable()
-            .optional()
-            .describe("Optional working directory for stdio transport."),
-          url: z
-            .string()
-            .nullable()
-            .optional()
-            .describe("Required for http transport: MCP endpoint URL."),
-          headers: z
-            .record(z.string(), z.string())
-            .nullable()
-            .optional()
-            .describe("Optional HTTP headers for http transport."),
+          id: z.string().describe("Server id"),
+          transport: z.enum(["stdio", "http"]),
+          command: z.string().nullable().optional().describe("stdio: executable"),
+          args: z.array(z.string()).nullable().optional(),
+          env: z.record(z.string(), z.string()).nullable().optional(),
+          cwd: z.string().nullable().optional(),
+          url: z.string().nullable().optional().describe("http: endpoint URL"),
+          headers: z.record(z.string(), z.string()).nullable().optional(),
         })
         .superRefine((value, ctx) => {
           if (value.transport === "stdio" && !(value.command ?? "").trim()) {
@@ -1432,10 +1252,9 @@ export function createAgentTools(
     });
 
     tools.delete_mcp_server = tool({
-      description:
-        "Delete one MCP server entry from this project's .meta/mcp/servers.json.",
+      description: "Delete an MCP server entry from this project.",
       inputSchema: z.object({
-        server_id: z.string().describe("Exact MCP server id to delete."),
+        server_id: z.string().describe("Server id"),
       }),
       execute: async ({ server_id }) => {
         const result = await deleteProjectMcpServer(context.projectId!, server_id);
@@ -1450,14 +1269,9 @@ export function createAgentTools(
   // Call subordinate tool (only for agents below max depth)
   if ((context.agentNumber ?? 0) < 3) {
     tools.call_subordinate = tool({
-      description:
-        "Delegate a complex subtask to a subordinate agent. The subordinate has access to all tools and will complete the task independently. Use this for complex multi-step tasks that would benefit from focused attention.",
+      description: "Delegate a subtask to a subordinate agent.",
       inputSchema: z.object({
-        task: z
-          .string()
-          .describe(
-            "Detailed description of the task to delegate. Include all necessary context."
-          ),
+        task: z.string().describe("Task description with context"),
       }),
       execute: async ({ task }) => {
         return callSubordinate(
