@@ -790,7 +790,23 @@ export async function POST(req: NextRequest) {
         await sendTelegramMessage(botToken, chatId, `Ошибка: ${errorMessage}`, messageId);
         return Response.json({ ok: true, handledError: true, status: error.status });
       }
-      throw error;
+
+      // Catch-all: send a user-visible error message for unexpected failures
+      // (e.g. LLM API errors, missing API keys, timeouts, etc.)
+      console.error("Telegram agent processing error:", error);
+      const fallbackMessage =
+        error instanceof Error ? error.message : "Внутренняя ошибка сервера.";
+      try {
+        await sendTelegramMessage(
+          botToken,
+          chatId,
+          `Ошибка обработки: ${fallbackMessage}`,
+          messageId
+        );
+      } catch (sendError) {
+        console.error("Failed to send error message to Telegram:", sendError);
+      }
+      return Response.json({ ok: true, handledError: true, internalError: true });
     }
   } catch (error) {
     if (
