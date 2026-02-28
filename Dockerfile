@@ -15,6 +15,7 @@ FROM node:22-bookworm-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
+ENV HOSTNAME=0.0.0.0
 ENV PYTHON_VENV=/opt/eggent-python
 ENV PATH="${PYTHON_VENV}/bin:${PATH}"
 ENV PIP_DISABLE_PIP_VERSION_CHECK=1
@@ -48,6 +49,7 @@ RUN npm install --omit=dev --no-package-lock
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/next.config.mjs ./next.config.mjs
 COPY --from=builder /app/bundled-skills ./bundled-skills
+COPY --from=builder /app/src/prompts ./src/prompts
 
 RUN mkdir -p /app/data/tmp /app/data/ms-playwright /app/data/npm-cache /app/data/.cache \
   && chown -R node:node /app "${PYTHON_VENV}"
