@@ -18,6 +18,7 @@ import {
   consumeTelegramAccessCode,
   getTelegramIntegrationRuntimeConfig,
   normalizeTelegramUserId,
+  saveTelegramIntegrationStoredSettings,
 } from "@/lib/storage/telegram-integration-store";
 import { saveChatFile } from "@/lib/storage/chat-files-store";
 import { createChat, getChat } from "@/lib/storage/chat-store";
@@ -563,44 +564,53 @@ export async function POST(req: NextRequest) {
     }
 
     if (!allowedUserIds.has(fromUserId)) {
-      const accessCode = extractAccessCodeCandidate(text);
-      const granted =
-        accessCode &&
-        (await consumeTelegramAccessCode({
-          code: accessCode,
-          userId: fromUserId,
-        }));
+      // Auto-allow the first user in private chat when no users are configured
+      if (allowedUserIds.size === 0 && chatType === "private") {
+        await saveTelegramIntegrationStoredSettings({
+          allowedUserIds: [fromUserId],
+        });
+        allowedUserIds.add(fromUserId);
+        console.log(`[Telegram] Auto-allowed first user: ${fromUserId}`);
+      } else {
+        const accessCode = extractAccessCodeCandidate(text);
+        const granted =
+          accessCode &&
+          (await consumeTelegramAccessCode({
+            code: accessCode,
+            userId: fromUserId,
+          }));
 
-      if (granted) {
+        if (granted) {
+          await sendTelegramMessage(
+            botToken,
+            chatId,
+            "Доступ выдан. Теперь можно отправлять сообщения агенту.",
+            messageId
+          );
+          return Response.json({
+            ok: true,
+            accessGranted: true,
+            userId: fromUserId,
+          });
+        }
+
         await sendTelegramMessage(
           botToken,
           chatId,
-          "Доступ выдан. Теперь можно отправлять сообщения агенту.",
+          [
+            "Доступ запрещён: ваш user_id не в списке разрешённых.",
+            "Отправьте код активации командой /code <код> или /start <код>.",
+            `Ваш user_id: ${fromUserId}`,
+          ].join("\n"),
           messageId
         );
         return Response.json({
           ok: true,
-          accessGranted: true,
+          ignored: true,
+          reason: "user_not_allowed",
           userId: fromUserId,
         });
       }
-
-      await sendTelegramMessage(
-        botToken,
-        chatId,
-        [
-          "Доступ запрещён: ваш user_id не в списке разрешённых.",
-          "Отправьте код активации командой /code <код> или /start <код>.",
-          `Ваш user_id: ${fromUserId}`,
-        ].join("\n"),
-        messageId
-      );
-      return Response.json({
-        ok: true,
-        ignored: true,
-        reason: "user_not_allowed",
-        userId: fromUserId,
-      });
     }
 
     // Resolve app user linked to this Telegram account (if any)
