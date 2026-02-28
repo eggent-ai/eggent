@@ -201,9 +201,12 @@ export async function buildSystemPrompt(options: {
     }
   }
 
-  // 6. Current date/time
+  // 6. Current date/time (rounded to the hour for prompt caching)
+  const now = new Date();
+  now.setMinutes(0, 0, 0);
+  const dateStr = now.toISOString().slice(0, 13) + ":00:00Z";
   parts.push(
-    `\n## Current Information\n- Date/Time: ${new Date().toISOString()}\n- Timezone: ${Intl.DateTimeFormat().resolvedOptions().timeZone}`
+    `\n## Current Information\n- Date/Time: ${dateStr}\n- Timezone: ${Intl.DateTimeFormat().resolvedOptions().timeZone}`
   );
 
   return parts.join("\n\n");

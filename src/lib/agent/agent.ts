@@ -13,6 +13,7 @@ import { getChat, saveChat } from "@/lib/storage/chat-store";
 import { createAgentTools } from "@/lib/tools/tool";
 import { getProjectMcpTools } from "@/lib/mcp/client";
 import type { AgentContext } from "@/lib/agent/types";
+import { History } from "@/lib/agent/history";
 import type { ChatMessage } from "@/lib/types";
 import { publishUiSyncEvent } from "@/lib/realtime/event-bus";
 
@@ -584,7 +585,10 @@ export async function runAgent(options: {
   const chat = await getChat(options.chatId);
   if (chat) {
     // Convert stored messages to ModelMessage format (including tool calls/results)
-    context.history = convertChatMessagesToModelMessages(chat.messages);
+    const allMessages = convertChatMessagesToModelMessages(chat.messages);
+    const history = new History(80);
+    history.addMany(allMessages);
+    context.history = history.getAll();
   }
 
   // Build tools: base + optional MCP tools from project .meta/mcp
@@ -717,7 +721,10 @@ export async function runAgentText(options: {
 
   const chat = await getChat(options.chatId);
   if (chat) {
-    context.history = convertChatMessagesToModelMessages(chat.messages);
+    const allMessages = convertChatMessagesToModelMessages(chat.messages);
+    const history = new History(80);
+    history.addMany(allMessages);
+    context.history = history.getAll();
   }
 
   const baseTools = createAgentTools(context, settings);
