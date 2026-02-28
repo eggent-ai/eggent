@@ -25,7 +25,8 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/app/data/ms-playwright
 ENV npm_config_cache=/app/data/npm-cache
 ENV XDG_CACHE_HOME=/app/data/.cache
 
-RUN apt-get update \
+RUN mkdir -p /app/data/tmp \
+  && apt-get update \
   && apt-get install -y --no-install-recommends \
     bash \
     ca-certificates \
