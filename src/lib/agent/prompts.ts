@@ -10,14 +10,6 @@ import { getChatFiles } from "@/lib/storage/chat-files-store";
 
 const PROMPTS_DIR = path.join(process.cwd(), "src", "prompts");
 
-function escapeXml(s: string): string {
-  return s
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;");
-}
-
 /**
  * Load a prompt template from the prompts directory
  */
@@ -89,33 +81,21 @@ export async function buildSystemPrompt(options: {
       : `You are a subordinate agent (level ${agentNum}), delegated a task by Agent ${agentNum - 1}.`)
   );
 
-  // 3. Tool prompts
+  // 3. Compact tool usage rules (detailed descriptions are already in tool schemas)
   if (options.tools && options.tools.length > 0) {
     const mcpToolNames = options.tools.filter((t) => t.startsWith("mcp_"));
-    for (const toolName of options.tools) {
-      const toolPrompt = await loadPrompt(`tool-${toolName}`);
-      if (toolPrompt) {
-        parts.push(`\n## Tool: ${toolName}\n${toolPrompt}`);
-      }
-    }
     if (mcpToolNames.length > 0) {
       parts.push(
-        `\n## MCP (Model Context Protocol) tools\n` +
-        `This project has ${mcpToolNames.length} tool(s) from connected MCP servers. ` +
-        `Tool names are prefixed with \`mcp_<server>_<tool>\`. Use them when the task matches their description.\n\n` +
-        `MCP execution rules:\n` +
-        `- After an error, do not repeat the same MCP tool call with identical arguments.\n` +
-        `- Read error details and change the payload before retrying.\n` +
-        `- For n8n workflow updates, use a real workflow id from a successful tool response; never guess ids.`
+        `\n## MCP Tools\n` +
+        `${mcpToolNames.length} MCP tool(s) available (prefixed \`mcp_<server>_<tool>\`). ` +
+        `After an error, change the payload before retrying.`
       );
     }
 
     parts.push(
-      `\n## Tool Loop Safety\n` +
-      `- After a failed tool call, do not repeat the same tool with identical arguments.\n` +
-      `- Use the tool's error details to change parameters before retrying.\n` +
-      `- For skill tools (load_skill/load_skill_resource/create_skill/update_skill/delete_skill/write_skill_file), use exact skill names and valid paths.\n` +
-      `- If two corrected attempts still fail, report the blocker to the user instead of retrying endlessly.`
+      `\n## Tool Rules\n` +
+      `- Never repeat a failed tool call with identical arguments; read the error and adjust.\n` +
+      `- After two corrected attempts still fail, report the blocker to the user.`
     );
   }
 
@@ -131,73 +111,40 @@ export async function buildSystemPrompt(options: {
           : "")
       );
 
-      // 4b. Project Skills — metadata only at startup; full instructions via load_skill tool (integrate-skills)
+      // 4b. Project Skills — compact list; full instructions loaded via load_skill tool
       const skillsMeta = await loadProjectSkillsMetadata(options.projectId);
       if (skillsMeta.length > 0) {
+        const list = skillsMeta.map((s) => `- **${s.name}**: ${s.description}`).join("\n");
         parts.push(
-          `\n## Project Skills (available)\n` +
-          `This project has ${skillsMeta.length} skill(s). Match the user's task to a skill by description. When a task matches a skill, call the **load_skill** tool with that skill's name to load its full instructions, then follow them. Use only skills that apply.\n` +
-          `<available_skills>\n` +
-          skillsMeta
-            .map(
-              (s) =>
-                `  <skill>\n    <name>${escapeXml(s.name)}</name>\n    <description>${escapeXml(s.description)}</description>\n  </skill>`
-            )
-            .join("\n") +
-          `\n</available_skills>`
+          `\n## Skills\nWhen a task matches a skill, call **load_skill** with its name.\n${list}`
         );
       }
     }
   }
 
-  // 5. Available Files (Project Directory + Chat Uploaded)
+  // 5. Available Files — compact list (paths only)
   if (options.projectId || options.chatId) {
-    const filesSections: string[] = [];
+    const filePaths: string[] = [];
 
-    // 5a. Project directory files
     if (options.projectId) {
       try {
         const projectFiles = await getAllProjectFilesRecursive(options.projectId);
-        if (projectFiles.length > 0) {
-          const rows = projectFiles
-            .slice(0, 50) // Limit to 50 files to avoid huge prompts
-            .map((f) => `| ${f.name} | ${f.path} | ${formatFileSize(f.size)} |`)
-            .join("\n");
-          filesSections.push(
-            `### Project Directory Files\n` +
-            `| File | Path | Size |\n|------|------|------|\n${rows}` +
-            (projectFiles.length > 50 ? `\n\n*...and ${projectFiles.length - 50} more files*` : "")
-          );
+        filePaths.push(...projectFiles.slice(0, 30).map((f) => f.path));
+        if (projectFiles.length > 30) {
+          filePaths.push(`... and ${projectFiles.length - 30} more`);
         }
-      } catch {
-        // Ignore errors when getting project files
-      }
+      } catch { /* ignore */ }
     }
 
-    // 5b. Chat uploaded files
     if (options.chatId) {
       try {
         const chatFiles = await getChatFiles(options.chatId);
-        if (chatFiles.length > 0) {
-          const rows = chatFiles
-            .map((f) => `| ${f.name} | ${f.path} | ${formatFileSize(f.size)} |`)
-            .join("\n");
-          filesSections.push(
-            `### Chat Uploaded Files\n` +
-            `| File | Path | Size |\n|------|------|------|\n${rows}`
-          );
-        }
-      } catch {
-        // Ignore errors when getting chat files
-      }
+        filePaths.push(...chatFiles.map((f) => f.path));
+      } catch { /* ignore */ }
     }
 
-    if (filesSections.length > 0) {
-      parts.push(
-        `\n## Available Files\n` +
-        `These files are available in this context. You can read them using the code_execution tool.\n\n` +
-        filesSections.join("\n\n")
-      );
+    if (filePaths.length > 0) {
+      parts.push(`\n## Files\n${filePaths.join("\n")}`);
     }
   }
 
@@ -209,40 +156,15 @@ export async function buildSystemPrompt(options: {
   return parts.join("\n\n");
 }
 
-/**
- * Format file size in human-readable format
- */
-function formatFileSize(bytes: number): string {
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
-}
-
 function getDefaultSystemPrompt(): string {
   return `# Eggent Agent
 
-You are a helpful AI assistant with access to tools that allow you to:
-- Execute code (Python, Node.js, Shell commands)
-- Save and retrieve information from persistent memory
-- Search the internet for current information
-- Query a knowledge base of documents
-- Delegate complex subtasks to subordinate agents
+You are a helpful AI assistant with tool access (code execution, memory, web search, file I/O, cron, multi-agent delegation).
 
-## Guidelines
-
-1. **Be helpful and direct.** Answer the user's question or complete their task.
-2. **Respond directly with text.** For simple questions, just write your answer — no tools needed.
-3. **Use tools only when needed.** Only use tools if the task genuinely requires running code, searching the web, reading files, or saving to memory.
-4. **Do NOT use code_execution for simple questions.** Only run code when you need to actually execute something on the machine.
-5. **Think step by step.** For complex tasks, break them down and use tools iteratively.
-6. **Memory management.** Save important facts, preferences, and solutions to memory for future reference.
-7. **Respond clearly.** Use markdown formatting for readability. Include code blocks with language tags.
-
-## Important Rules
-
-- Respond directly with text. Just write your answer.
-- Only use code_execution when you need to actually run code, not for answering questions.
-- If the user asks you to remember something, save it to memory.
-- If you need current information, use the search tool.
-- Never make up information. If you don't know something, say so or search for it.`;
+## Rules
+- Answer simple questions directly with text — no tool calls needed.
+- Use tools only when the task genuinely requires them.
+- Do NOT use code_execution for questions you can answer from knowledge.
+- Never fabricate information — search or say you don't know.
+- Be direct, concise, use markdown formatting.`;
 }
