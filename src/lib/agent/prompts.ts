@@ -116,7 +116,8 @@ export async function buildSystemPrompt(options: {
       if (skillsMeta.length > 0) {
         const list = skillsMeta.map((s) => `- **${s.name}**: ${s.description}`).join("\n");
         parts.push(
-          `\n## Skills\nWhen a task matches a skill, call **load_skill** with its name.\n${list}`
+          `\n## Skills\nOnly use **load_skill** when the task requires the skill's specialized multi-step workflow. ` +
+          `Do NOT load a skill if a single tool call (e.g. search_web) can answer the question.\n${list}`
         );
       }
     }
