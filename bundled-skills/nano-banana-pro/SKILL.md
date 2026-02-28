@@ -58,7 +58,7 @@ API key
 
 Notes
 
-- Resolutions: `1K` (default), `2K`, `4K`.
+- Resolutions: `0.5K`, `1K` (default), `2K`, `4K`. (`0.5K` is exclusive to this model.)
 - Use timestamps in filenames: `yyyy-mm-dd-hh-mm-ss-name.png`.
 - The script prints a `MEDIA:` line for eggent to auto-attach on supported chat providers.
 - Do not read the image back; report the saved path only.

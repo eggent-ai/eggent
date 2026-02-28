@@ -47,6 +47,21 @@ def image_to_base64_url(img_path: str) -> tuple[str, tuple[int, int]]:
     return f"data:image/png;base64,{b64}", size
 
 
+def save_image(image_bytes: bytes, output_path: Path):
+    """Decode image bytes and save as PNG."""
+    from PIL import Image as PILImage
+
+    image = PILImage.open(BytesIO(image_bytes))
+    if image.mode == 'RGBA':
+        rgb_image = PILImage.new('RGB', image.size, (255, 255, 255))
+        rgb_image.paste(image, mask=image.split()[3])
+        rgb_image.save(str(output_path), 'PNG')
+    elif image.mode == 'RGB':
+        image.save(str(output_path), 'PNG')
+    else:
+        image.convert('RGB').save(str(output_path), 'PNG')
+
+
 def main():
     parser = argparse.ArgumentParser(
         description="Generate images using Nano Banana Pro (Gemini 3.1 Flash Image via OpenRouter)"
@@ -70,9 +85,9 @@ def main():
     )
     parser.add_argument(
         "--resolution", "-r",
-        choices=["1K", "2K", "4K"],
+        choices=["0.5K", "1K", "2K", "4K"],
         default="1K",
-        help="Output resolution: 1K (default), 2K, or 4K"
+        help="Output resolution: 0.5K, 1K (default), 2K, or 4K"
     )
     parser.add_argument(
         "--api-key", "-k",
@@ -97,15 +112,14 @@ def main():
 
     # Import here after checking API key to avoid slow import on error
     import httpx
-    from PIL import Image as PILImage
 
     # Set up output path
     output_path = Path(args.filename)
     output_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Build message content parts
-    content_parts = []
+    # Build message content
     output_resolution = args.resolution
+    content_parts = []
 
     # Load input images if provided (up to 14 supported)
     if args.input_images:
@@ -137,20 +151,22 @@ def main():
                 output_resolution = "1K"
             print(f"Auto-detected resolution: {output_resolution} (from max input dimension {max_input_dim})")
 
-    # Add text prompt with resolution hint
-    prompt_text = args.prompt
-    if output_resolution != "1K":
-        prompt_text += f"\n\nGenerate the image at {output_resolution} resolution."
-    content_parts.append({"type": "text", "text": prompt_text})
+    # Add text prompt
+    content_parts.append({"type": "text", "text": args.prompt})
 
-    # Build request payload
+    # Build request payload per OpenRouter image generation API:
+    # - modalities: ["image", "text"] (image first)
+    # - image_config.image_size for resolution control
     payload = {
         "model": args.model,
         "messages": [
             {"role": "user", "content": content_parts}
         ],
-        "modalities": ["text", "image"],
-        "max_tokens": 4096,
+        "modalities": ["image", "text"],
+        "image_config": {
+            "image_size": output_resolution,
+        },
+        "stream": False,
     }
 
     headers = {
@@ -160,12 +176,11 @@ def main():
         "X-Title": "Eggent Nano Banana Pro",
     }
 
-    mode = "editing" if args.input_images else "generating"
     img_count = len(args.input_images) if args.input_images else 0
     if args.input_images:
-        print(f"Processing {img_count} image{'s' if img_count > 1 else ''} with resolution {output_resolution} via OpenRouter ({args.model})...")
+        print(f"Processing {img_count} image{'s' if img_count > 1 else ''} at {output_resolution} via OpenRouter ({args.model})...")
     else:
-        print(f"Generating image with resolution {output_resolution} via OpenRouter ({args.model})...")
+        print(f"Generating image at {output_resolution} via OpenRouter ({args.model})...")
 
     try:
         resp = httpx.post(
@@ -192,40 +207,44 @@ def main():
         sys.exit(1)
 
     message = choices[0].get("message", {})
-    content = message.get("content", "")
 
-    # Content can be a string or array of parts
-    if isinstance(content, str):
+    # Print text content if present
+    content = message.get("content", "")
+    if isinstance(content, str) and content:
         print(f"Model response: {content}")
-        print("Error: No image in response (text-only output).", file=sys.stderr)
-        sys.exit(1)
     elif isinstance(content, list):
         for part in content:
-            if not isinstance(part, dict):
-                continue
-            part_type = part.get("type", "")
-            if part_type == "text":
+            if isinstance(part, dict) and part.get("type") == "text":
                 text = part.get("text", "")
                 if text:
                     print(f"Model response: {text}")
-            elif part_type == "image_url":
+
+    # Images are returned in message.images[] as base64 data URLs
+    images = message.get("images", [])
+    for img_part in images:
+        if not isinstance(img_part, dict):
+            continue
+        image_url = img_part.get("image_url", {}).get("url", "")
+        if image_url.startswith("data:"):
+            _header, b64_data = image_url.split(",", 1)
+            image_bytes = base64.b64decode(b64_data)
+            save_image(image_bytes, output_path)
+            image_saved = True
+            break
+
+    # Fallback: some responses may put images inside content array
+    if not image_saved and isinstance(content, list):
+        for part in content:
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "image_url":
                 image_url = part.get("image_url", {}).get("url", "")
                 if image_url.startswith("data:"):
-                    # Extract base64 data from data URL
                     _header, b64_data = image_url.split(",", 1)
                     image_bytes = base64.b64decode(b64_data)
-                    image = PILImage.open(BytesIO(image_bytes))
-
-                    # Ensure RGB mode for PNG
-                    if image.mode == 'RGBA':
-                        rgb_image = PILImage.new('RGB', image.size, (255, 255, 255))
-                        rgb_image.paste(image, mask=image.split()[3])
-                        rgb_image.save(str(output_path), 'PNG')
-                    elif image.mode == 'RGB':
-                        image.save(str(output_path), 'PNG')
-                    else:
-                        image.convert('RGB').save(str(output_path), 'PNG')
+                    save_image(image_bytes, output_path)
                     image_saved = True
+                    break
 
     if image_saved:
         full_path = output_path.resolve()
@@ -234,6 +253,7 @@ def main():
         print(f"MEDIA: {full_path}")
     else:
         print("Error: No image was generated in the response.", file=sys.stderr)
+        print(f"Full response: {json.dumps(data, indent=2)}", file=sys.stderr)
         sys.exit(1)
 
 
