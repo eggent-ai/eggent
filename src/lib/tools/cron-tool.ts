@@ -66,8 +66,7 @@ function json(value: unknown): string {
 
 export function createCronTool(context: AgentContext) {
   return tool({
-    description:
-      "Manage scheduled cron jobs for a project: status, list, add, update, remove, run, and run history.",
+    description: "Manage cron jobs (status/list/add/update/remove/run/runs).",
     inputSchema: cronInputSchema,
     execute: async (input) => {
       try {
