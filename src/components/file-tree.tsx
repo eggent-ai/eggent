@@ -9,6 +9,7 @@ import {
   FileText,
   FileCode,
   File,
+  FileImage,
   Download,
 } from "lucide-react";
 import { useAppStore } from "@/store/app-store";
@@ -19,6 +20,13 @@ interface FileEntry {
   name: string;
   type: "file" | "directory";
   size: number;
+}
+
+const IMAGE_EXTENSIONS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg"]);
+
+function isImageFile(name: string): boolean {
+  const ext = name.split(".").pop()?.toLowerCase() || "";
+  return IMAGE_EXTENSIONS.has(ext);
 }
 
 function getFileIcon(name: string) {
@@ -38,6 +46,13 @@ function getFileIcon(name: string) {
     case "txt":
     case "csv":
       return FileText;
+    case "png":
+    case "jpg":
+    case "jpeg":
+    case "gif":
+    case "webp":
+    case "svg":
+      return FileImage;
     default:
       return File;
   }
@@ -127,6 +142,14 @@ function TreeNode({
         void loadChildren(true, true);
       }
       setCurrentPath(relativePath);
+    } else if (type === "file") {
+      // Open file: images and viewable files inline, others download
+      const params = new URLSearchParams({
+        project: projectId,
+        path: relativePath,
+        inline: "1",
+      });
+      window.open(`/api/files/download?${params.toString()}`, "_blank");
     }
   };
 
@@ -139,7 +162,7 @@ function TreeNode({
       <button
         onClick={handleClick}
         className={cn(
-          "flex items-center gap-1 w-full text-left text-xs py-1 px-1 rounded-sm hover:bg-accent/50 transition-colors",
+          "flex items-center gap-1 w-full text-left text-xs py-1 px-1 rounded-sm hover:bg-accent/50 transition-colors cursor-pointer",
           type === "file" && "pr-7",
           isActive && "bg-accent text-accent-foreground font-medium"
         )}

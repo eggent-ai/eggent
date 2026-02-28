@@ -3,9 +3,24 @@ import fs from "fs/promises";
 import path from "path";
 import { getWorkDir } from "@/lib/storage/project-store";
 
+const INLINE_MIME_TYPES: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+  ".txt": "text/plain",
+  ".md": "text/markdown",
+  ".json": "application/json",
+  ".csv": "text/csv",
+  ".pdf": "application/pdf",
+};
+
 export async function GET(req: NextRequest) {
   const projectId = req.nextUrl.searchParams.get("project");
   const filePath = req.nextUrl.searchParams.get("path");
+  const inline = req.nextUrl.searchParams.get("inline") === "1";
 
   if (!projectId || !filePath) {
     return Response.json(
@@ -30,11 +45,18 @@ export async function GET(req: NextRequest) {
   try {
     const content = await fs.readFile(fullPath);
     const fileName = path.basename(filePath);
+    const ext = path.extname(fileName).toLowerCase();
+    const mimeType = INLINE_MIME_TYPES[ext] || "application/octet-stream";
+
+    const disposition = inline && INLINE_MIME_TYPES[ext]
+      ? `inline; filename="${fileName}"`
+      : `attachment; filename="${fileName}"`;
 
     return new Response(content, {
       headers: {
-        "Content-Disposition": `attachment; filename="${fileName}"`,
-        "Content-Type": "application/octet-stream",
+        "Content-Disposition": disposition,
+        "Content-Type": inline && INLINE_MIME_TYPES[ext] ? mimeType : "application/octet-stream",
+        "Cache-Control": "private, max-age=3600",
       },
     });
   } catch {
