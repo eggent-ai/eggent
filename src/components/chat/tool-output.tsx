@@ -12,6 +12,8 @@ import {
   Puzzle,
   CalendarClock,
   FolderOpen,
+  ImageIcon,
+  Download,
 } from "lucide-react";
 import { CodeBlock } from "./code-block";
 
@@ -67,10 +69,72 @@ const TOOL_LABELS: Record<string, string> = {
   create_project: "Create Project",
 };
 
+const IMAGE_EXTENSIONS = new Set([".png", ".jpg", ".jpeg", ".gif", ".webp", ".svg"]);
+
+function extractMediaPaths(text: string): { mediaPaths: string[]; cleanedText: string } {
+  const lines = text.split("\n");
+  const mediaPaths: string[] = [];
+  const cleanedLines: string[] = [];
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed.startsWith("MEDIA:")) {
+      const filePath = trimmed.slice(6).trim();
+      if (filePath) {
+        const dotIdx = filePath.lastIndexOf(".");
+        if (dotIdx >= 0) {
+          const ext = filePath.slice(dotIdx).toLowerCase();
+          if (IMAGE_EXTENSIONS.has(ext)) {
+            mediaPaths.push(filePath);
+            continue;
+          }
+        }
+      }
+    }
+    cleanedLines.push(line);
+  }
+
+  return { mediaPaths, cleanedText: cleanedLines.join("\n") };
+}
+
+function MediaImage({ filePath }: { filePath: string }) {
+  const src = `/api/media/serve?path=${encodeURIComponent(filePath)}`;
+  const fileName = filePath.split("/").pop() || "image";
+
+  return (
+    <div className="my-2">
+      <a href={src} target="_blank" rel="noopener noreferrer">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={src}
+          alt={fileName}
+          className="max-w-full max-h-96 rounded-lg border shadow-sm hover:shadow-md transition-shadow cursor-pointer"
+          loading="lazy"
+        />
+      </a>
+      <div className="flex items-center gap-2 mt-1.5 text-xs text-muted-foreground">
+        <ImageIcon className="size-3" />
+        <span className="truncate">{fileName}</span>
+        <a
+          href={src}
+          download={fileName}
+          className="ml-auto flex items-center gap-1 hover:text-foreground transition-colors"
+        >
+          <Download className="size-3" />
+          <span>Download</span>
+        </a>
+      </div>
+    </div>
+  );
+}
+
 export function ToolOutput({ toolName, args, result }: ToolOutputProps) {
   const [expanded, setExpanded] = useState(false);
   const Icon = TOOL_ICONS[toolName] || Terminal;
   const label = TOOL_LABELS[toolName] || toolName;
+
+  const { mediaPaths, cleanedText } = extractMediaPaths(result);
+  const hasImages = mediaPaths.length > 0;
 
   return (
     <div className="border rounded-lg my-2 overflow-hidden bg-card">
@@ -97,6 +161,15 @@ export function ToolOutput({ toolName, args, result }: ToolOutputProps) {
         ) : null}
       </button>
 
+      {/* Always show generated images, even when collapsed */}
+      {hasImages && (
+        <div className="px-3 pb-2">
+          {mediaPaths.map((filePath, idx) => (
+            <MediaImage key={idx} filePath={filePath} />
+          ))}
+        </div>
+      )}
+
       {expanded && (
         <div className="border-t px-3 py-2 space-y-2">
           {/* Tool arguments */}
@@ -114,13 +187,13 @@ export function ToolOutput({ toolName, args, result }: ToolOutputProps) {
           ) : null}
 
           {/* Tool result */}
-          {result ? (
+          {cleanedText.trim() ? (
             <div className="text-sm">
               <p className="text-xs text-muted-foreground mb-1 font-medium">
                 Output:
               </p>
               <pre className="text-xs bg-muted/50 rounded p-2 overflow-x-auto whitespace-pre-wrap max-h-64 overflow-y-auto">
-                {result}
+                {cleanedText.trim()}
               </pre>
             </div>
           ) : null}
