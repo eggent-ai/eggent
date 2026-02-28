@@ -216,10 +216,7 @@ async function resolveTelegramProjectContext(params: {
 
   let resolvedProjectId: string | undefined;
   const explicitProjectId = params.defaultProjectId?.trim() || "";
-  if (explicitProjectId) {
-    if (!projectById.has(explicitProjectId)) {
-      throw new Error(`Project "${explicitProjectId}" not found`);
-    }
+  if (explicitProjectId && projectById.has(explicitProjectId)) {
     resolvedProjectId = explicitProjectId;
     session.activeProjectId = explicitProjectId;
   } else if (session.activeProjectId && projectById.has(session.activeProjectId)) {

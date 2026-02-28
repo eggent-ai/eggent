@@ -193,16 +193,7 @@ export async function handleExternalMessage(
 
   let resolvedProjectId: string | undefined;
 
-  if (explicitProjectId) {
-    if (!projectById.has(explicitProjectId)) {
-      throw new ExternalMessageError(404, {
-        error: `Project "${explicitProjectId}" not found`,
-        availableProjects: projects.map((project) => ({
-          id: project.id,
-          name: project.name,
-        })),
-      });
-    }
+  if (explicitProjectId && projectById.has(explicitProjectId)) {
     resolvedProjectId = explicitProjectId;
     session.activeProjectId = explicitProjectId;
   } else if (session.activeProjectId && projectById.has(session.activeProjectId)) {
