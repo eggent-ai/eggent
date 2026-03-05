@@ -7,7 +7,7 @@ import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Check, Loader2, Save, ShieldCheck } from "lucide-react";
+import { Check, Loader2, Moon, Save, ShieldCheck, Sun } from "lucide-react";
 import { ChatModelWizard, EmbeddingsModelWizard } from "@/components/settings/model-wizards";
 import { updateSettingsByPath } from "@/lib/settings/update-settings-path";
 import type { AppSettings } from "@/lib/types";
@@ -35,6 +35,11 @@ export default function SettingsPage() {
       })
       .catch(() => setLoading(false));
   }, []);
+
+  useEffect(() => {
+    if (!settings) return;
+    document.documentElement.classList.toggle("dark", settings.general.darkMode);
+  }, [settings?.general.darkMode]);
 
   async function handleSave() {
     if (!settings) return;
@@ -169,6 +174,34 @@ export default function SettingsPage() {
 
               <ChatModelWizard settings={settings} updateSettings={updateSettings} />
               <EmbeddingsModelWizard settings={settings} updateSettings={updateSettings} />
+
+              <section className="border rounded-xl p-5 bg-card space-y-4">
+                <h3 className="font-semibold text-lg">Appearance</h3>
+                <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
+                  <div>
+                    <p className="text-sm font-medium">Dark mode</p>
+                    <p className="text-sm text-muted-foreground">
+                      Switch between light and dark theme.
+                    </p>
+                  </div>
+                  <Label
+                    htmlFor="dark-mode-enabled"
+                    className="flex cursor-pointer items-center gap-2"
+                  >
+                    <Sun className="size-4 text-muted-foreground" />
+                    <input
+                      id="dark-mode-enabled"
+                      type="checkbox"
+                      checked={settings.general.darkMode}
+                      onChange={(e) =>
+                        updateSettings("general.darkMode", e.target.checked)
+                      }
+                      className="rounded"
+                    />
+                    <Moon className="size-4 text-muted-foreground" />
+                  </Label>
+                </div>
+              </section>
 
               <section className="border rounded-xl p-5 bg-card space-y-4">
                 <div className="flex items-center gap-2">

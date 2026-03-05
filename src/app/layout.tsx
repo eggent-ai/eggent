@@ -1,5 +1,7 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
+import { unstable_noStore as noStore } from "next/cache";
+import { getSettings } from "@/lib/storage/settings-store";
 import "./globals.css";
 
 const geistSans = Geist({
@@ -17,13 +19,16 @@ export const metadata: Metadata = {
   description: "AI Agent Terminal - Execute code, manage memory, search the web",
 };
 
-export default function RootLayout({
+export default async function RootLayout({
   children,
 }: Readonly<{
   children: React.ReactNode;
 }>) {
+  noStore();
+  const settings = await getSettings();
+
   return (
-    <html lang="en">
+    <html lang="en" className={settings.general.darkMode ? "dark" : undefined}>
       <body
         className={`${geistSans.variable} ${geistMono.variable} antialiased`}
       >
