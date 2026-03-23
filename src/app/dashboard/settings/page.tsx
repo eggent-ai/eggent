@@ -387,14 +387,20 @@ export default function SettingsPage() {
                       }}
                       className="w-full rounded-md border bg-background px-3 py-2 text-sm"
                     >
+                      <option value="auto">Auto (recommended)</option>
+                      <option value="duckduckgo">DuckDuckGo (no API key)</option>
                       <option value="none">Disabled</option>
                       <option value="searxng">SearXNG (self-hosted)</option>
                       <option value="tavily">Tavily API</option>
                     </select>
                   </div>
-                  {settings.search.provider === "tavily" && (
+                  {(settings.search.provider === "tavily" ||
+                    settings.search.provider === "auto") && (
                     <div className="space-y-2">
-                      <Label>Tavily API Key</Label>
+                      <Label>
+                        Tavily API Key
+                        {settings.search.provider === "auto" ? " (optional)" : ""}
+                      </Label>
                       <Input
                         type="password"
                         value={settings.search.apiKey || ""}
@@ -403,9 +409,13 @@ export default function SettingsPage() {
                       />
                     </div>
                   )}
-                  {settings.search.provider === "searxng" && (
+                  {(settings.search.provider === "searxng" ||
+                    settings.search.provider === "auto") && (
                     <div className="space-y-2">
-                      <Label>SearXNG URL</Label>
+                      <Label>
+                        SearXNG URL
+                        {settings.search.provider === "auto" ? " (optional)" : ""}
+                      </Label>
                       <Input
                         value={settings.search.baseUrl || ""}
                         onChange={(e) => updateSettings("search.baseUrl", e.target.value)}

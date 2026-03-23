@@ -22,8 +22,8 @@ The app runs as a Next.js service and stores runtime state on disk (`./data`).
 
 ## Releases
 
-- Latest release snapshot: [0.1.3 - OAuth Native CLI Providers](./docs/releases/0.1.3-oauth-native-cli-providers.md)
-- GitHub release body : [v0.1.3](./docs/releases/github-v0.1.3.md)
+- Latest release snapshot: [0.1.4 - Web Search Autostart](./docs/releases/0.1.4-web-search-autostart.md)
+- GitHub release body : [v0.1.4](./docs/releases/github-v0.1.4.md)
 - Release archive: [docs/releases/README.md](./docs/releases/README.md)
 
 ## Contributing and Support

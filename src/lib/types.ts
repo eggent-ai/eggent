@@ -47,7 +47,7 @@ export interface AppSettings {
   };
   search: {
     enabled: boolean;
-    provider: "searxng" | "tavily" | "none";
+    provider: "auto" | "duckduckgo" | "searxng" | "tavily" | "none";
     apiKey?: string;
     baseUrl?: string;
   };

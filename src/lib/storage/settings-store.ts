@@ -45,8 +45,8 @@ export const DEFAULT_SETTINGS: AppSettings = {
     chunkSize: 400,
   },
   search: {
-    enabled: false,
-    provider: "none",
+    enabled: true,
+    provider: "auto",
   },
   general: {
     darkMode: false,
