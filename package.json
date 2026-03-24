@@ -28,7 +28,7 @@
     "lucide-react": "^0.544.0",
     "mammoth": "^1.11.0",
     "nanoid": "^5.1.6",
-    "next": "15.5.4",
+    "next": "15.5.14",
     "node-ensure": "^0.0.0",
     "pdfjs-dist": "^2.16.105",
     "radix-ui": "^1.4.3",
