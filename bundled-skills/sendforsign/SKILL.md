@@ -1,21 +1,18 @@
 ---
 name: sendforsign
-description: >-
-  Use this skill whenever the user mentions "sendforsign", "send for sign",
-  "SFS", or wants to work with document signing via API. Also use it when the
-  user wants to create, send, sign, or manage contracts, templates, recipients,
-  placeholders, webhooks, or clients through the SendForSign platform - even if
-  they don't say "sendforsign" explicitly. Covers all operations: creating and
-  sending contracts for signature, managing templates, setting up webhooks,
-  downloading PDFs, uploading documents, managing clients and users. Trigger for
-  Russian-language requests too: "создай контракт", "отправь на подпись",
-  "шаблон для договора", etc.
+description: "Use for SendForSign document-signing workflows via API: create/send/sign contracts, manage templates/placeholders/recipients/webhooks/clients/users, upload/download documents, and handle Russian and English requests."
 version: 1.0.0
 ---
 
 # SendForSign API Skill
 
 This skill enables full interaction with the SendForSign API — a document signing platform. You can perform every operation available through their API.
+
+## Required Resources
+
+Load these required resources before execution:
+- [SendForSign API Reference](references/api-reference.md)
+- [PDF Render Script](scripts/render_pdf.py)
 
 ## Setup: Reading Credentials
 
@@ -52,7 +49,7 @@ Always show the user:
 3. The result (formatted nicely)
 4. Any errors with a clear explanation of what went wrong
 
-For full endpoint reference, see `references/api-reference.md`.
+For full endpoint reference, see [SendForSign API Reference](references/api-reference.md).
 
 ## Document Markup
 
@@ -1113,4 +1110,4 @@ Returns AI-generated contract text + a 30-minute preview URL.
 
 ---
 
-For the complete API reference with all endpoints, parameters, and examples, read `references/api-reference.md`.
+For the complete API reference with all endpoints, parameters, and examples, read [SendForSign API Reference](references/api-reference.md).

@@ -1,22 +1,6 @@
 ---
 name: bitrix24
-description: >
-  Work with Bitrix24 (Битрикс24) via REST API and MCP documentation server. Triggers on:
-  CRM — "сделки", "контакты", "лиды", "воронка", "клиенты", "deals", "contacts", "leads", "pipeline";
-  Tasks — "задачи", "мои задачи", "просроченные", "создай задачу", "tasks", "overdue", "to-do";
-  Calendar — "расписание", "встречи", "календарь", "schedule", "meetings", "events";
-  Chat — "чаты", "сообщения", "уведомления", "написать", "notifications", "messages";
-  Channels — "каналы", "канал", "объявления", "подписчики", "channels", "announcements", "subscribers";
-  Open Lines — "открытые линии", "поддержка", "обращения", "клиентские чаты", "операторы",
-  "омниканал", "виджет чата", "open lines", "support", "customer chat", "helpdesk", "operator";
-  Projects — "проекты", "рабочие группы", "projects", "workgroups";
-  Time — "рабочее время", "кто на работе", "учёт времени", "timeman", "work status";
-  Drive — "файлы", "документы", "диск", "files", "documents", "drive";
-  Structure — "сотрудники", "отделы", "структура", "подчинённые", "departments", "employees", "org structure";
-  Feed — "лента", "новости", "объявления", "feed", "announcements";
-  Scenarios — "утренний брифинг", "morning briefing", "еженедельный отчёт", "weekly report",
-  "статус команды", "что у меня сегодня", "итоги дня", "план на день", "воронка продаж",
-  "расскажи про клиента", "подготовь к встрече", "как работает отдел".
+description: "Work with Bitrix24 (Битрикс24) via REST API and MCP docs: CRM, tasks, calendar, chat, channels, open lines, projects, timeman, drive, org structure, feed, and scenario workflows in Russian and English."
 metadata:
   openclaw:
     requires:
