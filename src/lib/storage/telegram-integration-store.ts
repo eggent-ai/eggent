@@ -240,18 +240,36 @@ function normalizePollingInterval(raw: unknown): number {
   return Math.max(1000, Math.min(60000, numeric));
 }
 
+function isPrivateIpv4Address(hostname: string): boolean {
+  const octets = hostname.split(".").map((part) => Number(part));
+  if (octets.length !== 4 || octets.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) {
+    return false;
+  }
+
+  const [first, second] = octets;
+  return (
+    first === 10 ||
+    first === 127 ||
+    (first === 192 && second === 168) ||
+    (first === 172 && second >= 16 && second <= 31)
+  );
+}
+
 function isLocalhostUrl(url: string): boolean {
   if (!url) return true;
   try {
     const parsed = new URL(url);
     const hostname = parsed.hostname.toLowerCase();
+    if (hostname === "localhost" || hostname === "::1" || hostname.endsWith(".local")) {
+      return true;
+    }
+    if (isPrivateIpv4Address(hostname)) {
+      return true;
+    }
+
     return (
-      hostname === "localhost" ||
-      hostname === "127.0.0.1" ||
-      hostname.startsWith("192.168.") ||
-      hostname.startsWith("10.") ||
-      hostname.startsWith("172.") ||
-      hostname.endsWith(".local")
+      /^fe[89ab][0-9a-f]*:/i.test(hostname) ||
+      /^(fc|fd)[0-9a-f]*:/i.test(hostname)
     );
   } catch {
     return true;

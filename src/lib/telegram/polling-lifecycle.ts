@@ -1,5 +1,7 @@
 import {
+    generateTelegramWebhookSecret,
     getTelegramIntegrationRuntimeConfig,
+    saveTelegramIntegrationStoredSettings,
     detectTelegramMode,
     type TelegramIntegrationRuntimeConfig,
 } from "@/lib/storage/telegram-integration-store";
@@ -57,6 +59,14 @@ async function setupTelegramWebhook(
         throw new Error("Bot token and public base URL are required");
     }
 
+    let effectiveWebhookSecret = webhookSecret.trim();
+    if (!effectiveWebhookSecret) {
+        effectiveWebhookSecret = generateTelegramWebhookSecret();
+        await saveTelegramIntegrationStoredSettings({
+            webhookSecret: effectiveWebhookSecret,
+        });
+    }
+
     const webhookUrl = `${publicBaseUrl.replace(/\/$/, "")}/api/integrations/telegram`;
 
     const response = await fetch(
@@ -66,7 +76,7 @@ async function setupTelegramWebhook(
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
                 url: webhookUrl,
-                secret_token: webhookSecret.trim() || undefined,
+                secret_token: effectiveWebhookSecret,
                 allowed_updates: ["message"],
             }),
         }

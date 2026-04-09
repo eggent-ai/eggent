@@ -70,16 +70,42 @@ export function TelegramIntegrationManager() {
 
   // Helper to detect if URL is localhost/private (needs polling) or public (can use webhook)
   const detectUrlMode = useCallback((url: string): "webhook" | "polling" => {
-    if (!url.trim()) return "polling";
-    const lowerUrl = url.toLowerCase().trim();
-    // Check for localhost, private IPs, or non-HTTPS
-    if (lowerUrl.includes("localhost")) return "polling";
-    if (lowerUrl.includes("127.0.0.1")) return "polling";
-    if (lowerUrl.includes("192.168.")) return "polling";
-    if (lowerUrl.includes("10.0.")) return "polling";
-    if (lowerUrl.includes("172.16.")) return "polling";
-    if (lowerUrl.startsWith("http://")) return "polling";
-    return "webhook";
+    const normalized = url.trim();
+    if (!normalized) return "polling";
+
+    try {
+      const parsed = new URL(normalized);
+      const hostname = parsed.hostname.toLowerCase();
+      if (parsed.protocol !== "https:") return "polling";
+
+      if (
+        hostname === "localhost" ||
+        hostname === "::1" ||
+        hostname.endsWith(".local")
+      ) {
+        return "polling";
+      }
+
+      const octets = hostname.split(".").map((part) => Number(part));
+      if (
+        octets.length === 4 &&
+        octets.every((value) => Number.isInteger(value) && value >= 0 && value <= 255)
+      ) {
+        const [first, second] = octets;
+        if (
+          first === 10 ||
+          first === 127 ||
+          (first === 192 && second === 168) ||
+          (first === 172 && second >= 16 && second <= 31)
+        ) {
+          return "polling";
+        }
+      }
+
+      return "webhook";
+    } catch {
+      return "polling";
+    }
   }, []);
   const [allowedUserIdsInput, setAllowedUserIdsInput] = useState("");
   const [pendingAccessCodes, setPendingAccessCodes] = useState(0);

@@ -1,4 +1,6 @@
 import {
+    detectTelegramMode,
+    getTelegramIntegrationRuntimeConfig,
     type TelegramIntegrationRuntimeConfig,
 } from "@/lib/storage/telegram-integration-store";
 import {
@@ -30,6 +32,12 @@ class TelegramPollingService {
     private runtimeConfig: TelegramIntegrationRuntimeConfig | null = null;
     private pollTimeout: NodeJS.Timeout | null = null;
 
+    private extractUpdateId(update: TelegramUpdate): number | null {
+        return typeof update.update_id === "number" && Number.isInteger(update.update_id)
+            ? update.update_id
+            : null;
+    }
+
     get status(): PollingStatus {
         return {
             isRunning: this.isRunning,
@@ -52,6 +60,7 @@ class TelegramPollingService {
         this.runtimeConfig = runtimeConfig;
         this.isRunning = true;
         this.abortController = new AbortController();
+        this.errorCount = 0;
         this.consecutiveErrors = 0;
 
         console.log("[Telegram Polling] Starting polling service...");
@@ -98,23 +107,63 @@ class TelegramPollingService {
     }
 
     private async poll(): Promise<void> {
-        if (!this.isRunning || !this.runtimeConfig) {
+        if (!this.isRunning) {
             return;
         }
 
-        const { botToken } = this.runtimeConfig;
-
         try {
+            const runtimeConfig = await getTelegramIntegrationRuntimeConfig();
+            const botToken = runtimeConfig.botToken.trim();
+            if (!botToken) {
+                throw new Error("Bot token is required");
+            }
+
+            const detectedMode = detectTelegramMode(runtimeConfig);
+            if (detectedMode !== "polling") {
+                console.log("[Telegram Polling] Detected mode is webhook, stopping polling service");
+                this.stop();
+                return;
+            }
+
+            this.runtimeConfig = runtimeConfig;
             const updates = await this.getUpdates(botToken);
 
             this.consecutiveErrors = 0;
             this.lastPollTime = new Date().toISOString();
 
+            let retrySoon = false;
+
             for (const update of updates) {
                 if (!this.isRunning) break;
-                await this.processUpdate(update);
+                const updateId = this.extractUpdateId(update);
+                if (updateId === null) {
+                    console.warn("[Telegram Polling] Received update without valid update_id, skipping");
+                    continue;
+                }
+
+                const processed = await this.processUpdate(update, runtimeConfig);
+                if (!processed) {
+                    retrySoon = true;
+                    break;
+                }
+
+                // Confirm only successfully processed updates to avoid data loss.
+                this.lastUpdateId = updateId;
+            }
+
+            if (retrySoon) {
+                this.scheduleNextPoll(1000);
+                return;
             }
         } catch (error) {
+            if (
+                !this.isRunning &&
+                error instanceof Error &&
+                error.name === "AbortError"
+            ) {
+                return;
+            }
+
             this.errorCount++;
             this.consecutiveErrors++;
 
@@ -165,25 +214,27 @@ class TelegramPollingService {
             return [];
         }
 
-        // Update lastUpdateId to the highest received
-        for (const update of result) {
-            const updateId = typeof update.update_id === "number" ? update.update_id : null;
-            if (updateId !== null && (this.lastUpdateId === null || updateId > this.lastUpdateId)) {
-                this.lastUpdateId = updateId;
-            }
-        }
-
         return result as TelegramUpdate[];
     }
 
-    private async processUpdate(update: TelegramUpdate): Promise<void> {
-        if (!this.runtimeConfig) return;
-
+    private async processUpdate(
+        update: TelegramUpdate,
+        runtimeConfig: TelegramIntegrationRuntimeConfig
+    ): Promise<boolean> {
         try {
-            await processTelegramUpdate(update, this.runtimeConfig);
+            await processTelegramUpdate(update, runtimeConfig);
+            return true;
         } catch (error) {
+            this.errorCount++;
+            this.consecutiveErrors++;
             console.error("[Telegram Polling] Error processing update:", error);
-            // Don't throw - continue processing other updates
+
+            if (this.consecutiveErrors >= 10) {
+                console.error("[Telegram Polling] Too many consecutive processing errors, stopping polling");
+                this.stop();
+            }
+
+            return false;
         }
     }
 
