@@ -26,6 +26,7 @@ import { resolveCliOAuthCredentialSync } from "@/lib/providers/provider-auth";
 type OpenAICompatibleSettings = {
   providerName: string;
   apiKey: string;
+  allowMissingApiKey?: boolean;
   baseUrl?: string;
   fallbackBaseUrl?: string;
   baseUrlRequired?: boolean;
@@ -1509,15 +1510,57 @@ function normalizeBaseUrl(rawBaseUrl: string | undefined, settings: {
   return parsed.toString().replace(/\/$/, "");
 }
 
+function normalizeOpenAICompatibleApiBaseUrl(baseUrl: string | undefined): string | undefined {
+  if (!baseUrl) return baseUrl;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(baseUrl);
+  } catch {
+    return baseUrl;
+  }
+
+  const trimmedPath = parsed.pathname.replace(/\/+$/, "");
+  const withoutEndpoint = trimmedPath.replace(
+    /\/(chat\/completions|completions|responses|embeddings|models)$/i,
+    ""
+  );
+
+  if (!withoutEndpoint) {
+    parsed.pathname = "/v1";
+  } else {
+    parsed.pathname = withoutEndpoint;
+  }
+
+  return parsed.toString().replace(/\/$/, "");
+}
+
+function createOpenAICompatibleFetch(dropAuthorization: boolean) {
+  if (!dropAuthorization) {
+    return undefined;
+  }
+
+  return async (input: RequestInfo | URL, init?: RequestInit): Promise<Response> => {
+    const request = new Request(input, init);
+    const headers = new Headers(request.headers);
+    headers.delete("authorization");
+    return fetch(new Request(request, { headers }));
+  };
+}
+
 function createOpenAICompatibleChatModel(
   config: ModelConfig,
   settings: OpenAICompatibleSettings
 ): LanguageModel {
-  const baseURL = normalizeBaseUrl(config.baseUrl, settings);
+  const baseURL = normalizeOpenAICompatibleApiBaseUrl(
+    normalizeBaseUrl(config.baseUrl, settings)
+  );
+  const dropAuthorization = settings.allowMissingApiKey === true && !settings.apiKey.trim();
   const provider = createOpenAI({
-    apiKey: settings.apiKey,
+    apiKey: settings.apiKey || "__no_api_key__",
     baseURL,
     name: settings.providerName,
+    fetch: createOpenAICompatibleFetch(dropAuthorization),
   });
   return provider.chat(config.model);
 }
@@ -1528,11 +1571,15 @@ function createOpenAICompatibleEmbeddingModel(config: {
   apiKey?: string;
   baseUrl?: string;
 }, settings: OpenAICompatibleSettings) {
-  const baseURL = normalizeBaseUrl(config.baseUrl, settings);
+  const baseURL = normalizeOpenAICompatibleApiBaseUrl(
+    normalizeBaseUrl(config.baseUrl, settings)
+  );
+  const dropAuthorization = settings.allowMissingApiKey === true && !settings.apiKey.trim();
   const provider = createOpenAI({
-    apiKey: settings.apiKey,
+    apiKey: settings.apiKey || "__no_api_key__",
     baseURL,
     name: settings.providerName,
+    fetch: createOpenAICompatibleFetch(dropAuthorization),
   });
   return provider.embedding(config.model);
 }
@@ -1599,6 +1646,7 @@ export function createModel(
       return createOpenAICompatibleChatModel(config, {
         providerName: "custom",
         apiKey: config.apiKey || "",
+        allowMissingApiKey: true,
         baseUrlRequired: true,
         defaultPath: "/v1",
       });
@@ -1670,6 +1718,7 @@ export function createEmbeddingModel(config: {
       return createOpenAICompatibleEmbeddingModel(config, {
         providerName: "custom",
         apiKey: config.apiKey || "",
+        allowMissingApiKey: true,
         baseUrlRequired: true,
         defaultPath: "/v1",
       });

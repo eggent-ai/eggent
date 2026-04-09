@@ -164,6 +164,7 @@ function useModels(
           "ollama",
           "anthropic",
           "google",
+          "custom",
         ];
         if (!dynamicProviders.includes(provider) && providerConfig?.models?.length) {
           setModels([...providerConfig.models]);
@@ -181,6 +182,7 @@ function useModels(
         "ollama",
         "anthropic",
         "google",
+        "custom",
       ];
       if (!dynamicProviders.includes(provider) && providerConfig?.models?.length) {
         setModels([...providerConfig.models]);
@@ -210,6 +212,7 @@ export function ChatModelWizard({
   const apiKey = settings.chatModel.apiKey || "";
   const model = settings.chatModel.model;
   const providerConfig = MODEL_PROVIDERS[provider];
+  const isCustomProvider = provider === "custom";
   const availableAuthMethods = providerConfig?.authMethods || ["api_key"];
   const selectedAuthMethod = (
     availableAuthMethods.includes((settings.chatModel.authMethod || "") as ChatAuthMethod)
@@ -217,7 +220,8 @@ export function ChatModelWizard({
       : providerConfig?.defaultAuthMethod || availableAuthMethods[0]
   ) as ChatAuthMethod;
   const requiresApiKey =
-    selectedAuthMethod === "api_key" && (providerConfig?.requiresApiKey ?? true);
+    selectedAuthMethod === "api_key" &&
+    (isCustomProvider ? false : (providerConfig?.requiresApiKey ?? true));
   const isCliProvider = provider === "codex-cli" || provider === "gemini-cli";
   const hasProvider = !!provider;
   const hasModel = !!model;
@@ -322,7 +326,8 @@ export function ChatModelWizard({
         : !hasModel
           ? 4
           : 5;
-  const showApiKeyInput = selectedAuthMethod === "api_key" && requiresApiKey;
+  const showApiKeyInput =
+    selectedAuthMethod === "api_key" && (requiresApiKey || isCustomProvider);
   const connectionHelp =
     selectedAuthMethod === "oauth"
       ? providerConfig?.connectionHelp?.oauth
@@ -360,6 +365,8 @@ export function ChatModelWizard({
             if (nextProvider === "ollama") {
               updateSettings("chatModel.baseUrl", "http://localhost:11434/v1");
               updateSettings("chatModel.apiKey", "");
+            } else if (nextProvider === "custom") {
+              updateSettings("chatModel.baseUrl", "http://localhost:1234/v1");
             } else if (nextProvider === "codex-cli" || nextProvider === "gemini-cli") {
               updateSettings("chatModel.baseUrl", "");
             } else {
@@ -430,7 +437,9 @@ export function ChatModelWizard({
               placeholder={
                 providerConfig?.envKey
                   ? `Enter key or set ${providerConfig.envKey} in .env`
-                  : "sk-..."
+                  : isCustomProvider
+                    ? "Optional token (leave empty for local servers)"
+                    : "sk-..."
               }
               disabled={!hasProvider}
             />
@@ -497,6 +506,12 @@ export function ChatModelWizard({
             API Key not required — connecting to local Ollama
           </div>
         )}
+        {provider === "custom" && selectedAuthMethod === "api_key" && !apiKey.trim() && (
+          <div className="flex items-center gap-2 text-sm text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/30 rounded-lg px-3 py-2">
+            <Check className="size-4" />
+            API Key optional — works for local OpenAI-compatible servers (LM Studio, etc.)
+          </div>
+        )}
 
         {isCliProvider && connectionStatus && (
           <div
@@ -536,7 +551,7 @@ export function ChatModelWizard({
             placeholder={
               provider === "ollama"
                 ? "http://localhost:11434/v1"
-                : "https://api.example.com/v1"
+                : "http://localhost:1234/v1"
             }
             disabled={!apiKeyConnectionReady}
           />
@@ -614,26 +629,31 @@ export function EmbeddingsModelWizard({
       baseUrl: "http://localhost:11434",
     },
     google: { name: "Google", requiresApiKey: true, envKey: "GOOGLE_API_KEY" },
-    custom: { name: "Custom (OpenAI-compatible)", requiresApiKey: true },
+    custom: { name: "Custom (OpenAI-compatible)", requiresApiKey: false },
   };
 
   const providerConfig = embeddingProviders[provider] || embeddingProviders.openai;
   const requiresApiKey = providerConfig.requiresApiKey;
+  const showApiKeyInput = requiresApiKey || provider === "custom";
 
   const hasProvider = !!provider && provider !== "mock";
   const hasApiKey = !requiresApiKey || !!apiKey;
   const hasModel = !!model;
   const currentStep = !hasProvider
     ? 1
-    : !hasApiKey
+    : requiresApiKey && !hasApiKey
       ? 2
       : !hasModel
         ? requiresApiKey
           ? 3
-          : 2
+          : showApiKeyInput
+            ? 3
+            : 2
         : requiresApiKey
           ? 4
-          : 3;
+          : showApiKeyInput
+            ? 4
+            : 3;
 
   const { models, loading, error } = useModels(
     provider,
@@ -669,11 +689,11 @@ export function EmbeddingsModelWizard({
         <h3 className="font-semibold text-lg">Embeddings Model</h3>
         <div className="flex items-center gap-4">
           <StepIndicator step={1} currentStep={currentStep} label="Provider" />
-          {requiresApiKey && (
+          {showApiKeyInput && (
             <StepIndicator step={2} currentStep={currentStep} label="API Key" />
           )}
           <StepIndicator
-            step={requiresApiKey ? 3 : 2}
+            step={showApiKeyInput ? 3 : 2}
             currentStep={currentStep}
             label="Model"
           />
@@ -693,6 +713,8 @@ export function EmbeddingsModelWizard({
             if (nextProvider === "ollama") {
               updateSettings("embeddingsModel.baseUrl", "http://localhost:11434/v1");
               updateSettings("embeddingsModel.apiKey", "");
+            } else if (nextProvider === "custom") {
+              updateSettings("embeddingsModel.baseUrl", "http://localhost:1234/v1");
             } else {
               updateSettings("embeddingsModel.baseUrl", "");
             }
@@ -711,10 +733,10 @@ export function EmbeddingsModelWizard({
       <div
         className={`space-y-2 transition-all duration-300 ${
           !hasProvider ? "opacity-40 pointer-events-none" : ""
-        } ${!requiresApiKey ? "hidden" : ""}`}
+        } ${!showApiKeyInput ? "hidden" : ""}`}
       >
         <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          Step 2 — API Key
+          Step 2 — API Key {provider === "custom" && !requiresApiKey ? "(optional)" : ""}
         </Label>
         <Input
           type="password"
@@ -725,7 +747,9 @@ export function EmbeddingsModelWizard({
           placeholder={
             providerConfig.envKey
               ? `Enter key or set ${providerConfig.envKey} in .env`
-              : "sk-..."
+              : provider === "custom"
+                ? "Optional token (leave empty for local servers)"
+                : "sk-..."
           }
           disabled={!hasProvider}
         />
@@ -747,7 +771,7 @@ export function EmbeddingsModelWizard({
         </div>
       )}
 
-      {provider === "ollama" && (
+      {(provider === "ollama" || provider === "custom") && (
         <div
           className={`space-y-2 transition-all duration-300 ${
             !hasProvider ? "opacity-40 pointer-events-none" : ""
@@ -761,7 +785,11 @@ export function EmbeddingsModelWizard({
             onChange={(event) =>
               updateSettings("embeddingsModel.baseUrl", event.target.value)
             }
-            placeholder="http://localhost:11434/v1"
+            placeholder={
+              provider === "ollama"
+                ? "http://localhost:11434/v1"
+                : "http://localhost:1234/v1"
+            }
             disabled={!hasProvider}
           />
         </div>
@@ -769,11 +797,11 @@ export function EmbeddingsModelWizard({
 
       <div
         className={`space-y-2 transition-all duration-300 ${
-          !hasApiKey ? "opacity-40 pointer-events-none" : ""
+          requiresApiKey && !hasApiKey ? "opacity-40 pointer-events-none" : ""
         }`}
       >
         <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          {requiresApiKey ? "Step 3" : "Step 2"} — Model
+          {showApiKeyInput ? "Step 3" : "Step 2"} — Model
         </Label>
         <div className="flex gap-2">
           <div className="flex-1">
@@ -782,7 +810,7 @@ export function EmbeddingsModelWizard({
               models={models}
               loading={loading}
               error={error}
-              disabled={!hasApiKey}
+              disabled={requiresApiKey && !hasApiKey}
               onChange={(value) => {
                 updateSettings("embeddingsModel.model", value);
                 let dimensions = 1536;
@@ -809,7 +837,7 @@ export function EmbeddingsModelWizard({
               }
               placeholder="Dims"
               title="Embedding Dimensions"
-              disabled={!hasApiKey}
+              disabled={requiresApiKey && !hasApiKey}
             />
           </div>
         </div>
