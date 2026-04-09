@@ -10,6 +10,7 @@ const TELEGRAM_SETTINGS_FILE = path.join(
 );
 
 export type TelegramConfigSource = "stored" | "env" | "none";
+export type TelegramMode = "auto" | "webhook" | "polling";
 
 interface TelegramAccessCodeRecord {
   hash: string;
@@ -24,6 +25,8 @@ interface TelegramIntegrationFileRecord {
   defaultProjectId?: string;
   allowedUserIds?: unknown;
   accessCodes?: unknown;
+  mode?: unknown;
+  pollingInterval?: unknown;
   createdAt?: string;
   updatedAt?: string;
 }
@@ -35,6 +38,8 @@ export interface TelegramIntegrationStoredSettings {
   defaultProjectId: string;
   allowedUserIds: string[];
   accessCodes: TelegramAccessCodeRecord[];
+  mode: TelegramMode;
+  pollingInterval: number;
   createdAt: string;
   updatedAt: string;
 }
@@ -45,9 +50,13 @@ export interface TelegramIntegrationRuntimeConfig {
   publicBaseUrl: string;
   defaultProjectId: string;
   allowedUserIds: string[];
+  mode: TelegramMode;
+  pollingInterval: number;
+  detectedMode: TelegramMode;
   sources: {
     botToken: TelegramConfigSource;
     webhookSecret: TelegramConfigSource;
+    mode: TelegramConfigSource;
   };
 }
 
@@ -221,6 +230,61 @@ async function readStoredRecord(): Promise<TelegramIntegrationFileRecord> {
   }
 }
 
+function normalizeMode(raw: unknown): TelegramMode {
+  if (raw === "webhook" || raw === "polling") return raw;
+  return "auto";
+}
+
+function normalizePollingInterval(raw: unknown): number {
+  const numeric = typeof raw === "number" && Number.isFinite(raw) ? raw : 5000;
+  return Math.max(1000, Math.min(60000, numeric));
+}
+
+function isPrivateIpv4Address(hostname: string): boolean {
+  const octets = hostname.split(".").map((part) => Number(part));
+  if (octets.length !== 4 || octets.some((value) => !Number.isInteger(value) || value < 0 || value > 255)) {
+    return false;
+  }
+
+  const [first, second] = octets;
+  return (
+    first === 10 ||
+    first === 127 ||
+    (first === 192 && second === 168) ||
+    (first === 172 && second >= 16 && second <= 31)
+  );
+}
+
+function isLocalhostUrl(url: string): boolean {
+  if (!url) return true;
+  try {
+    const parsed = new URL(url);
+    const hostname = parsed.hostname.toLowerCase();
+    if (hostname === "localhost" || hostname === "::1" || hostname.endsWith(".local")) {
+      return true;
+    }
+    if (isPrivateIpv4Address(hostname)) {
+      return true;
+    }
+
+    return (
+      /^fe[89ab][0-9a-f]*:/i.test(hostname) ||
+      /^(fc|fd)[0-9a-f]*:/i.test(hostname)
+    );
+  } catch {
+    return true;
+  }
+}
+
+export function detectTelegramMode(config: {
+  mode: TelegramMode;
+  publicBaseUrl: string;
+}): "webhook" | "polling" {
+  if (config.mode !== "auto") return config.mode;
+  if (isLocalhostUrl(config.publicBaseUrl)) return "polling";
+  return "webhook";
+}
+
 function normalizeStoredRecord(
   record: TelegramIntegrationFileRecord
 ): TelegramIntegrationStoredSettings {
@@ -231,6 +295,8 @@ function normalizeStoredRecord(
     defaultProjectId: trimString(record.defaultProjectId),
     allowedUserIds: normalizeAllowedUserIds(record.allowedUserIds),
     accessCodes: normalizeAccessCodeRecords(record.accessCodes),
+    mode: normalizeMode(record.mode),
+    pollingInterval: normalizePollingInterval(record.pollingInterval),
     createdAt: trimString(record.createdAt),
     updatedAt: trimString(record.updatedAt),
   };
@@ -259,6 +325,8 @@ export async function saveTelegramIntegrationStoredSettings(input: {
   defaultProjectId?: string;
   allowedUserIds?: string[];
   accessCodes?: TelegramAccessCodeRecord[];
+  mode?: TelegramMode;
+  pollingInterval?: number;
 }): Promise<TelegramIntegrationStoredSettings> {
   const current = await getTelegramIntegrationStoredSettings();
 
@@ -284,6 +352,12 @@ export async function saveTelegramIntegrationStoredSettings(input: {
     input.accessCodes !== undefined
       ? normalizeAccessCodeRecords(input.accessCodes)
       : current.accessCodes;
+  const nextMode =
+    input.mode !== undefined ? normalizeMode(input.mode) : current.mode;
+  const nextPollingInterval =
+    input.pollingInterval !== undefined
+      ? normalizePollingInterval(input.pollingInterval)
+      : current.pollingInterval;
 
   const now = new Date().toISOString();
   const next: TelegramIntegrationStoredSettings = {
@@ -293,6 +367,8 @@ export async function saveTelegramIntegrationStoredSettings(input: {
     defaultProjectId: nextDefaultProjectId,
     allowedUserIds: nextAllowedUserIds,
     accessCodes: nextAccessCodes,
+    mode: nextMode,
+    pollingInterval: nextPollingInterval,
     createdAt: current.createdAt || now,
     updatedAt: now,
   };
@@ -310,6 +386,7 @@ export async function getTelegramIntegrationRuntimeConfig(): Promise<TelegramInt
   const envAllowedUserIds = parseAllowedUserIdsFromEnv(
     trimString(process.env.TELEGRAM_ALLOWED_USER_IDS)
   );
+  const envMode = normalizeMode(process.env.TELEGRAM_MODE);
 
   const botToken = stored.botToken || envBotToken;
   const webhookSecret = stored.webhookSecret || envWebhookSecret;
@@ -319,6 +396,8 @@ export async function getTelegramIntegrationRuntimeConfig(): Promise<TelegramInt
     stored.allowedUserIds,
     envAllowedUserIds
   );
+  const mode = stored.mode !== "auto" ? stored.mode : envMode !== "auto" ? envMode : "auto";
+  const pollingInterval = stored.pollingInterval || 5000;
 
   const botTokenSource: TelegramConfigSource = stored.botToken
     ? "stored"
@@ -330,6 +409,13 @@ export async function getTelegramIntegrationRuntimeConfig(): Promise<TelegramInt
     : envWebhookSecret
       ? "env"
       : "none";
+  const modeSource: TelegramConfigSource = stored.mode !== "auto"
+    ? "stored"
+    : envMode !== "auto"
+      ? "env"
+      : "none";
+
+  const detectedMode = detectTelegramMode({ mode, publicBaseUrl });
 
   return {
     botToken,
@@ -337,9 +423,13 @@ export async function getTelegramIntegrationRuntimeConfig(): Promise<TelegramInt
     publicBaseUrl,
     defaultProjectId,
     allowedUserIds,
+    mode,
+    pollingInterval,
+    detectedMode,
     sources: {
       botToken: botTokenSource,
       webhookSecret: webhookSecretSource,
+      mode: modeSource,
     },
   };
 }
@@ -350,11 +440,15 @@ export async function getTelegramIntegrationPublicSettings(): Promise<{
   publicBaseUrl: string;
   defaultProjectId: string;
   allowedUserIds: string[];
+  mode: TelegramMode;
+  pollingInterval: number;
+  detectedMode: TelegramMode;
   pendingAccessCodes: number;
   updatedAt: string | null;
   sources: {
     botToken: TelegramConfigSource;
     webhookSecret: TelegramConfigSource;
+    mode: TelegramConfigSource;
   };
 }> {
   const stored = await getTelegramIntegrationStoredSettings();
@@ -365,6 +459,9 @@ export async function getTelegramIntegrationPublicSettings(): Promise<{
     publicBaseUrl: runtime.publicBaseUrl,
     defaultProjectId: runtime.defaultProjectId,
     allowedUserIds: runtime.allowedUserIds,
+    mode: runtime.mode,
+    pollingInterval: runtime.pollingInterval,
+    detectedMode: runtime.detectedMode,
     pendingAccessCodes: stored.accessCodes.length,
     updatedAt: stored.updatedAt || null,
     sources: runtime.sources,
@@ -377,6 +474,8 @@ export async function saveTelegramIntegrationFromPublicInput(input: {
   publicBaseUrl?: unknown;
   defaultProjectId?: unknown;
   allowedUserIds?: unknown;
+  mode?: unknown;
+  pollingInterval?: unknown;
 }): Promise<void> {
   const currentStored = await getTelegramIntegrationStoredSettings();
 
@@ -407,6 +506,14 @@ export async function saveTelegramIntegrationFromPublicInput(input: {
       ? input.defaultProjectId
       : undefined;
   const allowedUserIds = parseAllowedUserIdsInput(input.allowedUserIds);
+  const mode =
+    typeof input.mode === "string"
+      ? normalizeMode(input.mode)
+      : undefined;
+  const pollingInterval =
+    typeof input.pollingInterval === "number"
+      ? normalizePollingInterval(input.pollingInterval)
+      : undefined;
 
   await saveTelegramIntegrationStoredSettings({
     botToken,
@@ -414,6 +521,8 @@ export async function saveTelegramIntegrationFromPublicInput(input: {
     publicBaseUrl,
     defaultProjectId,
     allowedUserIds,
+    mode,
+    pollingInterval,
   });
 }
 

@@ -34,34 +34,45 @@ The app runs as a Next.js service and stores runtime state on disk (`./data`).
 - Code of conduct: [CODE_OF_CONDUCT.md](./CODE_OF_CONDUCT.md)
 - Security policy: [SECURITY.md](./SECURITY.md)
 
-## Installation (All Supported Paths)
+## Installation
 
-| Path | Best for | Command |
+Choose the deployment method that best fits your needs:
+
+| Method | Best For | Command |
 | --- | --- | --- |
-| One-command installer | Fastest setup, Docker-first | `curl -fsSL https://raw.githubusercontent.com/eggent-ai/eggent/main/scripts/install.sh \| bash` |
-| Local production | Run directly on your machine (Node + npm) | `npm run setup:local` |
-| Docker isolated | Containerized runtime | `npm run setup:docker` |
-| Manual setup | Full control | see [Manual Setup](#manual-setup) |
+| **Docker** (One-command) | Fastest setup, VPS, production | `curl -fsSL https://raw.githubusercontent.com/eggent-ai/eggent/main/scripts/install.sh \| bash` |
+| **Docker** (Manual) | Containerized runtime, full control | `npm run setup:docker` |
+| **Local/Node.js** | Run directly on your machine | `npm run setup:local` |
+| **Development** | Active development, hot reload | `npm run dev` |
 
-## 1) One-command Installer
+---
+
+## Docker Deployment
+
+### Option A: One-command Installer (Recommended)
+
+The fastest way to get Eggent running, especially on VPS:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/eggent-ai/eggent/main/scripts/install.sh | bash
 ```
 
 What it does:
-- installs Docker (best-effort on macOS/Linux) if missing
-- clones/updates Eggent in `~/.eggent`
-- runs Docker deployment via `scripts/install-docker.sh`
+- Installs Docker (best-effort on macOS/Linux) if missing
+- Clones/updates Eggent in `~/.eggent`
+- Runs Docker deployment via `scripts/install-docker.sh`
 
-Installer environment variables:
-- `EGGENT_INSTALL_DIR`: target directory (default: `~/.eggent`)
-- `EGGENT_BRANCH`: git branch (default: `main`)
-- `EGGENT_REPO_URL`: git repo URL (default: `https://github.com/eggent-ai/eggent.git`)
-- `EGGENT_AUTO_INSTALL_DOCKER`: `1`/`0` (default: `1`)
-- `EGGENT_APP_BIND_HOST`: Docker published bind host (`Linux default: 0.0.0.0`, otherwise `127.0.0.1`)
+**Environment variables:**
 
-Example:
+| Variable | Default | Description |
+| --- | --- | --- |
+| `EGGENT_INSTALL_DIR` | `~/.eggent` | Target directory |
+| `EGGENT_BRANCH` | `main` | Git branch to use |
+| `EGGENT_REPO_URL` | `https://github.com/eggent-ai/eggent.git` | Repository URL |
+| `EGGENT_AUTO_INSTALL_DOCKER` | `1` | Auto-install Docker if missing |
+| `EGGENT_APP_BIND_HOST` | `0.0.0.0` (Linux) / `127.0.0.1` | Docker bind host |
+
+Example with custom options:
 
 ```bash
 EGGENT_INSTALL_DIR=~/apps/eggent \
@@ -70,24 +81,55 @@ EGGENT_AUTO_INSTALL_DOCKER=1 \
 curl -fsSL https://raw.githubusercontent.com/eggent-ai/eggent/main/scripts/install.sh | bash
 ```
 
-On Linux (including VPS installs), the one-command installer publishes app port on all interfaces by default, so app is reachable at `http://<server-ip>:3000`.
+On Linux (including VPS installs), the one-command installer publishes the app port on all interfaces by default, making it reachable at `http://<server-ip>:3000`.
 
-## 2) Local Production Setup (Node + npm)
+### Option B: Manual Docker Setup
+
+If you already have the repository cloned:
+
+```bash
+npm run setup:docker
+```
+
+This script:
+- Validates Docker + Compose
+- Prepares `.env` and `data/`
+- Builds image and starts container
+- Waits for `GET /api/health` to succeed
+
+**Useful Docker commands:**
+
+```bash
+docker compose logs -f app      # View logs
+docker compose restart app     # Restart app
+docker compose down            # Stop and remove
+docker compose up -d app       # Start in background
+```
+
+Open: `http://localhost:3000`
+
+---
+
+## Local/Node.js Deployment
+
+Run Eggent directly on your machine with Node.js:
+
+### Quick Start
 
 ```bash
 npm run setup:local
 ```
 
 This script:
-- validates Node/npm availability
-- validates `python3` availability (required for Code Execution with Python runtime)
-- validates `curl` availability (required for terminal commands like `curl ...`)
-- warns if recommended utilities are missing: `git`, `jq`, `pip3`, `rg`
-- creates `.env` from `.env.example` if needed
-- generates secure defaults for token placeholders
-- installs dependencies
-- builds production output
-- runs a health smoke-check
+- Validates Node/npm availability
+- Validates `python3` availability (required for Code Execution with Python runtime)
+- Validates `curl` availability (required for terminal commands)
+- Warns if recommended utilities are missing: `git`, `jq`, `pip3`, `rg`
+- Creates `.env` from `.env.example` if needed
+- Generates secure defaults for token placeholders
+- Installs dependencies
+- Builds production output
+- Runs a health smoke-check
 
 Start the app:
 
@@ -95,54 +137,112 @@ Start the app:
 npm run start
 ```
 
-Open:
-- `http://localhost:3000`
+Open: `http://localhost:3000`
 
-## 3) Docker Isolated Setup
+### PM2 Auto-start (Optional - Linux/macOS)
 
-```bash
-npm run setup:docker
-```
+For production deployments with auto-restart on boot, use PM2:
 
-This script:
-- validates Docker + Compose
-- prepares `.env` and `data/`
-- builds image and starts container
-- waits for `GET /api/health` to succeed
-
-Open:
-- `http://localhost:3000`
-
-Useful Docker commands:
+**1. Install PM2 globally:**
 
 ```bash
-docker compose logs -f app
-docker compose restart app
-docker compose down
+npm install -g pm2
 ```
 
-## 4) Manual Setup
+**2. Start Eggent with PM2:**
 
 ```bash
-cp .env.example .env
-# ensure python3 is installed and available in PATH
-npm install
-npm run build
-npm run start
+pm2 start npm --name eggent -- run start
 ```
 
-Open:
-- `http://localhost:3000`
+**3. Save PM2 configuration:**
 
-## 5) Development Mode
+```bash
+pm2 save
+```
+
+**4. Setup systemd auto-start:**
+
+```bash
+pm2 startup systemd
+```
+
+Copy and execute the command output (requires sudo).
+
+**5. Verify auto-start works:**
+
+```bash
+sudo reboot
+# After reboot:
+pm2 status
+```
+
+**Alternative: Using ecosystem file**
+
+Create `ecosystem.config.js` in your Eggent directory:
+
+```javascript
+module.exports = {
+  apps: [
+    {
+      name: "eggent",
+      cwd: "/home/YOUR_USERNAME/.eggent",
+      script: "npm",
+      args: "run start",
+      autorestart: true,
+      watch: false,
+      env: {
+        NODE_ENV: "production"
+      }
+    }
+  ]
+}
+```
+
+Then start with:
+
+```bash
+pm2 start ecosystem.config.js
+pm2 save
+pm2 startup systemd
+```
+
+**Common PM2 commands:**
+
+```bash
+pm2 status              # Check status
+pm2 logs eggent         # View logs
+pm2 restart eggent      # Restart app
+pm2 stop eggent         # Stop app
+pm2 delete eggent       # Remove from PM2
+```
+
+---
+
+## Development Mode
+
+For active development with hot reload:
 
 ```bash
 npm install
 npm run dev
 ```
 
-Open:
-- `http://localhost:3000`
+Open: `http://localhost:3000`
+
+### Manual Setup (Full Control)
+
+If you prefer complete manual control:
+
+```bash
+cp .env.example .env
+# Ensure python3 is installed and available in PATH
+npm install
+npm run build
+npm run start
+```
+
+Open: `http://localhost:3000`
 
 ## Updating Eggent
 
