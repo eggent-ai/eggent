@@ -54,7 +54,7 @@ export default function ApiPage() {
               </section>
 
               <section className="rounded-lg border bg-card p-4 space-y-3">
-                <h3 className="text-lg font-medium">Telegram Webhook</h3>
+                <h3 className="text-lg font-medium">Telegram Integration</h3>
                 <p className="text-sm text-muted-foreground">
                   Telegram endpoint: <span className="font-mono">POST /api/integrations/telegram</span>.
                   It reuses the same external session context engine as{" "}
@@ -64,14 +64,45 @@ export default function ApiPage() {
                   Configure credentials in <span className="font-mono">Dashboard -&gt; Messengers</span>
                   (bot token is enough; webhook secret/url are configured automatically).
                 </p>
-                <CodeBlock
-                  code={`curl -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \\
+
+                <div className="space-y-2">
+                  <h4 className="text-sm font-medium">Connection Modes</h4>
+                  <ul className="list-disc pl-5 space-y-1 text-sm text-muted-foreground">
+                    <li><strong>Webhook</strong> (default for public HTTPS URLs): Telegram pushes updates to your server. Requires a public HTTPS URL.</li>
+                    <li><strong>Long Polling</strong> (default for localhost): Your server periodically fetches updates from Telegram. Works without HTTPS, perfect for local development.</li>
+                    <li><strong>Auto</strong> (recommended): Automatically selects the best mode based on your Public Base URL configuration.</li>
+                  </ul>
+                </div>
+
+                <div className="space-y-2">
+                  <h4 className="text-sm font-medium">Webhook Setup (Production)</h4>
+                  <CodeBlock
+                    code={`curl -X POST "https://api.telegram.org/bot$TELEGRAM_BOT_TOKEN/setWebhook" \\
   -H "Content-Type: application/json" \\
   -d '{
     "url": "https://YOUR_PUBLIC_BASE_URL/api/integrations/telegram",
     "secret_token": "'$TELEGRAM_WEBHOOK_SECRET'"
   }'`}
-                />
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <h4 className="text-sm font-medium">Long Polling API (Development)</h4>
+                  <p className="text-sm text-muted-foreground">
+                    When using long polling mode, control the polling service via API:
+                  </p>
+                  <CodeBlock
+                    code={`# Get polling status
+GET /api/integrations/telegram/polling
+
+# Start polling
+POST /api/integrations/telegram/polling
+
+# Stop polling
+DELETE /api/integrations/telegram/polling`}
+                  />
+                </div>
+
                 <p className="text-sm text-muted-foreground">
                   Supported commands: <span className="font-mono">/start</span>,{" "}
                   <span className="font-mono">/help</span>,{" "}

@@ -4,6 +4,7 @@ import {
   getTelegramIntegrationStoredSettings,
   saveTelegramIntegrationStoredSettings,
 } from "@/lib/storage/telegram-integration-store";
+import { telegramPollingService } from "@/lib/telegram/polling-service";
 
 interface TelegramApiResponse {
   ok?: boolean;
@@ -56,6 +57,10 @@ export async function POST() {
             ? error.message
             : "Failed to remove Telegram webhook";
       }
+    }
+
+    if (telegramPollingService.status.isRunning) {
+      telegramPollingService.stop();
     }
 
     await saveTelegramIntegrationStoredSettings({
