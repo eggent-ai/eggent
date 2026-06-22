@@ -93,6 +93,8 @@ export async function GET(req: NextRequest) {
             } else if (provider === "openrouter" && process.env.OPENROUTER_API_KEY) {
                 // Special case for environment variables if not in settings explicitly
                 apiKey = process.env.OPENROUTER_API_KEY;
+            } else if (provider === "requesty" && process.env.REQUESTY_API_KEY) {
+                apiKey = process.env.REQUESTY_API_KEY;
             } else if (provider === "openai" && process.env.OPENAI_API_KEY) {
                 apiKey = process.env.OPENAI_API_KEY;
             } else if (provider === "anthropic" && process.env.ANTHROPIC_API_KEY) {
@@ -140,6 +142,25 @@ export async function GET(req: NextRequest) {
                 const data = await res.json();
 
                 // OpenRouter embeddings endpoint might return array directly or { data: [] }
+                const rawModels = Array.isArray(data) ? data : (data.data || []);
+
+                models = rawModels
+                    .map((m: { id: string; name?: string }) => ({
+                        id: m.id,
+                        name: m.name || m.id,
+                    }))
+                    .sort((a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name));
+                break;
+            }
+
+            case "requesty": {
+                const res = await fetch("https://router.requesty.ai/v1/models", {
+                    headers: { Authorization: `Bearer ${apiKey}` },
+                });
+                if (!res.ok) throw new Error(`Requesty API error: ${res.status}`);
+                const data = await res.json();
+
+                // Requesty's /v1/models returns OpenAI shape ({ data: [] })
                 const rawModels = Array.isArray(data) ? data : (data.data || []);
 
                 models = rawModels
