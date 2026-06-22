@@ -165,6 +165,7 @@ function useModels(
         const dynamicProviders = [
           "openai",
           "openrouter",
+          "requesty",
           "ollama",
           "anthropic",
           "google",
@@ -183,6 +184,7 @@ function useModels(
       const dynamicProviders = [
         "openai",
         "openrouter",
+        "requesty",
         "ollama",
         "anthropic",
         "google",

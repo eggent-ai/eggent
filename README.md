@@ -705,7 +705,7 @@ See `.env.example` for the full list.
 | `PI_CODING_AGENT_DIR` | Docker: `/app/data/pi-agent` | Runtime config directory. |
 | `EGGENT_VERSION` | `latest` | Image tag used by `docker-compose.ghcr.yml`. |
 | `HTTPS_PROXY` / `HTTP_PROXY` | unset | Send outbound traffic through an egress proxy. `NO_PROXY` is honoured. Needs Node 22.23 or newer. |
-| `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `OPENROUTER_API_KEY` | unset | Optional provider fallback keys. |
+| `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `OPENROUTER_API_KEY`, `REQUESTY_API_KEY` | unset | Optional provider fallback keys. |
 
 ---
 
