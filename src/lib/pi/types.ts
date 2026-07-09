@@ -5,7 +5,6 @@ export interface PiSessionOptions {
   chatId?: string;
   projectId?: string;
   memorySubdir?: string;
-  knowledgeSubdirs?: string[];
   enableEggentTools?: boolean;
 }
 

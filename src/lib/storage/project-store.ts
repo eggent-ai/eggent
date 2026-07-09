@@ -31,17 +31,45 @@ async function ensureDir(dir: string) {
   await fs.mkdir(dir, { recursive: true });
 }
 
+export const PROJECT_CONTEXT_FILENAME = "context.md";
+export const PROJECT_MEMORY_FILENAME = "memory.md";
+export const PROJECT_SKILLS_DIRNAME = "skills";
+export const PROJECT_MCP_FILENAME = "mcp.json";
+export const PROJECT_CRON_FILENAME = "cron.json";
+export const PROJECT_MODEL_FILENAME = "model.json";
+export const PROJECT_METADATA_FILENAME = "project.json";
+
+function projectDir(projectId: string) {
+  return path.join(PROJECTS_DIR, projectId);
+}
+
 function projectMetaDir(projectId: string) {
-  return path.join(PROJECTS_DIR, projectId, ".meta");
+  return path.join(projectDir(projectId), ".meta");
 }
 
 function projectMetaFile(projectId: string) {
+  return path.join(projectDir(projectId), PROJECT_METADATA_FILENAME);
+}
+
+function legacyProjectMetaFile(projectId: string) {
   return path.join(projectMetaDir(projectId), "project.json");
 }
 
-/** Path to project's .meta/skills directory — Agent Skills spec */
+export function getProjectContextPath(projectId: string): string {
+  return path.join(projectDir(projectId), PROJECT_CONTEXT_FILENAME);
+}
+
+export function getProjectMemoryPath(projectId: string): string {
+  return path.join(projectDir(projectId), PROJECT_MEMORY_FILENAME);
+}
+
+export function getProjectModelSettingsPath(projectId: string): string {
+  return path.join(projectDir(projectId), PROJECT_MODEL_FILENAME);
+}
+
+/** Path to project's skills directory — Agent Skills spec */
 export function getProjectSkillsDir(projectId: string): string {
-  return path.join(projectMetaDir(projectId), "skills");
+  return path.join(projectDir(projectId), PROJECT_SKILLS_DIRNAME);
 }
 
 /** Legacy path to project's .meta/instructions directory (kept for compatibility/migration). */
@@ -49,19 +77,23 @@ function getProjectLegacyInstructionsDir(projectId: string): string {
   return path.join(projectMetaDir(projectId), "instructions");
 }
 
+function getProjectLegacySkillsDir(projectId: string): string {
+  return path.join(projectMetaDir(projectId), "skills");
+}
+
 /** @deprecated Use getProjectSkillsDir. Kept for compatibility with existing imports. */
 export function getProjectInstructionsDir(projectId: string): string {
   return getProjectSkillsDir(projectId);
 }
 
-/** Path to project's .meta/mcp directory — MCP servers config (next to skills) */
+/** Project root directory where mcp.json lives. */
 export function getProjectMcpDir(projectId: string): string {
-  return path.join(projectMetaDir(projectId), "mcp");
+  return projectDir(projectId);
 }
 
-/** Path to project's .meta/mcp/servers.json */
+/** Path to project's root mcp.json */
 export function getProjectMcpServersPath(projectId: string): string {
-  return path.join(getProjectMcpDir(projectId), "servers.json");
+  return path.join(projectDir(projectId), PROJECT_MCP_FILENAME);
 }
 
 /**
@@ -283,7 +315,7 @@ export async function saveProjectMcpServersContent(
   } catch {
     return {
       success: false,
-      error: "Invalid JSON. Provide a valid servers.json object.",
+      error: "Invalid JSON. Provide a valid mcp.json object.",
     };
   }
 
@@ -378,32 +410,30 @@ async function dirExists(dir: string): Promise<boolean> {
 }
 
 /**
- * Move legacy .meta/instructions to .meta/skills when possible.
+ * Move legacy .meta skills/instructions to root skills/ when possible.
  * Keeps backward compatibility for existing projects.
  */
 async function migrateLegacySkillsDir(projectId: string): Promise<void> {
   const skillsDir = getProjectSkillsDir(projectId);
-  const legacyDir = getProjectLegacyInstructionsDir(projectId);
-  const [skillsExists, legacyExists] = await Promise.all([
-    dirExists(skillsDir),
-    dirExists(legacyDir),
-  ]);
+  const legacyDirs = [getProjectLegacySkillsDir(projectId), getProjectLegacyInstructionsDir(projectId)];
+  if (await dirExists(skillsDir)) return;
 
-  if (skillsExists || !legacyExists) return;
+  for (const legacyDir of legacyDirs) {
+    if (!(await dirExists(legacyDir))) continue;
+    try {
+      await fs.rename(legacyDir, skillsDir);
+      return;
+    } catch {
+      // fallback below
+    }
 
-  try {
-    await fs.rename(legacyDir, skillsDir);
-    return;
-  } catch {
-    // fallback below
-  }
-
-  try {
-    await fs.mkdir(skillsDir, { recursive: true });
-    await fs.cp(legacyDir, skillsDir, { recursive: true });
-    await fs.rm(legacyDir, { recursive: true, force: true });
-  } catch {
-    // Keep both dirs if migration fails; readers still check legacy path.
+    try {
+      await fs.mkdir(skillsDir, { recursive: true });
+      await fs.cp(legacyDir, skillsDir, { recursive: true });
+      return;
+    } catch {
+      // Keep legacy dirs if migration fails; readers still check them.
+    }
   }
 }
 
@@ -411,11 +441,13 @@ async function getProjectSkillDirs(projectId: string): Promise<string[]> {
   await migrateLegacySkillsDir(projectId);
 
   const skillsDir = getProjectSkillsDir(projectId);
-  const legacyDir = getProjectLegacyInstructionsDir(projectId);
+  const legacySkillsDir = getProjectLegacySkillsDir(projectId);
+  const legacyInstructionsDir = getProjectLegacyInstructionsDir(projectId);
   const dirs: string[] = [];
 
   if (await dirExists(skillsDir)) dirs.push(skillsDir);
-  if (await dirExists(legacyDir)) dirs.push(legacyDir);
+  if (await dirExists(legacySkillsDir)) dirs.push(legacySkillsDir);
+  if (await dirExists(legacyInstructionsDir)) dirs.push(legacyInstructionsDir);
   if (dirs.length === 0) dirs.push(skillsDir);
 
   return dirs;
@@ -517,7 +549,7 @@ export async function loadProjectSkillsMetadata(
 
 /**
  * Create a new skill in the project (Agent Skills spec).
- * Validates name and description; writes .meta/skills/<name>/SKILL.md.
+ * Validates name and description; writes skills/<name>/SKILL.md.
  * Fails if a skill with that name already exists.
  */
 export async function createSkill(
@@ -1301,6 +1333,160 @@ export async function loadProjectSkills(
   return skills;
 }
 
+async function readTextIfExists(filePath: string): Promise<string | null> {
+  try {
+    return await fs.readFile(filePath, "utf-8");
+  } catch {
+    return null;
+  }
+}
+
+async function writeTextFile(filePath: string, content: string): Promise<void> {
+  await ensureDir(path.dirname(filePath));
+  await fs.writeFile(filePath, content, "utf-8");
+}
+
+function defaultProjectMemory(projectName: string): string {
+  return [`# ${projectName} memory`, "", "Persistent notes for this project/pi agent.", ""].join("\n");
+}
+
+function defaultProjectModelFile(): string {
+  return JSON.stringify({ inheritsGlobal: true }, null, 2);
+}
+
+function defaultProjectCronFile(): string {
+  return JSON.stringify({ version: 1, jobs: [] }, null, 2);
+}
+
+async function ensureProjectDiskLayout(project: Project): Promise<Project> {
+  const root = projectDir(project.id);
+  await ensureDir(root);
+  await ensureDir(getProjectSkillsDir(project.id));
+
+  const legacyMcpPath = path.join(projectMetaDir(project.id), "mcp", "servers.json");
+  const mcpPath = getProjectMcpServersPath(project.id);
+  if (!(await readTextIfExists(mcpPath))) {
+    const legacyMcp = await readTextIfExists(legacyMcpPath);
+    await writeTextFile(mcpPath, legacyMcp ?? JSON.stringify({ mcpServers: {} }, null, 2));
+  }
+
+  const contextPath = getProjectContextPath(project.id);
+  const context = await readTextIfExists(contextPath);
+  if (context === null) {
+    await writeTextFile(contextPath, project.instructions || `# ${project.name}\n\n`);
+  }
+
+  const memoryPath = getProjectMemoryPath(project.id);
+  if ((await readTextIfExists(memoryPath)) === null) {
+    await writeTextFile(memoryPath, defaultProjectMemory(project.name));
+  }
+
+  if ((await readTextIfExists(path.join(projectDir(project.id), PROJECT_CRON_FILENAME))) === null) {
+    const legacyCron = await readTextIfExists(path.join(projectMetaDir(project.id), "cron", "jobs.json"));
+    await writeTextFile(path.join(projectDir(project.id), PROJECT_CRON_FILENAME), legacyCron ?? defaultProjectCronFile());
+  }
+
+  if ((await readTextIfExists(getProjectModelSettingsPath(project.id))) === null) {
+    await writeTextFile(getProjectModelSettingsPath(project.id), defaultProjectModelFile());
+  }
+
+  const currentContext = await readTextIfExists(contextPath);
+  return {
+    ...project,
+    instructions: currentContext ?? project.instructions ?? "",
+  };
+}
+
+export async function readProjectContext(projectId: string): Promise<string> {
+  const project = await getProject(projectId);
+  if (!project) throw new Error("Project not found");
+  return (await readTextIfExists(getProjectContextPath(projectId))) ?? project.instructions ?? "";
+}
+
+export async function saveProjectContext(projectId: string, content: string): Promise<Project | null> {
+  const existing = await getProject(projectId);
+  if (!existing) return null;
+  await writeTextFile(getProjectContextPath(projectId), content);
+  return updateProject(projectId, { instructions: content });
+}
+
+export async function readProjectMemoryFile(projectId: string): Promise<string> {
+  const project = await getProject(projectId);
+  if (!project) throw new Error("Project not found");
+  return (await readTextIfExists(getProjectMemoryPath(projectId))) ?? defaultProjectMemory(project.name);
+}
+
+export async function saveProjectMemoryFile(projectId: string, content: string): Promise<void> {
+  await writeTextFile(getProjectMemoryPath(projectId), content);
+  publishUiSyncEvent({ topic: "projects", projectId, reason: "project_memory_updated" });
+}
+
+export async function readProjectModelSettingsFile(projectId: string): Promise<string> {
+  const project = await getProject(projectId);
+  if (!project) throw new Error("Project not found");
+  return (await readTextIfExists(getProjectModelSettingsPath(projectId))) ?? defaultProjectModelFile();
+}
+
+export async function saveProjectModelSettingsFile(projectId: string, content: string): Promise<string> {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content.trim() ? content : defaultProjectModelFile());
+  } catch {
+    throw new Error("model.json must be valid JSON.");
+  }
+  const normalized = JSON.stringify(parsed, null, 2);
+  await writeTextFile(getProjectModelSettingsPath(projectId), normalized);
+  publishUiSyncEvent({ topic: "projects", projectId, reason: "project_model_updated" });
+  return normalized;
+}
+
+export async function loadProjectModelSettings(projectId: string): Promise<Record<string, unknown> | null> {
+  try {
+    const content = await readProjectModelSettingsFile(projectId);
+    return JSON.parse(content) as Record<string, unknown>;
+  } catch {
+    return null;
+  }
+}
+
+export async function appendProjectMemory(projectId: string, text: string, area = "main"): Promise<void> {
+  const existing = await readProjectMemoryFile(projectId);
+  const entry = [
+    "",
+    `## ${area} — ${new Date().toISOString()}`,
+    "",
+    text.trim(),
+    "",
+  ].join("\n");
+  await saveProjectMemoryFile(projectId, existing.replace(/\s*$/, "\n") + entry);
+}
+
+export async function searchProjectMemory(projectId: string, query: string, limit = 5): Promise<string> {
+  const content = await readProjectMemoryFile(projectId);
+  const q = query.trim().toLowerCase();
+  if (!q) return content;
+  const tokens = q.split(/\s+/).filter(Boolean);
+  const blocks = content.split(/\n(?=##\s+)/g);
+  const matches = blocks
+    .map((block) => ({ block, score: tokens.reduce((n, t) => n + (block.toLowerCase().includes(t) ? 1 : 0), 0) }))
+    .filter((item) => item.score > 0)
+    .sort((a, b) => b.score - a.score)
+    .slice(0, Math.max(1, limit))
+    .map((item) => item.block.trim());
+  return matches.length > 0 ? matches.join("\n\n---\n\n") : "No matching project memory entries.";
+}
+
+export async function deleteProjectMemoryMatches(projectId: string, query: string): Promise<string> {
+  const content = await readProjectMemoryFile(projectId);
+  const q = query.trim().toLowerCase();
+  if (!q) return "Query is required.";
+  const blocks = content.split(/\n(?=##\s+)/g);
+  const kept = blocks.filter((block) => !block.toLowerCase().includes(q));
+  const removed = blocks.length - kept.length;
+  if (removed > 0) await saveProjectMemoryFile(projectId, kept.join("\n"));
+  return `Removed ${removed} matching memory block(s).`;
+}
+
 export async function getAllProjects(): Promise<Project[]> {
   await ensureDir(PROJECTS_DIR);
   const entries = await fs.readdir(PROJECTS_DIR, { withFileTypes: true });
@@ -1310,8 +1496,16 @@ export async function getAllProjects(): Promise<Project[]> {
     if (!entry.isDirectory()) continue;
     try {
       const metaFile = projectMetaFile(entry.name);
-      const content = await fs.readFile(metaFile, "utf-8");
-      projects.push(JSON.parse(content));
+      let content = await readTextIfExists(metaFile);
+      if (content === null) {
+        const legacyContent = await readTextIfExists(legacyProjectMetaFile(entry.name));
+        if (legacyContent !== null) {
+          content = legacyContent;
+          await writeTextFile(metaFile, legacyContent);
+        }
+      }
+      if (content === null) continue;
+      projects.push(await ensureProjectDiskLayout(JSON.parse(content)));
     } catch {
       // skip projects without metadata
     }
@@ -1325,8 +1519,16 @@ export async function getAllProjects(): Promise<Project[]> {
 
 export async function getProject(projectId: string): Promise<Project | null> {
   try {
-    const content = await fs.readFile(projectMetaFile(projectId), "utf-8");
-    return JSON.parse(content);
+    let content = await readTextIfExists(projectMetaFile(projectId));
+    if (content === null) {
+      const legacyContent = await readTextIfExists(legacyProjectMetaFile(projectId));
+      if (legacyContent !== null) {
+        content = legacyContent;
+        await writeTextFile(projectMetaFile(projectId), legacyContent);
+      }
+    }
+    if (content === null) return null;
+    return ensureProjectDiskLayout(JSON.parse(content));
   } catch {
     return null;
   }
@@ -1342,44 +1544,16 @@ export async function createProject(
     updatedAt: now,
   };
 
-  const projectDir = path.join(PROJECTS_DIR, project.id);
-  await ensureDir(projectDir);
-  await ensureDir(projectMetaDir(project.id));
+  const projectRoot = path.join(PROJECTS_DIR, project.id);
+  await ensureDir(projectRoot);
   await ensureDir(getProjectSkillsDir(project.id));
-  await ensureDir(path.join(projectMetaDir(project.id), "knowledge"));
-  await ensureDir(getProjectMcpDir(project.id));
 
-  const defaultMcpServers = {
-    mcpServers: {
-      "firecrawl-mcp": {
-        command: "npx",
-        args: ["-y", "firecrawl-mcp"],
-        env: {
-          FIRECRAWL_API_KEY: "",
-        },
-      },
-      "sendforsign-mcp": {
-        command: "npx",
-        args: ["-y", "@sendforsign/mcp"],
-        env: {
-          EGGENT_API_KEY: "",
-          EGGENT_CLIENT_KEY: "",
-        },
-      },
-    },
-  };
-
-  await fs.writeFile(
-    getProjectMcpServersPath(project.id),
-    JSON.stringify(defaultMcpServers, null, 2),
-    "utf-8"
-  );
-
-  await fs.writeFile(
-    projectMetaFile(project.id),
-    JSON.stringify(fullProject, null, 2),
-    "utf-8"
-  );
+  await writeTextFile(getProjectContextPath(project.id), project.instructions || `# ${project.name}\n\n`);
+  await writeTextFile(getProjectMemoryPath(project.id), defaultProjectMemory(project.name));
+  await writeTextFile(getProjectMcpServersPath(project.id), JSON.stringify({ mcpServers: {} }, null, 2));
+  await writeTextFile(path.join(projectRoot, PROJECT_CRON_FILENAME), defaultProjectCronFile());
+  await writeTextFile(getProjectModelSettingsPath(project.id), defaultProjectModelFile());
+  await writeTextFile(projectMetaFile(project.id), JSON.stringify(fullProject, null, 2));
 
   publishUiSyncEvent({
     topic: "projects",
@@ -1404,11 +1578,10 @@ export async function updateProject(
     updatedAt: new Date().toISOString(),
   };
 
-  await fs.writeFile(
-    projectMetaFile(projectId),
-    JSON.stringify(updated, null, 2),
-    "utf-8"
-  );
+  await writeTextFile(projectMetaFile(projectId), JSON.stringify(updated, null, 2));
+  if (updates.instructions !== undefined) {
+    await writeTextFile(getProjectContextPath(projectId), updates.instructions || "");
+  }
 
   publishUiSyncEvent({
     topic: "projects",
@@ -1428,7 +1601,7 @@ export async function deleteProject(projectId: string): Promise<boolean> {
     const memoryDir = path.join(DATA_DIR, "memory", projectId);
     await fs.rm(memoryDir, { recursive: true, force: true });
     clearMemoryCache(projectId);
-    // Remove project directory (files, .meta, etc.)
+    // Remove project directory (config files, skills, user files, legacy .meta, etc.)
     await fs.rm(projectDir, { recursive: true, force: true });
     publishUiSyncEvent({
       topic: "projects",
@@ -1453,7 +1626,7 @@ export async function getProjectFiles(
   try {
     const entries = await fs.readdir(targetDir, { withFileTypes: true });
     const files = [];
-    const HIDDEN_NAMES = new Set([".meta", ".venv", "venv"]);
+    const HIDDEN_NAMES = new Set([".meta", ".cron-runs", ".venv", "venv", PROJECT_METADATA_FILENAME]);
 
     for (const entry of entries) {
       if (HIDDEN_NAMES.has(entry.name)) continue; // hide internal metadata and virtualenvs

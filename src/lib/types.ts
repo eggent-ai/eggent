@@ -131,7 +131,7 @@ export interface Project {
 
 /**
  * Project Skill (Agent Skills spec: https://agentskills.io/specification).
- * Each skill is a directory under .meta/skills/<skill-name>/ with SKILL.md.
+ * Each skill is a directory under data/projects/<projectId>/skills/<skill-name>/ with SKILL.md.
  */
 export interface ProjectSkill {
   /** Matches directory name; lowercase, hyphens, 1–64 chars */
@@ -256,7 +256,7 @@ export interface McpServerConfigHttp {
 }
 
 /**
- * Cursor-compatible format for .meta/mcp/servers.json.
+ * Cursor-compatible format for data/projects/<projectId>/mcp.json.
  * Key = server id; value with `command` = stdio, with `url` = http.
  * @see https://docs.cursor.com/context/model-context-protocol
  */

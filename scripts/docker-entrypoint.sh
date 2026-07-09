@@ -28,6 +28,10 @@ fix_auth_dir "/app/data/.gemini"
 
 fix_auth_file "/app/data/.codex/auth.json"
 fix_auth_file "/app/data/.gemini/oauth_creds.json"
+mkdir -p "${PI_CODING_AGENT_DIR:-/app/data/pi-agent}" >/dev/null 2>&1 || true
+sudo chown -R node:node "${PI_CODING_AGENT_DIR:-/app/data/pi-agent}" >/dev/null 2>&1 || true
+sudo chmod 700 "${PI_CODING_AGENT_DIR:-/app/data/pi-agent}" >/dev/null 2>&1 || true
+
 fix_auth_file "/app/data/.gemini/settings.json"
 
 exec npm run start

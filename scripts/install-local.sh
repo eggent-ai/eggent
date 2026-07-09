@@ -152,7 +152,12 @@ if looks_placeholder "$EGGENT_AUTH_SECRET_VALUE"; then
 fi
 
 chmod 600 "$ENV_FILE" 2>/dev/null || true
-mkdir -p "$ROOT_DIR/data"
+mkdir -p "$ROOT_DIR/data" "$ROOT_DIR/data/pi-agent"
+PI_AGENT_DIR_VALUE="$(get_env_value "$ENV_FILE" "PI_CODING_AGENT_DIR")"
+if looks_placeholder "$PI_AGENT_DIR_VALUE"; then
+  upsert_env "$ENV_FILE" "PI_CODING_AGENT_DIR" "$ROOT_DIR/data/pi-agent"
+  echo "Configured PI_CODING_AGENT_DIR in .env"
+fi
 
 echo "==> Installing dependencies"
 npm install --no-package-lock

@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useRouter } from "next/navigation";
 import {
   ChevronRight,
   ChevronDown,
@@ -60,6 +61,7 @@ function TreeNode({
   depth,
   refreshToken,
 }: TreeNodeProps) {
+  const router = useRouter();
   const { currentPath, setCurrentPath } = useAppStore();
   const [expanded, setExpanded] = useState(false);
   const [children, setChildren] = useState<FileEntry[] | null>(null);
@@ -132,7 +134,26 @@ function TreeNode({
   }, [refreshToken, type, expanded, loadChildren]);
 
   const handleClick = () => {
+    if (type === "file" && projectId !== "none") {
+      const projectFileRoutes: Record<string, string> = {
+        "context.md": "context",
+        "memory.md": "memory",
+        "mcp.json": "mcp",
+        "cron.json": "cron",
+        "model.json": "settings",
+      };
+      const route = projectFileRoutes[relativePath];
+      if (route) {
+        router.push(`/dashboard/projects/${projectId}/${route}`);
+      }
+      return;
+    }
+
     if (type === "directory") {
+      if (relativePath === "skills" && projectId !== "none") {
+        router.push(`/dashboard/projects/${projectId}/skills`);
+        return;
+      }
       const willExpand = !expanded;
       setExpanded(willExpand);
       if (willExpand) {

@@ -22,9 +22,23 @@ Eggent UI + API
 The most important concept:
 
 ```text
-Eggent Project = pi Agent configuration
+Eggent Project = a directory-backed pi Agent configuration
 Eggent Pipeline = sequence of Eggent Projects
 ```
+
+Every project directory contains the runtime files Eggent exposes in the UI:
+
+```text
+data/projects/<projectId>/
+  context.md    # pi agent instructions/context
+  memory.md     # plain Markdown persistent memory
+  skills/       # project-local Agent Skills
+  mcp.json      # project-local MCP servers
+  cron.json     # scheduled project-agent turns
+  model.json    # project model override or global inheritance
+```
+
+RAG/knowledge ingestion has been removed. Pipelines and agents pass long-lived state through project files, `memory.md`, and pipeline artifacts.
 
 ---
 
@@ -33,8 +47,8 @@ Eggent Pipeline = sequence of Eggent Projects
 Eggent is responsible for:
 
 - a convenient chat UI for pi agents;
-- project-based agent configuration;
-- project-local context, skills, MCP servers, memory, and knowledge;
+- directory-backed project/agent configuration;
+- project-local context files, memory files, skills, MCP servers, cron, and model settings;
 - persistent chat and pi session storage;
 - external/Telegram/cron entrypoints;
 - multi-agent pipelines with artifact handoff;
@@ -101,19 +115,19 @@ A project can define:
 | Project files | Used as pi `cwd` |
 | Project skills | Passed as pi `additionalSkillPaths` |
 | Project MCP servers | Exposed as `eggent_mcp_*` tools |
-| Project memory | Exposed as `eggent_memory_*` tools |
-| Project knowledge | Exposed as `eggent_knowledge_query` |
-| Project model settings | Resolved through pi `ModelRegistry` where possible |
+| Project memory file | Exposed as `eggent_memory_*` tools over `memory.md` |
+| | Project model settings | Resolved through pi `ModelRegistry` where possible |
 
 Project data lives under:
 
 ```text
 data/projects/<projectId>/
-  .meta/
-    project.json
-    skills/
-    mcp/servers.json
-    knowledge/
+  context.md
+  memory.md
+  skills/
+  mcp.json
+  cron.json
+  model.json
 ```
 
 When a project is launched as an agent, Eggent builds a pi session with that project as the runtime context.
@@ -127,7 +141,7 @@ Project instructions are converted into a virtual context file for pi.
 Conceptually:
 
 ```text
-EGGENT_PROJECT_CONTEXT.md
+context.md
 ```
 
 It contains:
@@ -142,14 +156,12 @@ Project name: ...
 Project description: ...
 Working directory: ...
 Memory namespace: ...
-Knowledge namespaces: ...
 
 Project instructions:
 ...
 
 Available Eggent bridge tools:
 - eggent_memory_search / eggent_memory_save / eggent_memory_delete
-- eggent_knowledge_query
 - eggent_mcp_*
 - eggent_list_pipelines / eggent_start_pipeline
 ```
@@ -165,7 +177,7 @@ Eggent skills are project-local pi skills.
 They are stored as Agent Skills-compatible directories:
 
 ```text
-data/projects/<projectId>/.meta/skills/<skill-name>/SKILL.md
+data/projects/<projectId>/skills/<skill-name>/SKILL.md
 ```
 
 When a project is launched, Eggent passes those `SKILL.md` files into pi as additional skill paths.
@@ -179,7 +191,7 @@ You can manage skills from the Eggent UI, but the runtime behavior is pi's skill
 MCP servers are configured per Eggent project:
 
 ```text
-data/projects/<projectId>/.meta/mcp/servers.json
+data/projects/<projectId>/mcp.json
 ```
 
 When that project runs as a pi agent, Eggent connects to the configured MCP servers and exposes their tools to pi as bridge tools:
@@ -232,21 +244,9 @@ So memory is still stored and indexed by Eggent, but accessed by pi.
 
 ---
 
-## Knowledge
+## Knowledge / RAG
 
-Knowledge files are managed by Eggent and queried by pi via:
-
-```text
-eggent_knowledge_query
-```
-
-For a project, knowledge lookup uses:
-
-```text
-[projectId, "main"]
-```
-
-This allows an agent to access both project-specific knowledge and shared knowledge.
+RAG has been removed from Eggent. Use project files, `memory.md`, skills, MCP tools, and pipeline artifacts instead.
 
 ---
 
@@ -268,7 +268,6 @@ eggent_memory_save
 eggent_memory_search
 eggent_memory_delete
 
-eggent_knowledge_query
 
 eggent_list_pipelines
 eggent_start_pipeline
@@ -433,15 +432,16 @@ signers-agent    # identifies signers and signing order
 send-agent       # sends or prepares send package
 ```
 
-Each project has its own:
+Each project has its own directory-backed files:
 
 ```text
-instructions
-skills
-MCP servers
-memory
-knowledge
-files
+context.md
+memory.md
+skills/
+mcp.json
+cron.json
+model.json
+regular project files
 ```
 
 The pipeline is just the sequence:
@@ -666,10 +666,10 @@ Main environment variables:
 
 | Variable | Required | Purpose |
 | --- | --- | --- |
-| `OPENAI_API_KEY` | Usually yes | OpenAI provider key |
-| `ANTHROPIC_API_KEY` | No | Anthropic provider key |
-| `GOOGLE_API_KEY` | No | Google provider key |
-| `OPENROUTER_API_KEY` | No | OpenRouter provider key |
+| `OPENAI_API_KEY` | No | Optional pi OpenAI provider key; can also be stored in pi `auth.json` |
+| `ANTHROPIC_API_KEY` | No | Optional pi Anthropic provider key; can also be stored in pi `auth.json` |
+| `GOOGLE_API_KEY` | No | Optional pi Google provider key; can also be stored in pi `auth.json` |
+| `OPENROUTER_API_KEY` | No | Optional pi OpenRouter provider key; can also be stored in pi `auth.json` |
 | `TAVILY_API_KEY` | No | Web search integration |
 | `EXTERNAL_API_TOKEN` | No, auto-generated by setup scripts | External message API auth token |
 | `TELEGRAM_BOT_TOKEN` | No | Telegram bot token |
@@ -688,7 +688,7 @@ Main environment variables:
 | `GEMINI_SETTINGS_FILE` | No | Explicit path to Gemini settings file |
 | `EGGENT_AGENT_BACKEND` | No | Set to `legacy` to use old Eggent agent instead of pi |
 
-Model keys can be configured either through environment variables or Eggent Settings. Eggent forwards configured runtime API keys into pi `AuthStorage` where possible.
+Model connections are owned by pi, not by Eggent. Use Eggent Settings as a UI for pi `~/.pi/agent/auth.json` and `~/.pi/agent/models.json`, or configure pi directly with `/login`, environment variables, or custom `models.json`.
 
 ---
 
@@ -702,7 +702,7 @@ Important directories:
 data/chats/             # Eggent UI chat history
 data/pi-sessions/       # pi session files per Eggent chat / pipeline step
 data/projects/          # Eggent projects = pi agent configs
-data/memory/            # vector memory / knowledge storage
+data/projects/<id>/memory.md # plain Markdown project memory
 data/pipelines/         # pipeline definitions
 data/pipeline-runs/     # pipeline runs and artifacts
 data/settings/          # app settings
@@ -747,7 +747,7 @@ Expected response:
 
 ## VPS Production Checklist
 
-1. Set at least one model API key.
+1. Configure at least one pi model connection in Eggent Settings, pi `/login`, `~/.pi/agent/auth.json`, or environment variables.
 2. Change default dashboard credentials immediately after first login.
 3. If using Telegram/webhooks, set public HTTPS `APP_BASE_URL`.
 4. Keep `data/` persistent and writable.
@@ -768,20 +768,11 @@ Use one host consistently. Browser storage/cookies are origin-scoped.
 docker compose logs --tail 200 app
 ```
 
-Verify `.env` values and model keys.
+Verify `.env` values and pi model connections.
 
 ### pi model/provider cannot authenticate
 
-Check that a provider key is configured in `.env` or Settings:
-
-```text
-OPENAI_API_KEY
-ANTHROPIC_API_KEY
-GOOGLE_API_KEY
-OPENROUTER_API_KEY
-```
-
-Eggent forwards Settings API keys into pi runtime auth where possible.
+Check that a provider key is configured through pi. Eggent Settings edits pi `auth.json` and `models.json` directly. You can also use pi CLI `/login` or environment variables such as `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GEMINI_API_KEY`, or `OPENROUTER_API_KEY`.
 
 ### Pipeline step does not use the expected agent
 
@@ -804,7 +795,7 @@ GET /api/projects/<projectId>/pi-config
 Verify project MCP config:
 
 ```text
-data/projects/<projectId>/.meta/mcp/servers.json
+data/projects/<projectId>/mcp.json
 ```
 
 Then restart the chat/session. MCP tools appear as:
@@ -818,7 +809,7 @@ eggent_mcp_<serverId>_<toolName>
 Verify the skill has a valid `SKILL.md`:
 
 ```text
-data/projects/<projectId>/.meta/skills/<skill-name>/SKILL.md
+data/projects/<projectId>/skills/<skill-name>/SKILL.md
 ```
 
 The skill must have valid frontmatter with a name and description.
@@ -862,7 +853,7 @@ src/components/          # UI components
 src/lib/pi/              # Eggent -> pi SDK integration
 src/lib/pipelines/       # Pipeline definitions, storage, runner
 src/lib/storage/         # Disk stores for projects, chats, settings, integrations
-src/lib/memory/          # Memory/knowledge storage backend exposed to pi
+src/lib/memory/          # Legacy vector/RAG backend, no longer part of default pi runtime
 src/lib/mcp/             # MCP connection backend exposed to pi
 src/lib/agent/           # Legacy Eggent agent fallback
 src/lib/tools/           # Legacy/bridge utility wrappers

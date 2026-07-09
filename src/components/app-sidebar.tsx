@@ -5,20 +5,15 @@ import { useEffect } from "react";
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
 import {
-  CalendarClock,
   Cable,
   Bot,
-  Brain,
   FolderOpen,
   GitBranch,
   LifeBuoy,
   LogOut,
   MessageSquarePlus,
   MessagesSquare,
-  Puzzle,
-  Settings2,
   Trash2,
-  Wrench,
 } from "lucide-react";
 import { useAppStore } from "@/store/app-store";
 import { FileTree } from "@/components/file-tree";
@@ -279,30 +274,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             </SidebarMenuItem>
             <SidebarMenuItem>
               <SidebarMenuButton asChild>
-                <Link href="/dashboard/memory">
-                  <Brain className="size-4" />
-                  <span>Memory</span>
-                </Link>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-            <SidebarMenuItem>
-              <SidebarMenuButton asChild>
-                <Link href="/dashboard/skills">
-                  <Puzzle className="size-4" />
-                  <span>Skills</span>
-                </Link>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-            <SidebarMenuItem>
-              <SidebarMenuButton asChild>
-                <Link href="/dashboard/mcp">
-                  <Wrench className="size-4" />
-                  <span>MCP</span>
-                </Link>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-            <SidebarMenuItem>
-              <SidebarMenuButton asChild>
                 <Link href="/dashboard/pipelines">
                   <GitBranch className="size-4" />
                   <span>Pipelines</span>
@@ -311,33 +282,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             </SidebarMenuItem>
             <SidebarMenuItem>
               <SidebarMenuButton asChild>
-                <Link href="/dashboard/cron">
-                  <CalendarClock className="size-4" />
-                  <span>Cron Jobs</span>
-                </Link>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-            <SidebarMenuItem>
-              <SidebarMenuButton asChild>
-                <Link href="/dashboard/settings">
-                  <Settings2 className="size-4" />
-                  <span>Settings</span>
-                </Link>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-            <SidebarMenuItem>
-              <SidebarMenuButton asChild>
                 <Link href="/dashboard/api">
                   <Cable className="size-4" />
                   <span>API</span>
-                </Link>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
-            <SidebarMenuItem>
-              <SidebarMenuButton asChild>
-                <Link href="/dashboard/messengers">
-                  <MessagesSquare className="size-4" />
-                  <span>Messengers</span>
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>

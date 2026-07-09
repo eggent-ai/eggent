@@ -10,15 +10,23 @@ export function resolveCronProjectDir(projectId: string): string {
   if (!normalized || normalized === GLOBAL_CRON_PROJECT_ID) {
     return path.join(DATA_DIR, "cron", "main");
   }
-  return path.join(PROJECTS_DIR, normalized, ".meta", "cron");
+  return path.join(PROJECTS_DIR, normalized);
 }
 
 export function resolveCronStorePath(projectId: string): string {
-  return path.join(resolveCronProjectDir(projectId), "jobs.json");
+  const normalized = projectId.trim();
+  if (!normalized || normalized === GLOBAL_CRON_PROJECT_ID) {
+    return path.join(resolveCronProjectDir(projectId), "jobs.json");
+  }
+  return path.join(resolveCronProjectDir(projectId), "cron.json");
 }
 
 export function resolveCronRunsDir(projectId: string): string {
-  return path.join(resolveCronProjectDir(projectId), "runs");
+  const normalized = projectId.trim();
+  if (!normalized || normalized === GLOBAL_CRON_PROJECT_ID) {
+    return path.join(resolveCronProjectDir(projectId), "runs");
+  }
+  return path.join(resolveCronProjectDir(projectId), ".cron-runs");
 }
 
 export function resolveCronRunLogPath(projectId: string, jobId: string): string {

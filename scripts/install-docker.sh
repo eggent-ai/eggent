@@ -103,7 +103,7 @@ docker_cmd() {
 prepare_data_dir() {
   local data_dir="$ROOT_DIR/data"
   mkdir -p "$data_dir"
-  mkdir -p "$data_dir/tmp" "$data_dir/ms-playwright" "$data_dir/npm-cache" "$data_dir/.cache"
+  mkdir -p "$data_dir/tmp" "$data_dir/ms-playwright" "$data_dir/npm-cache" "$data_dir/.cache" "$data_dir/pi-agent"
 
   # The runtime container runs as user "node" (uid/gid 1000).
   # If setup is executed as root, fix bind-mount ownership to avoid EACCES at runtime.
@@ -184,6 +184,11 @@ APP_BIND_HOST="${APP_BIND_HOST:-$(get_env_value "$ENV_FILE" "APP_BIND_HOST")}"
 APP_BIND_HOST="${APP_BIND_HOST:-127.0.0.1}"
 upsert_env "$ENV_FILE" "APP_PORT" "$APP_PORT"
 upsert_env "$ENV_FILE" "APP_BIND_HOST" "$APP_BIND_HOST"
+PI_AGENT_DIR_VALUE="$(get_env_value "$ENV_FILE" "PI_CODING_AGENT_DIR")"
+if looks_placeholder "$PI_AGENT_DIR_VALUE"; then
+  upsert_env "$ENV_FILE" "PI_CODING_AGENT_DIR" "/app/data/pi-agent"
+  echo "Configured PI_CODING_AGENT_DIR in .env"
+fi
 HEALTH_URL="http://127.0.0.1:${APP_PORT}/api/health"
 
 echo "==> Building image"

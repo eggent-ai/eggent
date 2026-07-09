@@ -318,7 +318,7 @@ export default function PipelinesPage() {
                       />
                       <div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
                         <div className="mb-2 font-medium text-foreground">Pipeline = sequence of Eggent projects</div>
-                        <p>Each step should set <code>projectId</code>. That project is launched as a pi agent config with its context, skills, MCP, memory and knowledge.</p>
+                        <p>Each step should set <code>projectId</code>. That project directory is launched as a pi agent config with context.md, memory.md, skills/, mcp.json, cron.json and model.json.</p>
                         {projects.length > 0 ? (
                           <div className="mt-2">Available projects: {projects.map((project) => `${project.name} (${project.id})`).join(", ")}</div>
                         ) : null}

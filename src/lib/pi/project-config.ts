@@ -11,8 +11,7 @@ export async function getEggentPiProjectConfig(projectId?: string | null) {
   const cwd = projectId ? getWorkDir(projectId) : getWorkDir(null);
   const skills = projectId ? await loadProjectSkillsMetadata(projectId) : [];
   const mcp = projectId ? await loadProjectMcpServers(projectId) : null;
-  const memorySubdir = project?.memoryMode === "global" ? "main" : projectId || "main";
-  const knowledgeSubdirs = projectId ? [projectId, "main"] : ["main"];
+  const memoryFile = projectId ? path.join(cwd, "memory.md") : null;
 
   return {
     projectId: projectId || null,
@@ -20,7 +19,7 @@ export async function getEggentPiProjectConfig(projectId?: string | null) {
     pi: {
       cwd,
       contextFile: projectId
-        ? path.join(cwd, "EGGENT_PROJECT_CONTEXT.md")
+        ? path.join(cwd, "context.md")
         : path.join(cwd, "EGGENT_GLOBAL_CONTEXT.md"),
       instructions: project?.instructions || "",
       skills: skills.map((skill) => ({
@@ -30,13 +29,19 @@ export async function getEggentPiProjectConfig(projectId?: string | null) {
         skillFile: path.join(skill.skillDir, "SKILL.md"),
       })),
       mcpServers: mcp?.servers ?? [],
-      memorySubdir,
-      knowledgeSubdirs,
+      memoryFile,
+      files: {
+        context: path.join(cwd, "context.md"),
+        memory: path.join(cwd, "memory.md"),
+        skills: path.join(cwd, "skills"),
+        mcp: path.join(cwd, "mcp.json"),
+        cron: path.join(cwd, "cron.json"),
+        model: path.join(cwd, "model.json"),
+      },
       bridgeTools: [
         "eggent_memory_search",
         "eggent_memory_save",
         "eggent_memory_delete",
-        "eggent_knowledge_query",
         "eggent_mcp_*",
         "eggent_list_pipelines",
         "eggent_start_pipeline",

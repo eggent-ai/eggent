@@ -8,9 +8,6 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { TelegramIntegrationManager } from "@/components/telegram-integration-manager";
-import { ChatModelWizard, EmbeddingsModelWizard } from "@/components/settings/model-wizards";
-import type { AppSettings } from "@/lib/types";
-import { updateSettingsByPath } from "@/lib/settings/update-settings-path";
 import {
   AlertTriangle,
   Check,
@@ -104,11 +101,6 @@ function ProjectsPageClient() {
   const [onboardingStep, setOnboardingStep] = useState<OnboardingStep>(-1);
   const [onboardingProjectId, setOnboardingProjectId] = useState("");
 
-  const [settingsDraft, setSettingsDraft] = useState<AppSettings | null>(null);
-  const [settingsLoading, setSettingsLoading] = useState(false);
-  const [settingsSaving, setSettingsSaving] = useState(false);
-  const [settingsError, setSettingsError] = useState<string | null>(null);
-
   const [bundledSkills, setBundledSkills] = useState<BundledSkillItem[]>([]);
   const [bundledSkillsLoading, setBundledSkillsLoading] = useState(false);
   const [installingSkill, setInstallingSkill] = useState<string | null>(null);
@@ -157,25 +149,6 @@ function ProjectsPageClient() {
       setMustChangeCredentials(false);
     } finally {
       setAuthStatusLoading(false);
-    }
-  }, []);
-
-  const loadOnboardingSettings = useCallback(async () => {
-    try {
-      setSettingsLoading(true);
-      setSettingsError(null);
-      const res = await fetch("/api/settings", { cache: "no-store" });
-      const data = (await res.json()) as AppSettings;
-      if (!res.ok) {
-        throw new Error("Failed to load settings");
-      }
-      setSettingsDraft(data);
-    } catch (error) {
-      setSettingsError(
-        error instanceof Error ? error.message : "Failed to load settings"
-      );
-    } finally {
-      setSettingsLoading(false);
     }
   }, []);
 
@@ -283,11 +256,6 @@ function ProjectsPageClient() {
   ]);
 
   useEffect(() => {
-    if (onboardingStep !== 2 || settingsDraft) return;
-    void loadOnboardingSettings();
-  }, [onboardingStep, settingsDraft, loadOnboardingSettings]);
-
-  useEffect(() => {
     if (onboardingStep !== 4 || !onboardingTargetProjectId) return;
     void loadBundledSkills(onboardingTargetProjectId);
   }, [onboardingStep, onboardingTargetProjectId, loadBundledSkills]);
@@ -325,7 +293,6 @@ function ProjectsPageClient() {
 
       if (hadNoProjects) {
         setOnboardingStep(2);
-        setSettingsDraft(null);
         setShowCreate(false);
       } else {
         setShowCreate(false);
@@ -410,39 +377,6 @@ function ProjectsPageClient() {
     await loadProjects();
   }
 
-  async function handleSaveSettingsStep() {
-    if (!settingsDraft) return;
-
-    try {
-      setSettingsSaving(true);
-      setSettingsError(null);
-
-      const res = await fetch("/api/settings", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(settingsDraft),
-      });
-
-      const data = (await res.json()) as AppSettings | { error?: string };
-      if (!res.ok) {
-        throw new Error(
-          "error" in data && typeof data.error === "string"
-            ? data.error
-            : "Failed to save settings"
-        );
-      }
-
-      setSettingsDraft(data as AppSettings);
-      setOnboardingStep(3);
-    } catch (error) {
-      setSettingsError(
-        error instanceof Error ? error.message : "Failed to save settings"
-      );
-    } finally {
-      setSettingsSaving(false);
-    }
-  }
-
   async function handleInstallSkill(skillName: string) {
     if (!onboardingTargetProjectId) return;
 
@@ -477,13 +411,6 @@ function ProjectsPageClient() {
   function finishOnboarding() {
     setOnboardingStep(-1);
     router.push("/dashboard");
-  }
-
-  function updateOnboardingSettings(path: string, value: unknown) {
-    setSettingsDraft((prev) => {
-      if (!prev) return null;
-      return updateSettingsByPath(prev, path, value);
-    });
   }
 
   return (
@@ -640,55 +567,16 @@ function ProjectsPageClient() {
 
                   {onboardingStep === 2 && (
                     <div className="rounded-lg border p-4 space-y-4">
-                      <h4 className="font-medium">Step 2: Model and Vector API Settings</h4>
+                      <h4 className="font-medium">Step 2: pi Model Connections</h4>
                       <p className="text-sm text-muted-foreground">
-                        Same model setup UI as in Settings, including model loading by API key.
+                        Eggent no longer stores model provider credentials. It reads pi&apos;s own <code>auth.json</code> and <code>models.json</code>. Configure them in Settings, or continue if pi is already logged in.
                       </p>
-
-                      {settingsLoading || !settingsDraft ? (
-                        <div className="py-8 flex items-center justify-center text-muted-foreground">
-                          <Loader2 className="size-4 animate-spin mr-2" />
-                          Loading settings...
-                        </div>
-                      ) : (
-                        <>
-                          <ChatModelWizard
-                            settings={settingsDraft}
-                            updateSettings={updateOnboardingSettings}
-                          />
-                          <EmbeddingsModelWizard
-                            settings={settingsDraft}
-                            updateSettings={updateOnboardingSettings}
-                          />
-
-                          {settingsError && (
-                            <p className="text-sm text-destructive">{settingsError}</p>
-                          )}
-
-                          <div className="flex items-center gap-2">
-                            <Button
-                              onClick={handleSaveSettingsStep}
-                              disabled={settingsSaving}
-                              className="gap-2"
-                            >
-                              {settingsSaving ? (
-                                <>
-                                  <Loader2 className="size-4 animate-spin" />
-                                  Saving...
-                                </>
-                              ) : (
-                                "Save and Continue"
-                              )}
-                            </Button>
-                            <Button
-                              variant="ghost"
-                              onClick={() => setOnboardingStep(3)}
-                            >
-                              Skip
-                            </Button>
-                          </div>
-                        </>
-                      )}
+                      <div className="flex items-center gap-2">
+                        <Button onClick={() => router.push("/dashboard/settings")}>Open Settings</Button>
+                        <Button variant="ghost" onClick={() => setOnboardingStep(3)}>
+                          Continue
+                        </Button>
+                      </div>
                     </div>
                   )}
 
@@ -908,10 +796,7 @@ function ProjectsPageClient() {
                           </p>
                         )}
                         <div className="flex items-center gap-4 text-xs text-muted-foreground mt-2">
-                          <span>
-                            Memory:{" "}
-                            {project.memoryMode === "isolated" ? "Isolated" : "Global"}
-                          </span>
+                          <span className="font-mono">context.md · memory.md · skills/ · mcp.json · cron.json · model.json</span>
                           <span>
                             Created:{" "}
                             {new Date(project.createdAt).toLocaleDateString()}

@@ -1,11 +1,10 @@
+import "@/lib/pi/env";
 import fs from "fs";
 import path from "path";
 import {
-  AuthStorage,
   createAgentSession,
   DefaultResourceLoader,
   getAgentDir,
-  ModelRegistry,
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { createEggentPiTools } from "@/lib/pi/eggent-tools";
@@ -13,9 +12,10 @@ import type { PiSessionOptions } from "@/lib/pi/types";
 import {
   getProject,
   getWorkDir,
+  loadProjectModelSettings,
   loadProjectSkillsMetadata,
 } from "@/lib/storage/project-store";
-import { getSettings } from "@/lib/storage/settings-store";
+import { getPiAuthStorage, getPiModelRegistry, getPiSettingsManager } from "@/lib/pi/config-store";
 
 function resolveCwd(options: PiSessionOptions): string {
   const rawCwd = options.cwd?.trim();
@@ -35,7 +35,6 @@ function buildEggentProjectContext(options: {
   projectDescription?: string;
   projectInstructions?: string;
   memorySubdir: string;
-  knowledgeSubdirs: string[];
   cwd: string;
 }): string {
   return [
@@ -48,15 +47,13 @@ function buildEggentProjectContext(options: {
     options.projectName ? `Project name: ${options.projectName}` : "",
     options.projectDescription ? `Project description: ${options.projectDescription}` : "",
     `Working directory: ${options.cwd}`,
-    `Memory namespace: ${options.memorySubdir}`,
-    `Knowledge namespaces: ${options.knowledgeSubdirs.join(", ")}`,
+    `Memory file: memory.md`,
     "",
     "Project instructions:",
     options.projectInstructions?.trim() || "No project-specific instructions configured.",
     "",
     "Available Eggent bridge tools:",
-    "- eggent_memory_search / eggent_memory_save / eggent_memory_delete for persistent project memory.",
-    "- eggent_knowledge_query for project knowledge/RAG documents.",
+    "- eggent_memory_search / eggent_memory_save / eggent_memory_delete for the project memory.md file.",
     "- eggent_mcp_* tools for MCP servers configured on this Eggent project.",
     "- eggent_list_pipelines / eggent_start_pipeline for multi-project pipelines.",
   ]
@@ -98,18 +95,22 @@ function createSessionManager(options: PiSessionOptions, cwd: string): SessionMa
 export async function createEggentPiSession(options: PiSessionOptions = {}) {
   const cwd = resolveCwd(options);
   const agentDir = options.agentDir || getAgentDir();
-  const authStorage = AuthStorage.create();
-  const settings = await getSettings();
-  if (settings.chatModel.apiKey) {
-    authStorage.setRuntimeApiKey(settings.chatModel.provider, settings.chatModel.apiKey);
-  }
-  const modelRegistry = ModelRegistry.create(authStorage);
-  const configuredModel = modelRegistry.find(settings.chatModel.provider, settings.chatModel.model);
+  const authStorage = getPiAuthStorage();
+  const modelRegistry = getPiModelRegistry(authStorage);
+  const settingsManager = getPiSettingsManager(cwd);
+  await authStorage.reload();
+  await modelRegistry.refresh();
+  const projectModelSettings = options.projectId ? await loadProjectModelSettings(options.projectId) : null;
+  const configuredModel = projectModelSettings && projectModelSettings.inheritsGlobal !== true
+    ? modelRegistry.find(
+        typeof projectModelSettings.provider === "string" ? projectModelSettings.provider : "",
+        typeof projectModelSettings.model === "string" ? projectModelSettings.model : ""
+      )
+    : modelRegistry.find(settingsManager.getDefaultProvider(), settingsManager.getDefaultModel());
   const project = options.projectId ? await getProject(options.projectId) : null;
   const memorySubdir =
     options.memorySubdir ||
     (project?.memoryMode === "global" ? "main" : options.projectId || "main");
-  const knowledgeSubdirs = options.knowledgeSubdirs || (options.projectId ? [options.projectId, "main"] : ["main"]);
 
   const projectSkillPaths = options.projectId
     ? (await loadProjectSkillsMetadata(options.projectId)).map((skill) =>
@@ -123,7 +124,6 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     projectDescription: project?.description,
     projectInstructions: project?.instructions,
     memorySubdir,
-    knowledgeSubdirs,
     cwd,
   });
 
@@ -136,7 +136,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
         ...current.agentsFiles,
         {
           path: options.projectId
-            ? path.join(getWorkDir(options.projectId), "EGGENT_PROJECT_CONTEXT.md")
+            ? path.join(getWorkDir(options.projectId), "context.md")
             : path.join(process.cwd(), "EGGENT_GLOBAL_CONTEXT.md"),
           content: projectContext,
         },
@@ -152,7 +152,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
         projectId: options.projectId,
         cwd,
         memorySubdir,
-        knowledgeSubdirs,
+
       });
   const customTools = eggentTools.tools;
   const customToolNames = customTools.map((tool) => tool.name);

@@ -1,11 +1,8 @@
 import { Type } from "typebox";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
-import { getSettings } from "@/lib/storage/settings-store";
 import type { McpServerConfig } from "@/lib/types";
 import { getPipelineDefinitions } from "@/lib/pipelines/store";
 import { startPipelineRunInBackground } from "@/lib/pipelines/runner";
-import { knowledgeQuery } from "@/lib/tools/knowledge-query";
-import { memoryDelete, memoryLoad, memorySave } from "@/lib/tools/memory-tools";
 import {
   callMcpTool,
   closeMcpConnection,
@@ -19,6 +16,9 @@ import {
   deleteProjectMcpServer,
   getAllProjects,
   loadProjectMcpServers,
+  searchProjectMemory,
+  appendProjectMemory,
+  deleteProjectMemoryMatches,
   upsertProjectMcpServer,
 } from "@/lib/storage/project-store";
 
@@ -107,17 +107,15 @@ export async function createEggentPiTools(options: {
   projectId?: string;
   cwd?: string;
   memorySubdir?: string;
-  knowledgeSubdirs?: string[];
 } = {}): Promise<{ tools: ToolDefinition[]; cleanup: () => Promise<void> }> {
-  const memorySubdir = options.memorySubdir || options.projectId || "main";
-  const knowledgeSubdirs = options.knowledgeSubdirs || (options.projectId ? [options.projectId, "main"] : ["main"]);
+  const memoryProjectId = options.projectId;
   const mcp = await createMcpPiTools(options.projectId);
 
   const tools: ToolDefinition[] = [
     defineTool({
       name: "list_projects",
       label: "List Eggent Projects",
-      description: "List Eggent projects. Each project is a pi agent configuration with context, skills, MCP, memory and knowledge.",
+      description: "List Eggent projects. Each project is a directory-backed pi agent configuration with context.md, memory.md, skills/, mcp.json, cron.json, and model.json.",
       parameters: Type.Object({}),
       execute: async () => {
         const projects = await getAllProjects();
@@ -258,50 +256,36 @@ export async function createEggentPiTools(options: {
         area: Type.Optional(Type.String({ description: "Memory area/category. Defaults to main." })),
       }),
       execute: async (_toolCallId, params) => {
-        const settings = await getSettings();
-        const output = await memorySave(params.text, params.area || "main", memorySubdir, settings);
-        return textResult(output, { memorySubdir, area: params.area || "main" });
+        if (!memoryProjectId) return textResult("No project selected; project memory is stored in the project's memory.md file.");
+        await appendProjectMemory(memoryProjectId, params.text, params.area || "main");
+        return textResult("Saved to project memory.md.", { projectId: memoryProjectId, area: params.area || "main" });
       },
     }),
     defineTool({
       name: "eggent_memory_search",
       label: "Search Eggent Memory",
-      description: "Search persistent Eggent memory for the current pi project agent.",
+      description: "Search the current project's memory.md file.",
       parameters: Type.Object({
-        query: Type.String({ description: "Semantic memory search query." }),
+        query: Type.String({ description: "Memory search query." }),
         limit: Type.Optional(Type.Number({ description: "Maximum number of memories. Defaults to 5." })),
       }),
       execute: async (_toolCallId, params) => {
-        const settings = await getSettings();
-        const output = await memoryLoad(params.query, params.limit || 5, memorySubdir, settings);
-        return textResult(output, { memorySubdir });
+        if (!memoryProjectId) return textResult("No project selected; project memory is stored in the project's memory.md file.");
+        const output = await searchProjectMemory(memoryProjectId, params.query, params.limit || 5);
+        return textResult(output, { projectId: memoryProjectId });
       },
     }),
     defineTool({
       name: "eggent_memory_delete",
       label: "Delete Eggent Memory",
-      description: "Delete Eggent memories matching a query for the current pi project agent.",
+      description: "Delete memory.md blocks matching a query for the current pi project agent.",
       parameters: Type.Object({
-        query: Type.String({ description: "Semantic query for memories to delete." }),
+        query: Type.String({ description: "Query for memory.md blocks to delete." }),
       }),
       execute: async (_toolCallId, params) => {
-        const settings = await getSettings();
-        const output = await memoryDelete(params.query, memorySubdir, settings);
-        return textResult(output, { memorySubdir });
-      },
-    }),
-    defineTool({
-      name: "eggent_knowledge_query",
-      label: "Query Eggent Knowledge",
-      description: "Query the Eggent project knowledge base/RAG documents and return relevant excerpts.",
-      parameters: Type.Object({
-        query: Type.String({ description: "Knowledge base query." }),
-        limit: Type.Optional(Type.Number({ description: "Maximum number of excerpts. Defaults to 5." })),
-      }),
-      execute: async (_toolCallId, params) => {
-        const settings = await getSettings();
-        const output = await knowledgeQuery(params.query, params.limit || 5, knowledgeSubdirs, settings);
-        return textResult(output, { knowledgeSubdirs });
+        if (!memoryProjectId) return textResult("No project selected; project memory is stored in the project's memory.md file.");
+        const output = await deleteProjectMemoryMatches(memoryProjectId, params.query);
+        return textResult(output, { projectId: memoryProjectId });
       },
     }),
     defineTool({
