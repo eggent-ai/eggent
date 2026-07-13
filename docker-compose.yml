@@ -22,7 +22,7 @@ services:
       XDG_CACHE_HOME: ${XDG_CACHE_HOME:-/app/data/.cache}
       PI_CODING_AGENT_DIR: ${PI_CODING_AGENT_DIR:-/app/data/pi-agent}
     ports:
-      - "${APP_BIND_HOST:-0.0.0.0}:${APP_PORT:-3000}:3000"
+      - "${APP_BIND_HOST:-127.0.0.1}:${APP_PORT:-3000}:3000"
     volumes:
       - ./data:/app/data
     healthcheck:
