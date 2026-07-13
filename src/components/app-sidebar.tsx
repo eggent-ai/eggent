@@ -104,6 +104,10 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 
   const handleNewChat = () => {
     setActiveChatId(null);
+    if (typeof window !== "undefined") {
+      window.sessionStorage.setItem("eggent-focus-chat-input", "1");
+      window.dispatchEvent(new Event("eggent:focus-chat-input"));
+    }
     goToChatIfNeeded();
   };
 

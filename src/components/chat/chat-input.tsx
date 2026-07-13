@@ -14,6 +14,7 @@ interface ChatInputProps {
   disabled?: boolean;
   chatId?: string;
   onFilesUploaded?: (files: ChatFile[]) => void;
+  focusSignal?: number;
 }
 
 export function ChatInput({
@@ -25,6 +26,7 @@ export function ChatInput({
   disabled,
   chatId,
   onFilesUploaded,
+  focusSignal,
 }: ChatInputProps) {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -189,6 +191,13 @@ export function ChatInput({
     // Reset textarea height back to a single-row composer after submit/clear.
     textarea.style.height = "auto";
   }, [input]);
+
+  useEffect(() => {
+    if (!focusSignal) return;
+    const textarea = textareaRef.current;
+    if (!textarea || disabled) return;
+    requestAnimationFrame(() => textarea.focus());
+  }, [focusSignal, disabled]);
 
   return (
     <div

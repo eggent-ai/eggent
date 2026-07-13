@@ -289,6 +289,7 @@ export function ChatPanel() {
   } = useAppStore();
   const [input, setInput] = useState("");
   const [chatError, setChatError] = useState<string | null>(null);
+  const [inputFocusSignal, setInputFocusSignal] = useState(0);
 
   // Internal chatId that stays stable during a message send.
   // Pre-generate a UUID so useChat always has a consistent id.
@@ -325,6 +326,20 @@ export function ChatPanel() {
       }
     }
   }, [activeChatId]);
+
+  useEffect(() => {
+    const focusIfRequested = () => {
+      if (typeof window === "undefined") return;
+      if (window.sessionStorage.getItem("eggent-focus-chat-input") !== "1") return;
+      window.sessionStorage.removeItem("eggent-focus-chat-input");
+      setInputFocusSignal((value) => value + 1);
+    };
+
+    focusIfRequested();
+    const listener = () => setInputFocusSignal((value) => value + 1);
+    window.addEventListener("eggent:focus-chat-input", listener);
+    return () => window.removeEventListener("eggent:focus-chat-input", listener);
+  }, []);
 
   // Stable transport — body is a function so it always reads current refs.
   // /api/chat uses the pi SDK backend by default; override only for experiments.
@@ -579,6 +594,7 @@ export function ChatPanel() {
         onStop={stop}
         isLoading={isLoading}
         chatId={activeChatId || internalChatId}
+        focusSignal={inputFocusSignal}
       />
     </div>
   );
