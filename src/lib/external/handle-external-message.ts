@@ -13,6 +13,7 @@ export interface HandleExternalMessageInput {
   sessionId: string;
   message: string;
   projectId?: string;
+  projectName?: string;
   chatId?: string;
   currentPath?: string;
   runtimeData?: Record<string, unknown>;
@@ -138,6 +139,30 @@ function parseCreateProjectSignal(
   return { projectId };
 }
 
+function normalizeProjectLookup(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function resolveProjectByIdOrName(
+  projects: Awaited<ReturnType<typeof getAllProjects>>,
+  value: string
+) {
+  const lookup = value.trim();
+  if (!lookup) return { project: null, ambiguous: false };
+
+  const byId = projects.find((project) => project.id === lookup);
+  if (byId) return { project: byId, ambiguous: false };
+
+  const normalized = normalizeProjectLookup(lookup);
+  const byName = projects.filter(
+    (project) => normalizeProjectLookup(project.name) === normalized
+  );
+  if (byName.length === 1) return { project: byName[0], ambiguous: false };
+  if (byName.length > 1) return { project: null, ambiguous: true };
+
+  return { project: null, ambiguous: false };
+}
+
 function chatBelongsToProject(
   chatProjectId: string | undefined,
   projectId: string | undefined
@@ -173,6 +198,8 @@ export async function handleExternalMessage(
   const sessionId = input.sessionId.trim();
   const message = input.message.trim();
   const explicitProjectId = input.projectId?.trim() ?? "";
+  const explicitProjectName = input.projectName?.trim() ?? "";
+  const explicitProjectRef = explicitProjectId || explicitProjectName;
   const explicitChatId = input.chatId?.trim() ?? "";
   const explicitCurrentPath =
     typeof input.currentPath === "string" ? input.currentPath : undefined;
@@ -193,18 +220,28 @@ export async function handleExternalMessage(
 
   let resolvedProjectId: string | undefined;
 
-  if (explicitProjectId) {
-    if (!projectById.has(explicitProjectId)) {
-      throw new ExternalMessageError(404, {
-        error: `Project "${explicitProjectId}" not found`,
+  if (explicitProjectRef) {
+    const resolvedProject = resolveProjectByIdOrName(projects, explicitProjectRef);
+    if (resolvedProject.ambiguous) {
+      throw new ExternalMessageError(409, {
+        error: `Project name "${explicitProjectRef}" is ambiguous. Use projectId instead.`,
         availableProjects: projects.map((project) => ({
           id: project.id,
           name: project.name,
         })),
       });
     }
-    resolvedProjectId = explicitProjectId;
-    session.activeProjectId = explicitProjectId;
+    if (!resolvedProject.project) {
+      throw new ExternalMessageError(404, {
+        error: `Project "${explicitProjectRef}" not found`,
+        availableProjects: projects.map((project) => ({
+          id: project.id,
+          name: project.name,
+        })),
+      });
+    }
+    resolvedProjectId = resolvedProject.project.id;
+    session.activeProjectId = resolvedProject.project.id;
   } else if (session.activeProjectId && projectById.has(session.activeProjectId)) {
     resolvedProjectId = session.activeProjectId;
   }

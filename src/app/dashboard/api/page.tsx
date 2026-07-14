@@ -72,7 +72,7 @@ export default function ApiPage() {
   -d '{
     "sessionId": "user-42",
     "message": "Summarize the current project status",
-    "projectId": "optional-project-id"
+    "projectName": "optional project name"
   }'`}
                 />
               </InfoCard>
@@ -101,7 +101,12 @@ export default function ApiPage() {
                       <tr>
                         <td className="py-2 pr-4 font-mono text-xs">projectId</td>
                         <td className="py-2 pr-4">No</td>
-                        <td className="py-2 text-muted-foreground">Pin or switch this external session to a project.</td>
+                        <td className="py-2 text-muted-foreground">Pin or switch this external session to a project by id. Also accepts an exact unique project name.</td>
+                      </tr>
+                      <tr>
+                        <td className="py-2 pr-4 font-mono text-xs">projectName</td>
+                        <td className="py-2 pr-4">No</td>
+                        <td className="py-2 text-muted-foreground">Pin or switch by exact project name when you do not know the id.</td>
                       </tr>
                       <tr>
                         <td className="py-2 pr-4 font-mono text-xs">chatId</td>
@@ -125,7 +130,7 @@ export default function ApiPage() {
                     <CodeBlock
                       code={`{
   "sessionId": "user-42",
-  "projectId": "backend",
+  "projectName": "Backend",
   "message": "What should I work on next?"
 }`}
                     />
@@ -154,7 +159,7 @@ export default function ApiPage() {
                     <CodeBlock
                       code={`{
   "sessionId": "deploy-hook",
-  "projectId": "backend",
+  "projectName": "Backend",
   "currentPath": "services/api",
   "message": "Check the deployment notes here"
 }`}
@@ -162,7 +167,7 @@ export default function ApiPage() {
                   </div>
                 </div>
                 <p className="text-sm text-muted-foreground">
-                  If <span className="font-mono">projectId</span> is omitted, Eggent uses the
+                  If <span className="font-mono">projectId</span> / <span className="font-mono">projectName</span> is omitted, Eggent uses the
                   session&apos;s last active project. If there is no active project and multiple projects
                   exist, the API returns <span className="font-mono">409</span> with available projects.
                 </p>
@@ -178,7 +183,7 @@ export default function ApiPage() {
   },
   body: JSON.stringify({
     sessionId: "user-42",
-    projectId: "backend",
+    projectName: "Backend",
     message: "Create a short release summary",
   }),
 });

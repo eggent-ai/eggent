@@ -10,6 +10,7 @@ interface ExternalMessageBody {
   sessionId?: unknown;
   message?: unknown;
   projectId?: unknown;
+  projectName?: unknown;
   chatId?: unknown;
   currentPath?: unknown;
 }
@@ -72,6 +73,10 @@ export async function POST(req: NextRequest) {
       projectId:
         typeof body.projectId === "string" && body.projectId.trim() && body.projectId !== "none"
           ? body.projectId.trim()
+          : undefined,
+      projectName:
+        typeof body.projectName === "string" && body.projectName.trim()
+          ? body.projectName.trim()
           : undefined,
       chatId: typeof body.chatId === "string" ? body.chatId : undefined,
       currentPath:
