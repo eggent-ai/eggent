@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useCallback, useState, useEffect } from "react";
-import { Send, Square, Paperclip, X, FileIcon, Loader2 } from "lucide-react";
+import { Send, Square, Paperclip, X, FileIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { ChatFile } from "@/lib/types";
 import type { PiRuntimeStats } from "@/lib/pi/types";
@@ -35,7 +35,6 @@ interface ChatInputProps {
   onSubmit: () => void;
   onStop?: () => void;
   isLoading: boolean;
-  canStop?: boolean;
   disabled?: boolean;
   chatId?: string;
   onFilesUploaded?: (files: ChatFile[]) => void;
@@ -49,7 +48,6 @@ export function ChatInput({
   onSubmit,
   onStop,
   isLoading,
-  canStop = true,
   disabled,
   chatId,
   onFilesUploaded,
@@ -309,26 +307,14 @@ export function ChatInput({
           </div>
 
             {isLoading ? (
-              canStop ? (
-                <Button
-                  variant="destructive"
-                  size="icon"
-                  onClick={onStop}
-                  className="h-10 w-10 shrink-0 rounded-xl"
-                >
-                  <Square className="size-4" />
-                </Button>
-              ) : (
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  disabled
-                  className="h-10 w-10 shrink-0 rounded-xl"
-                  title="This chat is still running in another view"
-                >
-                  <Loader2 className="size-4 animate-spin" />
-                </Button>
-              )
+              <Button
+                variant="destructive"
+                size="icon"
+                onClick={onStop}
+                className="h-10 w-10 shrink-0 rounded-xl"
+              >
+                <Square className="size-4" />
+              </Button>
             ) : (
               <Button
                 size="icon"

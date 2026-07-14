@@ -3,7 +3,6 @@ import type { UIMessage } from "ai";
 import { createEggentPiSession } from "@/lib/pi/session";
 import { retainPiScheduleSession, takeRetainedPiScheduleSession } from "@/lib/pi/schedule-host";
 import type { PiChatRunOptions, PiRuntimeStats, PiToolRecord } from "@/lib/pi/types";
-import { finishChatRun, startChatRun, updateChatRun } from "@/lib/chat/run-status";
 import { getChat, saveChat } from "@/lib/storage/chat-store";
 import type { ChatMessage } from "@/lib/types";
 
@@ -342,7 +341,6 @@ export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?:
     : options.userMessage;
 
   await persistUserMessage({ ...options, userMessage: prompt }, userMessageId);
-  startChatRun(options.chatId, options.projectId ?? null);
 
   const session = takeRetainedPiScheduleSession(options.chatId) ?? await createEggentPiSession({
     cwd: options.cwd,
@@ -363,7 +361,6 @@ export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?:
     if (!record) return;
 
     if (record.type === "message_update") {
-      updateChatRun(options.chatId, { phase: "thinking" });
       const assistantEvent = asRecord(record.assistantMessageEvent);
       if (assistantEvent?.type === "text_delta" && typeof assistantEvent.delta === "string") {
         assistantText += assistantEvent.delta;
@@ -385,7 +382,6 @@ export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?:
       const toolCallId =
         typeof record.toolCallId === "string" ? record.toolCallId : crypto.randomUUID();
       const toolName = typeof record.toolName === "string" ? record.toolName : "tool";
-      updateChatRun(options.chatId, { phase: "tool", toolName });
       tools.set(toolCallId, {
         toolCallId,
         toolName,
@@ -412,9 +408,7 @@ export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?:
 
   try {
     applySchedulingToolPolicy(session, prompt);
-    updateChatRun(options.chatId, { phase: "thinking" });
     await session.prompt(withSchedulingDirective(prompt));
-    updateChatRun(options.chatId, { phase: "finalizing" });
     currentPromptUsage = currentPromptUsage ?? subtractUsage(getSessionTokenUsage(session), baselineUsage);
     lastTurnUsage = lastTurnUsage ?? currentPromptUsage;
     await persistAssistantMessage({
@@ -432,7 +426,6 @@ export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?:
       session,
     });
     if (!retained) session.dispose();
-    finishChatRun(options.chatId);
   }
 }
 
@@ -442,7 +435,6 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
   return createUIMessageStream<UIMessage>({
     async execute({ writer }) {
       await persistUserMessage(options, userMessageId);
-      startChatRun(options.chatId, options.projectId ?? null);
 
       const session = takeRetainedPiScheduleSession(options.chatId) ?? await createEggentPiSession({
         cwd: options.cwd,
@@ -481,7 +473,6 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         if (!record) return;
 
         if (record.type === "message_update") {
-          updateChatRun(options.chatId, { phase: "thinking" });
           const assistantEvent = asRecord(record.assistantMessageEvent);
           if (assistantEvent?.type === "text_delta" && typeof assistantEvent.delta === "string") {
             ensureTextStarted();
@@ -511,7 +502,6 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
           const toolCallId =
             typeof record.toolCallId === "string" ? record.toolCallId : crypto.randomUUID();
           const toolName = typeof record.toolName === "string" ? record.toolName : "tool";
-          updateChatRun(options.chatId, { phase: "tool", toolName });
           const input = getToolArgs(record);
           tools.set(toolCallId, {
             toolCallId,
@@ -564,9 +554,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
 
       try {
         applySchedulingToolPolicy(session, options.userMessage);
-        updateChatRun(options.chatId, { phase: "thinking" });
         await session.prompt(withSchedulingDirective(options.userMessage));
-        updateChatRun(options.chatId, { phase: "finalizing" });
         currentPromptUsage = currentPromptUsage ?? subtractUsage(getSessionTokenUsage(session), baselineUsage);
         lastTurnUsage = lastTurnUsage ?? currentPromptUsage;
         const finalStats = buildPiRuntimeStats(session, currentPromptUsage, addUsage(baselineUsage, currentPromptUsage));
@@ -588,7 +576,6 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
           session,
         });
         if (!retained) session.dispose();
-        finishChatRun(options.chatId);
       }
     },
     onError: (error) => {

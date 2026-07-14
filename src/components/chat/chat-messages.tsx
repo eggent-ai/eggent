@@ -9,10 +9,9 @@ interface ChatMessagesProps {
   messages: UIMessage[];
   isLoading: boolean;
   errorMessage?: string | null;
-  loadingLabel?: string;
 }
 
-export function ChatMessages({ messages, isLoading, errorMessage, loadingLabel }: ChatMessagesProps) {
+export function ChatMessages({ messages, isLoading, errorMessage }: ChatMessagesProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollRef = useRef(true);
@@ -88,7 +87,7 @@ export function ChatMessages({ messages, isLoading, errorMessage, loadingLabel }
             </div>
             <div className="flex items-center">
               <span className="text-sm text-muted-foreground">
-                {loadingLabel || "Thinking..."}
+                Thinking...
               </span>
             </div>
           </div>
