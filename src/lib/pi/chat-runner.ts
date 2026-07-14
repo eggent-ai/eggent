@@ -86,6 +86,26 @@ function asUsage(value: unknown): PiRuntimeStats["lastTurn"] | undefined {
   });
 }
 
+function addUsage(
+  left?: PiRuntimeStats["lastTurn"],
+  right?: PiRuntimeStats["lastTurn"]
+): PiRuntimeStats["lastTurn"] | undefined {
+  if (!left && !right) return undefined;
+  const sum = (field: keyof NonNullable<PiRuntimeStats["lastTurn"]>) => {
+    const leftValue = left && typeof left[field] === "number" ? left[field] : 0;
+    const rightValue = right && typeof right[field] === "number" ? right[field] : 0;
+    const value = leftValue + rightValue;
+    return value > 0 ? value : undefined;
+  };
+  return normalizeUsage({
+    input: sum("input"),
+    output: sum("output"),
+    cacheRead: sum("cacheRead"),
+    cacheWrite: sum("cacheWrite"),
+    total: sum("total"),
+  });
+}
+
 function subtractUsage(
   after?: PiRuntimeStats["lastTurn"],
   before?: PiRuntimeStats["lastTurn"]
@@ -124,7 +144,7 @@ function buildPiRuntimeStats(session: {
     contextUsage?: PiRuntimeStats["context"];
   };
   getContextUsage?: () => PiRuntimeStats["context"] | undefined;
-}, lastTurn?: PiRuntimeStats["lastTurn"]): PiRuntimeStats {
+}, lastTurn?: PiRuntimeStats["lastTurn"], sessionUsageOverride?: PiRuntimeStats["session"]): PiRuntimeStats {
   let sessionStats: ReturnType<NonNullable<typeof session.getSessionStats>> | undefined;
   try {
     sessionStats = session.getSessionStats?.();
@@ -150,7 +170,7 @@ function buildPiRuntimeStats(session: {
         }
       : undefined,
     lastTurn,
-    session: sessionStats?.tokens
+    session: sessionUsageOverride ?? (sessionStats?.tokens
       ? {
           input: sessionStats.tokens.input,
           output: sessionStats.tokens.output,
@@ -159,7 +179,7 @@ function buildPiRuntimeStats(session: {
           total: sessionStats.tokens.total,
           cost: sessionStats.cost,
         }
-      : undefined,
+      : undefined),
     context,
   };
 }
@@ -332,6 +352,7 @@ export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?:
 
   let assistantText = "";
   let lastTurnUsage: PiRuntimeStats["lastTurn"] | undefined;
+  let currentPromptUsage: PiRuntimeStats["lastTurn"] | undefined;
   const baselineUsage = getSessionTokenUsage(session);
   const tools = new Map<string, PiToolRecord>();
 
@@ -350,7 +371,9 @@ export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?:
     if (record.type === "message_end") {
       const message = asRecord(record.message);
       if (message?.role === "assistant") {
-        lastTurnUsage = asUsage(message.usage) ?? lastTurnUsage;
+        const usage = asUsage(message.usage);
+        lastTurnUsage = usage ?? lastTurnUsage;
+        currentPromptUsage = addUsage(currentPromptUsage, usage);
       }
       return;
     }
@@ -386,12 +409,13 @@ export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?:
   try {
     applySchedulingToolPolicy(session, prompt);
     await session.prompt(withSchedulingDirective(prompt));
-    lastTurnUsage = lastTurnUsage ?? subtractUsage(getSessionTokenUsage(session), baselineUsage);
+    currentPromptUsage = currentPromptUsage ?? subtractUsage(getSessionTokenUsage(session), baselineUsage);
+    lastTurnUsage = lastTurnUsage ?? currentPromptUsage;
     await persistAssistantMessage({
       chatId: options.chatId,
       assistantText,
       tools: [...tools.values()],
-      runtimeStats: buildPiRuntimeStats(session, lastTurnUsage),
+      runtimeStats: buildPiRuntimeStats(session, currentPromptUsage, addUsage(baselineUsage, currentPromptUsage)),
     });
     return assistantText;
   } finally {
@@ -423,6 +447,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
       let assistantText = "";
       let textStarted = false;
       let lastTurnUsage: PiRuntimeStats["lastTurn"] | undefined;
+      let currentPromptUsage: PiRuntimeStats["lastTurn"] | undefined;
       const baselineUsage = getSessionTokenUsage(session);
       const textId = `pi-text-${crypto.randomUUID()}`;
       const tools = new Map<string, PiToolRecord>();
@@ -460,14 +485,16 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         if (record.type === "message_end") {
           const message = asRecord(record.message);
           if (message?.role === "assistant") {
-            lastTurnUsage = asUsage(message.usage);
-            emitStats(buildPiRuntimeStats(session, lastTurnUsage));
+            const usage = asUsage(message.usage);
+            lastTurnUsage = usage ?? lastTurnUsage;
+            currentPromptUsage = addUsage(currentPromptUsage, usage);
+            emitStats(buildPiRuntimeStats(session, currentPromptUsage, addUsage(baselineUsage, currentPromptUsage)));
           }
           return;
         }
 
         if (record.type === "agent_end") {
-          emitStats(buildPiRuntimeStats(session, lastTurnUsage));
+          emitStats(buildPiRuntimeStats(session, currentPromptUsage ?? lastTurnUsage, addUsage(baselineUsage, currentPromptUsage)));
           return;
         }
 
@@ -528,8 +555,9 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
       try {
         applySchedulingToolPolicy(session, options.userMessage);
         await session.prompt(withSchedulingDirective(options.userMessage));
-        lastTurnUsage = lastTurnUsage ?? subtractUsage(getSessionTokenUsage(session), baselineUsage);
-        const finalStats = buildPiRuntimeStats(session, lastTurnUsage);
+        currentPromptUsage = currentPromptUsage ?? subtractUsage(getSessionTokenUsage(session), baselineUsage);
+        lastTurnUsage = lastTurnUsage ?? currentPromptUsage;
+        const finalStats = buildPiRuntimeStats(session, currentPromptUsage, addUsage(baselineUsage, currentPromptUsage));
         emitStats(finalStats);
         if (textStarted) {
           writer.write({ type: "text-end", id: textId });
