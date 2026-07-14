@@ -674,6 +674,12 @@ Main environment variables:
 | `APP_BIND_HOST` | No | Docker port bind host |
 | `APP_PORT` | No | Published app port; default `3000` |
 | `APP_TMP_DIR` | No | Docker temp directory passed as `TMPDIR` |
+| `SYNCTHING_API_KEY` | No | Internal Eggent → Syncthing REST key; override the Docker default |
+| `SYNCTHING_DEVICE_NAME` | No | Name advertised by the Docker Syncthing device |
+| `SYNCTHING_BIND_HOST` | No | Bind host for Syncthing transfer/discovery ports; default `0.0.0.0` |
+| `SYNCTHING_TCP_PORT` | No | Syncthing TCP transfer port; default `22000` |
+| `SYNCTHING_QUIC_PORT` | No | Syncthing QUIC/UDP transfer port; default `22000` |
+| `SYNCTHING_DISCOVERY_PORT` | No | Local discovery UDP port; default `21027` |
 | `PLAYWRIGHT_BROWSERS_PATH` | No | Browser install/cache path |
 | `NPM_CONFIG_CACHE` | No | npm cache directory |
 | `XDG_CACHE_HOME` | No | Generic CLI cache directory |
@@ -706,6 +712,26 @@ data/integrations/      # integration state
 Docker mounts `./data` into `/app/data`.
 
 Back up `data/` and `.env` for disaster recovery.
+
+### Device synchronization
+
+Docker Compose also starts a pinned Syncthing sidecar. Its GUI/REST port is not published;
+Eggent manages it from **Settings → Device sync**.
+
+1. Open Settings on both Eggent installations and click **Enable Sync**.
+2. Copy the Device ID from one installation into the other and click **Add**.
+3. Accept the pending device on the other installation.
+4. Wait until both sides show **Up to date**.
+
+The folder uses Syncthing's active-active `Send & Receive` mode. Eggent synchronizes projects,
+chats, chat files, memory, pipelines, artifacts, and Pi chat sessions. Local credentials,
+app settings, Pi auth/packages, Telegram runtime, scheduled-task runtime, caches, dependencies,
+virtual environments, and `.env*` files are excluded.
+
+If the same file is modified on both devices before either sees the other change, Syncthing keeps
+one version and creates a `.sync-conflict-*` copy. Eggent reports these conflicts in Settings.
+The Syncthing transfer ports are `22000/tcp`, `22000/udp`, and `21027/udp`; the Eggent dashboard
+continues to use the safe localhost bind by default.
 
 ---
 

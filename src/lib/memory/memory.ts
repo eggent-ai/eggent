@@ -25,6 +25,11 @@ export function clearMemoryCache(subdir: string): void {
   dbCache.delete(subdir);
 }
 
+/** Clear cached vector databases after external filesystem synchronization. */
+export function clearAllMemoryCaches(): void {
+  dbCache.clear();
+}
+
 async function ensureDir(dir: string) {
   await fs.mkdir(dir, { recursive: true });
 }

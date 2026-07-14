@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { AppSidebar } from "@/components/app-sidebar";
 import { SiteHeader } from "@/components/site-header";
+import { SyncthingIntegrationManager } from "@/components/syncthing-integration-manager";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -601,6 +602,8 @@ export default function SettingsPage() {
                   </details>
                 ) : null}
               </section>
+
+              <SyncthingIntegrationManager />
 
               <section className="rounded-xl border bg-card p-5 space-y-4">
                 <h3 className="text-lg font-semibold">Appearance</h3>

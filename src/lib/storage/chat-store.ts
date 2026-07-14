@@ -16,7 +16,7 @@ export async function getAllChats(): Promise<ChatListItem[]> {
   const chats: ChatListItem[] = [];
 
   for (const file of files) {
-    if (!file.endsWith(".json")) continue;
+    if (!file.endsWith(".json") || file.includes(".sync-conflict-")) continue;
     try {
       const content = await fs.readFile(path.join(CHATS_DIR, file), "utf-8");
       const chat: Chat = JSON.parse(content);
@@ -84,7 +84,7 @@ export async function deleteChatsByProjectId(projectId: string): Promise<number>
   const files = await fs.readdir(CHATS_DIR);
   let deleted = 0;
   for (const file of files) {
-    if (!file.endsWith(".json")) continue;
+    if (!file.endsWith(".json") || file.includes(".sync-conflict-")) continue;
     try {
       const content = await fs.readFile(path.join(CHATS_DIR, file), "utf-8");
       const chat: Chat = JSON.parse(content);

@@ -21,6 +21,9 @@ services:
       npm_config_cache: ${NPM_CONFIG_CACHE:-/app/data/npm-cache}
       XDG_CACHE_HOME: ${XDG_CACHE_HOME:-/app/data/.cache}
       PI_CODING_AGENT_DIR: ${PI_CODING_AGENT_DIR:-/app/data/pi-agent}
+      SYNCTHING_URL: ${SYNCTHING_URL:-http://syncthing:8384}
+      SYNCTHING_API_KEY: ${SYNCTHING_API_KEY:-eggent-internal-syncthing-api}
+      SYNCTHING_DATA_PATH: ${SYNCTHING_DATA_PATH:-/sync/data}
     ports:
       - "${APP_BIND_HOST:-127.0.0.1}:${APP_PORT:-3000}:3000"
     volumes:
@@ -37,3 +40,24 @@ services:
       timeout: 5s
       retries: 10
       start_period: 20s
+
+  syncthing:
+    image: syncthing/syncthing:2.1.2
+    restart: unless-stopped
+    hostname: ${SYNCTHING_DEVICE_NAME:-eggent}
+    environment:
+      PUID: "1000"
+      PGID: "1000"
+      STGUIADDRESS: 0.0.0.0:8384
+      STGUIAPIKEY: ${SYNCTHING_API_KEY:-eggent-internal-syncthing-api}
+      STNOUPGRADE: "true"
+    volumes:
+      - ./data:/sync/data
+      - syncthing_state:/var/syncthing
+    ports:
+      - "${SYNCTHING_BIND_HOST:-0.0.0.0}:${SYNCTHING_TCP_PORT:-22000}:22000/tcp"
+      - "${SYNCTHING_BIND_HOST:-0.0.0.0}:${SYNCTHING_QUIC_PORT:-22000}:22000/udp"
+      - "${SYNCTHING_BIND_HOST:-0.0.0.0}:${SYNCTHING_DISCOVERY_PORT:-21027}:21027/udp"
+
+volumes:
+  syncthing_state:
