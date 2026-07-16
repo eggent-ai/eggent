@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useCallback, useState, useEffect } from "react";
-import { Send, Square, Paperclip, X, FileIcon } from "lucide-react";
+import { Send, Square, Paperclip, X, FileIcon, ImageIcon } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import type { ChatFile } from "@/lib/types";
 import type { PiRuntimeStats } from "@/lib/pi/types";
@@ -29,10 +29,32 @@ function formatModelName(stats?: PiRuntimeStats | null) {
   return model.provider ? `${model.provider}/${id}` : id;
 }
 
+function extensionForMimeType(mimeType: string): string {
+  if (mimeType === "image/jpeg") return "jpg";
+  if (mimeType === "image/webp") return "webp";
+  if (mimeType === "image/gif") return "gif";
+  if (mimeType === "image/png") return "png";
+  return "png";
+}
+
+function buildClipboardImageName(mimeType: string, index: number): string {
+  const timestamp = new Date()
+    .toISOString()
+    .replaceAll(/[:.]/g, "-")
+    .replace("T", "_")
+    .replace("Z", "");
+  const ext = extensionForMimeType(mimeType);
+  return `clipboard-image-${timestamp}-${index + 1}.${ext}`;
+}
+
+function isImageFile(file: File): boolean {
+  return file.type.startsWith("image/");
+}
+
 interface ChatInputProps {
   input: string;
   setInput: (input: string) => void;
-  onSubmit: () => void;
+  onSubmit: (messageOverride?: string) => void;
   onStop?: () => void;
   isLoading: boolean;
   disabled?: boolean;
@@ -41,6 +63,8 @@ interface ChatInputProps {
   focusSignal?: number;
   runtimeStats?: PiRuntimeStats | null;
 }
+
+const ATTACHMENT_ONLY_PROMPT = "Посмотри прикреплённое изображение.";
 
 export function ChatInput({
   input,
@@ -89,16 +113,20 @@ export function ChatInput({
     };
   }, [chatId]);
 
+  const canSubmit = Boolean(input.trim()) || uploadedFiles.length > 0;
+  const submitCurrentMessage = useCallback(() => {
+    if (!canSubmit || isLoading) return;
+    onSubmit(input.trim() ? undefined : ATTACHMENT_ONLY_PROMPT);
+  }, [canSubmit, input, isLoading, onSubmit]);
+
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
       if (e.key === "Enter" && !e.shiftKey) {
         e.preventDefault();
-        if (!isLoading && input.trim()) {
-          onSubmit();
-        }
+        submitCurrentMessage();
       }
     },
-    [input, isLoading, onSubmit]
+    [submitCurrentMessage]
   );
 
   const handleInput = useCallback(
@@ -161,6 +189,42 @@ export function ChatInput({
       }
     },
     [uploadFile]
+  );
+
+  const handlePaste = useCallback(
+    async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
+      if (disabled || isLoading || !chatId) return;
+
+      const clipboardFiles = Array.from(e.clipboardData.files).filter(isImageFile);
+      const itemFiles = Array.from(e.clipboardData.items)
+        .filter((item) => item.kind === "file" && item.type.startsWith("image/"))
+        .map((item) => item.getAsFile())
+        .filter((file): file is File => Boolean(file));
+
+      const seen = new Set<string>();
+      const images = [...clipboardFiles, ...itemFiles].filter((file) => {
+        const key = `${file.name}:${file.type}:${file.size}:${file.lastModified}`;
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      });
+
+      if (images.length === 0) return;
+      e.preventDefault();
+
+      for (let index = 0; index < images.length; index += 1) {
+        const image = images[index];
+        const name = image.name && image.name !== "image.png"
+          ? image.name
+          : buildClipboardImageName(image.type, index);
+        const upload = new File([image], name, {
+          type: image.type || "image/png",
+          lastModified: Date.now(),
+        });
+        await uploadFile(upload);
+      }
+    },
+    [chatId, disabled, isLoading, uploadFile]
   );
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -241,7 +305,11 @@ export function ChatInput({
                 key={file.name}
                 className="flex items-center gap-1 rounded-md bg-muted px-2 py-1 text-xs"
               >
-                <FileIcon className="size-3" />
+                {file.type.startsWith("image/") ? (
+                  <ImageIcon className="size-3" />
+                ) : (
+                  <FileIcon className="size-3" />
+                )}
                 <span className="max-w-[100px] truncate">{file.name}</span>
                 <button
                   type="button"
@@ -299,7 +367,8 @@ export function ChatInput({
               value={input}
               onChange={handleInput}
               onKeyDown={handleKeyDown}
-              placeholder={isDragging ? "Drop files here..." : "Send a message..."}
+              onPaste={handlePaste}
+              placeholder={isDragging ? "Drop files here..." : "Send a message or paste an image..."}
               disabled={disabled}
               rows={1}
               className="min-h-[30px] max-h-[200px] w-full translate-y-px resize-none border-0 bg-transparent px-1 pt-2.5 pb-1.5 text-sm leading-5 placeholder:text-muted-foreground focus:outline-none disabled:opacity-50"
@@ -318,8 +387,8 @@ export function ChatInput({
             ) : (
               <Button
                 size="icon"
-                onClick={onSubmit}
-                disabled={!input.trim() || disabled}
+                onClick={submitCurrentMessage}
+                disabled={!canSubmit || disabled}
                 className="h-10 w-10 shrink-0 rounded-xl"
               >
                 <Send className="size-4" />

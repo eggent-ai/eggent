@@ -606,8 +606,9 @@ export function ChatPanel() {
 
   const isLoading = status === "submitted" || status === "streaming";
 
-  const onSubmit = useCallback(() => {
-    if (!input.trim() || isLoading) return;
+  const onSubmit = useCallback((messageOverride?: string) => {
+    const messageText = messageOverride ?? input;
+    if (!messageText.trim() || isLoading) return;
     setChatError(null);
 
     pendingProjectSwitchRef.current = true;
@@ -624,7 +625,7 @@ export function ChatPanel() {
       setActiveChatId(internalChatId);
       addChat({
         id: internalChatId,
-        title: input.slice(0, 60) + (input.length > 60 ? "..." : ""),
+        title: messageText.slice(0, 60) + (messageText.length > 60 ? "..." : ""),
         projectId: activeProjectId || undefined,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -632,7 +633,7 @@ export function ChatPanel() {
       });
     }
 
-    sendMessage({ text: input });
+    sendMessage({ text: messageText });
     setInput("");
   }, [
     input,

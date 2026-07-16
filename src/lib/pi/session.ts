@@ -101,14 +101,14 @@ function formatFileSize(bytes: number): string {
 function formatChatFilesContext(chatFiles: ChatFile[]): string[] {
   if (chatFiles.length === 0) return [];
   const rows = chatFiles
-    .map((file) => `| ${file.name} | ${file.path} | ${formatFileSize(file.size)} |`)
+    .map((file) => `| ${file.name} | ${file.type} | ${file.path} | ${formatFileSize(file.size)} |`)
     .join("\n");
   return [
     "",
     "Chat uploaded files:",
-    "These files are attached to the current chat and are available on disk. Use the built-in read tool with the absolute Path shown below, or pass that path to other file-capable tools. Do not say you cannot see uploaded files before checking this list.",
-    "| File | Path | Size |",
-    "| --- | --- | --- |",
+    "These files are attached to the current chat and are available on disk. Use the built-in read tool with the absolute Path shown below, or pass that path to other file-capable tools. Image files are visual context attachments; read them directly by absolute path when the user asks about pasted/uploaded screenshots or pictures. Do not say you cannot see uploaded files before checking this list.",
+    "| File | Type | Path | Size |",
+    "| --- | --- | --- | --- |",
     rows,
   ];
 }
