@@ -19,7 +19,7 @@ const EMPTY_STEPS = JSON.stringify(
       id: "agent-1",
       name: "Agent project step",
       projectId: "project-id-here",
-      instructions: "Run this Eggent project as the next pi agent. Use previous artifacts as input and save handoff output in the artifacts directory."
+      instructions: "Run this Eggent project as the next agent. Use previous artifacts as input and save handoff output in the artifacts directory."
     },
   ],
   null,
@@ -113,8 +113,8 @@ export default function PipelinesPage() {
       projectId: project.id,
       instructions:
         index === 0
-          ? "Run this project/pi-agent first. Save the initial output in the artifacts directory."
-          : "Run this project/pi-agent after previous project agents. Read artifacts and save your handoff output.",
+          ? "Run this project agent first. Save the initial output in the artifacts directory."
+          : "Run this project agent after previous project agents. Read artifacts and save your handoff output.",
     }));
     setEditSteps(JSON.stringify(steps.length > 0 ? steps : JSON.parse(EMPTY_STEPS), null, 2));
   }
@@ -218,7 +218,7 @@ export default function PipelinesPage() {
                   <GitBranch className="size-6" /> Agent Pipelines
                 </h2>
                 <p className="text-sm text-muted-foreground">
-                  Configure and run sequential pi-powered agent chains with artifact handoff.
+                  Configure and run sequential Eggent agent chains with artifact handoff.
                 </p>
               </div>
 
@@ -321,7 +321,7 @@ export default function PipelinesPage() {
                       />
                       <div className="rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
                         <div className="mb-2 font-medium text-foreground">Pipeline = sequence of Eggent projects</div>
-                        <p>Each step should set <code>projectId</code>. That project directory is launched as a pi agent config with context.md, memory.md, skills/, .mcp.json and model.json.</p>
+                        <p>Each step should set <code>projectId</code>. That project directory is launched as an Eggent agent with context.md, memory.md, skills/, .mcp.json and model.json.</p>
                         {projects.length > 0 ? (
                           <div className="mt-2">Available projects: {projects.map((project) => `${project.name} (${project.id})`).join(", ")}</div>
                         ) : null}

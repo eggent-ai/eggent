@@ -147,7 +147,7 @@ export default function SettingsPage() {
       const res = await fetch(`/api/pi/auth/login?id=${encodeURIComponent(oauthJobId)}`, { cache: "no-store" });
       const json = await res.json().catch(() => null) as LoginJobState | { error?: string } | null;
       if (!res.ok || !json || ("error" in json && !("status" in json))) {
-        setPiError(json?.error || "Failed to poll pi login");
+        setPiError(json?.error || "Failed to poll provider login");
         return;
       }
       const next = json as LoginJobState;
@@ -174,7 +174,7 @@ export default function SettingsPage() {
         fetch("/api/pi/models?raw=1", { cache: "no-store" }),
       ]);
       const [stateJson, rawJson] = await Promise.all([stateRes.json(), rawRes.json()]);
-      if (!stateRes.ok) throw new Error(stateJson.error || "Failed to load pi models");
+      if (!stateRes.ok) throw new Error(stateJson.error || "Failed to load models");
       setPiState(stateJson);
       const defaultProvider = typeof stateJson?.settings?.defaultProvider === "string" ? stateJson.settings.defaultProvider : "";
       const defaultModel = typeof stateJson?.settings?.defaultModel === "string" ? stateJson.settings.defaultModel : "";
@@ -190,7 +190,7 @@ export default function SettingsPage() {
       setModelsJson(raw);
       setModelsJsonSaved(raw);
     } catch (error) {
-      setPiError(error instanceof Error ? error.message : "Failed to load pi model connections");
+      setPiError(error instanceof Error ? error.message : "Failed to load model connections");
     } finally {
       setPiLoading(false);
     }
@@ -247,7 +247,7 @@ export default function SettingsPage() {
   }
 
   async function logoutProvider(providerId: string) {
-    if (!confirm(`Run pi /logout for ${providerId}? Stored credentials will be removed from auth.json.`)) return;
+    if (!confirm(`Log out from ${providerId}? Stored credentials will be removed.`)) return;
     const res = await fetch(`/api/pi/auth?provider=${encodeURIComponent(providerId)}`, { method: "DELETE" });
     const json = await res.json().catch(() => null);
     if (!res.ok) {
@@ -273,10 +273,10 @@ export default function SettingsPage() {
         body: JSON.stringify({ provider: providerId }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed to start pi login");
+      if (!res.ok) throw new Error(json.error || "Failed to start provider login");
       setOauthJob(json);
     } catch (error) {
-      setPiError(error instanceof Error ? error.message : "Failed to start pi login");
+      setPiError(error instanceof Error ? error.message : "Failed to start provider login");
     } finally {
       setOauthSaving(false);
     }
@@ -291,7 +291,7 @@ export default function SettingsPage() {
     });
     const json = await res.json().catch(() => null);
     if (!res.ok) {
-      setPiError(json?.error || "Failed to answer pi login prompt");
+      setPiError(json?.error || "Failed to answer login prompt");
       return;
     }
     setAnsweredPrompts((prev) => ({ ...prev, [promptId]: true }));
@@ -325,10 +325,10 @@ export default function SettingsPage() {
         body: JSON.stringify({ provider: providerId, model: modelId, thinkingLevel: defaultThinkingLevel }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed to save pi default model");
+      if (!res.ok) throw new Error(json.error || "Failed to save default model");
       await loadPiState();
     } catch (error) {
-      setPiError(error instanceof Error ? error.message : "Failed to save pi default model");
+      setPiError(error instanceof Error ? error.message : "Failed to save default model");
     } finally {
       setSavingDefaultModel(false);
     }
@@ -436,7 +436,7 @@ export default function SettingsPage() {
               <div className="flex items-center justify-between">
                 <div>
                   <h2 className="text-2xl font-semibold">Settings</h2>
-                  <p className="text-sm text-muted-foreground">Manage Eggent and pi model/auth settings from one UI.</p>
+                  <p className="text-sm text-muted-foreground">Manage Eggent model and authentication settings from one UI.</p>
                 </div>
                 <Button onClick={handleSaveSettings} className="gap-2">
                   {saved ? <Check className="size-4" /> : <Save className="size-4" />}
@@ -447,20 +447,20 @@ export default function SettingsPage() {
               <section className="rounded-xl border bg-card p-5 space-y-5">
                 <div className="flex items-center gap-2">
                   <PlugZap className="size-5 text-primary" />
-                  <h3 className="text-lg font-semibold">pi models and login</h3>
+                  <h3 className="text-lg font-semibold">Models and login</h3>
                 </div>
                 <p className="text-sm text-muted-foreground">
-                  This mirrors pi&apos;s <code>/login</code>, <code>/model</code>, and <code>/logout</code> flow. Credentials are stored in <code>{piState?.authFile || "~/.pi/agent/auth.json"}</code>; custom providers live in <code>{piState?.modelsFile || "~/.pi/agent/models.json"}</code>.
+                  Configure provider logins, API keys, model defaults, and custom model providers for Eggent.
                 </p>
                 {piError ? <div className="rounded-md border border-destructive/40 bg-destructive/10 px-3 py-2 text-sm text-destructive">{piError}</div> : null}
 
-                {piLoading ? <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" /> Loading pi providers...</div> : null}
+                {piLoading ? <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" /> Loading providers...</div> : null}
 
                 {currentModelIsAvailable ? (
                   <div className="rounded-lg border p-4">
                     <div className="flex flex-wrap items-start justify-between gap-3">
                       <div>
-                        <div className="text-xs font-mono text-muted-foreground">current pi default</div>
+                        <div className="text-xs font-mono text-muted-foreground">current default</div>
                         <h4 className="font-medium">{piState?.current?.providerName || piState?.current?.provider}</h4>
                         <p className="text-sm text-muted-foreground">
                           <span className="font-mono">{piState?.current?.model?.id}</span>
@@ -504,8 +504,8 @@ export default function SettingsPage() {
                       <h4 className="font-medium">Connect {selectedProviderName}</h4>
                       <p className="text-xs text-muted-foreground">
                         {selectedProviderConnected
-                          ? "This provider already has available models. You can still save or replace the API key used by pi."
-                          : "After this provider is connected, its current pi models will appear here."}
+                          ? "This provider already has available models. You can still save or replace its API key."
+                          : "After this provider is connected, its available models will appear here."}
                       </p>
                     </div>
 
@@ -530,7 +530,7 @@ export default function SettingsPage() {
                     ) : null}
 
                     {!selectedOauthProvider && !selectedApiKeyProvider ? (
-                      <p className="text-sm text-muted-foreground">This provider does not expose a login method through pi.</p>
+                      <p className="text-sm text-muted-foreground">This provider does not expose a login method here.</p>
                     ) : null}
                   </div>
                 ) : null}
@@ -547,7 +547,7 @@ export default function SettingsPage() {
                       if (event.type === "progress") return <p key={event.id} className="text-muted-foreground">{event.message}</p>;
                       if (event.type === "select" && oauthJob.status === "running" && !answeredPrompts[event.promptId]) return <div key={event.id} className="space-y-2"><p className="font-medium">{event.message}</p><div className="flex flex-wrap gap-2">{event.options.map((option) => <Button key={option.id} size="sm" variant="outline" onClick={() => answerLoginPrompt(event.promptId, option.id)}>{option.label}</Button>)}</div></div>;
                       if (event.type === "prompt" && oauthJob.status === "running" && !answeredPrompts[event.promptId]) return <div key={event.id} className="space-y-2"><Label>{event.message}</Label><div className="grid gap-2 md:grid-cols-[1fr_auto]"><Input value={promptInputs[event.promptId] || ""} placeholder={event.placeholder || ""} onChange={(inputEvent) => setPromptInputs((prev) => ({ ...prev, [event.promptId]: inputEvent.target.value }))} /><Button onClick={() => answerLoginPrompt(event.promptId, promptInputs[event.promptId] || "")} disabled={!event.allowEmpty && !promptInputs[event.promptId]?.trim()}>Send</Button></div></div>;
-                      if (event.type === "completed") return <p key={event.id} className="text-emerald-600">Login completed. pi auth.json was updated.</p>;
+                      if (event.type === "completed") return <p key={event.id} className="text-emerald-600">Login completed. Credentials were updated.</p>;
                       if (event.type === "error") return <p key={event.id} className="text-destructive">{event.message}</p>;
                       return null;
                     })}
@@ -587,12 +587,12 @@ export default function SettingsPage() {
 
                 {defaultProviderSelection ? (
                   <details className="rounded-lg border p-4">
-                    <summary className="cursor-pointer text-sm font-medium">Advanced: edit pi models.json</summary>
+                    <summary className="cursor-pointer text-sm font-medium">Advanced: edit custom models.json</summary>
                     <div className="mt-4 space-y-2">
                       <div className="flex items-center justify-between gap-3">
                         <div>
                           <div className="text-xs font-mono text-muted-foreground">models.json</div>
-                          <h4 className="font-medium">pi custom providers and models</h4>
+                          <h4 className="font-medium">Custom providers and models</h4>
                         </div>
                         <Button size="sm" onClick={saveModelsJson} disabled={savingModelsJson || !modelsJsonDirty}>
                           {savingModelsJson ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}

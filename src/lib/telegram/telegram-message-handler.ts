@@ -441,6 +441,51 @@ function normalizeOutgoingText(text: string): string {
     return `${value.slice(0, TELEGRAM_TEXT_LIMIT - 1)}…`;
 }
 
+function escapeTelegramHtml(text: string): string {
+    return text
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;");
+}
+
+function escapeTelegramHtmlAttribute(text: string): string {
+    return escapeTelegramHtml(text).replaceAll('"', "&quot;");
+}
+
+function renderInlineTelegramMarkdown(text: string): string {
+    const placeholders: string[] = [];
+    const withCode = text.replace(/`([^`\n]+)`/g, (_match, code: string) => {
+        const token = `\u0000${placeholders.length}\u0000`;
+        placeholders.push(`<code>${escapeTelegramHtml(code)}</code>`);
+        return token;
+    });
+
+    let rendered = escapeTelegramHtml(withCode)
+        .replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>")
+        .replace(/__([^_\n]+)__/g, "<b>$1</b>")
+        .replace(/\[([^\]\n]+)]\((https?:\/\/[^)\s]+)\)/g, (_match, label: string, url: string) => {
+            return `<a href="${escapeTelegramHtmlAttribute(url)}">${label}</a>`;
+        });
+
+    for (let index = 0; index < placeholders.length; index += 1) {
+        rendered = rendered.replaceAll(`\u0000${index}\u0000`, placeholders[index]);
+    }
+    return rendered;
+}
+
+function markdownToTelegramHtml(text: string): string {
+    const parts = text.split(/```/);
+    return parts
+        .map((part, index) => {
+            if (index % 2 === 1) {
+                const code = part.replace(/^\w+\n/, "");
+                return `<pre>${escapeTelegramHtml(code.trim())}</pre>`;
+            }
+            return renderInlineTelegramMarkdown(part);
+        })
+        .join("");
+}
+
 export async function sendTelegramChatAction(
     botToken: string,
     chatId: number | string,
@@ -503,7 +548,8 @@ export async function sendTelegramMessage(
         },
         body: JSON.stringify({
             chat_id: chatId,
-            text: normalizeOutgoingText(text),
+            text: markdownToTelegramHtml(normalizeOutgoingText(text)),
+            parse_mode: "HTML",
             ...(typeof replyToMessageId === "number" ? { reply_to_message_id: replyToMessageId } : {}),
         }),
     });

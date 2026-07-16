@@ -18,7 +18,7 @@ export default function ProjectSettingsPage() {
   const { id } = useParams();
   const projectId = id as string;
   return (
-    <ProjectPageShell projectId={projectId} title="Project Model Settings" description="Edit model.json for this project/pi agent.">
+    <ProjectPageShell projectId={projectId} title="Project Model Settings" description="Edit model.json for this project agent.">
       <div className="rounded-xl border bg-card p-4 md:p-5 space-y-3">
         <div>
           <h2 className="text-xl font-semibold">How project model override works</h2>
@@ -26,7 +26,7 @@ export default function ProjectSettingsPage() {
             By default a project inherits the global model from Settings. To pin this project to a specific model,
             set <span className="font-mono">inheritsGlobal</span> to <span className="font-mono">false</span> and provide
             the exact <span className="font-mono">provider</span> and <span className="font-mono">model</span> id.
-            Credentials still come from Eggent/Pi model settings, so add API keys or OAuth in global Settings first.
+            Credentials still come from Eggent model settings, so add API keys or OAuth in global Settings first.
           </p>
         </div>
 

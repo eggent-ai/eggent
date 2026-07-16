@@ -99,7 +99,7 @@ export default function ApiPage() {
                       <tr>
                         <td className="py-2 pr-4 font-mono text-xs">message</td>
                         <td className="py-2 pr-4">Yes</td>
-                        <td className="py-2 text-muted-foreground">Text to send to the Eggent/Pi agent.</td>
+                        <td className="py-2 text-muted-foreground">Text to send to the Eggent agent.</td>
                       </tr>
                       <tr>
                         <td className="py-2 pr-4 font-mono text-xs">projectId</td>

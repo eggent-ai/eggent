@@ -14,7 +14,7 @@ export default function ProjectMcpPage() {
         endpoint="mcp"
         filename=".mcp.json"
         title=".mcp.json"
-        description='Cursor-compatible MCP config for pi-mcp-adapter: { "mcpServers": { ... } }. Tools are available through the mcp proxy tool.'
+        description='Cursor-compatible MCP config: { "mcpServers": { ... } }. Tools are available through Eggent.'
         rows={18}
       />
     </ProjectPageShell>

@@ -252,7 +252,7 @@ export default function McpPage() {
                 <p className="text-sm text-muted-foreground">
                   View and edit MCP servers configured for each project from
                   <span className="font-mono"> .mcp.json </span>
-                  and switch between projects. Runtime access is provided by pi-mcp-adapter's mcp tool.
+                  and switch between projects. Runtime access is provided by Eggent.
                 </p>
               </div>
 

@@ -25,7 +25,7 @@ const projectFiles = [
   {
     name: "context.md",
     title: "Context",
-    description: "Primary instructions injected into the pi agent.",
+    description: "Primary instructions injected into the project agent.",
     href: "context",
     icon: FileText,
   },
@@ -39,14 +39,14 @@ const projectFiles = [
   {
     name: "skills/",
     title: "Skills",
-    description: "Project-local pi skills, each with a SKILL.md file.",
+    description: "Project-local skills, each with a SKILL.md file.",
     href: "skills",
     icon: Puzzle,
   },
   {
     name: ".mcp.json",
     title: "MCP",
-    description: "Project-only MCP servers exposed through pi-mcp-adapter's mcp tool.",
+    description: "Project-only MCP servers available to the agent.",
     href: "mcp",
     icon: Wrench,
   },
@@ -128,12 +128,12 @@ export default function ProjectDetailsPage() {
                     </Button>
                     <h1 className="text-2xl font-semibold tracking-tight">{project.name}</h1>
                     <span className="rounded-full bg-primary/10 px-2 py-1 text-xs font-medium text-primary">
-                      directory-backed pi agent
+                      directory-backed agent
                     </span>
                   </div>
                   <p className="text-muted-foreground">{project.description || "No description provided."}</p>
                   <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-                    This project is a directory. Its context, memory, skills, MCP, and model settings are stored as files in the project folder and injected into pi when the agent runs. Scheduled tasks are managed by pi-subagents.
+                    This project is a directory. Its context, memory, skills, MCP, and model settings are stored as files in the project folder and used by Eggent when the agent runs. Scheduled tasks are managed by Eggent.
                   </p>
                 </div>
                 <Button asChild className="gap-2">
@@ -192,7 +192,7 @@ export default function ProjectDetailsPage() {
   -> data/projects/${project.id}/skills/
   -> data/projects/${project.id}/.mcp.json
   -> data/projects/${project.id}/model.json
-  -> pi SDK AgentSession`}</pre>
+  -> Eggent agent runtime`}</pre>
               </section>
             </div>
           </SidebarInset>

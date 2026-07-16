@@ -8,13 +8,13 @@ export default function ProjectMemoryPage() {
   const { id } = useParams();
   const projectId = id as string;
   return (
-    <ProjectPageShell projectId={projectId} title="Project Memory" description="Edit the memory.md file used by this project/pi agent.">
+    <ProjectPageShell projectId={projectId} title="Project Memory" description="Edit the memory.md file used by this project agent.">
       <ProjectFileEditor
         projectId={projectId}
         endpoint="memory"
         filename="memory.md"
         title="memory.md"
-        description="Plain Markdown memory. pi reads/searches/appends this file through Eggent memory bridge tools."
+        description="Plain Markdown memory. The agent reads, searches, and appends this file through Eggent memory tools."
       />
     </ProjectPageShell>
   );

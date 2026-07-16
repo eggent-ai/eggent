@@ -125,7 +125,7 @@ export default function PipelineRunPage() {
                               <div className="font-medium">{step.name}</div>
                               <span className={`rounded-full px-2 py-0.5 text-xs ${statusClass(step.status)}`}>{step.status}</span>
                             </div>
-                            {step.projectId ? <div className="mt-1 text-xs text-muted-foreground">Project/pi agent: {step.projectId}</div> : null}
+                            {step.projectId ? <div className="mt-1 text-xs text-muted-foreground">Project agent: {step.projectId}</div> : null}
                             {step.summary ? <div className="mt-2 whitespace-pre-wrap text-xs text-muted-foreground line-clamp-5">{step.summary}</div> : null}
                             {step.error ? <div className="mt-2 text-xs text-destructive">{step.error}</div> : null}
                           </div>

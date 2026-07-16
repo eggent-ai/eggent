@@ -76,8 +76,7 @@ export default function PiSchedulesPage() {
                 <div className="space-y-1">
                   <h2 className="text-2xl font-semibold">Scheduled Tasks</h2>
                   <p className="text-sm text-muted-foreground">
-                    View scheduled work managed by pi-subagents. Eggent hosts the Pi session lifecycle;
-                    scheduling and subagent execution remain owned by Pi.
+                    View scheduled work managed by Eggent.
                   </p>
                 </div>
                 <Button variant="outline" onClick={load} disabled={loading} className="gap-2 md:self-start">
@@ -90,7 +89,7 @@ export default function PiSchedulesPage() {
                 <div className="flex items-center justify-between border-b px-4 py-3">
                   <div className="flex items-center gap-2">
                     <CalendarClock className="size-4 text-primary" />
-                    <h3 className="text-sm font-medium">Pi Subagent Schedules</h3>
+                    <h3 className="text-sm font-medium">Scheduled Tasks</h3>
                   </div>
                   {!loading && (
                     <span className="text-xs text-muted-foreground">
@@ -100,7 +99,7 @@ export default function PiSchedulesPage() {
                 </div>
 
                 <div className="border-b bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
-                  Create or change schedules from chat. Under the hood, Pi calls the
+                  Create or change schedules from chat. Eggent uses the
                   <span className="font-mono"> Agent </span>
                   tool with a
                   <span className="font-mono"> schedule </span>
@@ -115,9 +114,9 @@ export default function PiSchedulesPage() {
                 ) : schedules.length === 0 ? (
                   <div className="p-8 text-center text-sm text-muted-foreground">
                     <CalendarClock className="mx-auto mb-3 size-8 opacity-70" />
-                    <p className="font-medium text-foreground">No Pi scheduled tasks found</p>
+                    <p className="font-medium text-foreground">No scheduled tasks found</p>
                     <p className="mt-1">
-                      Schedules will appear here after pi-subagents creates them in an Eggent chat/session.
+                      Schedules will appear here after they are created from an Eggent chat/session.
                     </p>
                   </div>
                 ) : (

@@ -67,7 +67,7 @@ export default function ProjectSkillsPage() {
   }, [bundled, search]);
 
   return (
-    <ProjectPageShell projectId={projectId} title="Project Skills" description="Manage the project's skills/ directory. Each skill is passed to pi when this project runs.">
+    <ProjectPageShell projectId={projectId} title="Project Skills" description="Manage the project's skills/ directory. Each skill is available when this project runs.">
       <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
         <section className="rounded-xl border bg-card p-4 space-y-3">
           <div className="flex items-center justify-between gap-3">

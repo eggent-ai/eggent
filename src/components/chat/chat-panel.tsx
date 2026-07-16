@@ -71,7 +71,7 @@ function chatMessagesToUIMessages(chatMessages: ChatMessage[]): UIMessage[] {
         parts.push({ type: "text" as const, text: m.content });
       }
 
-      // Keep Pi runtime stats in the message stream so the footer remains
+      // Keep runtime stats in the message stream so the footer remains
       // populated after the live stream is replaced by stored chat history.
       if (m.piRuntimeStats) {
         parts.push({
@@ -371,7 +371,7 @@ export function ChatPanel() {
   }, []);
 
   // Stable transport — body is a function so it always reads current refs.
-  // /api/chat uses the pi SDK backend by default; override only for experiments.
+  // /api/chat uses the Eggent agent backend by default; override only for experiments.
   const transport = useMemo(
     () =>
       new DefaultChatTransport({
@@ -410,7 +410,7 @@ export function ChatPanel() {
     const params = activeProjectId ? `?projectId=${encodeURIComponent(activeProjectId)}` : "";
     fetch(`/api/pi-chat/model${params}`, { cache: "no-store" })
       .then((response) => {
-        if (!response.ok) throw new Error("Failed to load pi model");
+        if (!response.ok) throw new Error("Failed to load configured model");
         return response.json() as Promise<unknown>;
       })
       .then((data) => {
