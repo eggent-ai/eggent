@@ -89,7 +89,7 @@ COPY --from=whisper /usr/local/bin/whisper-cli /usr/local/bin/whisper-cli
 
 RUN mkdir -p /app/data/tmp /app/data/models/whisper /app/data/ms-playwright /app/data/npm-cache /app/data/.cache \
   && chmod +x /app/scripts/docker-entrypoint.sh /app/scripts/ensure-pi-packages.mjs \
-  && chown -R node:node /app "${PYTHON_VENV}"
+  && chown -R node:node /app/data "${PYTHON_VENV}"
 
 USER node
 EXPOSE 3000
