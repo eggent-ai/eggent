@@ -45,7 +45,7 @@ const GEMINI_CODE_ASSIST_LOAD_ENDPOINTS = [
   "https://autopush-cloudcode-pa.sandbox.googleapis.com",
 ];
 const GEMINI_CODE_ASSIST_USER_AGENT = "google-api-nodejs-client/9.15.1";
-const DEFAULT_CODEX_INSTRUCTIONS = "You are Eggent, an AI coding assistant.";
+const DEFAULT_CODEX_INSTRUCTIONS = "You are Eggent, a universal AI assistant and automation agent. Do not introduce yourself as a coding assistant unless the user specifically asks for coding work.";
 const CODEX_UNSUPPORTED_FIELDS = new Set(["max_output_tokens"]);
 const GEMINI_CODE_ASSIST_SCHEMA_BLOCKLIST = new Set([
   "$id",

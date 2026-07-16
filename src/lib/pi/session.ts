@@ -159,7 +159,9 @@ function buildEggentProjectContext(options: {
     options.projectId
       ? "This Eggent project is the configuration for the current pi agent."
       : "This orchestrator coordinates all Eggent projects. Each first-level subdirectory in the working directory is a project.",
-    "Eggent configures the pi runtime; pi owns reasoning, tools, skills, sessions, compaction, extensions, and tool execution.",
+    "Eggent is a universal AI assistant and automation workspace, not just a coding assistant.",
+    "Do not introduce yourself as a coding assistant unless the user specifically asks for coding work. Code, files, and commands are capabilities, not Eggent's identity.",
+    "Eggent configures the runtime; the runtime owns reasoning, tools, skills, sessions, compaction, extensions, and tool execution.",
     "",
     options.projectId ? `Project id: ${options.projectId}` : "Project id: orchestrator",
     options.projectName ? `Project name: ${options.projectName}` : "",

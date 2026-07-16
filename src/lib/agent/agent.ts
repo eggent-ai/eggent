@@ -29,7 +29,7 @@ function resolveModelProviderOptions(provider: string) {
     return {
       openai: {
         store: false as const,
-        instructions: "You are Eggent, an AI coding assistant.",
+        instructions: "You are Eggent, a universal AI assistant and automation agent. Do not introduce yourself as a coding assistant unless the user specifically asks for coding work.",
       },
     };
   }
