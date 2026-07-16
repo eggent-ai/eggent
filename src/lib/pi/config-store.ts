@@ -1,24 +1,46 @@
 import "@/lib/pi/env";
 import fs from "fs/promises";
 import path from "path";
-import {
-  AuthStorage,
-  getAgentDir,
-  ModelRegistry,
-  SettingsManager,
-} from "@earendil-works/pi-coding-agent";
+import * as PiSdk from "@earendil-works/pi-coding-agent";
+import type { AuthStorage, ModelRegistry, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { PiRuntimeStats } from "@/lib/pi/types";
 import { getWorkDir, loadProjectModelSettings } from "@/lib/storage/project-store";
 
-export function getPiAuthStorage() {
+function getPiSdkExport<T = unknown>(name: string): T {
+  const sdk = PiSdk as unknown as Record<string, unknown> & { default?: Record<string, unknown> };
+  const value = sdk[name] ?? sdk.default?.[name];
+  if (!value) {
+    throw new Error(`Eggent runtime SDK export "${name}" is unavailable. Rebuild the Docker image with the current dependencies.`);
+  }
+  return value as T;
+}
+
+export function getPiAgentDir(): string {
+  const getAgentDir = (PiSdk as unknown as { getAgentDir?: () => string; default?: { getAgentDir?: () => string } }).getAgentDir
+    ?? (PiSdk as unknown as { default?: { getAgentDir?: () => string } }).default?.getAgentDir;
+  if (typeof getAgentDir === "function") {
+    return getAgentDir();
+  }
+  return process.env.PI_CODING_AGENT_DIR?.trim() || path.join(process.cwd(), "data", "pi-agent");
+}
+
+export function getPiAuthStorage(): AuthStorage {
+  const AuthStorage = getPiSdkExport<{ create?: () => AuthStorage }>("AuthStorage");
+  if (typeof AuthStorage.create !== "function") {
+    throw new Error('Eggent runtime SDK export "AuthStorage.create" is unavailable.');
+  }
   return AuthStorage.create();
 }
 
 export function getPiModelsPath(): string {
-  return path.join(getAgentDir(), "models.json");
+  return path.join(getPiAgentDir(), "models.json");
 }
 
-export function getPiModelRegistry(authStorage = getPiAuthStorage()) {
+export function getPiModelRegistry(authStorage = getPiAuthStorage()): ModelRegistry {
+  const ModelRegistry = getPiSdkExport<{ create?: (authStorage: AuthStorage, modelsPath: string) => ModelRegistry }>("ModelRegistry");
+  if (typeof ModelRegistry.create !== "function") {
+    throw new Error('Eggent runtime SDK export "ModelRegistry.create" is unavailable.');
+  }
   return ModelRegistry.create(authStorage, getPiModelsPath());
 }
 
@@ -48,7 +70,11 @@ export async function writePiModelsJson(content: string): Promise<string> {
   return normalized;
 }
 
-export function getPiSettingsManager(cwd = process.cwd()) {
+export function getPiSettingsManager(cwd = process.cwd()): SettingsManager {
+  const SettingsManager = getPiSdkExport<{ create?: (cwd: string) => SettingsManager }>("SettingsManager");
+  if (typeof SettingsManager.create !== "function") {
+    throw new Error('Eggent runtime SDK export "SettingsManager.create" is unavailable.');
+  }
   return SettingsManager.create(cwd);
 }
 
@@ -56,7 +82,7 @@ export async function getPiSettingsState(cwd = process.cwd()) {
   const settingsManager = getPiSettingsManager(cwd);
   const globalSettings = settingsManager.getGlobalSettings();
   return {
-    settingsFile: path.join(getAgentDir(), "settings.json"),
+    settingsFile: path.join(getPiAgentDir(), "settings.json"),
     defaultProvider: settingsManager.getDefaultProvider(),
     defaultModel: settingsManager.getDefaultModel(),
     defaultThinkingLevel: settingsManager.getDefaultThinkingLevel(),
@@ -187,8 +213,8 @@ export async function getPiModelsState() {
     : undefined;
 
   return {
-    agentDir: getAgentDir(),
-    authFile: path.join(getAgentDir(), "auth.json"),
+    agentDir: getPiAgentDir(),
+    authFile: path.join(getPiAgentDir(), "auth.json"),
     settings,
     modelsFile: getPiModelsPath(),
     current: currentModel ? {
