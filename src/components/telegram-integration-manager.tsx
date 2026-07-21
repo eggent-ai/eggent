@@ -65,7 +65,7 @@ export function TelegramIntegrationManager() {
   const [tokenSource, setTokenSource] = useState<"stored" | "env" | "none">(
     "none"
   );
-  const [mode, setMode] = useState<TelegramMode>("auto");
+  const [mode, setMode] = useState<TelegramMode>("polling");
   const [detectedMode, setDetectedMode] = useState<"webhook" | "polling">("polling");
 
   // Helper to detect if URL is localhost/private (needs polling) or public (can use webhook)
@@ -215,6 +215,7 @@ export function TelegramIntegrationManager() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           botToken: trimmedToken,
+          mode: "webhook",
         }),
       });
       const setupData = (await setupRes.json()) as {
@@ -454,20 +455,25 @@ export function TelegramIntegrationManager() {
                 setConnectState("loading");
                 setError(null);
                 try {
-                  const res = await fetch("/api/integrations/telegram/config", {
-                    method: "PUT",
+                  const res = await fetch("/api/integrations/telegram/setup", {
+                    method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ botToken: trimmedToken }),
+                    body: JSON.stringify({ botToken: trimmedToken, mode: "polling" }),
                   });
-                  const data = (await res.json()) as { error?: string };
+                  const data = (await res.json()) as {
+                    error?: string;
+                    message?: string;
+                    botLink?: string | null;
+                  };
                   if (!res.ok) {
-                    throw new Error(data.error || "Failed to save bot token");
+                    throw new Error(data.error || "Failed to activate Telegram bot");
                   }
-                  setSuccess("Bot token saved");
+                  setSuccess(data.botLink ? `${data.message || "Long polling started"} ${data.botLink}` : data.message || "Long polling started");
                   setBotToken("");
                   await loadSettings();
+                  await loadPollingStatus();
                 } catch (e) {
-                  setError(e instanceof Error ? e.message : "Failed to save bot token");
+                  setError(e instanceof Error ? e.message : "Failed to activate Telegram bot");
                 } finally {
                   setConnectState("idle");
                 }
@@ -477,12 +483,12 @@ export function TelegramIntegrationManager() {
               {connectState === "loading" ? (
                 <>
                   <Loader2 className="size-4 animate-spin" />
-                  Saving...
+                  Activating...
                 </>
               ) : (
                 <>
                   <Link2 className="size-4" />
-                  Save Token
+                  Activate Bot
                 </>
               )}
             </Button>
@@ -511,9 +517,9 @@ export function TelegramIntegrationManager() {
                   disabled={isBusy}
                   className="mt-1 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
                 >
-                  <option value="auto">Auto (recommended)</option>
+                  <option value="polling">Long Polling (recommended)</option>
+                  <option value="auto">Auto</option>
                   <option value="webhook">Webhook</option>
-                  <option value="polling">Long Polling</option>
                 </select>
               </div>
               <div className="flex-1">

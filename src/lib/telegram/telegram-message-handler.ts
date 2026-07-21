@@ -673,8 +673,9 @@ export async function processTelegramUpdate(
                 botToken,
                 chatId,
                 [
-                    "Доступ запрещён: ваш user_id не в списке разрешённых.",
-                    "Отправьте код активации командой /code <код> или /start <код>.",
+                    "Привет! Eggent подключён к этому боту ✅",
+                    "Чтобы начать общаться с агентом, активируйте доступ кодом из настроек Telegram.",
+                    "Отправьте код командой /code <код> или /start <код>.",
                     `Ваш user_id: ${fromUserId}`,
                 ].join("\n"),
                 messageId

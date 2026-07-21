@@ -247,7 +247,7 @@ class TelegramPollingService {
                 {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ drop_pending_updates: true }),
+                    body: JSON.stringify({ drop_pending_updates: false }),
                 }
             );
 

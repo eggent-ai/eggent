@@ -231,8 +231,8 @@ async function readStoredRecord(): Promise<TelegramIntegrationFileRecord> {
 }
 
 function normalizeMode(raw: unknown): TelegramMode {
-  if (raw === "webhook" || raw === "polling") return raw;
-  return "auto";
+  if (raw === "webhook" || raw === "polling" || raw === "auto") return raw;
+  return "polling";
 }
 
 function normalizePollingInterval(raw: unknown): number {
