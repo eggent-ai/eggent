@@ -1,6 +1,6 @@
 ---
 name: iishenka-wiki-llm
-description: Bootstrap an LLM-maintained wiki inside an Obsidian vault and wire the vault to use it. Creates a `wiki/` folder (index, scheme, log, raw/, its own CLAUDE.md), asks one questionnaire to scope the wiki to a single topic, patches the root CLAUDE.md registry so the assistant consults the wiki only for complex, on-topic questions, then explains how to use it. Supports multiple wikis on different topics: re-running adds another wiki (new folder + new registry row) without overwriting existing ones. All user-facing questions are in Russian. Use when the user says "set up a wiki", "wiki llm", "knowledge base", "another wiki", "сделай вики", "ещё одну вики", "вики для llm", "база знаний", or runs /iishenka-wiki-llm.
+description: 'Bootstrap an LLM-maintained wiki inside an Obsidian vault and wire the vault to use it. Creates a `wiki/` folder (index, scheme, log, raw/, its own CLAUDE.md), asks one questionnaire to scope the wiki to a single topic, patches the root CLAUDE.md registry so the assistant consults the wiki only for complex, on-topic questions, then explains how to use it. Supports multiple wikis on different topics: re-running adds another wiki (new folder + new registry row) without overwriting existing ones. All user-facing questions are in Russian. Use when the user says "set up a wiki", "wiki llm", "knowledge base", "another wiki", "сделай вики", "ещё одну вики", "вики для llm", "база знаний", or runs /iishenka-wiki-llm.'
 ---
 
 # iishenka Wiki-LLM — Setup + Usage

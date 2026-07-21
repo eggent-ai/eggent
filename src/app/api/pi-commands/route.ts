@@ -1,5 +1,7 @@
+import path from "path";
 import { NextRequest } from "next/server";
 import { createEggentPiSession } from "@/lib/pi/session";
+import { loadProjectSkillsMetadata } from "@/lib/storage/project-store";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -27,14 +29,29 @@ export async function GET(req: NextRequest) {
       enableEggentTools: false,
     });
 
-    const skills = session.resourceLoader.getSkills().skills.map((skill) => ({
-      name: `skill:${skill.name}`,
-      title: skill.name,
-      description: skill.description,
-      source: "skill" as const,
-      location: sourceLabel(skill.sourceInfo),
-      path: skill.filePath,
-    }));
+    // Eggent slash menu should expose only skills installed into the selected
+    // Eggent project. The Pi runtime may also load user/global package skills
+    // (for example pi-web-access's librarian) for model auto-invocation, but
+    // those are implementation details and should not appear as explicit UI
+    // commands in Eggent.
+    const projectSkillFilePaths = new Set(
+      projectId
+        ? (await loadProjectSkillsMetadata(projectId)).map((skill) =>
+            path.resolve(skill.skillDir, "SKILL.md")
+          )
+        : []
+    );
+
+    const skills = session.resourceLoader.getSkills().skills
+      .filter((skill) => projectSkillFilePaths.has(path.resolve(skill.filePath)))
+      .map((skill) => ({
+        name: `skill:${skill.name}`,
+        title: skill.name,
+        description: skill.description,
+        source: "skill" as const,
+        location: sourceLabel(skill.sourceInfo),
+        path: skill.filePath,
+      }));
 
     const prompts = session.promptTemplates.map((prompt) => ({
       name: prompt.name,
