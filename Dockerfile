@@ -84,7 +84,6 @@ RUN npm ci --omit=dev
 
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/next.config.mjs ./next.config.mjs
-COPY --from=builder /app/bundled-skills ./bundled-skills
 COPY --from=builder /app/scripts/docker-entrypoint.sh ./scripts/docker-entrypoint.sh
 COPY --from=builder /app/scripts/ensure-pi-packages.mjs ./scripts/ensure-pi-packages.mjs
 COPY --from=whisper /usr/local/bin/whisper-cli /usr/local/bin/whisper-cli

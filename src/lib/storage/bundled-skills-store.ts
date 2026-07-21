@@ -1,6 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
 import {
+  createProject,
   getProject,
   getProjectSkillsDir,
   validateSkillName,
@@ -14,6 +15,23 @@ export interface BundledSkill {
   description: string;
   license?: string;
   compatibility?: string;
+}
+
+function projectNameForSkill(skillName: string): string {
+  return skillName
+    .split("-")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+async function uniqueProjectId(baseId: string): Promise<string> {
+  const normalized = baseId.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "skill";
+  let candidate = normalized;
+  for (let i = 2; await getProject(candidate); i += 1) {
+    candidate = `${normalized}-${i}`;
+  }
+  return candidate;
 }
 
 function parseFrontmatter(raw: string): {
@@ -168,4 +186,44 @@ export async function installBundledSkill(
       code: 500,
     };
   }
+}
+
+export async function createProjectWithBundledSkill(
+  skillName: string
+): Promise<
+  | { success: true; project: Awaited<ReturnType<typeof createProject>>; skill: BundledSkill; initialMessage: string }
+  | { success: false; error: string; code: number }
+> {
+  const normalizedName = skillName.trim().toLowerCase();
+  const validationError = validateSkillName(normalizedName);
+  if (validationError) {
+    return { success: false, error: validationError, code: 400 };
+  }
+
+  const bundledSkills = await listBundledSkills();
+  const skill = bundledSkills.find((item) => item.name === normalizedName);
+  if (!skill) {
+    return { success: false, error: "Bundled skill not found", code: 404 };
+  }
+
+  const projectId = await uniqueProjectId(normalizedName);
+  const project = await createProject({
+    id: projectId,
+    name: projectNameForSkill(normalizedName),
+    description: skill.description,
+    instructions: `# ${projectNameForSkill(normalizedName)}\n\nThis project was created from the ${normalizedName} skill.\n`,
+    memoryMode: "global",
+  });
+
+  const installed = await installBundledSkill(project.id, normalizedName);
+  if (!installed.success) {
+    return { success: false, error: installed.error, code: installed.code };
+  }
+
+  return {
+    success: true,
+    project,
+    skill,
+    initialMessage: `/skill:${normalizedName}`,
+  };
 }

@@ -3,7 +3,7 @@
 import { useChat } from "@ai-sdk/react";
 import { DefaultChatTransport } from "ai";
 import type { UIMessage } from "ai";
-import { ChatMessages } from "./chat-messages";
+import { ChatMessages, type QuickSkillAction } from "./chat-messages";
 import { ChatInput } from "./chat-input";
 import { useAppStore } from "@/store/app-store";
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
@@ -340,6 +340,8 @@ export function ChatPanel() {
   const [chatError, setChatError] = useState<string | null>(null);
   const [inputFocusSignal, setInputFocusSignal] = useState(0);
   const [configuredRuntimeStats, setConfiguredRuntimeStats] = useState<PiRuntimeStats | null>(null);
+  const [quickSkills, setQuickSkills] = useState<QuickSkillAction[]>([]);
+  const [launchingSkill, setLaunchingSkill] = useState<string | null>(null);
 
   // Internal chatId that stays stable during a message send.
   // Pre-generate a UUID so useChat always has a consistent id.
@@ -376,6 +378,24 @@ export function ChatPanel() {
       }
     }
   }, [activeChatId]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/skills", { cache: "no-store" })
+      .then((response) => {
+        if (!response.ok) throw new Error("Failed to load bundled skills");
+        return response.json() as Promise<QuickSkillAction[]>;
+      })
+      .then((skills) => {
+        if (!cancelled) setQuickSkills(Array.isArray(skills) ? skills : []);
+      })
+      .catch(() => {
+        if (!cancelled) setQuickSkills([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   useEffect(() => {
     const focusIfRequested = () => {
@@ -627,6 +647,21 @@ export function ChatPanel() {
 
   const isLoading = status === "submitted" || status === "streaming";
 
+  const registerOutgoingChat = useCallback((messageText: string, projectId: string | null | undefined) => {
+    if (!activeChatId) {
+      prevActiveChatId.current = internalChatId;
+      setActiveChatId(internalChatId);
+      addChat({
+        id: internalChatId,
+        title: messageText.slice(0, 60) + (messageText.length > 60 ? "..." : ""),
+        projectId: projectId || undefined,
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+        messageCount: 1,
+      });
+    }
+  }, [activeChatId, internalChatId, setActiveChatId, addChat]);
+
   const onSubmit = useCallback((messageOverride?: string) => {
     const messageText = messageOverride ?? input;
     if (!messageText.trim() || isLoading) return;
@@ -638,38 +673,70 @@ export function ChatPanel() {
     queuedSwitchResultRef.current = null;
     shouldRefreshProjectsRef.current = false;
 
-    // If no active chat, register in the store.
-    // Update prevActiveChatId ref BEFORE setActiveChatId so the
-    // useEffect above won't treat this as external navigation.
-    if (!activeChatId) {
-      prevActiveChatId.current = internalChatId;
-      setActiveChatId(internalChatId);
-      addChat({
-        id: internalChatId,
-        title: messageText.slice(0, 60) + (messageText.length > 60 ? "..." : ""),
-        projectId: activeProjectId || undefined,
-        createdAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-        messageCount: 1,
-      });
-    }
+    registerOutgoingChat(messageText, activeProjectId);
 
     sendMessage({ text: messageText });
     setInput("");
   }, [
     input,
     isLoading,
-    activeChatId,
-    internalChatId,
-    setActiveChatId,
-    addChat,
     activeProjectId,
     sendMessage,
+    registerOutgoingChat,
   ]);
+
+  const launchBundledSkill = useCallback(async (skillName: string) => {
+    if (isLoading || launchingSkill) return;
+    try {
+      setLaunchingSkill(skillName);
+      setChatError(null);
+      const response = await fetch("/api/skills/launch", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ skillName }),
+      });
+      const payload = await response.json().catch(() => null) as {
+        error?: string;
+        project?: { id?: string };
+        initialMessage?: string;
+      } | null;
+      if (!response.ok || !payload?.project?.id) {
+        throw new Error(payload?.error || "Failed to launch skill");
+      }
+
+      const projectId = payload.project.id;
+      const messageText = payload.initialMessage || `/skill:${skillName}`;
+      await refreshProjects();
+      activeProjectIdRef.current = projectId;
+      currentPathRef.current = "";
+      setActiveProjectId(projectId);
+      setCurrentPath("");
+      pendingProjectSwitchRef.current = true;
+      submissionStartCountRef.current = messagesRef.current.length;
+      handledSwitchToolCallsRef.current.clear();
+      queuedSwitchResultRef.current = null;
+      shouldRefreshProjectsRef.current = true;
+      registerOutgoingChat(messageText, projectId);
+      sendMessage({ text: messageText });
+    } catch (error) {
+      setChatError(error instanceof Error ? error.message : "Failed to launch skill");
+    } finally {
+      setLaunchingSkill(null);
+    }
+  }, [isLoading, launchingSkill, refreshProjects, registerOutgoingChat, sendMessage, setActiveProjectId, setCurrentPath]);
+
+  const showQuickSkills = !activeProjectId && activeChatId === null && messages.length === 0 ? quickSkills : [];
 
   return (
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
-      <ChatMessages messages={messages} isLoading={isLoading} errorMessage={chatError} />
+      <ChatMessages
+        messages={messages}
+        isLoading={isLoading}
+        errorMessage={chatError}
+        quickSkills={showQuickSkills}
+        onLaunchSkill={launchBundledSkill}
+        launchingSkill={launchingSkill}
+      />
       <ChatInput
         input={input}
         setInput={setInput}
