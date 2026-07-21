@@ -79,6 +79,10 @@ interface PiState {
   providers: PiProviderState[];
   models: PiModelState[];
   availableModels: PiModelState[];
+  modelLock?: {
+    locked: boolean;
+    label: string;
+  };
 }
 
 type LoginEvent =
@@ -415,6 +419,8 @@ export default function SettingsPage() {
   const selectedProviderConnected = Boolean(defaultProviderSelection && modelChoices.length > 0);
   const selectedProviderHasStoredCredential = Boolean(piState?.credentials.some((item) => item.provider === defaultProviderSelection));
   const currentModelIsAvailable = Boolean(piState?.current?.model?.available);
+  const modelLocked = Boolean(piState?.modelLock?.locked);
+  const modelLockLabel = piState?.modelLock?.label || "Eggent AI";
 
   if (loading || !settings) {
     return (
@@ -472,11 +478,11 @@ export default function SettingsPage() {
                         <h4 className="font-medium">{piState?.current?.providerName || piState?.current?.provider}</h4>
                         <p className="text-sm text-muted-foreground">
                           <span className="font-mono">{piState?.current?.model?.id}</span>
-                          {currentCredential?.type ? ` · ${currentCredential.type === "oauth" ? "OAuth/subscription" : "API key"}` : ""}
-                          {piState?.settings?.defaultThinkingLevel ? ` · thinking ${piState.settings.defaultThinkingLevel}` : ""}
+                          {!modelLocked && currentCredential?.type ? ` · ${currentCredential.type === "oauth" ? "OAuth/subscription" : "API key"}` : ""}
+                          {!modelLocked && piState?.settings?.defaultThinkingLevel ? ` · thinking ${piState.settings.defaultThinkingLevel}` : ""}
                         </p>
                       </div>
-                      {piState?.current?.provider && piState.current.stored ? (
+                      {!modelLocked && piState?.current?.provider && piState.current.stored ? (
                         <Button variant="outline" className="gap-2 text-destructive" onClick={() => logoutProvider(piState.current?.provider || "")}>
                           <LogOut className="size-4" />
                           Logout
@@ -486,6 +492,17 @@ export default function SettingsPage() {
                   </div>
                 ) : null}
 
+                {modelLocked ? (
+                  <div className="rounded-lg border p-4 space-y-2">
+                    <div className="text-xs font-mono text-muted-foreground">managed</div>
+                    <h4 className="font-medium">{modelLockLabel}</h4>
+                    <p className="text-sm text-muted-foreground">
+                      Your workspace uses included Eggent AI credits. Provider credentials and model selection are managed by Eggent.
+                    </p>
+                  </div>
+                ) : null}
+
+                {!modelLocked ? <>
                 <div className="rounded-lg border p-4 space-y-3">
                   <div>
                     <div className="text-xs font-mono text-muted-foreground">provider</div>
@@ -630,6 +647,7 @@ export default function SettingsPage() {
                     </div>
                   </details>
                 ) : null}
+                </> : null}
               </section>
 
               <section className="rounded-xl border bg-card p-5 space-y-4">

@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { getPiModelRuntime, getPiModelsState, setPiDefaultToFirstAvailableModel } from "@/lib/pi/config-store";
+import { getEggentAiModelLockState, getPiModelRuntime, getPiModelsState, setPiDefaultToFirstAvailableModel } from "@/lib/pi/config-store";
 
 type LoginEvent =
   | { id: string; type: "auth_url"; url: string; instructions?: string; createdAt: number }
@@ -77,6 +77,11 @@ export async function POST(req: NextRequest) {
   const provider = typeof body?.provider === "string" ? body.provider.trim() : "";
   if (!provider) {
     return NextResponse.json({ error: "provider is required" }, { status: 400 });
+  }
+
+  const lock = await getEggentAiModelLockState();
+  if (lock.locked) {
+    return NextResponse.json({ error: "Provider login is managed by Eggent AI for this workspace." }, { status: 403 });
   }
 
   const modelRuntime = await getPiModelRuntime();

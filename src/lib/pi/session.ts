@@ -18,7 +18,7 @@ import {
   loadProjectModelSettings,
   loadProjectSkillsMetadata,
 } from "@/lib/storage/project-store";
-import { getPiModelRegistry, getPiModelRuntime, getPiSettingsManager } from "@/lib/pi/config-store";
+import { getEggentAiModelLockState, getPiModelRegistry, getPiModelRuntime, getPiSettingsManager } from "@/lib/pi/config-store";
 
 const EGGENT_CONTEXT_FILE_CANDIDATES = [
   "AGENTS.md",
@@ -254,6 +254,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     : undefined;
   const globalConfiguredModel = findAvailableModel(settingsManager.getDefaultProvider(), settingsManager.getDefaultModel());
   const configuredModel = projectConfiguredModel || globalConfiguredModel || availableModels[0];
+  const modelLock = await getEggentAiModelLockState(cwd);
   const project = projectId ? await getProject(projectId) : null;
   if (projectId) {
     await ensureProjectMcpAdapterConfig(projectId, cwd);
@@ -277,11 +278,16 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     chatFiles,
     projectSkills,
     runtimeModel: configuredModel
-      ? {
-          provider: configuredModel.provider,
-          id: configuredModel.id,
-          name: configuredModel.name,
-        }
+      ? modelLock.locked
+        ? {
+            id: modelLock.label,
+            name: modelLock.label,
+          }
+        : {
+            provider: configuredModel.provider,
+            id: configuredModel.id,
+            name: configuredModel.name,
+          }
       : undefined,
   });
   const explicitContextFiles = loadEggentContextFiles(cwd, agentDir);

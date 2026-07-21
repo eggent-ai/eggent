@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { deletePiCredential, getPiModelsState, getPiSettingsState, setPiApiKeyCredential, setPiDefaultToFirstAvailableModel } from "@/lib/pi/config-store";
+import { deletePiCredential, getEggentAiModelLockState, getPiModelsState, getPiSettingsState, setPiApiKeyCredential, setPiDefaultToFirstAvailableModel } from "@/lib/pi/config-store";
 
 export async function GET() {
   const state = await getPiModelsState();
@@ -26,6 +26,11 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "apiKey is required" }, { status: 400 });
   }
 
+  const lock = await getEggentAiModelLockState();
+  if (lock.locked) {
+    return NextResponse.json({ error: "Provider credentials are managed by Eggent AI for this workspace." }, { status: 403 });
+  }
+
   await setPiApiKeyCredential(provider, apiKey, env);
   await setPiDefaultToFirstAvailableModel(provider);
   return NextResponse.json(await getPiModelsState());
@@ -36,6 +41,11 @@ export async function DELETE(req: NextRequest) {
   if (!provider) {
     return NextResponse.json({ error: "provider query param is required" }, { status: 400 });
   }
+  const lock = await getEggentAiModelLockState();
+  if (lock.locked) {
+    return NextResponse.json({ error: "Provider credentials are managed by Eggent AI for this workspace." }, { status: 403 });
+  }
+
   const settings = await getPiSettingsState();
   await deletePiCredential(provider);
   if (settings.defaultProvider === provider) {

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { getEggentAiModelLockState } from "@/lib/pi/config-store";
 import { getProject, readProjectModelSettingsFile, saveProjectModelSettingsFile } from "@/lib/storage/project-store";
 
 export async function GET(
@@ -8,8 +9,11 @@ export async function GET(
   const { id } = await params;
   const project = await getProject(id);
   if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
-  const content = await readProjectModelSettingsFile(id);
-  return NextResponse.json({ content, path: "model.json" });
+  const lock = await getEggentAiModelLockState();
+  const content = lock.locked
+    ? `${JSON.stringify({ inheritsGlobal: true }, null, 2)}\n`
+    : await readProjectModelSettingsFile(id);
+  return NextResponse.json({ content, path: "model.json", modelLock: lock });
 }
 
 export async function PUT(
@@ -19,6 +23,11 @@ export async function PUT(
   const { id } = await params;
   const project = await getProject(id);
   if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
+  const lock = await getEggentAiModelLockState();
+  if (lock.locked) {
+    return NextResponse.json({ error: "Project model overrides are managed by Eggent AI for this workspace." }, { status: 403 });
+  }
+
   const body = await req.json().catch(() => null) as { content?: unknown } | null;
   if (typeof body?.content !== "string") {
     return NextResponse.json({ error: 'Field "content" must be a string.' }, { status: 400 });

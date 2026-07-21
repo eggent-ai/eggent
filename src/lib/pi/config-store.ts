@@ -9,6 +9,15 @@ import { getWorkDir, loadProjectModelSettings } from "@/lib/storage/project-stor
 type StoredCredentialInfo = { providerId: string; type: string };
 type StoredCredentialRecord = { type: string; key?: string; env?: Record<string, string> };
 
+function isTruthyEnv(value: string | undefined): boolean {
+  const normalized = value?.trim().toLowerCase();
+  return normalized === "1" || normalized === "true" || normalized === "yes";
+}
+
+export function eggentAiModelLabel(): string {
+  return process.env.EGGENT_AI_MODEL_LABEL?.trim() || "Eggent AI";
+}
+
 function getPiSdkExport<T = unknown>(name: string): T {
   const sdk = PiSdk as unknown as Record<string, unknown> & { default?: Record<string, unknown> };
   const value = sdk[name] ?? sdk.default?.[name];
@@ -56,12 +65,20 @@ async function writeAuthJson(content: Record<string, StoredCredentialRecord>): P
 }
 
 export async function setPiApiKeyCredential(provider: string, apiKey: string, env?: Record<string, string>): Promise<void> {
+  if ((await getEggentAiModelLockState()).locked) {
+    throw new Error("Provider credentials are managed by Eggent AI for this workspace.");
+  }
+
   const auth = await readAuthJson();
   auth[provider] = env ? { type: "api_key", key: apiKey, env } : { type: "api_key", key: apiKey };
   await writeAuthJson(auth);
 }
 
 export async function deletePiCredential(provider: string): Promise<void> {
+  if ((await getEggentAiModelLockState()).locked) {
+    throw new Error("Provider credentials are managed by Eggent AI for this workspace.");
+  }
+
   const auth = await readAuthJson();
   delete auth[provider];
   await writeAuthJson(auth);
@@ -93,6 +110,10 @@ export async function readPiModelsJson(): Promise<string> {
 }
 
 export async function writePiModelsJson(content: string): Promise<string> {
+  if ((await getEggentAiModelLockState()).locked) {
+    throw new Error("Model settings are managed by Eggent AI for this workspace.");
+  }
+
   let parsed: unknown;
   try {
     parsed = JSON.parse(content.trim() ? content : JSON.stringify({ providers: {} }));
@@ -115,6 +136,25 @@ export function getPiSettingsManager(cwd = process.cwd()): SettingsManager {
   return SettingsManager.create(cwd, getPiAgentDir());
 }
 
+export async function getEggentAiModelLockState(cwd = process.cwd()): Promise<{ locked: boolean; label: string }> {
+  const label = eggentAiModelLabel();
+  if (isTruthyEnv(process.env.EGGENT_AI_MODEL_LOCKED) || isTruthyEnv(process.env.EGGENT_MANAGED_AI_LOCKED)) {
+    return { locked: true, label };
+  }
+
+  const settingsManager = getPiSettingsManager(cwd);
+  const defaultProvider = settingsManager.getDefaultProvider();
+  if (!defaultProvider) return { locked: false, label };
+
+  const auth = await readAuthJson().catch(() => ({}));
+  const key = auth[defaultProvider]?.key;
+  if (typeof key === "string" && key.startsWith("eggw_")) {
+    return { locked: true, label };
+  }
+
+  return { locked: false, label };
+}
+
 export async function getPiSettingsState(cwd = process.cwd()) {
   const settingsManager = getPiSettingsManager(cwd);
   const globalSettings = settingsManager.getGlobalSettings();
@@ -132,6 +172,10 @@ export async function updatePiModelDefaults(options: {
   model?: string;
   thinkingLevel?: string;
 }, cwd = process.cwd()) {
+  if ((await getEggentAiModelLockState(cwd)).locked) {
+    throw new Error("Model selection is managed by Eggent AI for this workspace.");
+  }
+
   const settingsManager = getPiSettingsManager(cwd);
   const provider = options.provider?.trim();
   const model = options.model?.trim();
@@ -150,6 +194,10 @@ export async function updatePiModelDefaults(options: {
 }
 
 export async function setPiDefaultToFirstAvailableModel(provider?: string, cwd = process.cwd()) {
+  if ((await getEggentAiModelLockState(cwd)).locked) {
+    return getPiSettingsState(cwd);
+  }
+
   const modelRuntime = await getPiModelRuntime();
   const modelRegistry = await getPiModelRegistry(modelRuntime);
   await modelRegistry.refresh();
@@ -193,14 +241,20 @@ export async function getResolvedPiRuntimeModel(projectId?: string | null): Prom
     : undefined;
   const globalConfiguredModel = findAvailableModel(settingsManager.getDefaultProvider(), settingsManager.getDefaultModel());
   const configuredModel = projectConfiguredModel || globalConfiguredModel || availableModels[0];
+  const modelLock = await getEggentAiModelLockState(cwd);
 
   return {
     model: configuredModel
-      ? {
-          provider: configuredModel.provider,
-          id: configuredModel.id,
-          name: configuredModel.name,
-        }
+      ? modelLock.locked
+        ? {
+            id: modelLock.label,
+            name: modelLock.label,
+          }
+        : {
+            provider: configuredModel.provider,
+            id: configuredModel.id,
+            name: configuredModel.name,
+          }
       : undefined,
     context: configuredModel?.contextWindow
       ? {
@@ -249,12 +303,68 @@ export async function getPiModelsState() {
   const currentModel = settings.defaultProvider && settings.defaultModel
     ? all.find((model) => model.provider === settings.defaultProvider && model.id === settings.defaultModel)
     : undefined;
+  const modelLock = await getEggentAiModelLockState();
+
+  if (modelLock.locked) {
+    const lockedModel = currentModel
+      ? {
+          ...serializeModel(currentModel, true),
+          provider: "eggent-ai",
+          id: modelLock.label,
+          name: modelLock.label,
+          available: true,
+        }
+      : {
+          provider: "eggent-ai",
+          id: modelLock.label,
+          name: modelLock.label,
+          available: true,
+          contextWindow: 128000,
+          maxTokens: 16384,
+          reasoning: false,
+          input: ["text"],
+        };
+    return {
+      agentDir: getPiAgentDir(),
+      authFile: getPiAuthPath(),
+      settings: {
+        ...settings,
+        defaultProvider: "eggent-ai",
+        defaultModel: modelLock.label,
+      },
+      modelsFile: getPiModelsPath(),
+      modelLock,
+      current: {
+        provider: "eggent-ai",
+        providerName: modelLock.label,
+        model: lockedModel,
+        auth: { configured: true, source: "managed", label: modelLock.label },
+        credentialType: "api_key",
+        stored: false,
+      },
+      oauthProviders: [],
+      apiKeyProviders: [],
+      credentials: [],
+      providers: [{
+        id: "eggent-ai",
+        name: modelLock.label,
+        auth: { configured: true, source: "managed", label: modelLock.label },
+        credentialType: "api_key",
+        stored: false,
+        modelCount: 1,
+        availableModelCount: 1,
+      }],
+      models: [lockedModel],
+      availableModels: [lockedModel],
+    };
+  }
 
   return {
     agentDir: getPiAgentDir(),
     authFile: getPiAuthPath(),
     settings,
     modelsFile: getPiModelsPath(),
+    modelLock,
     current: currentModel ? {
       provider: settings.defaultProvider,
       providerName: modelRegistry.getProviderDisplayName(settings.defaultProvider || currentModel.provider),

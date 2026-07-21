@@ -1,11 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getPiModelsState, readPiModelsJson, writePiModelsJson } from "@/lib/pi/config-store";
+import { getEggentAiModelLockState, getPiModelsState, readPiModelsJson, writePiModelsJson } from "@/lib/pi/config-store";
 
 export async function GET(req: NextRequest) {
   try {
     const raw = req.nextUrl.searchParams.get("raw") === "1";
     if (raw) {
-      return NextResponse.json({ content: await readPiModelsJson() });
+      const lock = await getEggentAiModelLockState();
+      return NextResponse.json({
+        content: lock.locked
+          ? `${JSON.stringify({ providers: { "eggent-ai": { name: lock.label, models: [{ id: lock.label, name: lock.label }] } } }, null, 2)}\n`
+          : await readPiModelsJson(),
+      });
     }
     return NextResponse.json(await getPiModelsState());
   } catch (error) {
