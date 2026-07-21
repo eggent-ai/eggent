@@ -72,6 +72,26 @@ function renderMarkdownBlock(content: string, key: string) {
   );
 }
 
+function renderReasoningBlock(content: string, key: string, state?: string) {
+  const visible = normalizeVisibleText(content);
+  if (!visible) return null;
+  const isStreaming = state === "streaming";
+  return (
+    <details
+      key={key}
+      open={isStreaming}
+      className="rounded-xl border border-dashed border-border bg-muted/30 px-3 py-2 text-muted-foreground"
+    >
+      <summary className="cursor-pointer select-none text-xs font-medium uppercase tracking-wide">
+        {isStreaming ? "Thinking…" : "Thinking"}
+      </summary>
+      <div className="prose prose-sm dark:prose-invert mt-2 max-w-none text-muted-foreground [&>*:first-child]:mt-0 [&>*:last-child]:mb-0">
+        <MarkdownContent content={visible} />
+      </div>
+    </details>
+  );
+}
+
 export function MessageBubble({ message }: MessageBubbleProps) {
   const isUser = message.role === "user";
 
@@ -100,6 +120,10 @@ export function MessageBubble({ message }: MessageBubbleProps) {
   const renderedParts = message.parts.map((part, idx) => {
     if (part.type === "text") {
       return renderMarkdownBlock(part.text, `text-${idx}`);
+    }
+
+    if (part.type === "reasoning") {
+      return renderReasoningBlock(part.text, `reasoning-${idx}`, part.state);
     }
 
     const tool = toolPartInfo(part);

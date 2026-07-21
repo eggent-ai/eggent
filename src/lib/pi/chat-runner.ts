@@ -196,6 +196,27 @@ function normalizeToolInput(input: unknown): Record<string, unknown> {
   return asRecord(input) ?? {};
 }
 
+function getAssistantContentParts(message: Record<string, unknown>): ChatMessagePart[] {
+  const content = message.content;
+  if (!Array.isArray(content)) return [];
+
+  const parts: ChatMessagePart[] = [];
+  for (const item of content) {
+    const part = asRecord(item);
+    if (!part) continue;
+    if (part.type === "text" && typeof part.text === "string" && part.text) {
+      parts.push({ type: "text", text: part.text });
+    } else if (part.type === "thinking" && typeof part.thinking === "string" && part.thinking) {
+      parts.push({ type: "thinking", text: part.thinking });
+    }
+  }
+  return parts;
+}
+
+function timelineIncludesPart(parts: ChatMessagePart[], part: Extract<ChatMessagePart, { type: "text" | "thinking" }>): boolean {
+  return parts.some((existing) => existing.type === part.type && existing.text.includes(part.text));
+}
+
 function appendTimelineText(parts: ChatMessagePart[], delta: string): void {
   if (!delta) return;
   const last = parts[parts.length - 1];
@@ -204,6 +225,16 @@ function appendTimelineText(parts: ChatMessagePart[], delta: string): void {
     return;
   }
   parts.push({ type: "text", text: delta });
+}
+
+function appendTimelineThinking(parts: ChatMessagePart[], delta: string): void {
+  if (!delta) return;
+  const last = parts[parts.length - 1];
+  if (last?.type === "thinking") {
+    last.text += delta;
+    return;
+  }
+  parts.push({ type: "thinking", text: delta });
 }
 
 function upsertTimelineTool(parts: ChatMessagePart[], tool: PiToolRecord): void {
@@ -232,7 +263,7 @@ function upsertTimelineTool(parts: ChatMessagePart[], tool: PiToolRecord): void 
 function completedTimelineParts(parts: ChatMessagePart[]): ChatMessagePart[] {
   return parts
     .map((part) => {
-      if (part.type === "text") {
+      if (part.type === "text" || part.type === "thinking") {
         return part.text ? part : null;
       }
       if (part.status === "running") return null;
@@ -428,6 +459,8 @@ export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?:
       if (assistantEvent?.type === "text_delta" && typeof assistantEvent.delta === "string") {
         assistantText += assistantEvent.delta;
         appendTimelineText(timelineParts, assistantEvent.delta);
+      } else if (assistantEvent?.type === "thinking_delta" && typeof assistantEvent.delta === "string") {
+        appendTimelineThinking(timelineParts, assistantEvent.delta);
       }
       return;
     }
@@ -438,6 +471,15 @@ export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?:
         const usage = asUsage(message.usage);
         lastTurnUsage = usage ?? lastTurnUsage;
         currentPromptUsage = addUsage(currentPromptUsage, usage);
+        for (const finalPart of getAssistantContentParts(message)) {
+          if (timelineIncludesPart(timelineParts, finalPart)) continue;
+          if (finalPart.type === "text") {
+            assistantText += finalPart.text;
+            appendTimelineText(timelineParts, finalPart.text);
+          } else {
+            appendTimelineThinking(timelineParts, finalPart.text);
+          }
+        }
       }
       return;
     }
@@ -516,6 +558,8 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
       let assistantText = "";
       let textStarted = false;
       let currentTextId: string | null = null;
+      let thinkingStarted = false;
+      let currentThinkingId: string | null = null;
       let lastTurnUsage: PiRuntimeStats["lastTurn"] | undefined;
       let currentPromptUsage: PiRuntimeStats["lastTurn"] | undefined;
       const baselineUsage = getSessionTokenUsage(session);
@@ -547,6 +591,22 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         currentTextId = null;
       };
 
+      const ensureThinkingStarted = () => {
+        if (thinkingStarted && currentThinkingId) return currentThinkingId;
+        closeTextPart();
+        currentThinkingId = `pi-thinking-${crypto.randomUUID()}`;
+        thinkingStarted = true;
+        writer.write({ type: "reasoning-start", id: currentThinkingId });
+        return currentThinkingId;
+      };
+
+      const closeThinkingPart = () => {
+        if (!thinkingStarted || !currentThinkingId) return;
+        writer.write({ type: "reasoning-end", id: currentThinkingId });
+        thinkingStarted = false;
+        currentThinkingId = null;
+      };
+
       const unsubscribe = session.subscribe((event: unknown) => {
         const record = asRecord(event);
         if (!record) return;
@@ -554,10 +614,15 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         if (record.type === "message_update") {
           const assistantEvent = asRecord(record.assistantMessageEvent);
           if (assistantEvent?.type === "text_delta" && typeof assistantEvent.delta === "string") {
+            closeThinkingPart();
             const textId = ensureTextStarted();
             assistantText += assistantEvent.delta;
             appendTimelineText(timelineParts, assistantEvent.delta);
             writer.write({ type: "text-delta", id: textId, delta: assistantEvent.delta });
+          } else if (assistantEvent?.type === "thinking_delta" && typeof assistantEvent.delta === "string") {
+            const thinkingId = ensureThinkingStarted();
+            appendTimelineThinking(timelineParts, assistantEvent.delta);
+            writer.write({ type: "reasoning-delta", id: thinkingId, delta: assistantEvent.delta });
           }
           return;
         }
@@ -568,6 +633,21 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
             const usage = asUsage(message.usage);
             lastTurnUsage = usage ?? lastTurnUsage;
             currentPromptUsage = addUsage(currentPromptUsage, usage);
+            for (const finalPart of getAssistantContentParts(message)) {
+              if (timelineIncludesPart(timelineParts, finalPart)) continue;
+              if (finalPart.type === "text") {
+                closeThinkingPart();
+                const textId = ensureTextStarted();
+                assistantText += finalPart.text;
+                appendTimelineText(timelineParts, finalPart.text);
+                writer.write({ type: "text-delta", id: textId, delta: finalPart.text });
+              } else {
+                const thinkingId = ensureThinkingStarted();
+                appendTimelineThinking(timelineParts, finalPart.text);
+                writer.write({ type: "reasoning-delta", id: thinkingId, delta: finalPart.text });
+                closeThinkingPart();
+              }
+            }
             emitStats(buildPiRuntimeStats(session, currentPromptUsage, addUsage(baselineUsage, currentPromptUsage)));
           }
           return;
@@ -590,6 +670,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
             status: "running",
           };
           tools.set(toolCallId, toolRecord);
+          closeThinkingPart();
           closeTextPart();
           upsertTimelineTool(timelineParts, toolRecord);
           writer.write({
@@ -644,6 +725,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         lastTurnUsage = lastTurnUsage ?? currentPromptUsage;
         const finalStats = buildPiRuntimeStats(session, currentPromptUsage, addUsage(baselineUsage, currentPromptUsage));
         emitStats(finalStats);
+        closeThinkingPart();
         closeTextPart();
         await persistAssistantMessage({
           chatId: options.chatId,
@@ -659,6 +741,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
           addUsage(baselineUsage, currentPromptUsage)
         );
         const errorText = formatPiChatError(error);
+        closeThinkingPart();
         closeTextPart();
         console.error("Pi chat stream execution error:", error);
         await persistAssistantMessage({

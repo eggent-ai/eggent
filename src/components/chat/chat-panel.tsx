@@ -35,6 +35,10 @@ function storedPartToUIPart(part: ChatMessagePart): UIMessage["parts"][number] |
     return { type: "text" as const, text: part.text };
   }
 
+  if (part.type === "thinking") {
+    return { type: "reasoning" as const, text: part.text };
+  }
+
   return {
     type: `tool-${part.toolName}` as `tool-${string}`,
     toolCallId: part.toolCallId,

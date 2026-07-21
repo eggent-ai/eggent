@@ -71,6 +71,7 @@ export type MessageRole = "user" | "assistant" | "system" | "tool";
 
 export type ChatMessagePart =
   | { type: "text"; text: string }
+  | { type: "thinking"; text: string }
   | {
       type: "tool";
       toolCallId: string;
