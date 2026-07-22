@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { Suspense, useCallback, useEffect, useState } from "react";
 import { AppSidebar } from "@/components/app-sidebar";
 import { SiteHeader } from "@/components/site-header";
 import { SettingsNavigation } from "@/components/settings-navigation";
@@ -12,28 +12,18 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { TelegramIntegrationManager } from "@/components/telegram-integration-manager";
 import {
   Check,
   FolderOpen,
   Loader2,
   Plus,
-  Puzzle,
   Trash2,
   X,
 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAppStore } from "@/store/app-store";
 
-type OnboardingStep = -1 | 0 | 1 | 2 | 3 | 4;
-
-interface BundledSkillItem {
-  name: string;
-  description: string;
-  installed: boolean;
-  license?: string;
-  compatibility?: string;
-}
+type OnboardingStep = -1 | 0;
 
 interface AuthStatusResponse {
   authenticated: boolean;
@@ -46,7 +36,7 @@ function OnboardingStepIndicator({
   currentStep,
   label,
 }: {
-  step: 0 | 1 | 2 | 3 | 4;
+  step: 0;
   currentStep: OnboardingStep;
   label: string;
 }) {
@@ -83,7 +73,7 @@ function ProjectsPageClient() {
   const { projects, setProjects, setActiveProjectId } = useAppStore();
 
   const isOnboardingQuery = searchParams.get("onboarding") === "1";
-  const shouldOpenCreate = searchParams.get("create") === "1" || isOnboardingQuery;
+  const shouldOpenCreate = searchParams.get("create") === "1";
 
   const [projectsLoading, setProjectsLoading] = useState(true);
   const [authStatusLoading, setAuthStatusLoading] = useState(true);
@@ -103,19 +93,8 @@ function ProjectsPageClient() {
   const [newInstructions, setNewInstructions] = useState("");
 
   const [onboardingStep, setOnboardingStep] = useState<OnboardingStep>(-1);
-  const [onboardingProjectId, setOnboardingProjectId] = useState("");
-
-  const [bundledSkills, setBundledSkills] = useState<BundledSkillItem[]>([]);
-  const [bundledSkillsLoading, setBundledSkillsLoading] = useState(false);
-  const [installingSkill, setInstallingSkill] = useState<string | null>(null);
-  const [skillsStatus, setSkillsStatus] = useState<string | null>(null);
-
   const forceCreateVisible = false;
   const isCreateOpen = showCreate;
-  const onboardingTargetProjectId = useMemo(
-    () => onboardingProjectId || projects[0]?.id || "",
-    [onboardingProjectId, projects]
-  );
 
   const loadProjects = useCallback(async () => {
     try {
@@ -156,43 +135,6 @@ function ProjectsPageClient() {
     }
   }, []);
 
-  const loadBundledSkills = useCallback(async (projectId: string) => {
-    if (!projectId) {
-      setBundledSkills([]);
-      return;
-    }
-
-    try {
-      setBundledSkillsLoading(true);
-      setSkillsStatus(null);
-      const res = await fetch(
-        `/api/skills?projectId=${encodeURIComponent(projectId)}`
-      );
-      const data = (await res.json()) as unknown;
-      if (!res.ok || !Array.isArray(data)) {
-        throw new Error("Failed to load skills");
-      }
-
-      setBundledSkills(
-        data.map((item) => ({
-          name: typeof item.name === "string" ? item.name : "unknown",
-          description:
-            typeof item.description === "string" ? item.description : "",
-          installed: Boolean(item.installed),
-          license: typeof item.license === "string" ? item.license : undefined,
-          compatibility:
-            typeof item.compatibility === "string"
-              ? item.compatibility
-              : undefined,
-        }))
-      );
-    } catch {
-      setBundledSkills([]);
-      setSkillsStatus("Failed to load bundled skills.");
-    } finally {
-      setBundledSkillsLoading(false);
-    }
-  }, []);
 
   useEffect(() => {
     void loadProjects();
@@ -207,22 +149,16 @@ function ProjectsPageClient() {
       setShowCreate(true);
       return;
     }
-    if (shouldOpenCreate && onboardingStep === 1) {
+    if (shouldOpenCreate) {
       setShowCreate(true);
     }
-  }, [forceCreateVisible, shouldOpenCreate, onboardingStep]);
+  }, [forceCreateVisible, shouldOpenCreate]);
 
   useEffect(() => {
     if (onboardingStep === 0) {
       setShowCreate(false);
     }
   }, [onboardingStep]);
-
-  useEffect(() => {
-    if (!forceCreateVisible && onboardingStep >= 2) {
-      setShowCreate(false);
-    }
-  }, [forceCreateVisible, onboardingStep]);
 
   useEffect(() => {
     if (authStatusLoading || projectsLoading) return;
@@ -251,16 +187,10 @@ function ProjectsPageClient() {
     router,
   ]);
 
-  useEffect(() => {
-    if (onboardingStep !== 4 || !onboardingTargetProjectId) return;
-    void loadBundledSkills(onboardingTargetProjectId);
-  }, [onboardingStep, onboardingTargetProjectId, loadBundledSkills]);
-
   async function handleCreate() {
     const trimmedName = newName.trim();
     if (!trimmedName) return;
 
-    const hadNoProjects = projects.length === 0;
     try {
       setCreatingProject(true);
       setCreateError(null);
@@ -285,14 +215,7 @@ function ProjectsPageClient() {
       setNewDescription("");
       setNewInstructions("");
       setActiveProjectId(payload.id);
-      setOnboardingProjectId(payload.id);
-
-      if (hadNoProjects) {
-        setOnboardingStep(2);
-        setShowCreate(false);
-      } else {
-        setShowCreate(false);
-      }
+      setShowCreate(false);
 
       await loadProjects();
     } catch (error) {
@@ -361,42 +284,6 @@ function ProjectsPageClient() {
     if (!confirm("Delete this project? This cannot be undone.")) return;
     await fetch(`/api/projects/${id}`, { method: "DELETE" });
     await loadProjects();
-  }
-
-  async function handleInstallSkill(skillName: string) {
-    if (!onboardingTargetProjectId) return;
-
-    try {
-      setInstallingSkill(skillName);
-      setSkillsStatus(null);
-
-      const res = await fetch("/api/skills", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          projectId: onboardingTargetProjectId,
-          skillName,
-        }),
-      });
-      const payload = (await res.json()) as { error?: string };
-      if (!res.ok) {
-        throw new Error(payload.error || "Failed to install skill");
-      }
-
-      await loadBundledSkills(onboardingTargetProjectId);
-      setSkillsStatus(`Installed "${skillName}"`);
-    } catch (error) {
-      setSkillsStatus(
-        error instanceof Error ? error.message : "Failed to install skill"
-      );
-    } finally {
-      setInstallingSkill(null);
-    }
-  }
-
-  function finishOnboarding() {
-    setOnboardingStep(-1);
-    router.push("/dashboard");
   }
 
   return (

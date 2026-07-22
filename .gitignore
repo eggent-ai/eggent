@@ -43,3 +43,5 @@ next-env.d.ts
 # python
 __pycache__/
 *.py[cod]
+# optional externally supplied skill catalog
+/bundled-skills/

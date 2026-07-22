@@ -189,7 +189,7 @@ export function KnowledgeSection({ projectId }: KnowledgeSectionProps) {
     function getFileIcon(filename: string) {
         const ext = filename.split(".").pop()?.toLowerCase();
         if (["jpg", "jpeg", "png", "gif", "webp", "bmp"].includes(ext || "")) return ImageIcon;
-        if (["pdf", "docx", "xlsx", "xls"].includes(ext || "")) return FileText;
+        if (["pdf", "docx"].includes(ext || "")) return FileText;
         return File;
     }
 
@@ -254,7 +254,7 @@ export function KnowledgeSection({ projectId }: KnowledgeSectionProps) {
                         ref={fileInputRef}
                         onChange={handleUpload}
                         className="hidden"
-                        accept=".txt,.md,.json,.csv,.pdf,.docx,.xlsx,.xls,.png,.jpg,.jpeg,.gif,.bmp,.webp"
+                        accept=".txt,.md,.json,.csv,.pdf,.docx,.png,.jpg,.jpeg,.gif,.bmp,.webp"
                     />
                     <Button
                         onClick={() => fileInputRef.current?.click()}
@@ -285,7 +285,7 @@ export function KnowledgeSection({ projectId }: KnowledgeSectionProps) {
                     <div className="p-8 text-center text-muted-foreground">
                         <FolderOpen className="size-10 mx-auto mb-3 opacity-20" />
                         <p>No files in knowledge base yet.</p>
-                        <p className="text-xs mt-1">Upload PDF, Word, Excel, text, or images to give the agent context.</p>
+                        <p className="text-xs mt-1">Upload PDF, Word, text, or images to give the agent context.</p>
                     </div>
                 ) : (
                     <div className="divide-y">

@@ -21,6 +21,10 @@ type AuthEventLike =
   | { type: "device_code"; userCode: string; verificationUri: string; intervalSeconds?: number; expiresInSeconds?: number }
   | { type: "progress"; message: string };
 
+type LoginEventInput<T extends LoginEvent = LoginEvent> = T extends LoginEvent
+  ? Omit<T, "id" | "createdAt">
+  : never;
+
 type PendingPrompt = {
   resolve: (value: string | undefined) => void;
   reject: (error: Error) => void;
@@ -45,7 +49,7 @@ function eventId(): string {
   return randomUUID();
 }
 
-function pushEvent(job: LoginJob, event: Omit<LoginEvent, "id" | "createdAt">) {
+function pushEvent(job: LoginJob, event: LoginEventInput) {
   job.updatedAt = Date.now();
   job.events.push({ id: eventId(), createdAt: job.updatedAt, ...event } as LoginEvent);
 }
@@ -60,7 +64,7 @@ function cleanupJobs() {
   }
 }
 
-function waitForPrompt(job: LoginJob, event: Omit<Extract<LoginEvent, { type: "prompt" | "select" }>, "id" | "createdAt">) {
+function waitForPrompt(job: LoginJob, event: LoginEventInput<Extract<LoginEvent, { type: "prompt" | "select" }>>) {
   const promptId = event.promptId;
   pushEvent(job, event);
   return new Promise<string | undefined>((resolve, reject) => {
@@ -75,7 +79,7 @@ function handleAuthNotify(job: LoginJob, event: AuthEventLike): void {
     return;
   }
   if (event.type === "device_code") {
-    pushEvent(job, { type: "device_code", ...event });
+    pushEvent(job, event);
     return;
   }
   if (event.type === "progress") {

@@ -39,7 +39,7 @@ RUNTIME_DIRS=(
 # produces a less useful EACCES error later in ensure-pi-packages.mjs.
 sudo mkdir -p "$DATA_ROOT" "${RUNTIME_DIRS[@]}"
 # Fix the data tree, but tolerate read-only bind mounts under /app/data.
-# Commercial shared folders are intentionally mounted read-only by default
+# Shared project folders can be mounted read-only by deployments
 # (for example /app/data/projects/.shared/<folder>), and chown on those paths
 # returns "Read-only file system". That must not make the container restart-loop.
 sudo chown -R node:node "$DATA_ROOT" >/tmp/eggent-data-chown.log 2>&1 || true

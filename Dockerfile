@@ -13,14 +13,15 @@ RUN npm run build
 
 FROM node:22-bookworm-slim AS whisper
 WORKDIR /tmp/whisper.cpp
+ARG WHISPER_CPP_VERSION=v1.7.6
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     build-essential \
     ca-certificates \
     cmake \
     git \
-  && git clone --depth 1 https://github.com/ggerganov/whisper.cpp.git /tmp/whisper.cpp \
-  && cmake -S /tmp/whisper.cpp -B /tmp/whisper.cpp/build -DCMAKE_BUILD_TYPE=Release -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON \
+  && git clone --depth 1 --branch "${WHISPER_CPP_VERSION}" https://github.com/ggerganov/whisper.cpp.git /tmp/whisper.cpp \
+  && cmake -S /tmp/whisper.cpp -B /tmp/whisper.cpp/build -DCMAKE_BUILD_TYPE=Release -DWHISPER_BUILD_TESTS=OFF -DWHISPER_BUILD_EXAMPLES=ON -DGGML_NATIVE=OFF -DGGML_CPU_ARM_ARCH=armv8-a \
   && cmake --build /tmp/whisper.cpp/build --config Release -j"$(nproc)" \
   && cp /tmp/whisper.cpp/build/bin/whisper-cli /usr/local/bin/whisper-cli \
   && find /tmp/whisper.cpp/build -name '*.so*' -exec cp -P {} /usr/local/lib/ \; \

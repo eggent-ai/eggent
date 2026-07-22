@@ -4,7 +4,6 @@ import { loadText } from "./text-loader";
 import { loadPdf } from "./pdf-loader";
 import { loadImage } from "./image-loader";
 import { loadDocx } from "./docx-loader";
-import { loadXlsx } from "./xlsx-loader";
 
 export interface LoadedDocument {
     text: string;
@@ -28,8 +27,6 @@ const loaders: Record<string, FileLoader> = {
     ".log": loadText,
     ".pdf": loadPdf,
     ".docx": loadDocx,
-    ".xlsx": loadXlsx,
-    ".xls": loadXlsx,
     ".png": loadImage,
     ".jpg": loadImage,
     ".jpeg": loadImage,

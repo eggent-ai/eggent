@@ -2,6 +2,41 @@
 
 All notable changes to this project will be documented in this file.
 
+## [0.2.0] - 2026-07-22
+
+### Added
+- Pi SDK runtime integration for project agents, tools, models, skills, MCP, and schedules.
+- Project workspace management for files, context, memory, model settings, MCP, and skills.
+- Pipeline definitions, pipeline runs, and artifact handoff APIs.
+- Local whisper.cpp speech-to-text for browser dictation and Telegram voice messages.
+- Telegram polling activation, progress updates, and formatted replies.
+
+### Changed
+- Replaced legacy cron runtime with Pi-backed schedules.
+- Docker install defaults to localhost binding and keeps runtime/cache data under `data/`.
+- One-command installer and docs now target the public `eggent-ai/eggent` repository.
+- Core no longer ships bundled skill content; deployments can provide an optional runtime `bundled-skills/` catalog.
+- Package/app health version updated to `0.2.0`.
+
+### Fixed
+- Sidebar folder selection no longer changes the agent working directory.
+- Docker whisper.cpp build is pinned and ARM64-safe.
+- TypeScript project check now passes with `npx tsc --noEmit`.
+
+## [0.1.6] - 2026-04-30
+
+### Added
+- Telegram long polling mode for local/VPS installs without public HTTPS.
+- Telegram polling status/start/stop controls.
+
+### Changed
+- Telegram webhook and polling processing now share the same message handling path.
+- Installation docs were reworked around Docker, local Node.js, and VPS deployment paths.
+
+### Fixed
+- Telegram lifecycle starts from server instrumentation and stops cleanly on disconnect.
+- Health endpoint version updated to `0.1.6`.
+
 ## [0.1.5] - 2026-03-23
 
 ### Added

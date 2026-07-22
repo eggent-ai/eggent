@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-REPO_URL="${EGGENT_REPO_URL:-https://github.com/eggent-ai/eggentpi.git}"
+REPO_URL="${EGGENT_REPO_URL:-https://github.com/eggent-ai/eggent.git}"
 BRANCH="${EGGENT_BRANCH:-main}"
 INSTALL_DIR="${EGGENT_INSTALL_DIR:-$HOME/.eggent}"
 AUTO_INSTALL_DOCKER="${EGGENT_AUTO_INSTALL_DOCKER:-1}"

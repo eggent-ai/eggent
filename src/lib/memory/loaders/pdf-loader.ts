@@ -37,7 +37,7 @@ export async function loadPdf(filePath: string): Promise<LoadedDocument> {
         const textContent = await page.getTextContent();
 
         const pageText = textContent.items
-            .map((item: { str?: string }) => item.str ?? "")
+            .map((item) => "str" in item ? item.str : "")
             .join(" ");
 
         fullText += pageText + "\n\n";

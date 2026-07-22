@@ -313,7 +313,8 @@ function applyGlobalToolLoopGuard(tools: ToolSet): ToolSet {
   const wrappedTools: ToolSet = {};
 
   for (const [toolName, toolDef] of Object.entries(tools)) {
-    if (toolName === "response" || typeof toolDef.execute !== "function") {
+    const executeTool = toolDef.execute;
+    if (toolName === "response" || typeof executeTool !== "function") {
       wrappedTools[toolName] = toolDef;
       continue;
     }
@@ -348,7 +349,7 @@ function applyGlobalToolLoopGuard(tools: ToolSet): ToolSet {
           );
         }
 
-        const output = await toolDef.execute(input as never, options as never);
+        const output = await executeTool(input as never, options as never);
         const recoveryHint = buildAutoRecoveryHint(toolName, output);
         const outputWithHint = appendRecoveryHint(output, recoveryHint);
         const failureSignature = extractDeterministicFailureSignature(outputWithHint);

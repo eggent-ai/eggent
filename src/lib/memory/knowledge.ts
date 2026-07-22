@@ -12,7 +12,7 @@ const SUPPORTED_EXTENSIONS = new Set([
   ".txt", ".md", ".json", ".csv", ".html",
   ".py", ".js", ".ts", ".xml", ".yaml", ".yml", ".log",
   ".pdf",
-  ".docx", ".xlsx", ".xls",
+  ".docx",
   ".png", ".jpg", ".jpeg", ".gif", ".bmp", ".webp"
 ]);
 
@@ -27,7 +27,7 @@ function createSplitterOptions(settings: AppSettings) {
     chunkSize,
     // Keep overlap proportional to chunk size to preserve local context.
     chunkOverlap: Math.max(20, Math.floor(chunkSize * 0.2)),
-    separators: ["\n\n", "\n", " ", ""] as const,
+    separators: ["\n\n", "\n", " ", ""],
   };
 }
 

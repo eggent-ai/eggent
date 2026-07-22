@@ -173,7 +173,7 @@ export async function getEggentAiModelLockState(cwd = process.cwd()): Promise<{ 
   const defaultProvider = settingsManager.getDefaultProvider();
   if (!defaultProvider) return { locked: false, label };
 
-  const auth = await readAuthJson().catch(() => ({}));
+  const auth: Record<string, StoredCredentialRecord> = await readAuthJson().catch(() => ({}));
   const key = auth[defaultProvider]?.key;
   if (typeof key === "string" && key.startsWith("eggw_")) {
     return { locked: true, label };
