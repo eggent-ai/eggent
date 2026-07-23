@@ -241,6 +241,24 @@ function completedTimelineParts(parts: ChatMessagePart[]): ChatMessagePart[] {
     .filter((part): part is ChatMessagePart => Boolean(part));
 }
 
+function isEmptyZeroTokenTurn(
+  assistantText: string,
+  tools: Iterable<PiToolRecord>,
+  usage?: PiRuntimeStats["lastTurn"]
+): boolean {
+  if (assistantText.trim()) return false;
+  for (const tool of tools) {
+    if (tool.status === "completed" || tool.status === "error") return false;
+  }
+  return (usage?.total ?? 0) === 0 && (usage?.input ?? 0) === 0 && (usage?.output ?? 0) === 0;
+}
+
+function emptyZeroTokenTurnError(): Error {
+  return new Error(
+    "Model returned an empty response with 0 tokens. The provider may be rate-limiting, out of quota, or refusing this model. Try another model or reconnect the provider."
+  );
+}
+
 function hasScheduleManagementIntent(text: string): boolean {
   const normalized = text.toLowerCase();
   const mentionsSchedules =
@@ -480,6 +498,9 @@ export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?:
     await session.prompt(preparePromptForRuntime(prompt));
     currentPromptUsage = currentPromptUsage ?? subtractUsage(getSessionTokenUsage(session), baselineUsage);
     lastTurnUsage = lastTurnUsage ?? currentPromptUsage;
+    if (isEmptyZeroTokenTurn(assistantText, tools.values(), currentPromptUsage)) {
+      throw emptyZeroTokenTurnError();
+    }
     await persistAssistantMessage({
       chatId: options.chatId,
       assistantText,
@@ -701,6 +722,9 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
 
         currentPromptUsage = currentPromptUsage ?? subtractUsage(getSessionTokenUsage(session), baselineUsage);
         lastTurnUsage = lastTurnUsage ?? currentPromptUsage;
+        if (isEmptyZeroTokenTurn(assistantText, tools.values(), currentPromptUsage)) {
+          throw emptyZeroTokenTurnError();
+        }
         const finalStats = buildPiRuntimeStats(session, currentPromptUsage, addUsage(baselineUsage, currentPromptUsage));
         emitStats(finalStats);
         closeTextPart();
