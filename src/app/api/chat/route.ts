@@ -68,6 +68,7 @@ export async function POST(req: NextRequest) {
         userMessage: message,
         projectId,
         cwd: resolvedCurrentPath,
+        abortSignal: req.signal,
       });
 
       return createUIMessageStreamResponse({

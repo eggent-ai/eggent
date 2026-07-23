@@ -522,31 +522,77 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
       const baselineUsage = getSessionTokenUsage(session);
       const tools = new Map<string, PiToolRecord>();
       const timelineParts: ChatMessagePart[] = [];
+      let aborted = options.abortSignal?.aborted === true;
+      let persisted = false;
+      let abortPromise: Promise<void> | null = null;
+
+      const safeWrite = (part: Parameters<typeof writer.write>[0]) => {
+        if (aborted) return;
+        writer.write(part);
+      };
 
       const emitStats = (stats: PiRuntimeStats) => {
-        writer.write({
+        safeWrite({
           type: "data-piStats",
           id: "pi-runtime-stats",
           data: stats,
         });
       };
 
-      emitStats(buildPiRuntimeStats(session));
-
       const ensureTextStarted = () => {
         if (textStarted && currentTextId) return currentTextId;
         currentTextId = `pi-text-${crypto.randomUUID()}`;
         textStarted = true;
-        writer.write({ type: "text-start", id: currentTextId });
+        safeWrite({ type: "text-start", id: currentTextId });
         return currentTextId;
       };
 
       const closeTextPart = () => {
         if (!textStarted || !currentTextId) return;
-        writer.write({ type: "text-end", id: currentTextId });
+        safeWrite({ type: "text-end", id: currentTextId });
         textStarted = false;
         currentTextId = null;
       };
+
+      const currentStats = () => buildPiRuntimeStats(
+        session,
+        currentPromptUsage ?? lastTurnUsage,
+        addUsage(baselineUsage, currentPromptUsage)
+      );
+
+      const persistPartialAssistant = async (runtimeStats: PiRuntimeStats = currentStats()) => {
+        if (persisted) return;
+        persisted = true;
+        closeTextPart();
+        await persistAssistantMessage({
+          chatId: options.chatId,
+          assistantText,
+          tools: [...tools.values()],
+          runtimeStats,
+          parts: completedTimelineParts(timelineParts),
+        });
+      };
+
+      const abortSession = () => {
+        if (aborted && abortPromise) return abortPromise;
+        aborted = true;
+        abortPromise = (async () => {
+          try {
+            await session.abort();
+          } catch (error) {
+            console.warn("Pi chat abort failed:", error);
+          }
+        })();
+        return abortPromise;
+      };
+
+      const handleAbort = () => {
+        void abortSession();
+      };
+
+      options.abortSignal?.addEventListener("abort", handleAbort, { once: true });
+
+      emitStats(buildPiRuntimeStats(session));
 
       const unsubscribe = session.subscribe((event: unknown) => {
         const record = asRecord(event);
@@ -558,7 +604,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
             const textId = ensureTextStarted();
             assistantText += assistantEvent.delta;
             appendTimelineText(timelineParts, assistantEvent.delta);
-            writer.write({ type: "text-delta", id: textId, delta: assistantEvent.delta });
+            safeWrite({ type: "text-delta", id: textId, delta: assistantEvent.delta });
           }
           return;
         }
@@ -593,7 +639,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
           tools.set(toolCallId, toolRecord);
           closeTextPart();
           upsertTimelineTool(timelineParts, toolRecord);
-          writer.write({
+          safeWrite({
             type: "tool-input-available",
             toolCallId,
             toolName,
@@ -621,14 +667,14 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
           upsertTimelineTool(timelineParts, toolRecord);
 
           if (isError) {
-            writer.write({
+            safeWrite({
               type: "tool-output-error",
               toolCallId,
               errorText: stringifyForDisplay(output),
               dynamic: true,
             });
           } else {
-            writer.write({
+            safeWrite({
               type: "tool-output-available",
               toolCallId,
               output: stringifyForDisplay(output),
@@ -639,8 +685,20 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
       });
 
       try {
+        if (aborted) {
+          await persistPartialAssistant();
+          return;
+        }
+
         applySchedulingToolPolicy(session, options.userMessage);
         await session.prompt(preparePromptForRuntime(options.userMessage));
+
+        if (aborted) {
+          await abortPromise;
+          await persistPartialAssistant();
+          return;
+        }
+
         currentPromptUsage = currentPromptUsage ?? subtractUsage(getSessionTokenUsage(session), baselineUsage);
         lastTurnUsage = lastTurnUsage ?? currentPromptUsage;
         const finalStats = buildPiRuntimeStats(session, currentPromptUsage, addUsage(baselineUsage, currentPromptUsage));
@@ -653,7 +711,15 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
           runtimeStats: finalStats,
           parts: timelineParts,
         });
+        persisted = true;
       } catch (error) {
+        if (aborted || options.abortSignal?.aborted) {
+          aborted = true;
+          await abortPromise;
+          await persistPartialAssistant();
+          return;
+        }
+
         const errorStats = buildPiRuntimeStats(
           session,
           currentPromptUsage ?? lastTurnUsage,
@@ -669,9 +735,15 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
           runtimeStats: errorStats,
           parts: [...completedTimelineParts(timelineParts), { type: "text", text: errorText }],
         });
+        persisted = true;
         throw error;
       } finally {
+        options.abortSignal?.removeEventListener("abort", handleAbort);
         unsubscribe();
+        if (aborted) {
+          session.dispose();
+          return;
+        }
         const retained = await retainPiScheduleSession({
           chatId: options.chatId,
           projectId: options.projectId,

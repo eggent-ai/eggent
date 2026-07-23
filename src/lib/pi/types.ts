@@ -17,6 +17,8 @@ export interface PiSessionOptions {
    * secrets such as Telegram bot tokens.
    */
   toolRuntimeData?: Record<string, unknown>;
+  /** Abort signal for the active HTTP/chat request. */
+  abortSignal?: AbortSignal;
 }
 
 export interface PiChatRunOptions extends PiSessionOptions {

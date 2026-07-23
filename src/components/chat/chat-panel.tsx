@@ -482,6 +482,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
   const queuedSwitchResultRef = useRef<SwitchProjectResult | null>(null);
   const shouldRefreshProjectsRef = useRef(false);
   const switchInFlightRef = useRef(false);
+  const stopRequestedRef = useRef(false);
 
   // Reset local messages when switching to "new chat" mode.
   useEffect(() => {
@@ -613,7 +614,8 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     }
 
     if (status === "ready" || status === "error") {
-      if (hasToolOutput && !hasVisibleAssistantAnswer) {
+      const wasStoppedByUser = stopRequestedRef.current;
+      if (!wasStoppedByUser && hasToolOutput && !hasVisibleAssistantAnswer) {
         const alreadyPresent = assistantMessages.some(
           (m) => extractVisibleAssistantText(m) === NO_FINAL_RESPONSE_FALLBACK
         );
@@ -637,6 +639,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
       handledSwitchToolCallsRef.current.clear();
       queuedSwitchResultRef.current = null;
       shouldRefreshProjectsRef.current = false;
+      stopRequestedRef.current = false;
 
       void (async () => {
         if (shouldRefresh) {
@@ -670,6 +673,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     const messageText = messageOverride ?? input;
     if (!messageText.trim() || isLoading) return;
     setChatError(null);
+    stopRequestedRef.current = false;
 
     pendingProjectSwitchRef.current = true;
     submissionStartCountRef.current = messagesRef.current.length;
@@ -715,6 +719,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
       currentPathRef.current = "";
       setActiveProjectId(projectId);
       setCurrentPath("");
+      stopRequestedRef.current = false;
       pendingProjectSwitchRef.current = true;
       submissionStartCountRef.current = messagesRef.current.length;
       handledSwitchToolCallsRef.current.clear();
@@ -728,6 +733,17 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
       setLaunchingSkill(null);
     }
   }, [isLoading, launchingSkill, refreshProjects, registerOutgoingChat, sendMessage, setActiveProjectId, setCurrentPath]);
+
+  const handleStop = useCallback(() => {
+    const snapshot = messagesRef.current;
+    stopRequestedRef.current = true;
+    stop();
+    // The AI SDK clears the in-flight assistant message on client abort. Put the
+    // last streamed snapshot back immediately; the server persists the same
+    // partial turn and the normal history sync will reconcile it afterwards.
+    queueMicrotask(() => setMessages(snapshot));
+    setTimeout(() => setMessages(snapshot), 0);
+  }, [setMessages, stop]);
 
   const showQuickSkills = !activeProjectId && activeChatId === null && messages.length === 0 ? quickSkills : [];
 
@@ -745,7 +761,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         input={input}
         setInput={setInput}
         onSubmit={onSubmit}
-        onStop={stop}
+        onStop={handleStop}
         isLoading={isLoading}
         chatId={activeChatId || internalChatId}
         projectId={activeProjectId}
