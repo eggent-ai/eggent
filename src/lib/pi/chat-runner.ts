@@ -94,6 +94,13 @@ function asUsage(value: unknown): PiRuntimeStats["lastTurn"] | undefined {
   });
 }
 
+function formatTokenCount(value?: number): string {
+  if (value === undefined) return "—";
+  if (value >= 1_000_000) return `${(value / 1_000_000).toFixed(1)}M`;
+  if (value >= 1_000) return `${(value / 1_000).toFixed(1)}k`;
+  return String(value);
+}
+
 function addUsage(
   left?: PiRuntimeStats["lastTurn"],
   right?: PiRuntimeStats["lastTurn"]
@@ -643,6 +650,48 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
 
         if (record.type === "agent_end") {
           emitStats(buildPiRuntimeStats(session, currentPromptUsage ?? lastTurnUsage, addUsage(baselineUsage, currentPromptUsage)));
+          return;
+        }
+
+        if (record.type === "compaction_start") {
+          const reason = typeof record.reason === "string" ? record.reason : "threshold";
+          safeWrite({
+            type: "data-piCompaction",
+            id: `pi-compaction-${crypto.randomUUID()}`,
+            data: {
+              state: "running",
+              reason,
+              message: reason === "manual" ? "Сжимаю историю чата…" : "Сжимаю контекст, чтобы продолжить без переполнения…",
+              timestamp: new Date().toISOString(),
+            },
+          });
+          return;
+        }
+
+        if (record.type === "compaction_end") {
+          const reason = typeof record.reason === "string" ? record.reason : "threshold";
+          const result = asRecord(record.result);
+          const tokensBefore = numberFromRecord(result ?? {}, ["tokensBefore"]);
+          const estimatedTokensAfter = numberFromRecord(result ?? {}, ["estimatedTokensAfter"]);
+          const errorMessage = typeof record.errorMessage === "string" ? record.errorMessage : undefined;
+          const abortedCompaction = record.aborted === true;
+          const state = errorMessage || abortedCompaction ? "failed" : "completed";
+          const beforeText = tokensBefore !== undefined ? formatTokenCount(tokensBefore) : "—";
+          const afterText = estimatedTokensAfter !== undefined ? formatTokenCount(estimatedTokensAfter) : "—";
+          safeWrite({
+            type: "data-piCompaction",
+            id: `pi-compaction-${crypto.randomUUID()}`,
+            data: {
+              state,
+              reason,
+              tokensBefore,
+              estimatedTokensAfter,
+              message: state === "completed"
+                ? `Контекст сжат: было ${beforeText}, стало примерно ${afterText} токенов.`
+                : `Не удалось сжать контекст${errorMessage ? `: ${errorMessage}` : "."}`,
+              timestamp: new Date().toISOString(),
+            },
+          });
           return;
         }
 

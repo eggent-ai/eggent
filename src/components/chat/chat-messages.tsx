@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { MessageBubble } from "./message-bubble";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
-import { Loader2, MessageCircle, Sparkles } from "lucide-react";
+import { CheckCircle2, Loader2, MessageCircle, Sparkles, TriangleAlert } from "lucide-react";
 import type { UIMessage } from "ai";
 
 export interface QuickSkillAction {
@@ -12,16 +12,22 @@ export interface QuickSkillAction {
   description: string;
 }
 
+export interface PiCompactionStatus {
+  state: "running" | "completed" | "failed";
+  message: string;
+}
+
 interface ChatMessagesProps {
   messages: UIMessage[];
   isLoading: boolean;
   errorMessage?: string | null;
+  compactionStatus?: PiCompactionStatus | null;
   quickSkills?: QuickSkillAction[];
   onLaunchSkill?: (skillName: string) => void;
   launchingSkill?: string | null;
 }
 
-export function ChatMessages({ messages, isLoading, errorMessage, quickSkills = [], onLaunchSkill, launchingSkill }: ChatMessagesProps) {
+export function ChatMessages({ messages, isLoading, errorMessage, compactionStatus, quickSkills = [], onLaunchSkill, launchingSkill }: ChatMessagesProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollRef = useRef(true);
@@ -110,7 +116,26 @@ export function ChatMessages({ messages, isLoading, errorMessage, quickSkills = 
           <MessageBubble key={message.id} message={message} />
         ))}
 
-        {isLoading && messages.length > 0 && (
+        {compactionStatus ? (
+          <div className="flex gap-3 py-3">
+            <div className={`flex size-8 shrink-0 items-center justify-center rounded-full ${compactionStatus.state === "failed" ? "bg-destructive/10 text-destructive" : "bg-primary/10 text-primary"}`}>
+              {compactionStatus.state === "running" ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : compactionStatus.state === "failed" ? (
+                <TriangleAlert className="size-4" />
+              ) : (
+                <CheckCircle2 className="size-4" />
+              )}
+            </div>
+            <div className="flex items-center">
+              <span className="text-sm text-muted-foreground">
+                {compactionStatus.message}
+              </span>
+            </div>
+          </div>
+        ) : null}
+
+        {isLoading && messages.length > 0 && !compactionStatus ? (
           <div className="flex gap-3 py-3">
             <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
               <Loader2 className="size-4 animate-spin" />
@@ -121,7 +146,7 @@ export function ChatMessages({ messages, isLoading, errorMessage, quickSkills = 
               </span>
             </div>
           </div>
-        )}
+        ) : null}
 
         {errorMessage ? (
           <Alert variant="destructive">

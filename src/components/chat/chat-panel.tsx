@@ -30,6 +30,37 @@ function getLatestPiRuntimeStats(messages: UIMessage[]): PiRuntimeStats | null {
   return null;
 }
 
+export interface PiCompactionStatus {
+  state: "running" | "completed" | "failed";
+  reason?: string;
+  tokensBefore?: number;
+  estimatedTokensAfter?: number;
+  message: string;
+  timestamp?: string;
+}
+
+function isPiCompactionStatus(value: unknown): value is PiCompactionStatus {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    (record.state === "running" || record.state === "completed" || record.state === "failed") &&
+    typeof record.message === "string"
+  );
+}
+
+function getLatestPiCompactionStatus(messages: UIMessage[]): PiCompactionStatus | null {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    for (let j = message.parts.length - 1; j >= 0; j -= 1) {
+      const part = message.parts[j] as { type?: string; data?: unknown };
+      if (part.type === "data-piCompaction" && isPiCompactionStatus(part.data)) {
+        return part.data;
+      }
+    }
+  }
+  return null;
+}
+
 function storedPartToUIPart(part: ChatMessagePart): UIMessage["parts"][number] | null {
   if (part.type === "text") {
     return { type: "text" as const, text: part.text };
@@ -440,6 +471,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
   });
 
   const runtimeStats = useMemo(() => getLatestPiRuntimeStats(messages), [messages]);
+  const compactionStatus = useMemo(() => getLatestPiCompactionStatus(messages), [messages]);
   const displayRuntimeStats = useMemo(() => {
     if (!runtimeStats) return configuredRuntimeStats;
     if (runtimeStats.model || !configuredRuntimeStats?.model) return runtimeStats;
@@ -753,6 +785,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         messages={messages}
         isLoading={isLoading}
         errorMessage={chatError}
+        compactionStatus={compactionStatus}
         quickSkills={showQuickSkills}
         onLaunchSkill={launchBundledSkill}
         launchingSkill={launchingSkill}
