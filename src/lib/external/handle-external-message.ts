@@ -1,6 +1,8 @@
 import { runPiAgentText } from "@/lib/pi/chat-runner";
 import { createChat, getChat } from "@/lib/storage/chat-store";
+import { saveChatFile } from "@/lib/storage/chat-files-store";
 import { getAllProjects, getProject } from "@/lib/storage/project-store";
+import { transcribeAudioFile } from "@/lib/speech/transcriber";
 import {
   contextKey,
   getOrCreateExternalSession,
@@ -17,7 +19,17 @@ export interface HandleExternalMessageInput {
   chatId?: string;
   currentPath?: string;
   runtimeData?: Record<string, unknown>;
+  toolRuntimeData?: Record<string, unknown>;
   publicMode?: boolean;
+}
+
+export interface HandleExternalMediaMessageInput extends HandleExternalMessageInput {
+  file: {
+    buffer: Buffer;
+    filename: string;
+    mimeType?: string;
+    kind?: "document" | "photo" | "audio" | "video" | "voice" | "file";
+  };
 }
 
 interface SwitchProjectSignal {
@@ -193,11 +205,19 @@ async function ensureChatForProject(
   return newChatId;
 }
 
-export async function handleExternalMessage(
+interface ResolvedExternalMessageRunContext {
+  session: ExternalSession;
+  resolvedProjectId?: string;
+  currentPath: string;
+  resolvedChatId: string;
+  beforeCount: number;
+  runtimeData?: Record<string, unknown>;
+}
+
+async function resolveExternalMessageRunContext(
   input: HandleExternalMessageInput
-): Promise<ExternalMessageResult> {
+): Promise<ResolvedExternalMessageRunContext> {
   const sessionId = input.sessionId.trim();
-  const message = input.message.trim();
   const explicitProjectId = input.projectId?.trim() ?? "";
   const explicitProjectName = input.projectName?.trim() ?? "";
   const explicitProjectRef = explicitProjectId || explicitProjectName;
@@ -207,9 +227,6 @@ export async function handleExternalMessage(
 
   if (!sessionId) {
     throw new ExternalMessageError(400, { error: "sessionId is required" });
-  }
-  if (!message) {
-    throw new ExternalMessageError(400, { error: "message is required" });
   }
 
   const session = await getOrCreateExternalSession(sessionId);
@@ -248,18 +265,13 @@ export async function handleExternalMessage(
   }
 
   const contextId = contextKey(resolvedProjectId);
-  const currentPath =
-    explicitCurrentPath ??
-    session.currentPaths[contextId] ??
-    "";
+  const currentPath = explicitCurrentPath ?? session.currentPaths[contextId] ?? "";
 
   let resolvedChatId: string;
   if (explicitChatId) {
     const explicitChat = await getChat(explicitChatId);
     if (!explicitChat) {
-      throw new ExternalMessageError(404, {
-        error: `Chat "${explicitChatId}" not found`,
-      });
+      throw new ExternalMessageError(404, { error: `Chat "${explicitChatId}" not found` });
     }
     if (!chatBelongsToProject(explicitChat.projectId, resolvedProjectId)) {
       throw new ExternalMessageError(409, {
@@ -272,10 +284,7 @@ export async function handleExternalMessage(
     const sessionChatId = session.activeChats[contextId];
     if (sessionChatId) {
       const sessionChat = await getChat(sessionChatId);
-      if (
-        sessionChat &&
-        chatBelongsToProject(sessionChat.projectId, resolvedProjectId)
-      ) {
+      if (sessionChat && chatBelongsToProject(sessionChat.projectId, resolvedProjectId)) {
         resolvedChatId = sessionChatId;
       } else {
         resolvedChatId = await ensureChatForProject(session, resolvedProjectId);
@@ -298,12 +307,38 @@ export async function handleExternalMessage(
       }
     : input.runtimeData;
 
+  return { session, resolvedProjectId, currentPath, resolvedChatId, beforeCount, runtimeData };
+}
+
+function sanitizeExternalFileName(value: string): string {
+  const safe = value.trim().replace(/[\\/]+/g, "_");
+  return safe || `telegram-file-${Date.now()}`;
+}
+
+export async function handleExternalMessage(
+  input: HandleExternalMessageInput
+): Promise<ExternalMessageResult> {
+  const message = input.message.trim();
+  if (!message) {
+    throw new ExternalMessageError(400, { error: "message is required" });
+  }
+
+  const {
+    session,
+    resolvedProjectId,
+    currentPath,
+    resolvedChatId,
+    beforeCount,
+    runtimeData,
+  } = await resolveExternalMessageRunContext(input);
+
   const reply = await runPiAgentText({
     chatId: resolvedChatId,
     userMessage: message,
     projectId: resolvedProjectId,
     cwd: currentPath || undefined,
     runtimeData,
+    toolRuntimeData: input.toolRuntimeData,
     enableEggentTools: input.publicMode ? false : undefined,
   });
 
@@ -338,6 +373,7 @@ export async function handleExternalMessage(
   let activeProjectId = resolvedProjectId ?? null;
   let activeChatId = resolvedChatId;
   let activeCurrentPath = currentPath;
+  const contextId = contextKey(resolvedProjectId);
 
   if (switchSignal && (switchSignal.projectId === null || projectByIdAfter.has(switchSignal.projectId))) {
     activeProjectId = switchSignal.projectId;
@@ -396,5 +432,65 @@ export async function handleExternalMessage(
             name: projectByIdAfter.get(createSignal.projectId)?.name ?? null,
           }
         : null,
+  };
+}
+
+export async function handleExternalMediaMessage(
+  input: HandleExternalMediaMessageInput
+): Promise<ExternalMessageResult> {
+  const context = await resolveExternalMessageRunContext(input);
+  const saved = await saveChatFile(
+    context.resolvedChatId,
+    input.file.buffer,
+    sanitizeExternalFileName(input.file.filename)
+  );
+
+  const incomingMessage = input.message.trim();
+  const isVoice = input.file.kind === "voice";
+  let effectiveMessage = incomingMessage;
+
+  if (isVoice) {
+    const transcription = await transcribeAudioFile({
+      filePath: saved.path,
+      filename: saved.name,
+      mimeType: input.file.mimeType,
+    });
+    effectiveMessage = [
+      incomingMessage ? `Комментарий к голосовому: ${incomingMessage}` : "",
+      `🎙 Голосовое сообщение:\n${transcription.transcript}`,
+    ].filter(Boolean).join("\n\n");
+  }
+
+  if (effectiveMessage) {
+    return handleExternalMessage({
+      ...input,
+      message: isVoice ? effectiveMessage : `${effectiveMessage}\n\nAttached file: ${saved.name}`,
+      projectId: context.resolvedProjectId,
+      chatId: context.resolvedChatId,
+      currentPath: context.currentPath,
+    });
+  }
+
+  const activeProjectId = context.resolvedProjectId ?? null;
+  const activeContextKey = contextKey(context.resolvedProjectId);
+  context.session.activeChats[activeContextKey] = context.resolvedChatId;
+  context.session.currentPaths[activeContextKey] = context.currentPath;
+  if (context.resolvedProjectId) context.session.activeProjectId = context.resolvedProjectId;
+  context.session.updatedAt = new Date().toISOString();
+  await saveExternalSession(context.session);
+
+  const activeProject = activeProjectId ? await getProject(activeProjectId) : null;
+  return {
+    success: true,
+    sessionId: context.session.id,
+    reply: `File "${saved.name}" saved to chat files.`,
+    context: {
+      activeProjectId,
+      activeProjectName: activeProject?.name ?? null,
+      activeChatId: context.resolvedChatId,
+      currentPath: context.currentPath,
+    },
+    switchedProject: null,
+    createdProject: null,
   };
 }

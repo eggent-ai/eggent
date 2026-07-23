@@ -396,7 +396,7 @@ async function persistAssistantMessage(options: {
   await saveChat(chat);
 }
 
-export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?: Record<string, unknown> }): Promise<string> {
+export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?: Record<string, unknown>; toolRuntimeData?: Record<string, unknown> }): Promise<string> {
   const userMessageId = crypto.randomUUID();
   const prompt = options.runtimeData
     ? `${options.userMessage}\n\nRuntime data:\n${JSON.stringify(options.runtimeData, null, 2)}`
@@ -410,6 +410,7 @@ export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?:
     tools: options.tools,
     chatId: options.chatId,
     projectId: options.projectId,
+    toolRuntimeData: options.toolRuntimeData,
   });
 
   let assistantText = "";

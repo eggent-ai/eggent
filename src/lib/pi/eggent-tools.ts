@@ -1,5 +1,7 @@
 import { Type } from "typebox";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import fs from "fs/promises";
+import path from "path";
 import type { McpServerConfig } from "@/lib/types";
 import { getPipelineDefinitions, upsertPipelineDefinition } from "@/lib/pipelines/store";
 import { startPipelineRunInBackground } from "@/lib/pipelines/runner";
@@ -15,6 +17,13 @@ import {
   upsertProjectMcpServer,
 } from "@/lib/storage/project-store";
 
+const TELEGRAM_SEND_FILE_MAX_BYTES = 45 * 1024 * 1024;
+
+interface TelegramRuntimeData {
+  botToken: string;
+  chatId: string | number;
+}
+
 function textResult(text: string, details: Record<string, unknown> = {}) {
   return {
     content: [{ type: "text" as const, text }],
@@ -22,11 +31,30 @@ function textResult(text: string, details: Record<string, unknown> = {}) {
   };
 }
 
+function getTelegramRuntimeData(toolRuntimeData?: Record<string, unknown>): TelegramRuntimeData | null {
+  const raw = toolRuntimeData?.telegram;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const record = raw as Record<string, unknown>;
+  const botToken = typeof record.botToken === "string" ? record.botToken.trim() : "";
+  const chatIdRaw = record.chatId;
+  const chatId = typeof chatIdRaw === "string" || typeof chatIdRaw === "number" ? chatIdRaw : null;
+  if (!botToken || chatId === null) return null;
+  return { botToken, chatId };
+}
+
+function resolveOutgoingTelegramFilePath(options: { cwd?: string }, rawPath: string): string {
+  const value = rawPath.trim();
+  if (!value) throw new Error("file_path is required");
+  if (path.isAbsolute(value)) return path.resolve(value);
+  return path.resolve(options.cwd || process.cwd(), value);
+}
+
 export async function createEggentPiTools(options: {
   chatId?: string;
   projectId?: string;
   cwd?: string;
   memorySubdir?: string;
+  toolRuntimeData?: Record<string, unknown>;
 } = {}): Promise<{ tools: ToolDefinition[]; cleanup: () => Promise<void> }> {
   const memoryProjectId = options.projectId;
 
@@ -350,6 +378,58 @@ export async function createEggentPiTools(options: {
       },
     }),
   ];
+
+  const telegramRuntime = getTelegramRuntimeData(options.toolRuntimeData);
+  if (telegramRuntime) {
+    tools.push(defineTool({
+      name: "telegram_send_file",
+      label: "Send File to Telegram",
+      description: "Send a local file to the current Telegram chat as a document. Use this when the user asks to send, return, export, download, or share a file in Telegram.",
+      parameters: Type.Object({
+        file_path: Type.String({ description: "Absolute path to the file, or path relative to the current project cwd." }),
+        caption: Type.Optional(Type.String({ description: "Optional caption to include with the file." })),
+      }),
+      execute: async (_toolCallId, params) => {
+        try {
+          const resolvedPath = resolveOutgoingTelegramFilePath(options, params.file_path);
+          const stat = await fs.stat(resolvedPath);
+          if (!stat.isFile()) {
+            return textResult(JSON.stringify({ success: false, error: `Path is not a file: ${resolvedPath}` }, null, 2));
+          }
+          if (stat.size > TELEGRAM_SEND_FILE_MAX_BYTES) {
+            return textResult(JSON.stringify({ success: false, error: `File is too large (${stat.size} bytes). Max allowed is ${TELEGRAM_SEND_FILE_MAX_BYTES} bytes.` }, null, 2));
+          }
+
+          const fileBuffer = await fs.readFile(resolvedPath);
+          const form = new FormData();
+          form.append("chat_id", String(telegramRuntime.chatId));
+          form.append("document", new Blob([fileBuffer]), path.basename(resolvedPath));
+          const trimmedCaption = params.caption?.trim();
+          if (trimmedCaption) form.append("caption", trimmedCaption);
+
+          const response = await fetch(`https://api.telegram.org/bot${telegramRuntime.botToken}/sendDocument`, {
+            method: "POST",
+            body: form,
+          });
+          const payload = await response.json().catch(() => null) as { ok?: boolean; description?: string; result?: { document?: { file_id?: string; file_name?: string; file_size?: number } } } | null;
+          if (!response.ok || !payload?.ok) {
+            return textResult(JSON.stringify({ success: false, error: `Telegram sendDocument failed (${response.status})${payload?.description ? `: ${payload.description}` : ""}` }, null, 2));
+          }
+
+          return textResult(JSON.stringify({
+            success: true,
+            message: "File sent to Telegram successfully.",
+            path: resolvedPath,
+            name: payload.result?.document?.file_name || path.basename(resolvedPath),
+            size: payload.result?.document?.file_size ?? stat.size,
+            telegramFileId: payload.result?.document?.file_id ?? null,
+          }, null, 2));
+        } catch (error) {
+          return textResult(JSON.stringify({ success: false, error: error instanceof Error ? error.message : "Failed to send file to Telegram." }, null, 2));
+        }
+      },
+    }));
+  }
 
   return { tools, cleanup: async () => {} };
 }

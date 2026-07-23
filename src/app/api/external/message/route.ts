@@ -14,6 +14,7 @@ interface ExternalMessageBody {
   chatId?: unknown;
   currentPath?: unknown;
   runtimeData?: unknown;
+  toolRuntimeData?: unknown;
   publicMode?: unknown;
 }
 
@@ -86,6 +87,10 @@ export async function POST(req: NextRequest) {
       runtimeData:
         body.runtimeData && typeof body.runtimeData === "object" && !Array.isArray(body.runtimeData)
           ? body.runtimeData as Record<string, unknown>
+          : undefined,
+      toolRuntimeData:
+        body.toolRuntimeData && typeof body.toolRuntimeData === "object" && !Array.isArray(body.toolRuntimeData)
+          ? body.toolRuntimeData as Record<string, unknown>
           : undefined,
       publicMode: body.publicMode === true,
     });

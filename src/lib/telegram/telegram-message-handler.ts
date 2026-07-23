@@ -838,6 +838,12 @@ export async function processTelegramUpdate(
                 currentPath: normalizeTelegramCurrentPath(externalContext?.currentPath),
                 runtimeData: {
                     telegram: {
+                        chatId,
+                        replyToMessageId: messageId ?? null,
+                    },
+                },
+                toolRuntimeData: {
+                    telegram: {
                         botToken,
                         chatId,
                         replyToMessageId: messageId ?? null,

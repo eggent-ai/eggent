@@ -11,6 +11,12 @@ export interface PiSessionOptions {
    * extensions/skills/prompts/themes. By default Eggent allows all global pi packages.
    */
   corePiToolsOnly?: boolean;
+  /**
+   * Hidden runtime data for server-side custom tools. This must not be rendered
+   * into prompts or persisted user-visible messages because it can contain
+   * secrets such as Telegram bot tokens.
+   */
+  toolRuntimeData?: Record<string, unknown>;
 }
 
 export interface PiChatRunOptions extends PiSessionOptions {

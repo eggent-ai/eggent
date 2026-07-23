@@ -329,7 +329,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
         projectId,
         cwd,
         memorySubdir,
-
+        toolRuntimeData: options.toolRuntimeData,
       });
   const customTools = eggentTools.tools;
   const customToolNames = customTools.map((tool) => tool.name);
