@@ -51,16 +51,146 @@ function hasDraggedFiles(event: DragEvent): boolean {
   return Array.from(event.dataTransfer.types || []).includes("Files");
 }
 
-function getDroppedFiles(event: DragEvent): File[] {
-  return Array.from(event.dataTransfer.files || []).filter((file) => file.size >= 0);
+interface BrowserFileSystemEntry {
+  name: string;
+  isFile: boolean;
+  isDirectory: boolean;
 }
 
-async function uploadFilesToDirectory(projectId: string, targetPath: string, files: File[]) {
+interface BrowserFileSystemFileEntry extends BrowserFileSystemEntry {
+  isFile: true;
+  file: (successCallback: (file: File) => void, errorCallback?: (error: DOMException) => void) => void;
+}
+
+interface BrowserFileSystemDirectoryReader {
+  readEntries: (
+    successCallback: (entries: BrowserFileSystemEntry[]) => void,
+    errorCallback?: (error: DOMException) => void
+  ) => void;
+}
+
+interface BrowserFileSystemDirectoryEntry extends BrowserFileSystemEntry {
+  isDirectory: true;
+  createReader: () => BrowserFileSystemDirectoryReader;
+}
+
+interface DroppedUploadFile {
+  file: File;
+  relativePath: string;
+}
+
+interface DroppedUploadItems {
+  files: DroppedUploadFile[];
+  directories: string[];
+}
+
+function getDataTransferEntry(item: DataTransferItem): BrowserFileSystemEntry | null {
+  const maybeWithEntry = item as DataTransferItem & {
+    webkitGetAsEntry?: () => BrowserFileSystemEntry | null;
+  };
+  return maybeWithEntry.webkitGetAsEntry?.() ?? null;
+}
+
+function safeDroppedRelativePath(value: string): string {
+  return value
+    .replace(/\\/g, "/")
+    .split("/")
+    .map((segment) => segment.trim())
+    .filter((segment) => segment && segment !== "." && segment !== "..")
+    .join("/");
+}
+
+function readFileEntry(entry: BrowserFileSystemFileEntry): Promise<File> {
+  return new Promise((resolve, reject) => entry.file(resolve, reject));
+}
+
+async function readAllDirectoryEntries(entry: BrowserFileSystemDirectoryEntry): Promise<BrowserFileSystemEntry[]> {
+  const reader = entry.createReader();
+  const entries: BrowserFileSystemEntry[] = [];
+
+  while (true) {
+    const batch = await new Promise<BrowserFileSystemEntry[]>((resolve, reject) => {
+      reader.readEntries(resolve, reject);
+    });
+    if (batch.length === 0) break;
+    entries.push(...batch);
+  }
+
+  return entries;
+}
+
+async function collectEntryUploads(
+  entry: BrowserFileSystemEntry,
+  parentPath = ""
+): Promise<DroppedUploadItems> {
+  const relativePath = safeDroppedRelativePath(parentPath ? `${parentPath}/${entry.name}` : entry.name);
+
+  if (entry.isFile) {
+    const file = await readFileEntry(entry as BrowserFileSystemFileEntry);
+    return { files: [{ file, relativePath: relativePath || file.name }], directories: [] };
+  }
+
+  if (entry.isDirectory) {
+    const files: DroppedUploadFile[] = [];
+    const directories = relativePath ? [relativePath] : [];
+    const children = await readAllDirectoryEntries(entry as BrowserFileSystemDirectoryEntry);
+    for (const child of children) {
+      const nested = await collectEntryUploads(child, relativePath);
+      files.push(...nested.files);
+      directories.push(...nested.directories);
+    }
+    return { files, directories };
+  }
+
+  return { files: [], directories: [] };
+}
+
+async function getDroppedItems(event: DragEvent): Promise<DroppedUploadItems> {
+  const dataTransferItems = Array.from(event.dataTransfer.items || []);
+  const files: DroppedUploadFile[] = [];
+  const directories: string[] = [];
+
+  if (dataTransferItems.length > 0) {
+    for (const item of dataTransferItems) {
+      if (item.kind !== "file") continue;
+      const entry = getDataTransferEntry(item);
+      if (entry) {
+        const collected = await collectEntryUploads(entry);
+        files.push(...collected.files);
+        directories.push(...collected.directories);
+        continue;
+      }
+
+      const file = item.getAsFile();
+      if (file) {
+        files.push({ file, relativePath: safeDroppedRelativePath(file.name) || file.name });
+      }
+    }
+
+    return { files, directories };
+  }
+
+  for (const file of Array.from(event.dataTransfer.files || [])) {
+    const maybeWithRelativePath = file as File & { webkitRelativePath?: string };
+    files.push({
+      file,
+      relativePath: safeDroppedRelativePath(maybeWithRelativePath.webkitRelativePath || file.name) || file.name,
+    });
+  }
+
+  return { files, directories };
+}
+
+async function uploadFilesToDirectory(projectId: string, targetPath: string, items: DroppedUploadItems) {
   const formData = new FormData();
   formData.append("project", projectId);
   formData.append("path", targetPath);
-  for (const file of files) {
-    formData.append("files", file, file.name);
+  for (const directory of items.directories) {
+    formData.append("directories", directory);
+  }
+  for (const item of items.files) {
+    formData.append("files", item.file, item.file.name);
+    formData.append("relativePaths", item.relativePath);
   }
 
   const res = await fetch("/api/files/upload", {
@@ -214,10 +344,10 @@ function TreeNode({
     router.push("/dashboard");
   };
 
-  const uploadDroppedFiles = async (files: File[]) => {
-    if (type !== "directory" || files.length === 0) return;
+  const uploadDroppedItems = async (items: DroppedUploadItems) => {
+    if (type !== "directory" || (items.files.length === 0 && items.directories.length === 0)) return;
     try {
-      const result = await uploadFilesToDirectory(projectId, relativePath, files);
+      const result = await uploadFilesToDirectory(projectId, relativePath, items);
       const errors = result.errors ?? [];
       if (errors.length > 0) {
         window.alert(errors.map((item) => `${item.name}: ${item.error}`).join("\n"));
@@ -245,13 +375,13 @@ function TreeNode({
   };
 
   const handleDrop = (event: DragEvent) => {
-    if (type !== "directory") return;
-    const files = getDroppedFiles(event);
-    if (files.length === 0) return;
+    if (type !== "directory" || !hasDraggedFiles(event)) return;
     event.preventDefault();
     event.stopPropagation();
     setIsDragOver(false);
-    void uploadDroppedFiles(files);
+    void getDroppedItems(event)
+      .then(uploadDroppedItems)
+      .catch((error) => window.alert(error instanceof Error ? error.message : "Failed to read dropped folder"));
   };
 
   const handleClick = () => {
@@ -491,10 +621,10 @@ export function FileTree({ projectId }: FileTreeProps) {
     }
   };
 
-  const uploadDroppedRootFiles = async (files: File[]) => {
-    if (files.length === 0) return;
+  const uploadDroppedRootItems = async (items: DroppedUploadItems) => {
+    if (items.files.length === 0 && items.directories.length === 0) return;
     try {
-      const result = await uploadFilesToDirectory(projectId, "", files);
+      const result = await uploadFilesToDirectory(projectId, "", items);
       const errors = result.errors ?? [];
       if (errors.length > 0) {
         window.alert(errors.map((item) => `${item.name}: ${item.error}`).join("\n"));
@@ -519,12 +649,13 @@ export function FileTree({ projectId }: FileTreeProps) {
   };
 
   const handleRootDrop = (event: DragEvent) => {
-    const files = getDroppedFiles(event);
-    if (files.length === 0) return;
+    if (!hasDraggedFiles(event)) return;
     event.preventDefault();
     event.stopPropagation();
     setIsRootDragOver(false);
-    void uploadDroppedRootFiles(files);
+    void getDroppedItems(event)
+      .then(uploadDroppedRootItems)
+      .catch((error) => window.alert(error instanceof Error ? error.message : "Failed to read dropped folder"));
   };
 
   return (
