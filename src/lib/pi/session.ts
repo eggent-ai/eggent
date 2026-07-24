@@ -188,6 +188,7 @@ function buildEggentProjectContext(options: {
     options.projectId
       ? "- Use pi-mcp-adapter's mcp proxy tool for MCP servers configured in this project's .mcp.json."
       : "- Project MCP tools are available through pi-mcp-adapter after switching into a project.",
+    "- MCP OAuth tokens are persisted in the Pi agent data directory and can be reused across chats/sessions for the same MCP server id and URL. When using an already configured MCP server, call `mcp({ connect: \"<server>\" })` first; call `auth-start` only if connect returns `auth_required` or explicitly says re-authentication is required.",
     "- Use pi-web-access tools (web_search, fetch_content, get_search_content) for internet access when available.",
     "- When installing project skills with the `skills` CLI from a non-interactive web run, pass `-y`/`--yes` (for example `npx skills add owner/repo -y`) to avoid terminal selection prompts that cannot be reliably controlled from chat.",
     "- eggent_manage_schedules for listing or clearing pi-subagents scheduled tasks. Do not use Agent.schedule to manage existing schedules.",

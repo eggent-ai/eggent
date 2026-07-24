@@ -92,11 +92,57 @@ function getLatestPendingInteraction(messages: UIMessage[]): PiPendingInteractio
   return null;
 }
 
+function asRecord(value: unknown): Record<string, unknown> | null {
+  if (value == null || typeof value !== "object" || Array.isArray(value)) return null;
+  return value as Record<string, unknown>;
+}
+
+function parseToolOutput(value: unknown): Record<string, unknown> | null {
+  const direct = asRecord(value);
+  if (direct) return direct;
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null;
+  try {
+    return asRecord(JSON.parse(trimmed));
+  } catch {
+    return null;
+  }
+}
+
+function getToolPartInfo(part: UIMessage["parts"][number]): { toolName: string; state?: string; output?: unknown } | null {
+  if (part.type === "dynamic-tool") {
+    const typed = part as { toolName?: string; state?: string; output?: unknown };
+    return typed.toolName ? { toolName: typed.toolName, state: typed.state, output: typed.output } : null;
+  }
+  if (!part.type.startsWith("tool-")) return null;
+  const typed = part as { type: string; state?: string; output?: unknown };
+  return { toolName: typed.type.replace("tool-", ""), state: typed.state, output: typed.output };
+}
+
+function isMcpReadyToolOutput(part: UIMessage["parts"][number]): boolean {
+  const tool = getToolPartInfo(part);
+  if (tool?.toolName !== "mcp" || tool.state !== "output-available") return false;
+  const output = parseToolOutput(tool.output);
+  const details = asRecord(output?.details);
+  if (!details || typeof details.error === "string") return false;
+  if (details.mode === "auth-complete" && details.authenticated === true) return true;
+  if (details.mode === "list" && typeof details.server === "string") return true;
+  if (details.mode === "status" && typeof details.connectedCount === "number" && details.connectedCount > 0) return true;
+  return false;
+}
+
 function getRecentInteractionNotices(messages: UIMessage[]): PiPendingInteraction[] {
   const notices: PiPendingInteraction[] = [];
   const seen = new Set<string>();
   for (const message of messages) {
     for (const part of message.parts) {
+      if (isMcpReadyToolOutput(part)) {
+        for (let i = notices.length - 1; i >= 0; i -= 1) {
+          if (notices[i].kind === "oauth_url") notices.splice(i, 1);
+        }
+      }
+
       const typedPart = part as { type?: string; data?: unknown };
       if (typedPart.type !== "data-piInteraction" || !isPiInteraction(typedPart.data)) continue;
       if (typedPart.data.status !== "completed") continue;
