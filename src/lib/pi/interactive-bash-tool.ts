@@ -36,9 +36,10 @@ function getPromptCandidate(outputTail: string): string | null {
   const lower = lastLine.toLowerCase();
   const looksInteractive =
     /password|passphrase|username|login|token|api key|verification code|one-time code|device code/.test(lower) ||
-    /\b(y\/n|yes\/no|\[y\/n\]|\[y\/N\]|\[Y\/n\])\b/.test(lastLine) ||
-    /(continue|proceed|confirm|overwrite|replace|delete|install|authenticate|authorize).*[?:]$/i.test(lastLine) ||
-    /[:?]$/.test(lastLine) && /(enter|type|paste|select|choose|input|name|email|url|code|otp)/i.test(lastLine);
+    /\b(y\/n|yes\/no|\[y\/n\]|\[y\/N\]|\[Y\/n\]|\(y\)|\(yes\))\b/i.test(lastLine) ||
+    /ok to proceed\?/i.test(lastLine) ||
+    /(continue|proceed|confirm|overwrite|replace|delete|install|authenticate|authorize).*[?:](\s*(\[[^\]]+\]|\([^)]*\)))?$/i.test(lastLine) ||
+    /[:?](\s*(\[[^\]]+\]|\([^)]*\)))?$/.test(lastLine) && /(enter|type|paste|select|choose|input|name|email|url|code|otp)/i.test(lastLine);
 
   return looksInteractive ? lastLine : null;
 }

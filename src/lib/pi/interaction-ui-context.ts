@@ -26,6 +26,21 @@ function extractUrl(text: string): string | undefined {
   return text.match(/https?:\/\/\S+/)?.[0]?.replace(/[)>.,]+$/, "");
 }
 
+const webExtensionTheme = {
+  fg: (_color: string, text: string) => text,
+  bg: (_color: string, text: string) => text,
+  bold: (text: string) => text,
+  italic: (text: string) => text,
+  underline: (text: string) => text,
+  inverse: (text: string) => text,
+  strikethrough: (text: string) => text,
+  getFgAnsi: () => "",
+  getBgAnsi: () => "",
+  getColorMode: () => "truecolor" as const,
+  getThinkingBorderColor: () => (text: string) => text,
+  getBashModeBorderColor: () => (text: string) => text,
+} as unknown as ExtensionUIContext["theme"];
+
 export function createEggentPiExtensionUIContext(
   options: EggentPiInteractionContextOptions & { abortSignal?: AbortSignal }
 ): ExtensionUIContext {
@@ -104,7 +119,7 @@ export function createEggentPiExtensionUIContext(
     getEditorComponent() {
       return undefined;
     },
-    theme: {} as ExtensionUIContext["theme"],
+    theme: webExtensionTheme,
     getAllThemes() {
       return [];
     },
