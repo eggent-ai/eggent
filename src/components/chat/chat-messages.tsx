@@ -26,7 +26,6 @@ interface ChatMessagesProps {
   errorMessage?: string | null;
   compactionStatus?: PiCompactionStatus | null;
   pendingInteraction?: PiPendingInteraction | null;
-  interactionNotices?: PiPendingInteraction[];
   onRespondToInteraction?: (value: string | boolean | null, cancel?: boolean) => void;
   quickSkills?: QuickSkillAction[];
   onLaunchSkill?: (skillName: string) => void;
@@ -52,7 +51,7 @@ function interactionKindLabel(kind: PiPendingInteraction["kind"]): string {
   }
 }
 
-export function ChatMessages({ messages, isLoading, errorMessage, compactionStatus, pendingInteraction, interactionNotices = [], onRespondToInteraction, quickSkills = [], onLaunchSkill, launchingSkill }: ChatMessagesProps) {
+export function ChatMessages({ messages, isLoading, errorMessage, compactionStatus, pendingInteraction, onRespondToInteraction, quickSkills = [], onLaunchSkill, launchingSkill }: ChatMessagesProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollRef = useRef(true);
@@ -141,27 +140,6 @@ export function ChatMessages({ messages, isLoading, errorMessage, compactionStat
           <MessageBubble key={message.id} message={message} />
         ))}
 
-        {interactionNotices.map((notice) => (
-          <div key={notice.id} className="flex gap-3 py-3">
-            <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
-              <CheckCircle2 className="size-4" />
-            </div>
-            <div className="flex min-w-0 flex-1 flex-col gap-2 rounded-2xl border bg-card p-4 shadow-sm">
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="secondary">{interactionKindLabel(notice.kind)}</Badge>
-                <span className="text-sm font-medium">{notice.title}</span>
-              </div>
-              {notice.message ? (
-                <p className="whitespace-pre-wrap break-words text-sm text-muted-foreground">{notice.message}</p>
-              ) : null}
-              {notice.placeholder?.startsWith("http") ? (
-                <a className="break-all text-sm font-medium text-primary underline-offset-4 hover:underline" href={notice.placeholder} target="_blank" rel="noreferrer">
-                  Open authentication URL
-                </a>
-              ) : null}
-            </div>
-          </div>
-        ))}
 
         {pendingInteraction ? (
           <div className="flex gap-3 py-3">

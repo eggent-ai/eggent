@@ -92,75 +92,6 @@ function getLatestPendingInteraction(messages: UIMessage[]): PiPendingInteractio
   return null;
 }
 
-function asRecord(value: unknown): Record<string, unknown> | null {
-  if (value == null || typeof value !== "object" || Array.isArray(value)) return null;
-  return value as Record<string, unknown>;
-}
-
-function parseToolOutput(value: unknown): Record<string, unknown> | null {
-  const direct = asRecord(value);
-  if (direct) return direct;
-  if (typeof value !== "string") return null;
-  const trimmed = value.trim();
-  if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null;
-  try {
-    return asRecord(JSON.parse(trimmed));
-  } catch {
-    return null;
-  }
-}
-
-function getToolPartInfo(part: UIMessage["parts"][number]): { toolName: string; state?: string; output?: unknown } | null {
-  if (part.type === "dynamic-tool") {
-    const typed = part as { toolName?: string; state?: string; output?: unknown };
-    return typed.toolName ? { toolName: typed.toolName, state: typed.state, output: typed.output } : null;
-  }
-  if (!part.type.startsWith("tool-")) return null;
-  const typed = part as { type: string; state?: string; output?: unknown };
-  return { toolName: typed.type.replace("tool-", ""), state: typed.state, output: typed.output };
-}
-
-function isMcpReadyToolOutput(part: UIMessage["parts"][number]): boolean {
-  const tool = getToolPartInfo(part);
-  if (tool?.toolName !== "mcp" || tool.state !== "output-available") return false;
-  const output = parseToolOutput(tool.output);
-  const details = asRecord(output?.details);
-  if (!details || typeof details.error === "string") return false;
-  if (details.mode === "auth-complete" && details.authenticated === true) return true;
-  if (details.mode === "list" && typeof details.server === "string") return true;
-  if (details.mode === "status" && typeof details.connectedCount === "number" && details.connectedCount > 0) return true;
-  return false;
-}
-
-function getRecentInteractionNotices(messages: UIMessage[]): PiPendingInteraction[] {
-  const notices: PiPendingInteraction[] = [];
-  const seen = new Set<string>();
-  const lastUserIndex = messages.reduce((latest, message, index) => (
-    message.role === "user" ? index : latest
-  ), -1);
-
-  for (let messageIndex = 0; messageIndex < messages.length; messageIndex += 1) {
-    const message = messages[messageIndex];
-    for (const part of message.parts) {
-      if (isMcpReadyToolOutput(part)) {
-        for (let i = notices.length - 1; i >= 0; i -= 1) {
-          if (notices[i].kind === "oauth_url" || notices[i].kind === "device_code") notices.splice(i, 1);
-        }
-      }
-
-      const typedPart = part as { type?: string; data?: unknown };
-      if (typedPart.type !== "data-piInteraction" || !isPiInteraction(typedPart.data)) continue;
-      if (typedPart.data.status !== "completed") continue;
-      if (typedPart.data.kind !== "oauth_url" && typedPart.data.kind !== "device_code" && typedPart.data.kind !== "text") continue;
-      if ((typedPart.data.kind === "oauth_url" || typedPart.data.kind === "device_code") && messageIndex < lastUserIndex) continue;
-      if (seen.has(typedPart.data.id)) continue;
-      seen.add(typedPart.data.id);
-      notices.push(typedPart.data);
-    }
-  }
-  return notices.slice(-3);
-}
-
 function storedPartToUIPart(part: ChatMessagePart): UIMessage["parts"][number] | null {
   if (part.type === "text") {
     return { type: "text" as const, text: part.text };
@@ -573,7 +504,6 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
   const runtimeStats = useMemo(() => getLatestPiRuntimeStats(messages), [messages]);
   const compactionStatus = useMemo(() => getLatestPiCompactionStatus(messages), [messages]);
   const pendingInteraction = useMemo(() => getLatestPendingInteraction(messages), [messages]);
-  const interactionNotices = useMemo(() => getRecentInteractionNotices(messages), [messages]);
   const displayRuntimeStats = useMemo(() => {
     if (!runtimeStats) return configuredRuntimeStats;
     if (runtimeStats.model || !configuredRuntimeStats?.model) return runtimeStats;
@@ -918,7 +848,6 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         errorMessage={chatError}
         compactionStatus={compactionStatus}
         pendingInteraction={pendingInteraction}
-        interactionNotices={interactionNotices}
         onRespondToInteraction={(value, cancel) => pendingInteraction ? respondToInteraction(pendingInteraction, value, cancel) : undefined}
         quickSkills={showQuickSkills}
         onLaunchSkill={launchBundledSkill}
