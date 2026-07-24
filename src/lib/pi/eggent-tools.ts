@@ -55,6 +55,7 @@ export async function createEggentPiTools(options: {
   cwd?: string;
   memorySubdir?: string;
   toolRuntimeData?: Record<string, unknown>;
+  onMcpConfigChanged?: (details: { projectId: string; serverId: string; action?: string; filePath?: string }) => void;
 } = {}): Promise<{ tools: ToolDefinition[]; cleanup: () => Promise<void> }> {
   const memoryProjectId = options.projectId;
 
@@ -176,7 +177,23 @@ export async function createEggentPiTools(options: {
               cwd: params.cwd,
             };
         const result = await upsertProjectMcpServer(projectId, server as McpServerConfig);
-        return textResult(JSON.stringify(result, null, 2), { projectId });
+        options.onMcpConfigChanged?.({
+          projectId,
+          serverId: params.id,
+          action: result.success ? result.action : undefined,
+          filePath: result.success ? result.filePath : undefined,
+        });
+        return textResult(
+          JSON.stringify(
+            {
+              ...result,
+              note: "MCP config updated. Eggent is reloading the Pi MCP runtime so the mcp proxy can see the new server in this run.",
+            },
+            null,
+            2
+          ),
+          { projectId, mcpRuntimeReloadQueued: true }
+        );
       },
     }),
     defineTool({

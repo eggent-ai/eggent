@@ -189,6 +189,7 @@ function buildEggentProjectContext(options: {
       ? "- Use pi-mcp-adapter's mcp proxy tool for MCP servers configured in this project's .mcp.json."
       : "- Project MCP tools are available through pi-mcp-adapter after switching into a project.",
     "- Use pi-web-access tools (web_search, fetch_content, get_search_content) for internet access when available.",
+    "- When installing project skills with the `skills` CLI from a non-interactive web run, pass `-y`/`--yes` (for example `npx skills add owner/repo -y`) to avoid terminal selection prompts that cannot be reliably controlled from chat.",
     "- eggent_manage_schedules for listing or clearing pi-subagents scheduled tasks. Do not use Agent.schedule to manage existing schedules.",
     options.projectSkills?.length
       ? "- Project-local skills are listed above and are available as Pi skills in this project scope. Prefer those exact skill paths when activating a project skill."
@@ -324,6 +325,31 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
   });
   await resourceLoader.reload();
 
+  let sessionDisposed = false;
+  let sessionRef: Awaited<ReturnType<typeof createAgentSession>>["session"] | null = null;
+  let mcpReloadQueued = false;
+  const queueMcpRuntimeReload = (details: { projectId: string; serverId: string; action?: string; filePath?: string }) => {
+    if (mcpReloadQueued) return;
+    mcpReloadQueued = true;
+    setTimeout(() => {
+      void (async () => {
+        const sessionToReload = sessionRef;
+        if (sessionDisposed || !sessionToReload) {
+          mcpReloadQueued = false;
+          return;
+        }
+        try {
+          await sessionToReload.reload();
+          console.info("Reloaded Pi runtime after MCP config change", details);
+        } catch (error) {
+          console.error("Failed to reload Pi runtime after MCP config change", { details, error });
+        } finally {
+          mcpReloadQueued = false;
+        }
+      })();
+    }, 0);
+  };
+
   const eggentTools = options.enableEggentTools === false
     ? { tools: [], cleanup: async () => {} }
     : await createEggentPiTools({
@@ -332,6 +358,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
         cwd,
         memorySubdir,
         toolRuntimeData: options.toolRuntimeData,
+        onMcpConfigChanged: queueMcpRuntimeReload,
       });
   const customTools = [
     ...eggentTools.tools,
@@ -358,6 +385,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     customTools,
     sessionManager: createSessionManager(options, cwd),
   });
+  sessionRef = session;
 
   // SDK sessions do not emit extension lifecycle events until bindExtensions()
   // is called. Eggent has no TUI, but extensions such as pi-mcp-adapter and
@@ -378,6 +406,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
 
   const baseDispose = session.dispose.bind(session);
   session.dispose = () => {
+    sessionDisposed = true;
     void eggentTools.cleanup().catch((error) => {
       console.error("Failed to clean up Eggent/pi tools:", error);
     });
