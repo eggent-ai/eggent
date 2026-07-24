@@ -208,7 +208,27 @@ export async function createEggentPiTools(options: {
         const projectId = params.project_id || options.projectId;
         if (!projectId) return textResult("No project selected; pass project_id.");
         const result = await deleteProjectMcpServer(projectId, params.server_id);
-        return textResult(JSON.stringify(result, null, 2), { projectId });
+        if (result.success) {
+          options.onMcpConfigChanged?.({
+            projectId,
+            serverId: params.server_id,
+            action: "deleted",
+            filePath: result.filePath,
+          });
+        }
+        return textResult(
+          JSON.stringify(
+            result.success
+              ? {
+                  ...result,
+                  note: "MCP config updated. Eggent is reloading the Pi MCP runtime so the mcp proxy stops using the deleted server in this run.",
+                }
+              : result,
+            null,
+            2
+          ),
+          { projectId, mcpRuntimeReloadQueued: result.success }
+        );
       },
     }),
     defineTool({
