@@ -8,6 +8,8 @@ import {
   SessionManager,
 } from "@earendil-works/pi-coding-agent";
 import { createEggentPiTools } from "@/lib/pi/eggent-tools";
+import { createEggentPiExtensionUIContext } from "@/lib/pi/interaction-ui-context";
+import { createEggentInteractiveBashTool } from "@/lib/pi/interactive-bash-tool";
 import type { PiSessionOptions } from "@/lib/pi/types";
 import { getChatFiles } from "@/lib/storage/chat-files-store";
 import type { ChatFile, ProjectSkillMetadata } from "@/lib/types";
@@ -331,7 +333,19 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
         memorySubdir,
         toolRuntimeData: options.toolRuntimeData,
       });
-  const customTools = eggentTools.tools;
+  const customTools = [
+    ...eggentTools.tools,
+    ...(options.runId
+      ? [createEggentInteractiveBashTool({
+          cwd,
+          runId: options.runId,
+          abortSignal: options.abortSignal,
+          commandPrefix: settingsManager.getShellCommandPrefix(),
+          shellPath: settingsManager.getShellPath(),
+          onInteraction: options.onPiInteraction,
+        })]
+      : []),
+  ];
   const customToolNames = customTools.map((tool) => tool.name);
 
   const { session } = await createAgentSession({
@@ -347,8 +361,20 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
 
   // SDK sessions do not emit extension lifecycle events until bindExtensions()
   // is called. Eggent has no TUI, but extensions such as pi-mcp-adapter and
-  // pi-subagents initialize their per-session managers on session_start.
-  await session.bindExtensions({ mode: "rpc" });
+  // pi-subagents initialize their per-session managers on session_start. When a
+  // run id is present, expose a small RPC-style UI bridge so extensions can
+  // pause for user input through Eggent's web chat instead of throwing away the
+  // prompt or blocking invisibly.
+  await session.bindExtensions({
+    mode: "rpc",
+    uiContext: options.runId
+      ? createEggentPiExtensionUIContext({
+          runId: options.runId,
+          abortSignal: options.abortSignal,
+          onInteraction: options.onPiInteraction,
+        })
+      : undefined,
+  });
 
   const baseDispose = session.dispose.bind(session);
   session.dispose = () => {

@@ -5,6 +5,7 @@ import { Send, Square, Paperclip, X, FileIcon, ImageIcon, Mic, MicOff, Loader2, 
 import { Button } from "@/components/ui/button";
 import type { ChatFile } from "@/lib/types";
 import type { PiRuntimeStats } from "@/lib/pi/types";
+import type { PiPendingInteraction } from "@/lib/pi/interaction-types";
 
 function formatTokenCount(value?: number | null) {
   if (value === undefined || value === null) return "—";
@@ -95,6 +96,7 @@ interface ChatInputProps {
   onSubmit: (messageOverride?: string) => void;
   onStop?: () => void;
   isLoading: boolean;
+  pendingInteraction?: PiPendingInteraction | null;
   disabled?: boolean;
   chatId?: string;
   projectId?: string | null;
@@ -112,6 +114,7 @@ export function ChatInput({
   onSubmit,
   onStop,
   isLoading,
+  pendingInteraction,
   disabled,
   chatId,
   projectId,
@@ -263,11 +266,18 @@ export function ChatInput({
     });
   }, [setInput]);
 
-  const canSubmit = Boolean(input.trim()) || uploadedFiles.length > 0;
+  const canSubmit = pendingInteraction
+    ? Boolean(input.trim()) || pendingInteraction.kind === "confirm"
+    : Boolean(input.trim()) || uploadedFiles.length > 0;
   const submitCurrentMessage = useCallback(() => {
-    if (!canSubmit || isLoading) return;
+    if (!canSubmit) return;
+    if (!pendingInteraction && isLoading) return;
+    if (pendingInteraction) {
+      onSubmit();
+      return;
+    }
     onSubmit(input.trim() ? undefined : ATTACHMENT_ONLY_PROMPT);
-  }, [canSubmit, input, isLoading, onSubmit]);
+  }, [canSubmit, input, isLoading, onSubmit, pendingInteraction]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -706,7 +716,7 @@ export function ChatInput({
               variant="ghost"
               size="icon"
               onClick={() => fileInputRef.current?.click()}
-              disabled={disabled || !chatId}
+              disabled={disabled || Boolean(pendingInteraction) || !chatId}
               className="h-10 w-10 shrink-0 rounded-xl text-muted-foreground hover:text-foreground"
               title={chatId ? "Attach files" : "Send a message first to attach files"}
             >
@@ -717,7 +727,7 @@ export function ChatInput({
               variant={isRecording ? "destructive" : "ghost"}
               size="icon"
               onClick={toggleRecording}
-              disabled={disabled || isLoading || isTranscribing}
+              disabled={disabled || Boolean(pendingInteraction) || isLoading || isTranscribing}
               className="h-10 w-10 shrink-0 rounded-xl text-muted-foreground hover:text-foreground disabled:opacity-50"
               title={isRecording ? "Stop dictation" : "Dictate with microphone"}
             >
@@ -737,14 +747,16 @@ export function ChatInput({
               onChange={handleInput}
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
-              placeholder={isDragging ? "Drop files here..." : "Send a message or paste an image..."}
+              placeholder={pendingInteraction
+                ? pendingInteraction.placeholder || (pendingInteraction.kind === "confirm" ? "Answer yes/no…" : "Send input to the waiting tool…")
+                : isDragging ? "Drop files here..." : "Send a message or paste an image..."}
               disabled={disabled}
               rows={1}
               className="min-h-[30px] max-h-[200px] w-full translate-y-px resize-none border-0 bg-transparent px-1 pt-2.5 pb-1.5 text-sm leading-5 placeholder:text-muted-foreground focus:outline-none disabled:opacity-50"
             />
           </div>
 
-            {isLoading ? (
+            {isLoading && !pendingInteraction ? (
               <Button
                 variant="destructive"
                 size="icon"

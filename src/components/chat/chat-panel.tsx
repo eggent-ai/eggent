@@ -9,6 +9,7 @@ import { useAppStore } from "@/store/app-store";
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import type { ChatMessage, ChatMessagePart } from "@/lib/types";
 import type { PiRuntimeStats } from "@/lib/pi/types";
+import type { PiPendingInteraction } from "@/lib/pi/interaction-types";
 import { useBackgroundSync } from "@/hooks/use-background-sync";
 import { generateClientId } from "@/lib/utils";
 
@@ -59,6 +60,53 @@ function getLatestPiCompactionStatus(messages: UIMessage[]): PiCompactionStatus 
     }
   }
   return null;
+}
+
+function isPiInteraction(value: unknown): value is PiPendingInteraction {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.id === "string" &&
+    typeof record.runId === "string" &&
+    typeof record.kind === "string" &&
+    typeof record.title === "string" &&
+    typeof record.status === "string"
+  );
+}
+
+function getLatestPendingInteraction(messages: UIMessage[]): PiPendingInteraction | null {
+  const closedInteractionIds = new Set<string>();
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    for (let j = message.parts.length - 1; j >= 0; j -= 1) {
+      const part = message.parts[j] as { type?: string; data?: unknown };
+      if (part.type !== "data-piInteraction" || !isPiInteraction(part.data)) continue;
+      if (part.data.status === "pending" && !closedInteractionIds.has(part.data.id)) {
+        return part.data;
+      }
+      if (part.data.status !== "pending") {
+        closedInteractionIds.add(part.data.id);
+      }
+    }
+  }
+  return null;
+}
+
+function getRecentInteractionNotices(messages: UIMessage[]): PiPendingInteraction[] {
+  const notices: PiPendingInteraction[] = [];
+  const seen = new Set<string>();
+  for (const message of messages) {
+    for (const part of message.parts) {
+      const typedPart = part as { type?: string; data?: unknown };
+      if (typedPart.type !== "data-piInteraction" || !isPiInteraction(typedPart.data)) continue;
+      if (typedPart.data.status !== "completed") continue;
+      if (typedPart.data.kind !== "oauth_url" && typedPart.data.kind !== "device_code" && typedPart.data.kind !== "text") continue;
+      if (seen.has(typedPart.data.id)) continue;
+      seen.add(typedPart.data.id);
+      notices.push(typedPart.data);
+    }
+  }
+  return notices.slice(-3);
 }
 
 function storedPartToUIPart(part: ChatMessagePart): UIMessage["parts"][number] | null {
@@ -472,6 +520,8 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
 
   const runtimeStats = useMemo(() => getLatestPiRuntimeStats(messages), [messages]);
   const compactionStatus = useMemo(() => getLatestPiCompactionStatus(messages), [messages]);
+  const pendingInteraction = useMemo(() => getLatestPendingInteraction(messages), [messages]);
+  const interactionNotices = useMemo(() => getRecentInteractionNotices(messages), [messages]);
   const displayRuntimeStats = useMemo(() => {
     if (!runtimeStats) return configuredRuntimeStats;
     if (runtimeStats.model || !configuredRuntimeStats?.model) return runtimeStats;
@@ -701,8 +751,35 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     }
   }, [activeChatId, internalChatId, setActiveChatId, addChat]);
 
+  const respondToInteraction = useCallback(async (interaction: PiPendingInteraction, value: string | boolean | null, cancel = false) => {
+    try {
+      setChatError(null);
+      const response = await fetch(
+        `/api/pi-runs/${encodeURIComponent(interaction.runId)}/interactions/${encodeURIComponent(interaction.id)}/respond`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ value, cancel }),
+        }
+      );
+      const payload = await response.json().catch(() => null) as { error?: string } | null;
+      if (!response.ok) {
+        throw new Error(payload?.error || "Failed to send response");
+      }
+      setInput("");
+    } catch (error) {
+      setChatError(error instanceof Error ? error.message : "Failed to send response");
+    }
+  }, []);
+
   const onSubmit = useCallback((messageOverride?: string) => {
     const messageText = messageOverride ?? input;
+    if (pendingInteraction) {
+      const trimmed = messageText.trim();
+      if (!trimmed && pendingInteraction.kind !== "confirm") return;
+      void respondToInteraction(pendingInteraction, trimmed);
+      return;
+    }
     if (!messageText.trim() || isLoading) return;
     setChatError(null);
     stopRequestedRef.current = false;
@@ -719,6 +796,8 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     setInput("");
   }, [
     input,
+    pendingInteraction,
+    respondToInteraction,
     isLoading,
     activeProjectId,
     sendMessage,
@@ -786,6 +865,9 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         isLoading={isLoading}
         errorMessage={chatError}
         compactionStatus={compactionStatus}
+        pendingInteraction={pendingInteraction}
+        interactionNotices={interactionNotices}
+        onRespondToInteraction={(value, cancel) => pendingInteraction ? respondToInteraction(pendingInteraction, value, cancel) : undefined}
         quickSkills={showQuickSkills}
         onLaunchSkill={launchBundledSkill}
         launchingSkill={launchingSkill}
@@ -796,6 +878,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         onSubmit={onSubmit}
         onStop={handleStop}
         isLoading={isLoading}
+        pendingInteraction={pendingInteraction}
         chatId={activeChatId || internalChatId}
         projectId={activeProjectId}
         currentPath={currentPath}

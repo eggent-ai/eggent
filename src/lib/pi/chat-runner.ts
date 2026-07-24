@@ -1,6 +1,7 @@
 import { createUIMessageStream } from "ai";
 import type { UIMessage } from "ai";
 import { createEggentPiSession } from "@/lib/pi/session";
+import { cancelPendingInteractionsForRun } from "@/lib/pi/pending-interactions";
 import { retainPiScheduleSession, takeRetainedPiScheduleSession } from "@/lib/pi/schedule-host";
 import type { PiChatRunOptions, PiRuntimeStats, PiToolRecord } from "@/lib/pi/types";
 import { getChat, saveChat } from "@/lib/storage/chat-store";
@@ -423,6 +424,7 @@ async function persistAssistantMessage(options: {
 
 export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?: Record<string, unknown>; toolRuntimeData?: Record<string, unknown> }): Promise<string> {
   const userMessageId = crypto.randomUUID();
+  const runId = options.runId ?? crypto.randomUUID();
   const prompt = options.runtimeData
     ? `${options.userMessage}\n\nRuntime data:\n${JSON.stringify(options.runtimeData, null, 2)}`
     : options.userMessage;
@@ -436,6 +438,8 @@ export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?:
     chatId: options.chatId,
     projectId: options.projectId,
     toolRuntimeData: options.toolRuntimeData,
+    runId,
+    abortSignal: options.abortSignal,
   });
 
   let assistantText = "";
@@ -517,6 +521,7 @@ export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?:
     });
     return assistantText;
   } finally {
+    cancelPendingInteractionsForRun(runId);
     unsubscribe();
     const retained = await retainPiScheduleSession({
       chatId: options.chatId,
@@ -529,10 +534,20 @@ export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?:
 
 export function createPiChatUIMessageStream(options: PiChatRunOptions) {
   const userMessageId = crypto.randomUUID();
+  const runId = options.runId ?? crypto.randomUUID();
 
   return createUIMessageStream<UIMessage>({
     async execute({ writer }) {
       await persistUserMessage(options, userMessageId);
+
+      let aborted = options.abortSignal?.aborted === true;
+      let persisted = false;
+      let abortPromise: Promise<void> | null = null;
+
+      const safeWrite = (part: Parameters<typeof writer.write>[0]) => {
+        if (aborted) return;
+        writer.write(part);
+      };
 
       const session = takeRetainedPiScheduleSession(options.chatId) ?? await createEggentPiSession({
         cwd: options.cwd,
@@ -540,6 +555,15 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         tools: options.tools,
         chatId: options.chatId,
         projectId: options.projectId,
+        runId,
+        abortSignal: options.abortSignal,
+        onPiInteraction: (interaction) => {
+          safeWrite({
+            type: "data-piInteraction",
+            id: `pi-interaction-${interaction.id}`,
+            data: interaction,
+          });
+        },
       });
 
       let assistantText = "";
@@ -550,14 +574,6 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
       const baselineUsage = getSessionTokenUsage(session);
       const tools = new Map<string, PiToolRecord>();
       const timelineParts: ChatMessagePart[] = [];
-      let aborted = options.abortSignal?.aborted === true;
-      let persisted = false;
-      let abortPromise: Promise<void> | null = null;
-
-      const safeWrite = (part: Parameters<typeof writer.write>[0]) => {
-        if (aborted) return;
-        writer.write(part);
-      };
 
       const emitStats = (stats: PiRuntimeStats) => {
         safeWrite({
@@ -604,6 +620,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
       const abortSession = () => {
         if (aborted && abortPromise) return abortPromise;
         aborted = true;
+        cancelPendingInteractionsForRun(runId);
         abortPromise = (async () => {
           try {
             await session.abort();
@@ -814,6 +831,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         options.abortSignal?.removeEventListener("abort", handleAbort);
         unsubscribe();
         if (aborted) {
+          cancelPendingInteractionsForRun(runId);
           session.dispose();
           return;
         }

@@ -1,3 +1,5 @@
+import type { PiPendingInteraction } from "@/lib/pi/interaction-types";
+
 export interface PiSessionOptions {
   cwd?: string;
   agentDir?: string;
@@ -19,6 +21,10 @@ export interface PiSessionOptions {
   toolRuntimeData?: Record<string, unknown>;
   /** Abort signal for the active HTTP/chat request. */
   abortSignal?: AbortSignal;
+  /** Stable id for the active Pi run; used by pending interaction responses. */
+  runId?: string;
+  /** Emits pending interaction updates from Pi extension UI prompts. */
+  onPiInteraction?: (interaction: PiPendingInteraction) => void;
 }
 
 export interface PiChatRunOptions extends PiSessionOptions {
