@@ -638,24 +638,23 @@ export default function SettingsPage() {
                   </div>
                 ) : null}
 
-                {defaultProviderSelection ? (
-                  <details className="rounded-lg border p-4">
-                    <summary className="cursor-pointer text-sm font-medium">Advanced: edit custom models.json</summary>
-                    <div className="mt-4 space-y-2">
-                      <div className="flex items-center justify-between gap-3">
-                        <div>
-                          <div className="text-xs font-mono text-muted-foreground">models.json</div>
-                          <h4 className="font-medium">Custom providers and models</h4>
-                        </div>
-                        <Button size="sm" onClick={saveModelsJson} disabled={savingModelsJson || !modelsJsonDirty}>
-                          {savingModelsJson ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
-                          Save models.json
-                        </Button>
+                <details className="rounded-lg border p-4">
+                  <summary className="cursor-pointer text-sm font-medium">Advanced: edit custom models.json</summary>
+                  <div className="mt-4 space-y-2">
+                    <div className="flex items-center justify-between gap-3">
+                      <div>
+                        <div className="text-xs font-mono text-muted-foreground">models.json</div>
+                        <h4 className="font-medium">Custom providers and models</h4>
+                        <p className="text-xs text-muted-foreground">Add a custom provider here, save models.json, and it will appear in the provider list above.</p>
                       </div>
-                      <Textarea value={modelsJson} onChange={(event) => setModelsJson(event.target.value)} rows={14} className="min-h-80 font-mono text-xs" />
+                      <Button size="sm" onClick={saveModelsJson} disabled={savingModelsJson || !modelsJsonDirty}>
+                        {savingModelsJson ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
+                        Save models.json
+                      </Button>
                     </div>
-                  </details>
-                ) : null}
+                    <Textarea value={modelsJson} onChange={(event) => setModelsJson(event.target.value)} rows={14} className="min-h-80 font-mono text-xs" />
+                  </div>
+                </details>
                 </> : null}
               </section>
 
