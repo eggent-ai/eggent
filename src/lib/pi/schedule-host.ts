@@ -31,13 +31,17 @@ type ToolRecord = {
   status: "running" | "completed" | "error";
 };
 
+type RetainedReason = "schedule" | "mcp-oauth";
+
 type RetainedSession = {
   chatId: string;
   projectId?: string | null;
   session: AgentSession;
+  reason: RetainedReason;
   unsubscribe: () => void;
   interval: NodeJS.Timeout;
   emptySince?: number;
+  expiresAt?: number;
 };
 
 const retained = new Map<string, RetainedSession>();
@@ -221,7 +225,16 @@ async function maybeDisposeWhenDone(key: string) {
 
   const enabled = await hasEnabledSchedules(entry.session);
   if (enabled) {
+    entry.reason = "schedule";
     entry.emptySince = undefined;
+    entry.expiresAt = undefined;
+    return;
+  }
+
+  if (entry.reason === "mcp-oauth") {
+    if (entry.expiresAt && Date.now() >= entry.expiresAt && entry.session.isIdle) {
+      disposeRetained(key, entry);
+    }
     return;
   }
 
@@ -281,8 +294,47 @@ export async function retainPiScheduleSession(options: {
     chatId: options.chatId,
     projectId: options.projectId,
     session: options.session,
+    reason: "schedule",
     unsubscribe,
     interval,
+  });
+
+  return true;
+}
+
+/**
+ * Keep a Pi session alive briefly while an MCP OAuth browser redirect is in
+ * flight. pi-mcp-adapter stores the pending PKCE verifier/transport in memory,
+ * so the next user message with the redirected localhost URL must reuse the
+ * same session or auth-complete will fail with "No pending OAuth flow".
+ */
+export function retainPiMcpOAuthSession(options: {
+  chatId: string;
+  projectId?: string | null;
+  session: AgentSession;
+  ttlMs?: number;
+}): boolean {
+  const key = keyFor(options.chatId);
+  const previous = retained.get(key);
+  if (previous && previous.session !== options.session) {
+    disposeRetained(key, previous);
+  }
+
+  const interval = setInterval(() => {
+    void maybeDisposeWhenDone(key).catch((error) => {
+      console.error("Failed to monitor retained pi MCP OAuth session:", error);
+    });
+  }, POLL_MS);
+  interval.unref?.();
+
+  retained.set(key, {
+    chatId: options.chatId,
+    projectId: options.projectId,
+    session: options.session,
+    reason: "mcp-oauth",
+    unsubscribe: () => {},
+    interval,
+    expiresAt: Date.now() + (options.ttlMs ?? 6 * 60_000),
   });
 
   return true;
@@ -294,6 +346,7 @@ export function listRetainedPiScheduleSessions() {
     projectId: entry.projectId,
     sessionId: entry.session.sessionId,
     cwd: entry.session.sessionManager.getCwd(),
+    reason: entry.reason,
   }));
 }
 

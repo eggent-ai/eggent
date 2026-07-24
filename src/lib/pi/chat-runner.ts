@@ -2,7 +2,7 @@ import { createUIMessageStream } from "ai";
 import type { UIMessage } from "ai";
 import { createEggentPiSession } from "@/lib/pi/session";
 import { cancelPendingInteractionsForRun } from "@/lib/pi/pending-interactions";
-import { retainPiScheduleSession, takeRetainedPiScheduleSession } from "@/lib/pi/schedule-host";
+import { retainPiMcpOAuthSession, retainPiScheduleSession, takeRetainedPiScheduleSession } from "@/lib/pi/schedule-host";
 import type { PiChatRunOptions, PiRuntimeStats, PiToolRecord } from "@/lib/pi/types";
 import { getChat, saveChat } from "@/lib/storage/chat-store";
 import type { ChatMessage, ChatMessagePart } from "@/lib/types";
@@ -204,6 +204,22 @@ function normalizeToolInput(input: unknown): Record<string, unknown> {
   return asRecord(input) ?? {};
 }
 
+function getToolResultDetails(output: unknown): Record<string, unknown> | null {
+  return asRecord(asRecord(output)?.details);
+}
+
+function isMcpOAuthStartResult(toolName: string, output: unknown): boolean {
+  if (toolName !== "mcp") return false;
+  const details = getToolResultDetails(output);
+  return details?.mode === "auth-start" && typeof details.authorizationUrl === "string";
+}
+
+function isMcpOAuthCompleteResult(toolName: string, output: unknown): boolean {
+  if (toolName !== "mcp") return false;
+  const details = getToolResultDetails(output);
+  return details?.mode === "auth-complete" && details.authenticated === true;
+}
+
 function appendTimelineText(parts: ChatMessagePart[], delta: string): void {
   if (!delta) return;
   const last = parts[parts.length - 1];
@@ -321,10 +337,27 @@ function isSlashCommand(text: string): boolean {
   return text.trimStart().startsWith("/");
 }
 
+function hasMcpOAuthCallbackUrl(text: string): boolean {
+  return /https?:\/\/(localhost|127\.0\.0\.1|\[::1\])(?::\d+)?\/[^\s]*callback[^\s]*[?&](code|state)=/i.test(text);
+}
+
 function preparePromptForRuntime(text: string): string {
   // Runtime slash commands such as /skill:name and prompt templates must stay
   // at the very beginning of the message so the SDK can expand them.
   if (isSlashCommand(text)) return text;
+  if (hasMcpOAuthCallbackUrl(text)) {
+    return [
+      "Eggent MCP OAuth callback directive:",
+      "- The user message appears to be a redirected localhost OAuth callback URL for a pending MCP authentication flow.",
+      "- Do not start a new OAuth flow and do not search the web.",
+      "- Use the existing pending MCP flow in this same chat by calling the mcp proxy tool with action=\"auth-complete\" and args containing the full redirectUrl exactly as provided.",
+      "- If the current project has exactly one configured MCP server, use that server. If the previous assistant/tool output named a server, use that same server.",
+      "- After successful auth-complete, call mcp({ connect: \"<server>\" }) to verify it is ready.",
+      "",
+      "User message:",
+      text,
+    ].join("\n");
+  }
   if (hasScheduleManagementIntent(text)) {
     return [
       "Eggent schedule-management directive:",
@@ -448,6 +481,7 @@ export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?:
   const baselineUsage = getSessionTokenUsage(session);
   const tools = new Map<string, PiToolRecord>();
   const timelineParts: ChatMessagePart[] = [];
+  let mcpOAuthPending = false;
 
   const unsubscribe = session.subscribe((event: unknown) => {
     const record = asRecord(event);
@@ -492,13 +526,19 @@ export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?:
         typeof record.toolCallId === "string" ? record.toolCallId : crypto.randomUUID();
       const toolName = typeof record.toolName === "string" ? record.toolName : "tool";
       const existing = tools.get(toolCallId);
+      const output = getToolResult(record);
       const toolRecord: PiToolRecord = {
         toolCallId,
         toolName,
         input: existing?.input ?? {},
-        output: getToolResult(record),
+        output,
         status: record.isError === true ? "error" : "completed",
       };
+      if (!record.isError && isMcpOAuthStartResult(toolName, output)) {
+        mcpOAuthPending = true;
+      } else if (!record.isError && isMcpOAuthCompleteResult(toolName, output)) {
+        mcpOAuthPending = false;
+      }
       tools.set(toolCallId, toolRecord);
       upsertTimelineTool(timelineParts, toolRecord);
     }
@@ -528,7 +568,14 @@ export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?:
       projectId: options.projectId,
       session,
     });
-    if (!retained) session.dispose();
+    const retainedForMcpOAuth = !retained && mcpOAuthPending
+      ? retainPiMcpOAuthSession({
+          chatId: options.chatId,
+          projectId: options.projectId,
+          session,
+        })
+      : false;
+    if (!retained && !retainedForMcpOAuth) session.dispose();
   }
 }
 
@@ -574,6 +621,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
       const baselineUsage = getSessionTokenUsage(session);
       const tools = new Map<string, PiToolRecord>();
       const timelineParts: ChatMessagePart[] = [];
+      let mcpOAuthPending = false;
 
       const emitStats = (stats: PiRuntimeStats) => {
         safeWrite({
@@ -750,6 +798,11 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
             output,
             status: isError ? "error" : "completed",
           };
+          if (!isError && isMcpOAuthStartResult(toolName, output)) {
+            mcpOAuthPending = true;
+          } else if (!isError && isMcpOAuthCompleteResult(toolName, output)) {
+            mcpOAuthPending = false;
+          }
           tools.set(toolCallId, toolRecord);
           upsertTimelineTool(timelineParts, toolRecord);
 
@@ -840,7 +893,14 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
           projectId: options.projectId,
           session,
         });
-        if (!retained) session.dispose();
+        const retainedForMcpOAuth = !retained && mcpOAuthPending
+          ? retainPiMcpOAuthSession({
+              chatId: options.chatId,
+              projectId: options.projectId,
+              session,
+            })
+          : false;
+        if (!retained && !retainedForMcpOAuth) session.dispose();
       }
     },
     onError: (error) => {
