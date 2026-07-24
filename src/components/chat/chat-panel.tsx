@@ -135,11 +135,16 @@ function isMcpReadyToolOutput(part: UIMessage["parts"][number]): boolean {
 function getRecentInteractionNotices(messages: UIMessage[]): PiPendingInteraction[] {
   const notices: PiPendingInteraction[] = [];
   const seen = new Set<string>();
-  for (const message of messages) {
+  const lastUserIndex = messages.reduce((latest, message, index) => (
+    message.role === "user" ? index : latest
+  ), -1);
+
+  for (let messageIndex = 0; messageIndex < messages.length; messageIndex += 1) {
+    const message = messages[messageIndex];
     for (const part of message.parts) {
       if (isMcpReadyToolOutput(part)) {
         for (let i = notices.length - 1; i >= 0; i -= 1) {
-          if (notices[i].kind === "oauth_url") notices.splice(i, 1);
+          if (notices[i].kind === "oauth_url" || notices[i].kind === "device_code") notices.splice(i, 1);
         }
       }
 
@@ -147,6 +152,7 @@ function getRecentInteractionNotices(messages: UIMessage[]): PiPendingInteractio
       if (typedPart.type !== "data-piInteraction" || !isPiInteraction(typedPart.data)) continue;
       if (typedPart.data.status !== "completed") continue;
       if (typedPart.data.kind !== "oauth_url" && typedPart.data.kind !== "device_code" && typedPart.data.kind !== "text") continue;
+      if ((typedPart.data.kind === "oauth_url" || typedPart.data.kind === "device_code") && messageIndex < lastUserIndex) continue;
       if (seen.has(typedPart.data.id)) continue;
       seen.add(typedPart.data.id);
       notices.push(typedPart.data);

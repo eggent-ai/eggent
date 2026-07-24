@@ -137,6 +137,18 @@ function formatProjectSkillsContext(options: { projectId?: string; cwd: string; 
   ];
 }
 
+function loadConfiguredMcpServerIds(cwd: string): string[] {
+  const filePath = path.join(cwd, ".mcp.json");
+  try {
+    if (!fs.existsSync(filePath)) return [];
+    const parsed = JSON.parse(fs.readFileSync(filePath, "utf-8")) as { mcpServers?: unknown };
+    if (!parsed.mcpServers || typeof parsed.mcpServers !== "object" || Array.isArray(parsed.mcpServers)) return [];
+    return Object.keys(parsed.mcpServers).sort();
+  } catch {
+    return [];
+  }
+}
+
 function buildEggentProjectContext(options: {
   projectId?: string;
   projectName?: string;
@@ -146,6 +158,7 @@ function buildEggentProjectContext(options: {
   cwd: string;
   chatFiles?: ChatFile[];
   projectSkills?: ProjectSkillMetadata[];
+  mcpServerIds?: string[];
   runtimeModel?: {
     provider?: string;
     id?: string;
@@ -173,6 +186,7 @@ function buildEggentProjectContext(options: {
     options.runtimeModel?.provider && options.runtimeModel?.id
       ? `Current runtime model: ${options.runtimeModel.provider}/${options.runtimeModel.id}${options.runtimeModel.name ? ` (${options.runtimeModel.name})` : ""}`
       : "Current runtime model: not selected",
+    options.mcpServerIds?.length ? `Configured project MCP servers: ${options.mcpServerIds.join(", ")}` : "Configured project MCP servers: none",
     "If the user asks which model/provider is being used, answer from the Current runtime model line above rather than from model self-identification.",
     "",
     "Project instructions:",
@@ -189,6 +203,9 @@ function buildEggentProjectContext(options: {
       ? "- Use pi-mcp-adapter's mcp proxy tool for MCP servers configured in this project's .mcp.json."
       : "- Project MCP tools are available through pi-mcp-adapter after switching into a project.",
     "- MCP OAuth tokens are persisted in the Pi agent data directory and can be reused across chats/sessions for the same MCP server id and URL. When using an already configured MCP server, call `mcp({ connect: \"<server>\" })` first; call `auth-start` only if connect returns `auth_required` or explicitly says re-authentication is required.",
+    options.mcpServerIds?.includes("higgsfield")
+      ? "- Higgsfield is configured as an MCP server in this project. For Higgsfield image/video generation in Eggent cloud/web, prefer the `mcp` proxy (`connect`, `search`, `describe`, then tool call) over the `higgsfield` CLI. Do not run `higgsfield auth login`, `higgsfield account status`, or `higgsfield workspace set` unless the user explicitly asks for CLI setup; MCP OAuth is separate from CLI auth and is already persisted after successful authentication."
+      : "",
     "- Use pi-web-access tools (web_search, fetch_content, get_search_content) for internet access when available.",
     "- When installing project skills with the `skills` CLI from a non-interactive web run, pass `-y`/`--yes` (for example `npx skills add owner/repo -y`) to avoid terminal selection prompts that cannot be reliably controlled from chat.",
     "- eggent_manage_schedules for listing or clearing pi-subagents scheduled tasks. Do not use Agent.schedule to manage existing schedules.",
@@ -269,6 +286,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
 
   const projectSkills = projectId ? await loadProjectSkillsMetadata(projectId) : [];
   const projectSkillPaths = projectSkills.map((skill) => path.join(skill.skillDir, "SKILL.md"));
+  const mcpServerIds = projectId ? loadConfiguredMcpServerIds(cwd) : [];
   const chatFiles = options.chatId ? await getChatFiles(options.chatId) : [];
   const corePiToolsOnly = options.corePiToolsOnly === true;
 
@@ -281,6 +299,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     cwd,
     chatFiles,
     projectSkills,
+    mcpServerIds,
     runtimeModel: configuredModel
       ? modelLock.locked
         ? {
