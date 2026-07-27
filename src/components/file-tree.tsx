@@ -10,6 +10,7 @@ import {
   FileText,
   FileCode,
   File,
+  ImageIcon,
   Download,
   FilePlus,
   FolderPlus,
@@ -28,6 +29,13 @@ interface FileEntry {
 function getFileIcon(name: string) {
   const ext = name.split(".").pop()?.toLowerCase();
   switch (ext) {
+    case "png":
+    case "jpg":
+    case "jpeg":
+    case "gif":
+    case "webp":
+    case "svg":
+      return ImageIcon;
     case "ts":
     case "tsx":
     case "js":

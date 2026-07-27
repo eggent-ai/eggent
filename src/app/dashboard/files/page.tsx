@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { Download, FileText, Loader2, Save } from "lucide-react";
+import { Download, FileText, ImageIcon, Loader2, Save } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { AppSidebar } from "@/components/app-sidebar";
@@ -17,6 +17,9 @@ type FilePayload = {
   path: string;
   filename: string;
   content: string;
+  contentType?: string;
+  previewUrl?: string;
+  binary?: boolean;
   size?: number;
   updatedAt?: string;
 };
@@ -107,6 +110,7 @@ export default function GenericFileEditorPage() {
 
   const dirty = draft !== content;
   const title = metadata?.filename || filePath.split("/").pop() || t("files.defaultTitle");
+  const isImagePreview = Boolean(metadata?.previewUrl && metadata.contentType?.startsWith("image/"));
 
   return (
     <div className="[--header-height:calc(--spacing(14))]">
@@ -126,9 +130,13 @@ export default function GenericFileEditorPage() {
               <section className="rounded-xl border bg-card p-4 md:p-5 space-y-4">
                 <div className="flex flex-wrap items-start justify-between gap-3">
                   <div className="flex items-start gap-2 min-w-0">
-                    <FileText className="mt-1 size-4 shrink-0 text-primary" />
+                    {isImagePreview ? (
+                      <ImageIcon className="mt-1 size-4 shrink-0 text-primary" />
+                    ) : (
+                      <FileText className="mt-1 size-4 shrink-0 text-primary" />
+                    )}
                     <div className="min-w-0">
-                      <div className="truncate text-sm font-medium">{t("files.textPreview")}</div>
+                      <div className="truncate text-sm font-medium">{isImagePreview ? metadata?.contentType : t("files.textPreview")}</div>
                       <div className="text-xs text-muted-foreground">
                         {formatFileSize(metadata?.size)}{metadata?.updatedAt ? ` · ${t("common.updated", { date: new Date(metadata.updatedAt).toLocaleString() })}` : ""}
                       </div>
@@ -141,10 +149,12 @@ export default function GenericFileEditorPage() {
                         {t("common.download")}
                       </a>
                     </Button>
-                    <Button onClick={save} disabled={loading || saving || !dirty} className="gap-2">
-                      {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
-                      {t("common.save")}
-                    </Button>
+                    {!isImagePreview ? (
+                      <Button onClick={save} disabled={loading || saving || !dirty} className="gap-2">
+                        {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+                        {t("common.save")}
+                      </Button>
+                    ) : null}
                   </div>
                 </div>
 
@@ -159,7 +169,15 @@ export default function GenericFileEditorPage() {
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
                     <Loader2 className="size-4 animate-spin" /> {t("common.loadingFile")}
                   </div>
-                ) : error ? null : (
+                ) : error ? null : isImagePreview && metadata?.previewUrl ? (
+                  <div className="overflow-hidden rounded-lg border bg-muted/20 p-3">
+                    <img
+                      src={metadata.previewUrl}
+                      alt={title}
+                      className="mx-auto max-h-[70vh] max-w-full rounded object-contain"
+                    />
+                  </div>
+                ) : (
                   <Textarea
                     value={draft}
                     onChange={(event) => setDraft(event.target.value)}

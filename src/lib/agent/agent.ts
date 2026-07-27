@@ -890,7 +890,8 @@ export async function runAgent(options: {
       chat.messages.push(userMessageRecord);
       chat.updatedAt = userMessageRecord.createdAt;
       const userMessageCount = chat.messages.filter((m) => m.role === "user").length;
-      if (userMessageCount === 1 && chat.title === "New Chat") {
+      const defaultTitle = chat.title.trim();
+      if (userMessageCount === 1 && ["New Chat", "New chat"].includes(defaultTitle)) {
         chat.title =
           options.userMessage.slice(0, 60) +
           (options.userMessage.length > 60 ? "..." : "");

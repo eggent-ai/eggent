@@ -333,6 +333,14 @@ function applySchedulingToolPolicy(
   }
 }
 
+function isDefaultChatTitle(title: string): boolean {
+  return ["New Chat", "New chat"].includes(title.trim());
+}
+
+function titleFromFirstMessage(message: string): string {
+  return message.slice(0, 60) + (message.length > 60 ? "..." : "");
+}
+
 function isSlashCommand(text: string): boolean {
   return text.trimStart().startsWith("/");
 }
@@ -399,10 +407,8 @@ async function persistUserMessage(options: PiChatRunOptions, userMessageId: stri
   });
 
   const userMessageCount = chat.messages.filter((message) => message.role === "user").length;
-  if (userMessageCount === 1 && chat.title === "New Chat") {
-    chat.title =
-      options.userMessage.slice(0, 60) +
-      (options.userMessage.length > 60 ? "..." : "");
+  if (userMessageCount === 1 && isDefaultChatTitle(chat.title)) {
+    chat.title = titleFromFirstMessage(options.userMessage);
   }
 
   chat.updatedAt = now;

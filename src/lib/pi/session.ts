@@ -209,6 +209,7 @@ function buildEggentProjectContext(options: {
     "- Use pi-web-access tools (web_search, fetch_content, get_search_content) for internet access when available.",
     "- When installing project skills with the `skills` CLI from a non-interactive web run, pass `-y`/`--yes` (for example `npx skills add owner/repo -y`) to avoid terminal selection prompts that cannot be reliably controlled from chat.",
     "- eggent_manage_schedules for listing or clearing pi-subagents scheduled tasks. Do not use Agent.schedule to manage existing schedules.",
+    "- eggent_generate_image for image generation/editing/restyling requests. Use reference_image_paths from uploaded chat files when the user asks to edit or use an attached picture. This tool is separate from the text model; if an image backend is not configured, explain that image generation must be enabled separately.",
     options.projectSkills?.length
       ? "- Project-local skills are listed above and are available as Pi skills in this project scope. Prefer those exact skill paths when activating a project skill."
       : "- No project-local skills are installed for this project.",

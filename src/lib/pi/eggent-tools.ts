@@ -3,6 +3,7 @@ import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent
 import fs from "fs/promises";
 import path from "path";
 import type { McpServerConfig } from "@/lib/types";
+import { getPiAuthPath, getPiModelsPath } from "@/lib/pi/config-store";
 import { getPipelineDefinitions, upsertPipelineDefinition } from "@/lib/pipelines/store";
 import { startPipelineRunInBackground } from "@/lib/pipelines/runner";
 import { managePiSchedules } from "@/lib/pi/schedule-host";
@@ -18,6 +19,7 @@ import {
 } from "@/lib/storage/project-store";
 
 const TELEGRAM_SEND_FILE_MAX_BYTES = 45 * 1024 * 1024;
+const IMAGE_REFERENCE_MAX_BYTES = 20 * 1024 * 1024;
 
 interface TelegramRuntimeData {
   botToken: string;
@@ -42,11 +44,113 @@ function getTelegramRuntimeData(toolRuntimeData?: Record<string, unknown>): Tele
   return { botToken, chatId };
 }
 
-function resolveOutgoingTelegramFilePath(options: { cwd?: string }, rawPath: string): string {
+function resolveLocalFilePath(options: { cwd?: string }, rawPath: string): string {
   const value = rawPath.trim();
-  if (!value) throw new Error("file_path is required");
+  if (!value) throw new Error("file path is required");
   if (path.isAbsolute(value)) return path.resolve(value);
   return path.resolve(options.cwd || process.cwd(), value);
+}
+
+function resolveOutgoingTelegramFilePath(options: { cwd?: string }, rawPath: string): string {
+  return resolveLocalFilePath(options, rawPath);
+}
+
+function imageMimeType(filePath: string): string | null {
+  const ext = path.extname(filePath).toLowerCase();
+  if (ext === ".png") return "image/png";
+  if (ext === ".jpg" || ext === ".jpeg") return "image/jpeg";
+  if (ext === ".webp") return "image/webp";
+  if (ext === ".gif") return "image/gif";
+  return null;
+}
+
+async function fileToDataUrl(filePath: string): Promise<string> {
+  const mimeType = imageMimeType(filePath);
+  if (!mimeType) throw new Error(`Unsupported reference image type: ${filePath}`);
+  const stat = await fs.stat(filePath);
+  if (!stat.isFile()) throw new Error(`Reference image is not a file: ${filePath}`);
+  if (stat.size > IMAGE_REFERENCE_MAX_BYTES) {
+    throw new Error(`Reference image is too large (${stat.size} bytes). Max allowed is ${IMAGE_REFERENCE_MAX_BYTES} bytes: ${filePath}`);
+  }
+  const buffer = await fs.readFile(filePath);
+  return `data:${mimeType};base64,${buffer.toString("base64")}`;
+}
+
+async function readJsonFile(filePath: string): Promise<Record<string, unknown>> {
+  const content = await fs.readFile(filePath, "utf-8");
+  const parsed = JSON.parse(content) as unknown;
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
+}
+
+async function resolveManagedImageBackend(): Promise<{ baseUrl: string; token: string; providerLabel: string } | null> {
+  try {
+    const [auth, models] = await Promise.all([
+      readJsonFile(getPiAuthPath()).catch((): Record<string, unknown> => ({})),
+      readJsonFile(getPiModelsPath()).catch((): Record<string, unknown> => ({})),
+    ]);
+    const credential = auth["eggent-ai"];
+    const token = credential && typeof credential === "object" && !Array.isArray(credential)
+      ? String((credential as Record<string, unknown>).key || "").trim()
+      : "";
+    const providersValue = models["providers"];
+    const providers = providersValue && typeof providersValue === "object" && !Array.isArray(providersValue)
+      ? providersValue as Record<string, unknown>
+      : {};
+    const provider = providers["eggent-ai"];
+    const providerRecord = provider && typeof provider === "object" && !Array.isArray(provider)
+      ? provider as Record<string, unknown>
+      : {};
+    const baseUrl = String(providerRecord.baseUrl || "").trim().replace(/\/+$/, "");
+    const providerLabel = String(providerRecord.name || "Eggent Images").trim() || "Eggent Images";
+    if (!token.startsWith("eggw_") || !baseUrl) return null;
+    return { baseUrl, token, providerLabel };
+  } catch {
+    return null;
+  }
+}
+
+function imageExtension(mediaType?: string): string {
+  const normalized = mediaType?.toLowerCase().split(";")[0].trim();
+  if (normalized === "image/jpeg") return "jpg";
+  if (normalized === "image/webp") return "webp";
+  if (normalized === "image/gif") return "gif";
+  if (normalized === "image/svg+xml") return "svg";
+  return "png";
+}
+
+function decodeBase64Image(raw: string): { buffer: Buffer; mediaType?: string } {
+  const dataUrl = /^data:([^;,]+);base64,(.+)$/s.exec(raw);
+  if (dataUrl) return { mediaType: dataUrl[1], buffer: Buffer.from(dataUrl[2], "base64") };
+  return { buffer: Buffer.from(raw, "base64") };
+}
+
+async function writeGeneratedImages(options: { cwd?: string }, payload: unknown): Promise<Array<{ path: string; mediaType?: string; source: string }>> {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return [];
+  const record = payload as Record<string, unknown>;
+  const items = Array.isArray(record.data) ? record.data : Array.isArray(record.images) ? record.images : [];
+  const outputDir = path.join(options.cwd || process.cwd(), "generated-images");
+  await fs.mkdir(outputDir, { recursive: true });
+  const saved: Array<{ path: string; mediaType?: string; source: string }> = [];
+  for (let index = 0; index < items.length; index += 1) {
+    const item = items[index];
+    if (!item || typeof item !== "object" || Array.isArray(item)) continue;
+    const image = item as Record<string, unknown>;
+    const b64 = typeof image.b64_json === "string"
+      ? image.b64_json
+      : typeof image.image === "string"
+        ? image.image
+        : typeof image.data === "string"
+          ? image.data
+          : "";
+    if (!b64) continue;
+    const decoded = decodeBase64Image(b64);
+    const mediaType = typeof image.media_type === "string" ? image.media_type : decoded.mediaType;
+    const ext = imageExtension(mediaType);
+    const filePath = path.join(outputDir, `eggent-image-${new Date().toISOString().replace(/[:.]/g, "-")}-${index + 1}.${ext}`);
+    await fs.writeFile(filePath, decoded.buffer);
+    saved.push({ path: filePath, mediaType, source: "b64_json" });
+  }
+  return saved;
 }
 
 export async function createEggentPiTools(options: {
@@ -245,6 +349,94 @@ export async function createEggentPiTools(options: {
           scope: params.scope || "current",
           cwd: options.cwd,
         });
+        return textResult(JSON.stringify(result, null, 2), result);
+      },
+    }),
+    defineTool({
+      name: "eggent_generate_image",
+      label: "Generate or Edit Image",
+      description: "Generate a new image or edit/create a variant using optional reference images. Use this when the user asks to create, draw, generate, redesign, restyle, edit, improve, replace a background, or make a visual asset. This is separate from the text/agent model: managed Eggent workspaces use Eggent Images, while custom/BYOK workspaces need a configured image backend. For reference-image tasks, pass absolute paths from uploaded chat files or project files in reference_image_paths.",
+      parameters: Type.Object({
+        prompt: Type.String({ description: "Clear image generation/edit prompt. Include style, subject, constraints, and what should be preserved from references." }),
+        reference_image_paths: Type.Optional(Type.Array(Type.String(), { description: "Optional local image file paths to use as references. Use absolute paths when available." })),
+        n: Type.Optional(Type.Number({ description: "Number of output images. Defaults to 1." })),
+        size: Type.Optional(Type.String({ description: "Optional size/resolution shorthand, e.g. 1K, 2K, 4K, 1024x1024, 2048x2048." })),
+        resolution: Type.Optional(Type.String({ description: "Optional resolution tier, e.g. 512, 1K, 2K, 4K." })),
+        aspect_ratio: Type.Optional(Type.String({ description: "Optional aspect ratio, e.g. 1:1, 16:9, 9:16, 4:3." })),
+        quality: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")], { description: "Optional quality. Defaults to auto." })),
+        output_format: Type.Optional(Type.Union([Type.Literal("png"), Type.Literal("jpeg"), Type.Literal("webp")], { description: "Output format. Defaults to png/provider default." })),
+        background: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("transparent"), Type.Literal("opaque")], { description: "Optional background mode." })),
+      }),
+      execute: async (_toolCallId, params) => {
+        const backend = await resolveManagedImageBackend();
+        if (!backend) {
+          return textResult(
+            [
+              "Image generation is not configured for this workspace.",
+              "Text/chat models and image-generation models are configured separately.",
+              "If you are using your own OAuth/API model (for example Codex login), connect an image provider or enable Eggent Images before asking for generated/edited images.",
+            ].join("\n"),
+            { configured: false, reason: "image_backend_not_configured" }
+          );
+        }
+
+        const referencePaths = (params.reference_image_paths || []).map((item) => resolveLocalFilePath(options, item));
+        const inputReferences: Array<{ type: "image_url"; image_url: { url: string } }> = [];
+        for (const referencePath of referencePaths) {
+          inputReferences.push({
+            type: "image_url",
+            image_url: { url: await fileToDataUrl(referencePath) },
+          });
+        }
+
+        const body: Record<string, unknown> = {
+          model: "eggent-ai",
+          prompt: params.prompt,
+          n: Math.max(1, Math.min(10, Math.trunc(Number(params.n || 1)))) || 1,
+        };
+        if (params.size) body.size = params.size;
+        if (params.resolution) body.resolution = params.resolution;
+        if (params.aspect_ratio) body.aspect_ratio = params.aspect_ratio;
+        if (params.quality) body.quality = params.quality;
+        if (params.output_format) body.output_format = params.output_format;
+        if (params.background) body.background = params.background;
+        if (inputReferences.length > 0) body.input_references = inputReferences;
+
+        const response = await fetch(`${backend.baseUrl}/images`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${backend.token}`,
+            "Content-Type": "application/json",
+            "X-Eggent-AI-Request-Type": "image",
+          },
+          body: JSON.stringify(body),
+        });
+        const responseText = await response.text();
+        let payload: unknown = null;
+        try {
+          payload = responseText ? JSON.parse(responseText) : null;
+        } catch {
+          payload = responseText;
+        }
+        if (!response.ok) {
+          const message = payload && typeof payload === "object" && !Array.isArray(payload)
+            ? String(((payload as Record<string, unknown>).error as Record<string, unknown> | undefined)?.message || responseText || `Image generation failed with HTTP ${response.status}`)
+            : responseText || `Image generation failed with HTTP ${response.status}`;
+          return textResult(JSON.stringify({ success: false, error: message, status: response.status }, null, 2), { success: false, status: response.status });
+        }
+
+        const savedImages = await writeGeneratedImages(options, payload);
+        const result = {
+          success: true,
+          provider: backend.providerLabel,
+          imageCount: savedImages.length,
+          images: savedImages,
+          referenceImageCount: inputReferences.length,
+          note: savedImages.length > 0
+            ? "Generated image files were saved locally. Show the paths to the user and offer one short next action."
+            : "Image provider returned no inline base64 images; inspect rawResponse for URLs or provider-specific output.",
+          rawResponse: savedImages.length > 0 ? undefined : payload,
+        };
         return textResult(JSON.stringify(result, null, 2), result);
       },
     }),

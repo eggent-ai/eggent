@@ -54,6 +54,22 @@ function isImageFile(file: File): boolean {
   return file.type.startsWith("image/");
 }
 
+function chatFileKey(file: Pick<ChatFile, "name" | "type" | "size">): string {
+  return `${file.name}:${file.type}:${file.size}`;
+}
+
+function mergeUniqueChatFiles(current: ChatFile[], incoming: ChatFile[]): ChatFile[] {
+  const seen = new Set(current.map(chatFileKey));
+  const next = [...current];
+  for (const file of incoming) {
+    const key = chatFileKey(file);
+    if (seen.has(key)) continue;
+    seen.add(key);
+    next.push(file);
+  }
+  return next;
+}
+
 function getVoiceInputUnavailableMessage(t: (key: MessageKey) => string): string | null {
   if (typeof window !== "undefined" && !window.isSecureContext) {
     return t("chat.voiceHttpsRequired");
@@ -159,7 +175,8 @@ export function ChatInput({
       })
       .then((data: { files?: ChatFile[] }) => {
         if (cancelled) return;
-        setUploadedFiles(data.files || []);
+        const files = data.files || [];
+        setUploadedFiles(mergeUniqueChatFiles([], files));
       })
       .catch(() => {
         if (!cancelled) {
@@ -354,7 +371,7 @@ export function ChatInput({
         const data = await response.json();
         const uploadedFile = data.file as ChatFile;
 
-        setUploadedFiles((prev) => [...prev, uploadedFile]);
+        setUploadedFiles((prev) => mergeUniqueChatFiles(prev, [uploadedFile]));
         onFilesUploaded?.([uploadedFile]);
       } catch (error) {
         console.error("Failed to upload file:", error);
@@ -394,7 +411,7 @@ export function ChatInput({
 
       const seen = new Set<string>();
       const images = [...clipboardFiles, ...itemFiles].filter((file) => {
-        const key = `${file.name}:${file.type}:${file.size}:${file.lastModified}`;
+        const key = `${file.type}:${file.size}`;
         if (seen.has(key)) return false;
         seen.add(key);
         return true;

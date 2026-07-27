@@ -85,6 +85,12 @@ interface PiState {
     locked: boolean;
     label: string;
   };
+  imageGeneration?: {
+    enabled: boolean;
+    provider: "eggent" | "none";
+    label: string;
+    reason?: string;
+  };
 }
 
 type LoginEvent =
@@ -433,6 +439,7 @@ export default function SettingsPage() {
   const currentModelIsAvailable = Boolean(piState?.current?.model?.available);
   const modelLocked = Boolean(piState?.modelLock?.locked);
   const modelLockLabel = piState?.modelLock?.label || "Eggent AI";
+  const eggentImagesEnabled = Boolean(piState?.imageGeneration?.enabled);
 
   if (loading || !settings) {
     return (
@@ -519,6 +526,21 @@ export default function SettingsPage() {
                     </Button>
                   </div>
                 ) : null}
+
+                <div className="rounded-lg border p-4 space-y-2">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <div className="text-xs font-mono text-muted-foreground">{t("settings.imageGeneration.title")}</div>
+                      <h4 className="font-medium">{eggentImagesEnabled ? t("settings.imageGeneration.eggent") : t("settings.imageGeneration.notConfigured")}</h4>
+                    </div>
+                    <Badge variant={eggentImagesEnabled ? "secondary" : "outline"}>{eggentImagesEnabled ? t("settings.imageGeneration.enabled") : t("settings.imageGeneration.separateSetup")}</Badge>
+                  </div>
+                  <p className="text-sm text-muted-foreground">
+                    {eggentImagesEnabled
+                      ? t("settings.imageGeneration.enabledDescription")
+                      : t("settings.imageGeneration.disabledDescription")}
+                  </p>
+                </div>
 
                 {!modelLocked ? <>
                 <div className="rounded-lg border p-4 space-y-3">

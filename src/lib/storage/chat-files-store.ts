@@ -68,6 +68,13 @@ export async function saveChatFile(
 
     // Sanitize filename to prevent path traversal
     const safeName = path.basename(filename);
+
+    // Clipboard image pastes can arrive through both DataTransfer.files and
+    // DataTransfer.items. Treat byte-identical uploads in the same chat as the
+    // same attachment so the UI/context do not show or process them twice.
+    const existing = await findIdenticalChatFile(dir, fileBuffer);
+    if (existing) return existing;
+
     const fullPath = path.join(dir, safeName);
 
     await fs.writeFile(fullPath, fileBuffer);
@@ -124,6 +131,27 @@ export async function deleteAllChatFiles(chatId: string): Promise<void> {
 /**
  * Get MIME type or simple type from file extension
  */
+async function findIdenticalChatFile(dir: string, fileBuffer: Buffer): Promise<ChatFile | null> {
+    const entries = await fs.readdir(dir, { withFileTypes: true }).catch(() => []);
+    for (const entry of entries) {
+        if (!entry.isFile()) continue;
+        const fullPath = path.join(dir, entry.name);
+        const stat = await fs.stat(fullPath).catch(() => null);
+        if (!stat || stat.size !== fileBuffer.length) continue;
+        const existingBuffer = await fs.readFile(fullPath).catch(() => null);
+        if (!existingBuffer || !existingBuffer.equals(fileBuffer)) continue;
+        const ext = path.extname(entry.name).toLowerCase();
+        return {
+            name: entry.name,
+            path: fullPath,
+            size: stat.size,
+            type: getFileType(ext),
+            uploadedAt: stat.mtime.toISOString(),
+        };
+    }
+    return null;
+}
+
 function getFileType(ext: string): string {
     const mimeTypes: Record<string, string> = {
         ".txt": "text/plain",

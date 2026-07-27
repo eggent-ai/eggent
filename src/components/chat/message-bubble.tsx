@@ -189,6 +189,18 @@ function MarkdownContent({ content }: { content: string }) {
             </li>
           );
         },
+        img({ src, alt, ...props }) {
+          if (!src) return null;
+          return (
+            <img
+              src={src}
+              alt={alt || ""}
+              className="my-3 max-h-96 max-w-full rounded-lg border object-contain"
+              loading="lazy"
+              {...props}
+            />
+          );
+        },
         table({ children, ...props }) {
           return (
             <div className="my-3 overflow-x-auto rounded-lg border border-border">

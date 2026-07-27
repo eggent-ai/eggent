@@ -7,6 +7,19 @@ import { getServerTranslator } from "@/i18n/server";
 
 const MAX_TEXT_FILE_BYTES = 1024 * 1024;
 
+const IMAGE_MIME_TYPES: Record<string, string> = {
+  ".png": "image/png",
+  ".jpg": "image/jpeg",
+  ".jpeg": "image/jpeg",
+  ".gif": "image/gif",
+  ".webp": "image/webp",
+  ".svg": "image/svg+xml",
+};
+
+function imageMimeTypeForPath(filePath: string): string | null {
+  return IMAGE_MIME_TYPES[path.extname(filePath).toLowerCase()] ?? null;
+}
+
 function resolveSafePath(projectId: string, filePath: string) {
   const workDir = getWorkDir(projectId);
   const resolvedWorkDir = path.resolve(workDir);
@@ -43,6 +56,22 @@ export async function GET(req: NextRequest) {
     if (!stat.isFile()) {
       return Response.json({ error: t("api.error.pathNotFile") }, { status: 400 });
     }
+    const imageMimeType = imageMimeTypeForPath(resolved.filePath);
+    if (imageMimeType) {
+      const params = new URLSearchParams({ project: projectId, path: filePath });
+      return Response.json({
+        projectId,
+        path: filePath,
+        filename: path.basename(filePath),
+        content: "",
+        contentType: imageMimeType,
+        previewUrl: `/api/files/download?${params.toString()}`,
+        binary: true,
+        size: stat.size,
+        updatedAt: stat.mtime.toISOString(),
+      });
+    }
+
     if (stat.size > MAX_TEXT_FILE_BYTES) {
       return Response.json({ error: t("api.error.fileTooLargePreview"), size: stat.size }, { status: 413 });
     }

@@ -47,7 +47,6 @@ export async function DELETE(req: NextRequest) {
       return NextResponse.json({ error: "Provider credentials are managed by Eggent AI for this workspace." }, { status: 403 });
     }
     await disableEggentAiModelLock();
-    await setPiDefaultToFirstAvailableModel();
     return NextResponse.json(await getPiModelsState());
   }
 

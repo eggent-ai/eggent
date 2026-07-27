@@ -8,7 +8,7 @@ export async function GET(req: NextRequest) {
       const lock = await getEggentAiModelLockState();
       return NextResponse.json({
         content: lock.locked
-          ? `${JSON.stringify({ providers: { "eggent-ai": { name: lock.label, models: [{ id: lock.label, name: lock.label }] } } }, null, 2)}\n`
+          ? `${JSON.stringify({ providers: { "eggent-ai": { name: lock.label, models: [{ id: lock.label, name: lock.label, input: ["text", "image"], contextWindow: 272000, maxTokens: 128000 }] } } }, null, 2)}\n`
           : await readPiModelsJson(),
       });
     }

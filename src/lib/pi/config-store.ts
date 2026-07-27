@@ -81,6 +81,37 @@ async function readAuthJson(): Promise<Record<string, StoredCredentialRecord>> {
   }
 }
 
+function readJsonRecord(content: string): Record<string, unknown> {
+  const parsed = JSON.parse(content) as unknown;
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? parsed as Record<string, unknown>
+    : {};
+}
+
+async function getEggentImagesState(): Promise<{ enabled: boolean; provider: "eggent" | "none"; label: string; reason?: string }> {
+  const [auth, modelsContent] = await Promise.all([
+    readAuthJson().catch((): Record<string, StoredCredentialRecord> => ({})),
+    readPiModelsJson().catch(() => JSON.stringify({ providers: {} })),
+  ]);
+  const credential = auth["eggent-ai"];
+  const token = typeof credential?.key === "string" ? credential.key : "";
+  const models = readJsonRecord(modelsContent);
+  const providersValue = models.providers;
+  const providers = providersValue && typeof providersValue === "object" && !Array.isArray(providersValue)
+    ? providersValue as Record<string, unknown>
+    : {};
+  const providerValue = providers["eggent-ai"];
+  const provider = providerValue && typeof providerValue === "object" && !Array.isArray(providerValue)
+    ? providerValue as Record<string, unknown>
+    : {};
+  const baseUrl = typeof provider.baseUrl === "string" ? provider.baseUrl.trim() : "";
+  const label = typeof provider.name === "string" && provider.name.trim() ? provider.name.trim() : eggentAiModelLabel();
+  if (token.startsWith("eggw_") && baseUrl) {
+    return { enabled: true, provider: "eggent", label };
+  }
+  return { enabled: false, provider: "none", label: "Not configured", reason: "missing_managed_gateway_token" };
+}
+
 async function writeAuthJson(content: Record<string, StoredCredentialRecord>): Promise<void> {
   const filePath = getPiAuthPath();
   await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
@@ -184,14 +215,10 @@ export async function getEggentAiModelLockState(cwd = process.cwd()): Promise<{ 
 
 export async function disableEggentAiModelLock(cwd = process.cwd()): Promise<void> {
   await writeEggentAiLockOverride({ disabled: true });
-  const auth = await readAuthJson();
-  for (const [provider, credential] of Object.entries(auth)) {
-    if (provider === "eggent-ai" || (typeof credential.key === "string" && credential.key.startsWith("eggw_"))) {
-      delete auth[provider];
-    }
-  }
-  await writeAuthJson(auth);
-
+  // Keep the managed gateway credential in auth.json. Once the text/agent model
+  // is unlocked, this token becomes the separate Eggent Images backend so users
+  // can combine BYOK/OAuth text models (for example Codex login) with managed
+  // image generation without losing the original gateway token.
   const settingsManager = getPiSettingsManager(cwd);
   if (settingsManager.getDefaultProvider() === "eggent-ai") {
     settingsManager.setDefaultProvider("");
@@ -349,6 +376,7 @@ export async function getPiModelsState() {
     ? all.find((model) => model.provider === settings.defaultProvider && model.id === settings.defaultModel)
     : undefined;
   const modelLock = await getEggentAiModelLockState();
+  const imageGeneration = await getEggentImagesState();
 
   if (modelLock.locked) {
     const lockedModel = currentModel
@@ -367,7 +395,7 @@ export async function getPiModelsState() {
           contextWindow: 128000,
           maxTokens: 16384,
           reasoning: false,
-          input: ["text"],
+          input: ["text", "image"],
         };
     return {
       agentDir: getPiAgentDir(),
@@ -379,6 +407,7 @@ export async function getPiModelsState() {
       },
       modelsFile: getPiModelsPath(),
       modelLock,
+      imageGeneration,
       current: {
         provider: "eggent-ai",
         providerName: modelLock.label,
@@ -410,6 +439,7 @@ export async function getPiModelsState() {
     settings,
     modelsFile: getPiModelsPath(),
     modelLock,
+    imageGeneration,
     current: currentModel ? {
       provider: settings.defaultProvider,
       providerName: modelRegistry.getProviderDisplayName(settings.defaultProvider || currentModel.provider),
