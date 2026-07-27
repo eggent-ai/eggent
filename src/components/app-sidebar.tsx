@@ -17,6 +17,7 @@ import {
 import { useAppStore } from "@/store/app-store";
 import { FileTree } from "@/components/file-tree";
 import { useBackgroundSync } from "@/hooks/use-background-sync";
+import { useI18n } from "@/i18n/provider";
 
 import {
   Sidebar,
@@ -33,6 +34,7 @@ import {
 import { Button } from "@/components/ui/button";
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
+  const { t } = useI18n();
   const router = useRouter();
   const pathname = usePathname();
   const {
@@ -180,7 +182,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 </div>
                 <div className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-medium">Eggent</span>
-                  <span className="truncate text-xs">Agent Terminal</span>
+                  <span className="truncate text-xs">{t("app.tagline")}</span>
                 </div>
               </Link>
             </SidebarMenuButton>
@@ -194,7 +196,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             onClick={handleNewChat}
           >
             <MessageSquarePlus className="size-4" />
-            New Chat
+            {t("nav.newChat")}
           </Button>
         </div>
       </SidebarHeader>
@@ -203,7 +205,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 
         {/* Project selector */}
         <SidebarGroup>
-          <SidebarGroupLabel>Project</SidebarGroupLabel>
+          <SidebarGroupLabel>{t("nav.project")}</SidebarGroupLabel>
           <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton
@@ -211,14 +213,14 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 onClick={handleOrchestratorClick}
               >
                 <Bot className="size-4" />
-                <span className="truncate">Orchestrator</span>
+                <span className="truncate">{t("nav.orchestrator")}</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
             {projects.length === 0 && (
               <SidebarMenuItem>
                 <SidebarMenuButton disabled>
                   <span className="text-muted-foreground text-xs">
-                    No projects yet
+                    {t("nav.noProjects")}
                   </span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
@@ -241,7 +243,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         <SidebarGroup>
           <SidebarGroupLabel>
             <FolderOpen className="size-3.5 mr-1" />
-            Files
+            {t("nav.files")}
           </SidebarGroupLabel>
           <div className="px-2">
             <FileTree projectId={activeProjectId ?? "none"} />
@@ -252,14 +254,14 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         <SidebarGroup>
           <SidebarGroupLabel>
             <MessagesSquare className="size-3.5 mr-1" />
-            Chats
+            {t("nav.chats")}
           </SidebarGroupLabel>
           <SidebarMenu>
             {chats.length === 0 && (
               <SidebarMenuItem>
                 <SidebarMenuButton disabled>
                   <span className="text-muted-foreground text-xs">
-                    No chats yet
+                    {t("nav.noChats")}
                   </span>
                 </SidebarMenuButton>
               </SidebarMenuItem>
@@ -303,7 +305,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               >
                 <Link href="/dashboard/settings">
                   <Settings className="size-4" />
-                  <span>Settings</span>
+                  <span>{t("nav.settings")}</span>
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>
@@ -315,14 +317,14 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                   rel="noopener noreferrer"
                 >
                   <LifeBuoy className="size-4" />
-                  <span>Documentation</span>
+                  <span>{t("nav.documentation")}</span>
                 </a>
               </SidebarMenuButton>
             </SidebarMenuItem>
             <SidebarMenuItem>
               <SidebarMenuButton onClick={handleLogout}>
                 <LogOut className="size-4" />
-                <span>Logout</span>
+                <span>{t("nav.logout")}</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
           </SidebarMenu>

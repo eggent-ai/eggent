@@ -6,6 +6,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { useI18n } from "@/i18n/provider";
 
 interface ProjectFileEditorProps {
   projectId: string;
@@ -24,6 +25,7 @@ export function ProjectFileEditor({
   filename,
   rows = 18,
 }: ProjectFileEditorProps) {
+  const { t } = useI18n();
   const [content, setContent] = useState("");
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(true);
@@ -40,13 +42,13 @@ export function ProjectFileEditor({
         setError(null);
         const res = await fetch(`/api/projects/${projectId}/${endpoint}`, { cache: "no-store" });
         const json = await res.json();
-        if (!res.ok) throw new Error(json.error || `Failed to load ${filename}`);
+        if (!res.ok) throw new Error(json.error || t("projectEditor.loadFailed", { filename }));
         if (cancelled) return;
         const next = typeof json.content === "string" ? json.content : "";
         setContent(next);
         setDraft(next);
       } catch (loadError) {
-        if (!cancelled) setError(loadError instanceof Error ? loadError.message : `Failed to load ${filename}`);
+        if (!cancelled) setError(loadError instanceof Error ? loadError.message : t("projectEditor.loadFailed", { filename }));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -68,13 +70,13 @@ export function ProjectFileEditor({
         body: JSON.stringify({ content: draft }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || `Failed to save ${filename}`);
+      if (!res.ok) throw new Error(json.error || t("projectEditor.saveFailed", { filename }));
       const next = typeof json.content === "string" ? json.content : draft;
       setContent(next);
       setDraft(next);
-      setStatus(`${filename} saved.`);
+      setStatus(t("projectEditor.saved", { filename }));
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : `Failed to save ${filename}`);
+      setError(saveError instanceof Error ? saveError.message : t("projectEditor.saveFailed", { filename }));
     } finally {
       setSaving(false);
     }
@@ -92,7 +94,7 @@ export function ProjectFileEditor({
         </div>
         <Button onClick={save} disabled={saving || loading || !dirty} className="gap-2">
           {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
-          Save
+          {t("common.save")}
         </Button>
       </div>
 
@@ -105,7 +107,7 @@ export function ProjectFileEditor({
 
       {loading ? (
         <div className="flex items-center gap-2 text-sm text-muted-foreground">
-          <Loader2 className="size-4 animate-spin" /> Loading {filename}...
+          <Loader2 className="size-4 animate-spin" /> {t("projectEditor.loading", { filename })}
         </div>
       ) : (
         <Textarea

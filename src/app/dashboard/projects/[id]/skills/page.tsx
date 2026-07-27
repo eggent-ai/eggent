@@ -6,6 +6,7 @@ import { BookText, Loader2, PackagePlus } from "lucide-react";
 import { ProjectPageShell } from "@/components/project-page-shell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { useI18n } from "@/i18n/provider";
 
 interface SkillItem {
   name: string;
@@ -15,6 +16,7 @@ interface SkillItem {
 }
 
 export default function ProjectSkillsPage() {
+  const { t } = useI18n();
   const { id } = useParams();
   const projectId = id as string;
   const [installed, setInstalled] = useState<SkillItem[]>([]);
@@ -53,10 +55,10 @@ export default function ProjectSkillsPage() {
     const json = await res.json().catch(() => null);
     setInstalling(null);
     if (!res.ok) {
-      setStatus(json?.error || "Failed to install skill");
+      setStatus(json?.error || t("skills.errors.install"));
       return;
     }
-    setStatus(`Installed ${skillName}.`);
+    setStatus(t("projectSkills.installedMessage", { skill: skillName }));
     await load();
   }
 
@@ -67,25 +69,25 @@ export default function ProjectSkillsPage() {
   }, [bundled, search]);
 
   return (
-    <ProjectPageShell projectId={projectId} title="Project Skills" description="Manage the project's skills/ directory. Each skill is available when this project runs.">
+    <ProjectPageShell projectId={projectId} title={t("projectSkills.title")} description={t("projectSkills.description")}>
       <div className="grid gap-4 lg:grid-cols-[1fr_1fr]">
         <section className="rounded-xl border bg-card p-4 space-y-3">
           <div className="flex items-center justify-between gap-3">
             <div>
               <div className="text-xs font-mono text-muted-foreground">skills/</div>
-              <h2 className="font-semibold">Installed skills</h2>
+              <h2 className="font-semibold">{t("projectSkills.installed")}</h2>
             </div>
-            <span className="text-xs text-muted-foreground">{installed.length} total</span>
+            <span className="text-xs text-muted-foreground">{t("projectSkills.total", { count: installed.length })}</span>
           </div>
-          {loading ? <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" /> Loading...</div> : null}
-          {!loading && installed.length === 0 ? <p className="text-sm text-muted-foreground">No skills installed.</p> : null}
+          {loading ? <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" /> {t("common.loading")}</div> : null}
+          {!loading && installed.length === 0 ? <p className="text-sm text-muted-foreground">{t("projectSkills.noInstalled")}</p> : null}
           <div className="divide-y rounded-lg border">
             {installed.map((skill) => (
               <button key={skill.name} className="flex w-full items-start gap-3 p-3 text-left hover:bg-muted/50" onClick={() => setSelected(skill)}>
                 <BookText className="mt-0.5 size-4 text-primary" />
                 <div className="min-w-0">
                   <div className="font-medium">{skill.name}</div>
-                  <div className="line-clamp-2 text-xs text-muted-foreground">{skill.description || "No description"}</div>
+                  <div className="line-clamp-2 text-xs text-muted-foreground">{skill.description || t("skills.noDescription")}</div>
                 </div>
               </button>
             ))}
@@ -95,20 +97,20 @@ export default function ProjectSkillsPage() {
         <section className="rounded-xl border bg-card p-4 space-y-3">
           <div>
             <div className="text-xs font-mono text-muted-foreground">bundled-skills/</div>
-            <h2 className="font-semibold">Install bundled skill</h2>
+            <h2 className="font-semibold">{t("projectSkills.installBundled")}</h2>
           </div>
-          <Input placeholder="Search skills..." value={search} onChange={(event) => setSearch(event.target.value)} />
+          <Input placeholder={t("skills.searchPlaceholder")} value={search} onChange={(event) => setSearch(event.target.value)} />
           {status ? <div className="rounded-md border bg-muted px-3 py-2 text-sm">{status}</div> : null}
           <div className="max-h-[520px] divide-y overflow-auto rounded-lg border">
             {filteredBundled.map((skill) => (
               <div key={skill.name} className="flex items-start justify-between gap-3 p-3">
                 <div className="min-w-0">
                   <div className="font-medium">{skill.name}</div>
-                  <div className="line-clamp-2 text-xs text-muted-foreground">{skill.description || "No description"}</div>
+                  <div className="line-clamp-2 text-xs text-muted-foreground">{skill.description || t("skills.noDescription")}</div>
                 </div>
                 <Button size="sm" variant={skill.installed ? "outline" : "default"} disabled={skill.installed || installing === skill.name} onClick={() => install(skill.name)} className="gap-2">
                   {installing === skill.name ? <Loader2 className="size-4 animate-spin" /> : <PackagePlus className="size-4" />}
-                  {skill.installed ? "Installed" : "Install"}
+                  {skill.installed ? t("skills.installed") : t("skills.install")}
                 </Button>
               </div>
             ))}
@@ -119,7 +121,7 @@ export default function ProjectSkillsPage() {
       {selected ? (
         <section className="rounded-xl border bg-card p-4 space-y-3">
           <h2 className="font-semibold">{selected.name}/SKILL.md</h2>
-          <pre className="max-h-[520px] overflow-auto whitespace-pre-wrap rounded-lg border bg-muted/30 p-3 text-sm font-mono">{selected.content || "No content."}</pre>
+          <pre className="max-h-[520px] overflow-auto whitespace-pre-wrap rounded-lg border bg-muted/30 p-3 text-sm font-mono">{selected.content || t("projectSkills.noContent")}</pre>
         </section>
       ) : null}
     </ProjectPageShell>

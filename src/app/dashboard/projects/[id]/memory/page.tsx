@@ -3,18 +3,20 @@
 import { useParams } from "next/navigation";
 import { ProjectFileEditor } from "@/components/project-file-editor";
 import { ProjectPageShell } from "@/components/project-page-shell";
+import { useI18n } from "@/i18n/provider";
 
 export default function ProjectMemoryPage() {
+  const { t } = useI18n();
   const { id } = useParams();
   const projectId = id as string;
   return (
-    <ProjectPageShell projectId={projectId} title="Project Memory" description="Edit the memory.md file used by this project agent.">
+    <ProjectPageShell projectId={projectId} title={t("projectSub.memory.title")} description={t("projectSub.memory.description")}>
       <ProjectFileEditor
         projectId={projectId}
         endpoint="memory"
         filename="memory.md"
         title="memory.md"
-        description="Plain Markdown memory. The agent reads, searches, and appends this file through Eggent memory tools."
+        description={t("projectSub.memory.editorDescription")}
       />
     </ProjectPageShell>
   );

@@ -1,3 +1,4 @@
+import { NextRequest } from "next/server";
 import {
   getTelegramIntegrationPublicSettings,
   getTelegramIntegrationRuntimeConfig,
@@ -6,6 +7,7 @@ import {
 } from "@/lib/storage/telegram-integration-store";
 import { deleteEggentTelegramBotCommands } from "@/lib/telegram/bot-commands";
 import { telegramPollingService } from "@/lib/telegram/polling-service";
+import { getServerTranslator } from "@/i18n/server";
 
 interface TelegramApiResponse {
   ok?: boolean;
@@ -39,7 +41,8 @@ async function deleteTelegramWebhook(botToken: string): Promise<void> {
   }
 }
 
-export async function POST() {
+export async function POST(req: NextRequest) {
+  const t = await getServerTranslator(req.headers.get("accept-language"));
   try {
     const runtime = await getTelegramIntegrationRuntimeConfig();
     const stored = await getTelegramIntegrationStoredSettings();
@@ -57,7 +60,7 @@ export async function POST() {
         webhookWarning =
           error instanceof Error
             ? error.message
-            : "Failed to remove Telegram webhook";
+            : t("api.error.telegramWebhookRemoveFailed");
       }
     }
 
@@ -75,12 +78,12 @@ export async function POST() {
     const settings = await getTelegramIntegrationPublicSettings();
     const note =
       settings.sources.botToken === "env"
-        ? "Token is still provided by .env. Remove TELEGRAM_BOT_TOKEN and TELEGRAM_WEBHOOK_SECRET to fully disconnect."
+        ? t("api.error.telegramEnvTokenNote")
         : null;
 
     return Response.json({
       success: true,
-      message: "Telegram disconnected",
+      message: t("api.success.telegramDisconnected"),
       webhookRemoved,
       webhookWarning,
       note,
@@ -92,7 +95,7 @@ export async function POST() {
         error:
           error instanceof Error
             ? error.message
-            : "Failed to disconnect Telegram integration",
+            : t("api.error.telegramDisconnectFailed"),
       },
       { status: 500 }
     );

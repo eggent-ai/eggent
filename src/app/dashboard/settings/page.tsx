@@ -14,6 +14,8 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Textarea } from "@/components/ui/textarea";
 import { Check, ExternalLink, KeyRound, Loader2, LogOut, Moon, PlugZap, Save, ShieldCheck, Sun } from "lucide-react";
 import { updateSettingsByPath } from "@/lib/settings/update-settings-path";
+import { LOCALE_OPTIONS, normalizeLocalePreference, type LocalePreference } from "@/i18n/locales";
+import { useI18n } from "@/i18n/provider";
 import type { AppSettings } from "@/lib/types";
 
 interface PiProviderState {
@@ -105,6 +107,7 @@ interface LoginJobState {
 const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh"];
 
 export default function SettingsPage() {
+  const { setLocalePreference, t } = useI18n();
   const [settings, setSettings] = useState<AppSettings | null>(null);
   const [piState, setPiState] = useState<PiState | null>(null);
   const [modelsJson, setModelsJson] = useState("");
@@ -155,7 +158,7 @@ export default function SettingsPage() {
       const res = await fetch(`/api/pi/auth/login?id=${encodeURIComponent(oauthJobId)}`, { cache: "no-store" });
       const json = await res.json().catch(() => null) as LoginJobState | { error?: string } | null;
       if (!res.ok || !json || ("error" in json && !("status" in json))) {
-        setPiError(json?.error || "Failed to poll provider login");
+        setPiError(json?.error || t("settings.errors.pollProviderLogin"));
         return;
       }
       const next = json as LoginJobState;
@@ -182,7 +185,7 @@ export default function SettingsPage() {
         fetch("/api/pi/models?raw=1", { cache: "no-store" }),
       ]);
       const [stateJson, rawJson] = await Promise.all([stateRes.json(), rawRes.json()]);
-      if (!stateRes.ok) throw new Error(stateJson.error || "Failed to load models");
+      if (!stateRes.ok) throw new Error(stateJson.error || t("settings.errors.loadModels"));
       setPiState(stateJson);
       const defaultProvider = typeof stateJson?.settings?.defaultProvider === "string" ? stateJson.settings.defaultProvider : "";
       const defaultModel = typeof stateJson?.settings?.defaultModel === "string" ? stateJson.settings.defaultModel : "";
@@ -198,7 +201,7 @@ export default function SettingsPage() {
       setModelsJson(raw);
       setModelsJsonSaved(raw);
     } catch (error) {
-      setPiError(error instanceof Error ? error.message : "Failed to load model connections");
+      setPiError(error instanceof Error ? error.message : t("settings.errors.loadModelConnections"));
     } finally {
       setPiLoading(false);
     }
@@ -219,6 +222,12 @@ export default function SettingsPage() {
     setSettings((prev) => (prev ? updateSettingsByPath(prev, path, value) : prev));
   }
 
+  function updateLanguage(value: LocalePreference) {
+    updateSettings("general.language", value);
+    setLocalePreference(value);
+    window.dispatchEvent(new CustomEvent("eggent:locale-change", { detail: { preference: value } }));
+  }
+
   async function saveProviderKey() {
     const providerId = defaultProviderSelection.trim();
     if (!providerId || !apiKey.trim()) return;
@@ -229,7 +238,7 @@ export default function SettingsPage() {
         if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error();
         env = Object.fromEntries(Object.entries(parsed).filter(([, value]) => typeof value === "string")) as Record<string, string>;
       } catch {
-        setPiError("Provider env must be a JSON object, for example {\"CLOUDFLARE_ACCOUNT_ID\":\"...\"}.");
+        setPiError(t("settings.errors.providerEnvJson"));
         return;
       }
     }
@@ -242,13 +251,13 @@ export default function SettingsPage() {
         body: JSON.stringify({ provider: providerId, apiKey: apiKey.trim(), env }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed to save provider key");
+      if (!res.ok) throw new Error(json.error || t("settings.errors.saveProviderKey"));
       setApiKey("");
       setApiKeyEnv("");
       setPiState(json);
       await loadPiState();
     } catch (error) {
-      setPiError(error instanceof Error ? error.message : "Failed to save provider key");
+      setPiError(error instanceof Error ? error.message : t("settings.errors.saveProviderKey"));
     } finally {
       setSavingProvider(false);
     }
@@ -256,13 +265,13 @@ export default function SettingsPage() {
 
   async function logoutProvider(providerId: string) {
     const message = providerId === "eggent-ai"
-      ? "Switch from Eggent AI to your own provider key? You can add an API key after this."
+      ? t("settings.logoutEggentAiConfirm")
       : `Log out from ${providerId}? Stored credentials will be removed.`;
     if (!confirm(message)) return;
     const res = await fetch(`/api/pi/auth?provider=${encodeURIComponent(providerId)}`, { method: "DELETE" });
     const json = await res.json().catch(() => null);
     if (!res.ok) {
-      setPiError(json?.error || "Failed to logout provider");
+      setPiError(json?.error || t("settings.errors.logoutProvider"));
       return;
     }
     setPiState(json);
@@ -284,10 +293,10 @@ export default function SettingsPage() {
         body: JSON.stringify({ provider: providerId }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed to start provider login");
+      if (!res.ok) throw new Error(json.error || t("settings.errors.startProviderLogin"));
       setOauthJob(json);
     } catch (error) {
-      setPiError(error instanceof Error ? error.message : "Failed to start provider login");
+      setPiError(error instanceof Error ? error.message : t("settings.errors.startProviderLogin"));
     } finally {
       setOauthSaving(false);
     }
@@ -302,7 +311,7 @@ export default function SettingsPage() {
     });
     const json = await res.json().catch(() => null);
     if (!res.ok) {
-      setPiError(json?.error || "Failed to answer login prompt");
+      setPiError(json?.error || t("settings.errors.answerLoginPrompt"));
       return;
     }
     setAnsweredPrompts((prev) => ({ ...prev, [promptId]: true }));
@@ -312,7 +321,7 @@ export default function SettingsPage() {
   async function cancelOAuthLogin() {
     if (!oauthJob) return;
     await fetch(`/api/pi/auth/login?id=${encodeURIComponent(oauthJob.id)}`, { method: "DELETE" }).catch(() => null);
-    setOauthJob((prev) => prev ? { ...prev, status: "cancelled", error: "Login cancelled" } : prev);
+    setOauthJob((prev) => prev ? { ...prev, status: "cancelled", error: t("common.cancel") } : prev);
   }
 
   function handleDefaultProviderChange(providerId: string) {
@@ -336,10 +345,10 @@ export default function SettingsPage() {
         body: JSON.stringify({ provider: providerId, model: modelId, thinkingLevel: defaultThinkingLevel }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed to save default model");
+      if (!res.ok) throw new Error(json.error || t("settings.errors.saveDefaultModel"));
       await loadPiState();
     } catch (error) {
-      setPiError(error instanceof Error ? error.message : "Failed to save default model");
+      setPiError(error instanceof Error ? error.message : t("settings.errors.saveDefaultModel"));
     } finally {
       setSavingDefaultModel(false);
     }
@@ -355,13 +364,13 @@ export default function SettingsPage() {
         body: JSON.stringify({ content: modelsJson }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed to save models.json");
+      if (!res.ok) throw new Error(json.error || t("settings.errors.saveModelsJson"));
       const next = typeof json.content === "string" ? json.content : modelsJson;
       setModelsJson(next);
       setModelsJsonSaved(next);
       await loadPiState();
     } catch (error) {
-      setPiError(error instanceof Error ? error.message : "Failed to save models.json");
+      setPiError(error instanceof Error ? error.message : t("settings.errors.saveModelsJson"));
     } finally {
       setSavingModelsJson(false);
     }
@@ -372,9 +381,9 @@ export default function SettingsPage() {
     const password = authPassword.trim();
     const passwordConfirm = authPasswordConfirm.trim();
 
-    if (!username) return setAuthError("Username is required.");
-    if (password.length < 8) return setAuthError("Password must be at least 8 characters.");
-    if (password !== passwordConfirm) return setAuthError("Password confirmation does not match.");
+    if (!username) return setAuthError(t("projects.errors.usernameRequired"));
+    if (password.length < 8) return setAuthError(t("projects.errors.passwordMin"));
+    if (password !== passwordConfirm) return setAuthError(t("projects.errors.passwordMismatch"));
 
     try {
       setAuthSaving(true);
@@ -386,7 +395,7 @@ export default function SettingsPage() {
         body: JSON.stringify({ username, password }),
       });
       const payload = (await response.json().catch(() => null)) as { error?: string; username?: string } | null;
-      if (!response.ok) throw new Error(payload?.error || "Failed to update credentials.");
+      if (!response.ok) throw new Error(payload?.error || t("settings.errors.updateCredentials"));
       setAuthUsername(payload?.username || username);
       setAuthPassword("");
       setAuthPasswordConfirm("");
@@ -394,7 +403,7 @@ export default function SettingsPage() {
       setTimeout(() => setAuthSaved(false), 2000);
       setSettings((prev) => prev ? { ...prev, auth: { ...prev.auth, username: payload?.username || username, mustChangeCredentials: false } } : prev);
     } catch (error) {
-      setAuthError(error instanceof Error ? error.message : "Failed to update credentials.");
+      setAuthError(error instanceof Error ? error.message : t("settings.errors.updateCredentials"));
     } finally {
       setAuthSaving(false);
     }
@@ -429,7 +438,7 @@ export default function SettingsPage() {
     return (
       <div className="[--header-height:calc(--spacing(14))]">
         <SidebarProvider className="flex flex-col">
-          <SiteHeader title="Settings" />
+          <SiteHeader title={t("settings.title")} />
           <div className="flex flex-1"><AppSidebar /><SidebarInset><div className="flex flex-1 items-center justify-center"><Loader2 className="size-6 animate-spin text-muted-foreground" /></div></SidebarInset></div>
         </SidebarProvider>
       </div>
@@ -439,7 +448,7 @@ export default function SettingsPage() {
   return (
     <div className="[--header-height:calc(--spacing(14))]">
       <SidebarProvider className="flex flex-col">
-        <SiteHeader title="Settings" />
+        <SiteHeader title={t("settings.title")} />
         <div className="flex flex-1">
           <AppSidebar />
           <SidebarInset>
@@ -448,22 +457,22 @@ export default function SettingsPage() {
 
               <div className="flex items-center justify-between">
                 <div>
-                  <h2 className="text-2xl font-semibold">Settings</h2>
-                  <p className="text-sm text-muted-foreground">Manage Eggent model and authentication settings from one UI.</p>
+                  <h2 className="text-2xl font-semibold">{t("settings.title")}</h2>
+                  <p className="text-sm text-muted-foreground">{t("settings.description")}</p>
                 </div>
                 <Button onClick={handleSaveSettings} className="gap-2">
                   {saved ? <Check className="size-4" /> : <Save className="size-4" />}
-                  {saved ? "Saved" : "Save App Settings"}
+                  {saved ? t("settings.saved") : t("settings.save")}
                 </Button>
               </div>
 
               <section className="rounded-xl border bg-card p-5 space-y-5">
                 <div className="flex items-center gap-2">
                   <PlugZap className="size-5 text-primary" />
-                  <h3 className="text-lg font-semibold">Models and login</h3>
+                  <h3 className="text-lg font-semibold">{t("settings.models.title")}</h3>
                 </div>
                 <p className="text-sm text-muted-foreground">
-                  Configure provider logins, API keys, model defaults, and custom model providers for Eggent.
+                  {t("settings.models.description")}
                 </p>
                 {piError ? (
                   <Alert variant="destructive">
@@ -515,8 +524,8 @@ export default function SettingsPage() {
                 <div className="rounded-lg border p-4 space-y-3">
                   <div>
                     <div className="text-xs font-mono text-muted-foreground">provider</div>
-                    <h4 className="font-medium">Choose provider</h4>
-                    <p className="text-xs text-muted-foreground">Pick one provider first. Eggent will only show models for that provider.</p>
+                    <h4 className="font-medium">{t("settings.chooseProvider")}</h4>
+                    <p className="text-xs text-muted-foreground">{t("settings.chooseProviderDescription")}</p>
                   </div>
                   <Select
                     value={defaultProviderSelection}
@@ -524,7 +533,7 @@ export default function SettingsPage() {
                     disabled={piLoading || providerChoices.length === 0}
                   >
                     <SelectTrigger className="w-full">
-                      <SelectValue placeholder="Select provider..." />
+                      <SelectValue placeholder={t("settings.selectProvider")} />
                     </SelectTrigger>
                     <SelectContent>
                       <SelectGroup>
@@ -540,11 +549,11 @@ export default function SettingsPage() {
                   <div className="rounded-lg border p-4 space-y-4">
                     <div>
                       <div className="text-xs font-mono text-muted-foreground">/login</div>
-                      <h4 className="font-medium">Connect {selectedProviderName}</h4>
+                      <h4 className="font-medium">{t("settings.connectProvider", { provider: selectedProviderName })}</h4>
                       <p className="text-xs text-muted-foreground">
                         {selectedProviderConnected
-                          ? "This provider already has available models. You can still save or replace its API key."
-                          : "After this provider is connected, its available models will appear here."}
+                          ? t("settings.providerConnectedDescription")
+                          : t("settings.providerDisconnectedDescription")}
                       </p>
                     </div>
 
@@ -561,15 +570,15 @@ export default function SettingsPage() {
                           <Input value={apiKey} onChange={(event) => setApiKey(event.target.value)} type="password" placeholder={`API key for ${selectedProviderName}`} />
                           <Button onClick={saveProviderKey} disabled={savingProvider || !apiKey.trim()} className="gap-2">
                             {savingProvider ? <Loader2 className="size-4 animate-spin" /> : <KeyRound className="size-4" />}
-                            {selectedProviderHasStoredCredential ? "Replace key" : "Save key"}
+                            {selectedProviderHasStoredCredential ? t("settings.replaceKey") : t("settings.saveKey")}
                           </Button>
                         </div>
-                        <Textarea value={apiKeyEnv} onChange={(event) => setApiKeyEnv(event.target.value)} rows={4} className="font-mono text-xs" placeholder={'Optional provider-scoped env JSON, e.g. {"CLOUDFLARE_ACCOUNT_ID":"..."}'} />
+                        <Textarea value={apiKeyEnv} onChange={(event) => setApiKeyEnv(event.target.value)} rows={4} className="font-mono text-xs" placeholder={t("settings.providerEnvPlaceholder")} />
                       </div>
                     ) : null}
 
                     {!selectedOauthProvider && !selectedApiKeyProvider ? (
-                      <p className="text-sm text-muted-foreground">This provider does not expose a login method here.</p>
+                      <p className="text-sm text-muted-foreground">{t("settings.noLoginMethod")}</p>
                     ) : null}
                   </div>
                 ) : null}
@@ -577,16 +586,16 @@ export default function SettingsPage() {
                 {oauthJob ? (
                   <div className="rounded-md border bg-muted/20 p-3 space-y-3 text-sm">
                     <div className="flex items-center justify-between gap-3">
-                      <div>Status: <span className="font-medium">{oauthJob.status}</span>{oauthJob.error ? <span className="text-destructive"> · {oauthJob.error}</span> : null}</div>
-                      {oauthJob.status === "running" ? <Button size="sm" variant="outline" onClick={cancelOAuthLogin}>Cancel</Button> : null}
+                      <div>{t("settings.status")} <span className="font-medium">{oauthJob.status}</span>{oauthJob.error ? <span className="text-destructive"> · {oauthJob.error}</span> : null}</div>
+                      {oauthJob.status === "running" ? <Button size="sm" variant="outline" onClick={cancelOAuthLogin}>{t("common.cancel")}</Button> : null}
                     </div>
                     {oauthJob.events.map((event) => {
-                      if (event.type === "auth_url") return <div key={event.id} className="space-y-1"><p>{event.instructions || "Open this URL to authenticate:"}</p><a href={event.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary underline"><ExternalLink className="size-3" />Open auth URL</a><p className="break-all text-xs text-muted-foreground">{event.url}</p></div>;
-                      if (event.type === "device_code") return <div key={event.id} className="rounded-md bg-background p-3"><p>Open <a href={event.verificationUri} target="_blank" rel="noreferrer" className="text-primary underline">{event.verificationUri}</a> and enter code:</p><div className="mt-2 font-mono text-lg font-semibold tracking-widest">{event.userCode}</div></div>;
+                      if (event.type === "auth_url") return <div key={event.id} className="space-y-1"><p>{event.instructions || t("settings.openAuthUrlInstruction")}</p><a href={event.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary underline"><ExternalLink className="size-3" />{t("settings.openAuthUrl")}</a><p className="break-all text-xs text-muted-foreground">{event.url}</p></div>;
+                      if (event.type === "device_code") return <div key={event.id} className="rounded-md bg-background p-3"><p>{t("settings.deviceCodeInstruction", { url: event.verificationUri })}</p><div className="mt-2 font-mono text-lg font-semibold tracking-widest">{event.userCode}</div></div>;
                       if (event.type === "progress") return <p key={event.id} className="text-muted-foreground">{event.message}</p>;
                       if (event.type === "select" && oauthJob.status === "running" && !answeredPrompts[event.promptId]) return <div key={event.id} className="space-y-2"><p className="font-medium">{event.message}</p><div className="flex flex-wrap gap-2">{event.options.map((option) => <Button key={option.id} size="sm" variant="outline" onClick={() => answerLoginPrompt(event.promptId, option.id)}>{option.label}</Button>)}</div></div>;
-                      if (event.type === "prompt" && oauthJob.status === "running" && !answeredPrompts[event.promptId]) return <div key={event.id} className="space-y-2"><Label>{event.message}</Label><div className="grid gap-2 md:grid-cols-[1fr_auto]"><Input value={promptInputs[event.promptId] || ""} placeholder={event.placeholder || ""} onChange={(inputEvent) => setPromptInputs((prev) => ({ ...prev, [event.promptId]: inputEvent.target.value }))} /><Button onClick={() => answerLoginPrompt(event.promptId, promptInputs[event.promptId] || "")} disabled={!event.allowEmpty && !promptInputs[event.promptId]?.trim()}>Send</Button></div></div>;
-                      if (event.type === "completed") return <p key={event.id} className="text-emerald-600">Login completed. Credentials were updated.</p>;
+                      if (event.type === "prompt" && oauthJob.status === "running" && !answeredPrompts[event.promptId]) return <div key={event.id} className="space-y-2"><Label>{event.message}</Label><div className="grid gap-2 md:grid-cols-[1fr_auto]"><Input value={promptInputs[event.promptId] || ""} placeholder={event.placeholder || ""} onChange={(inputEvent) => setPromptInputs((prev) => ({ ...prev, [event.promptId]: inputEvent.target.value }))} /><Button onClick={() => answerLoginPrompt(event.promptId, promptInputs[event.promptId] || "")} disabled={!event.allowEmpty && !promptInputs[event.promptId]?.trim()}>{t("settings.send")}</Button></div></div>;
+                      if (event.type === "completed") return <p key={event.id} className="text-emerald-600">{t("settings.loginCompleted")}</p>;
                       if (event.type === "error") return <p key={event.id} className="text-destructive">{event.message}</p>;
                       return null;
                     })}
@@ -597,13 +606,13 @@ export default function SettingsPage() {
                   <div className="rounded-lg border p-4 space-y-3">
                     <div>
                       <div className="text-xs font-mono text-muted-foreground">/model</div>
-                      <h4 className="font-medium">Choose {selectedProviderName} model</h4>
-                      <p className="text-xs text-muted-foreground">Only models currently available for this provider are shown.</p>
+                      <h4 className="font-medium">{t("settings.chooseModel", { provider: selectedProviderName })}</h4>
+                      <p className="text-xs text-muted-foreground">{t("settings.chooseModelDescription")}</p>
                     </div>
                     <div className="grid gap-3 md:grid-cols-[1fr_160px_auto]">
                       <Select value={defaultModelSelection} onValueChange={setDefaultModelSelection}>
                         <SelectTrigger className="w-full">
-                          <SelectValue placeholder="Select model" />
+                          <SelectValue placeholder={t("settings.selectModel")} />
                         </SelectTrigger>
                         <SelectContent>
                           <SelectGroup>
@@ -617,7 +626,7 @@ export default function SettingsPage() {
                       </Select>
                       <Select value={defaultThinkingLevel} onValueChange={setDefaultThinkingLevel}>
                         <SelectTrigger className="w-full">
-                          <SelectValue placeholder="Thinking" />
+                          <SelectValue placeholder={t("settings.thinking")} />
                         </SelectTrigger>
                         <SelectContent>
                           <SelectGroup>
@@ -627,29 +636,29 @@ export default function SettingsPage() {
                       </Select>
                       <Button onClick={saveDefaultModel} disabled={savingDefaultModel || !defaultModelSelection} className="gap-2">
                         {savingDefaultModel ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
-                        Save model
+                        {t("settings.saveModel")}
                       </Button>
                     </div>
                     {selectedProviderState?.stored ? (
                       <Button variant="ghost" className="gap-2 px-0 text-destructive" onClick={() => logoutProvider(defaultProviderSelection)}>
-                        <LogOut className="size-4" /> Logout from {selectedProviderName}
+                        <LogOut className="size-4" /> {t("settings.logoutFromProvider", { provider: selectedProviderName })}
                       </Button>
                     ) : null}
                   </div>
                 ) : null}
 
                 <details className="rounded-lg border p-4">
-                  <summary className="cursor-pointer text-sm font-medium">Advanced: edit custom models.json</summary>
+                  <summary className="cursor-pointer text-sm font-medium">{t("settings.advancedModelsSummary")}</summary>
                   <div className="mt-4 space-y-2">
                     <div className="flex items-center justify-between gap-3">
                       <div>
                         <div className="text-xs font-mono text-muted-foreground">models.json</div>
-                        <h4 className="font-medium">Custom providers and models</h4>
-                        <p className="text-xs text-muted-foreground">Add a custom provider here, save models.json, and it will appear in the provider list above.</p>
+                        <h4 className="font-medium">{t("settings.customProvidersTitle")}</h4>
+                        <p className="text-xs text-muted-foreground">{t("settings.customProvidersDescription")}</p>
                       </div>
                       <Button size="sm" onClick={saveModelsJson} disabled={savingModelsJson || !modelsJsonDirty}>
                         {savingModelsJson ? <Loader2 className="mr-2 size-4 animate-spin" /> : null}
-                        Save models.json
+                        {t("settings.saveModelsJson")}
                       </Button>
                     </div>
                     <Textarea value={modelsJson} onChange={(event) => setModelsJson(event.target.value)} rows={14} className="min-h-80 font-mono text-xs" />
@@ -659,33 +668,51 @@ export default function SettingsPage() {
               </section>
 
               <section className="rounded-xl border bg-card p-5 space-y-4">
-                <h3 className="text-lg font-semibold">Appearance</h3>
+                <h3 className="text-lg font-semibold">{t("settings.appearance.title")}</h3>
                 <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
-                  <div><p className="text-sm font-medium">Dark mode</p><p className="text-sm text-muted-foreground">Switch between light and dark theme.</p></div>
+                  <div><p className="text-sm font-medium">{t("settings.darkMode.title")}</p><p className="text-sm text-muted-foreground">{t("settings.darkMode.description")}</p></div>
                   <Label htmlFor="dark-mode-enabled" className="flex cursor-pointer items-center gap-2">
                     <Sun className="size-4 text-muted-foreground" />
                     <input id="dark-mode-enabled" type="checkbox" checked={settings.general.darkMode} onChange={(event) => updateSettings("general.darkMode", event.target.checked)} className="rounded" />
                     <Moon className="size-4 text-muted-foreground" />
                   </Label>
                 </div>
+                <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
+                  <div>
+                    <p className="text-sm font-medium">{t("settings.language.title")}</p>
+                    <p className="text-sm text-muted-foreground">{t("settings.language.description")}</p>
+                  </div>
+                  <Select value={normalizeLocalePreference(settings.general.language)} onValueChange={(value) => updateLanguage(value as LocalePreference)}>
+                    <SelectTrigger className="w-[180px]">
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectGroup>
+                        {LOCALE_OPTIONS.map((option) => (
+                          <SelectItem key={option.value} value={option.value}>{option.label}</SelectItem>
+                        ))}
+                      </SelectGroup>
+                    </SelectContent>
+                  </Select>
+                </div>
               </section>
 
               <section className="rounded-xl border bg-card p-5 space-y-4">
-                <div className="flex items-center gap-2"><ShieldCheck className="size-5 text-primary" /><h3 className="text-lg font-semibold">Dashboard authentication</h3></div>
+                <div className="flex items-center gap-2"><ShieldCheck className="size-5 text-primary" /><h3 className="text-lg font-semibold">{t("settings.auth.title")}</h3></div>
                 <div className="grid gap-4 sm:grid-cols-3">
-                  <div className="space-y-2"><Label htmlFor="auth-username">Username</Label><Input id="auth-username" value={authUsername} onChange={(event) => setAuthUsername(event.target.value)} /></div>
-                  <div className="space-y-2"><Label htmlFor="auth-password">New password</Label><Input id="auth-password" type="password" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} /></div>
-                  <div className="space-y-2"><Label htmlFor="auth-password-confirm">Confirm password</Label><Input id="auth-password-confirm" type="password" value={authPasswordConfirm} onChange={(event) => setAuthPasswordConfirm(event.target.value)} /></div>
+                  <div className="space-y-2"><Label htmlFor="auth-username">{t("settings.auth.username")}</Label><Input id="auth-username" value={authUsername} onChange={(event) => setAuthUsername(event.target.value)} /></div>
+                  <div className="space-y-2"><Label htmlFor="auth-password">{t("settings.auth.newPassword")}</Label><Input id="auth-password" type="password" value={authPassword} onChange={(event) => setAuthPassword(event.target.value)} /></div>
+                  <div className="space-y-2"><Label htmlFor="auth-password-confirm">{t("settings.auth.confirmPassword")}</Label><Input id="auth-password-confirm" type="password" value={authPasswordConfirm} onChange={(event) => setAuthPasswordConfirm(event.target.value)} /></div>
                 </div>
                 {authError ? (
                   <Alert variant="destructive">
                     <AlertDescription>{authError}</AlertDescription>
                   </Alert>
                 ) : null}
-                {authSaved ? <Badge variant="secondary">Credentials updated</Badge> : null}
+                {authSaved ? <Badge variant="secondary">{t("settings.auth.credentialsUpdated")}</Badge> : null}
                 <Button onClick={handleUpdateAuth} disabled={authSaving} className="gap-2">
                   {authSaving ? <Loader2 className="size-4 animate-spin" /> : <ShieldCheck className="size-4" />}
-                  Update credentials
+                  {t("settings.auth.updateCredentials")}
                 </Button>
               </section>
             </div>

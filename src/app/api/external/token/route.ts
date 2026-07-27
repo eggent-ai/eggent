@@ -4,6 +4,7 @@ import {
   maskExternalApiToken,
   saveExternalApiToken,
 } from "@/lib/storage/external-api-token-store";
+import { getServerTranslator } from "@/i18n/server";
 
 function resolveEnvToken(): string | null {
   const envToken = process.env.EXTERNAL_API_TOKEN?.trim();
@@ -39,7 +40,8 @@ export async function GET() {
   });
 }
 
-export async function POST() {
+export async function POST(req: Request) {
+  const t = await getServerTranslator(req.headers.get("accept-language"));
   try {
     const token = generateExternalApiToken();
     await saveExternalApiToken(token);
@@ -56,7 +58,7 @@ export async function POST() {
         error:
           error instanceof Error
             ? error.message
-            : "Failed to generate token",
+            : t("api.error.generateToken"),
       },
       { status: 500 }
     );

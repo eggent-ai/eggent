@@ -6,6 +6,7 @@ import { SettingsNavigation } from "@/components/settings-navigation";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { getServerTranslator } from "@/i18n/server";
 
 function CodeBlock({ code }: { code: string }) {
   return (
@@ -34,11 +35,13 @@ function InfoCard({
   );
 }
 
-export default function ApiPage() {
+export default async function ApiPage() {
+  const t = await getServerTranslator();
+
   return (
     <div className="[--header-height:calc(--spacing(14))]">
       <SidebarProvider className="flex flex-col">
-        <SiteHeader title="API" />
+        <SiteHeader title={t("apiDocs.title")} />
         <div className="flex flex-1">
           <AppSidebar />
           <SidebarInset>
@@ -46,30 +49,25 @@ export default function ApiPage() {
               <SettingsNavigation />
 
               <div className="space-y-2">
-                <h2 className="text-2xl font-semibold">External Message API</h2>
-                <p className="text-sm text-muted-foreground">
-                  Send messages to Eggent from your app, workflow, bot, or webhook. Eggent keeps
-                  session state by <span className="font-mono">sessionId</span>, so follow-up calls
-                  can continue the same project/chat context.
-                </p>
+                <h2 className="text-2xl font-semibold">{t("apiDocs.heading")}</h2>
+                <p className="text-sm text-muted-foreground">{t("apiDocs.description")}</p>
               </div>
 
-              <InfoCard title="1. Generate an API token">
+              <InfoCard title={t("apiDocs.generateToken")}>
                 <ExternalApiTokenManager />
               </InfoCard>
 
-              <InfoCard title="2. Connect to the endpoint">
+              <InfoCard title={t("apiDocs.connectEndpoint")}>
                 <div className="flex flex-wrap items-center gap-2">
                   <Badge variant="outline">POST</Badge>
                   <span className="font-mono text-sm">/api/external/message</span>
                 </div>
                 <div className="space-y-1 text-sm text-muted-foreground">
                   <p>
-                    Auth header: <span className="font-mono">Authorization: Bearer &lt;token&gt;</span>
+                    {t("apiDocs.authHeader")} <span className="font-mono">Authorization: Bearer &lt;token&gt;</span>
                   </p>
                   <p>
-                    Required body fields: <span className="font-mono">sessionId</span> and{" "}
-                    <span className="font-mono">message</span>.
+                    {t("apiDocs.requiredFields")}
                   </p>
                 </div>
                 <CodeBlock
@@ -84,56 +82,56 @@ export default function ApiPage() {
                 />
               </InfoCard>
 
-              <InfoCard title="Request fields">
+              <InfoCard title={t("apiDocs.requestFields")}>
                 <div className="overflow-x-auto">
                   <table className="w-full min-w-[640px] text-sm">
                     <thead className="text-left text-muted-foreground">
                       <tr className="border-b">
-                        <th className="py-2 pr-4 font-medium">Field</th>
-                        <th className="py-2 pr-4 font-medium">Required</th>
-                        <th className="py-2 font-medium">Purpose</th>
+                        <th className="py-2 pr-4 font-medium">{t("apiDocs.field")}</th>
+                        <th className="py-2 pr-4 font-medium">{t("apiDocs.required")}</th>
+                        <th className="py-2 font-medium">{t("apiDocs.purpose")}</th>
                       </tr>
                     </thead>
                     <tbody className="divide-y">
                       <tr>
                         <td className="py-2 pr-4 font-mono text-xs">sessionId</td>
-                        <td className="py-2 pr-4">Yes</td>
-                        <td className="py-2 text-muted-foreground">Stable external user/thread id. Used to remember context.</td>
+                        <td className="py-2 pr-4">{t("apiDocs.yes")}</td>
+                        <td className="py-2 text-muted-foreground">{t("apiDocs.field.sessionId")}</td>
                       </tr>
                       <tr>
                         <td className="py-2 pr-4 font-mono text-xs">message</td>
-                        <td className="py-2 pr-4">Yes</td>
-                        <td className="py-2 text-muted-foreground">Text to send to the Eggent agent.</td>
+                        <td className="py-2 pr-4">{t("apiDocs.yes")}</td>
+                        <td className="py-2 text-muted-foreground">{t("apiDocs.field.message")}</td>
                       </tr>
                       <tr>
                         <td className="py-2 pr-4 font-mono text-xs">projectId</td>
-                        <td className="py-2 pr-4">No</td>
-                        <td className="py-2 text-muted-foreground">Pin or switch this external session to a project by id. Also accepts an exact unique project name.</td>
+                        <td className="py-2 pr-4">{t("apiDocs.no")}</td>
+                        <td className="py-2 text-muted-foreground">{t("apiDocs.field.projectId")}</td>
                       </tr>
                       <tr>
                         <td className="py-2 pr-4 font-mono text-xs">projectName</td>
-                        <td className="py-2 pr-4">No</td>
-                        <td className="py-2 text-muted-foreground">Pin or switch by exact project name when you do not know the id.</td>
+                        <td className="py-2 pr-4">{t("apiDocs.no")}</td>
+                        <td className="py-2 text-muted-foreground">{t("apiDocs.field.projectName")}</td>
                       </tr>
                       <tr>
                         <td className="py-2 pr-4 font-mono text-xs">chatId</td>
-                        <td className="py-2 pr-4">No</td>
-                        <td className="py-2 text-muted-foreground">Reuse a specific Eggent chat instead of auto-created session chat.</td>
+                        <td className="py-2 pr-4">{t("apiDocs.no")}</td>
+                        <td className="py-2 text-muted-foreground">{t("apiDocs.field.chatId")}</td>
                       </tr>
                       <tr>
                         <td className="py-2 pr-4 font-mono text-xs">currentPath</td>
-                        <td className="py-2 pr-4">No</td>
-                        <td className="py-2 text-muted-foreground">Optional relative path hint inside the selected project.</td>
+                        <td className="py-2 pr-4">{t("apiDocs.no")}</td>
+                        <td className="py-2 text-muted-foreground">{t("apiDocs.field.currentPath")}</td>
                       </tr>
                     </tbody>
                   </table>
                 </div>
               </InfoCard>
 
-              <InfoCard title="Main use cases">
+              <InfoCard title={t("apiDocs.useCases")}>
                 <div className="grid gap-3 md:grid-cols-2">
                   <div className="rounded-lg border bg-muted/20 p-3 space-y-2">
-                    <h4 className="text-sm font-medium">Ask inside a project</h4>
+                    <h4 className="text-sm font-medium">{t("apiDocs.useCase.project")}</h4>
                     <CodeBlock
                       code={`{
   "sessionId": "user-42",
@@ -143,7 +141,7 @@ export default function ApiPage() {
                     />
                   </div>
                   <div className="rounded-lg border bg-muted/20 p-3 space-y-2">
-                    <h4 className="text-sm font-medium">Continue the same external thread</h4>
+                    <h4 className="text-sm font-medium">{t("apiDocs.useCase.thread")}</h4>
                     <CodeBlock
                       code={`{
   "sessionId": "user-42",
@@ -152,7 +150,7 @@ export default function ApiPage() {
                     />
                   </div>
                   <div className="rounded-lg border bg-muted/20 p-3 space-y-2">
-                    <h4 className="text-sm font-medium">Use a fixed Eggent chat</h4>
+                    <h4 className="text-sm font-medium">{t("apiDocs.useCase.fixedChat")}</h4>
                     <CodeBlock
                       code={`{
   "sessionId": "support-user-42",
@@ -162,7 +160,7 @@ export default function ApiPage() {
                     />
                   </div>
                   <div className="rounded-lg border bg-muted/20 p-3 space-y-2">
-                    <h4 className="text-sm font-medium">Send path context</h4>
+                    <h4 className="text-sm font-medium">{t("apiDocs.useCase.path")}</h4>
                     <CodeBlock
                       code={`{
   "sessionId": "deploy-hook",
@@ -174,13 +172,11 @@ export default function ApiPage() {
                   </div>
                 </div>
                 <p className="text-sm text-muted-foreground">
-                  If <span className="font-mono">projectId</span> / <span className="font-mono">projectName</span> is omitted, Eggent uses the
-                  session&apos;s last active project. If there is no active project and multiple projects
-                  exist, the API returns <span className="font-mono">409</span> with available projects.
+                  {t("apiDocs.omittedProjectNote")}
                 </p>
               </InfoCard>
 
-              <InfoCard title="JavaScript example">
+              <InfoCard title={t("apiDocs.jsExample")}>
                 <CodeBlock
                   code={`const res = await fetch("https://your-eggent.example.com/api/external/message", {
   method: "POST",
@@ -200,7 +196,7 @@ console.log(data.reply);`}
                 />
               </InfoCard>
 
-              <InfoCard title="Successful response">
+              <InfoCard title={t("apiDocs.successResponse")}>
                 <CodeBlock
                   code={`{
   "success": true,

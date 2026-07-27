@@ -8,6 +8,7 @@ import { SiteHeader } from "@/components/site-header";
 import { SettingsNavigation } from "@/components/settings-navigation";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
+import { useI18n } from "@/i18n/provider";
 
 interface ProjectPageShellProps {
   projectId: string;
@@ -17,6 +18,8 @@ interface ProjectPageShellProps {
 }
 
 export function ProjectPageShell({ projectId, title, description, children }: ProjectPageShellProps) {
+  const { t } = useI18n();
+
   return (
     <div className="[--header-height:calc(--spacing(14))]">
       <SidebarProvider className="flex flex-col">
@@ -30,11 +33,11 @@ export function ProjectPageShell({ projectId, title, description, children }: Pr
               <div className="space-y-2">
                 <Button variant="ghost" size="sm" asChild className="-ml-2 gap-2">
                   <Link href={`/dashboard/projects/${projectId}`}>
-                    <ArrowLeft className="size-4" /> Back to project
+                    <ArrowLeft className="size-4" /> {t("projectShell.back")}
                   </Link>
                 </Button>
                 <div>
-                  <div className="text-xs font-mono text-muted-foreground">project: {projectId}</div>
+                  <div className="text-xs font-mono text-muted-foreground">{t("projectShell.project", { projectId })}</div>
                   <h1 className="text-2xl font-semibold">{title}</h1>
                   {description ? <p className="text-sm text-muted-foreground">{description}</p> : null}
                 </div>

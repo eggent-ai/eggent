@@ -4,6 +4,7 @@ import {
     detectTelegramMode,
 } from "@/lib/storage/telegram-integration-store";
 import { telegramPollingService } from "@/lib/telegram/polling-service";
+import { getServerTranslator } from "@/i18n/server";
 
 export const maxDuration = 300;
 
@@ -23,13 +24,14 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+    const t = await getServerTranslator(req.headers.get("accept-language"));
     try {
         const runtime = await getTelegramIntegrationRuntimeConfig();
         const detectedMode = detectTelegramMode(runtime);
 
         if (!runtime.botToken.trim()) {
             return Response.json(
-                { error: "Telegram bot token is not configured" },
+                { error: t("api.error.telegramTokenMissing") },
                 { status: 503 }
             );
         }
@@ -41,7 +43,7 @@ export async function POST(req: NextRequest) {
         if (detectedMode === "webhook" && !force) {
             return Response.json(
                 {
-                    error: "Detected mode is webhook. Use force=true to start polling anyway.",
+                    error: t("api.error.pollingWebhookMode"),
                     detectedMode,
                 },
                 { status: 400 }
@@ -51,7 +53,7 @@ export async function POST(req: NextRequest) {
         if (telegramPollingService.status.isRunning) {
             return Response.json(
                 {
-                    error: "Polling is already running",
+                    error: t("api.error.pollingAlreadyRunning"),
                     polling: telegramPollingService.status,
                 },
                 { status: 409 }
@@ -62,25 +64,26 @@ export async function POST(req: NextRequest) {
 
         return Response.json({
             ok: true,
-            message: "Polling started",
+            message: t("api.success.pollingStarted"),
             polling: telegramPollingService.status,
         });
     } catch (error) {
         console.error("[Telegram Polling API] Error starting polling:", error);
         return Response.json(
             {
-                error: error instanceof Error ? error.message : "Failed to start polling",
+                error: error instanceof Error ? error.message : t("api.error.pollingStartFailed"),
             },
             { status: 500 }
         );
     }
 }
 
-export async function DELETE() {
+export async function DELETE(req: NextRequest) {
+    const t = await getServerTranslator(req.headers.get("accept-language"));
     try {
         if (!telegramPollingService.status.isRunning) {
             return Response.json(
-                { error: "Polling is not running" },
+                { error: t("api.error.pollingNotRunning") },
                 { status: 409 }
             );
         }
@@ -89,14 +92,14 @@ export async function DELETE() {
 
         return Response.json({
             ok: true,
-            message: "Polling stopped",
+            message: t("api.success.pollingStopped"),
             polling: telegramPollingService.status,
         });
     } catch (error) {
         console.error("[Telegram Polling API] Error stopping polling:", error);
         return Response.json(
             {
-                error: error instanceof Error ? error.message : "Failed to stop polling",
+                error: error instanceof Error ? error.message : t("api.error.pollingStopFailed"),
             },
             { status: 500 }
         );

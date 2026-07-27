@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { getAllProjects, createProject } from "@/lib/storage/project-store";
+import { getServerTranslator } from "@/i18n/server";
 
 export async function GET() {
   const projects = await getAllProjects();
@@ -7,13 +8,14 @@ export async function GET() {
 }
 
 export async function POST(req: NextRequest) {
+  const t = await getServerTranslator(req.headers.get("accept-language"));
   try {
     const body = await req.json();
     const { name, description, instructions, memoryMode } = body;
 
     if (!name || typeof name !== "string") {
       return Response.json(
-        { error: "Project name is required" },
+        { error: t("api.error.projectNameRequired") },
         { status: 400 }
       );
     }
@@ -38,7 +40,7 @@ export async function POST(req: NextRequest) {
     return Response.json(
       {
         error:
-          error instanceof Error ? error.message : "Failed to create project",
+          error instanceof Error ? error.message : t("projects.errors.create"),
       },
       { status: 500 }
     );

@@ -19,6 +19,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { useI18n } from "@/i18n/provider";
 
 interface BundledSkillItem {
   name: string;
@@ -37,6 +38,7 @@ interface InstalledSkillItem {
 }
 
 export default function SkillsPage() {
+  const { t } = useI18n();
   const { projects, setProjects, activeProjectId } = useAppStore();
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [bundledSkills, setBundledSkills] = useState<BundledSkillItem[]>([]);
@@ -108,7 +110,7 @@ export default function SkillsPage() {
         ? `?projectId=${encodeURIComponent(projectId)}`
         : "";
       const res = await fetch(`/api/skills${query}`);
-      if (!res.ok) throw new Error("Failed to load skills");
+      if (!res.ok) throw new Error(t("skills.errors.load"));
       const data = await res.json();
       if (Array.isArray(data)) {
         setBundledSkills(
@@ -143,7 +145,7 @@ export default function SkillsPage() {
     try {
       setInstalledSkillsLoading(true);
       const res = await fetch(`/api/projects/${encodeURIComponent(projectId)}/skills`);
-      if (!res.ok) throw new Error("Failed to load project skills");
+      if (!res.ok) throw new Error(t("skills.errors.loadProject"));
       const data = await res.json();
       if (Array.isArray(data)) {
         setInstalledSkills(
@@ -190,7 +192,7 @@ export default function SkillsPage() {
         const errorText =
           typeof payload?.error === "string"
             ? payload.error
-            : "Failed to install skill";
+            : t("skills.errors.install");
         setStatusMessage(errorText);
         return;
       }
@@ -202,9 +204,9 @@ export default function SkillsPage() {
       const projectName =
         projects.find((project) => project.id === selectedProjectId)?.name ??
         selectedProjectId;
-      setStatusMessage(`Installed "${skillName}" into project "${projectName}".`);
+      setStatusMessage(t("skills.installedMessage", { skill: skillName, project: projectName }));
     } catch {
-      setStatusMessage("Failed to install skill");
+      setStatusMessage(t("skills.errors.install"));
     } finally {
       setInstallingSkill(null);
     }
@@ -236,18 +238,15 @@ export default function SkillsPage() {
   return (
     <div className="[--header-height:calc(--spacing(14))]">
       <SidebarProvider className="flex flex-col">
-        <SiteHeader title="Skills" />
+        <SiteHeader title={t("skills.title")} />
         <div className="flex flex-1">
           <AppSidebar />
           <SidebarInset>
             <div className="flex flex-1 flex-col gap-4 p-4 md:p-6 max-w-5xl mx-auto w-full">
               <div className="space-y-1">
-                <h2 className="text-2xl font-semibold">Skills</h2>
+                <h2 className="text-2xl font-semibold">{t("skills.title")}</h2>
                 <p className="text-sm text-muted-foreground">
-                  Browse installed skills of the selected project and install bundled skills.
-                  Installed skills live in
-                  <span className="font-mono"> .meta/skills </span>
-                  and bundled skills are copied there on install.
+                  {t("skills.description", { path: ".meta/skills" })}
                 </p>
               </div>
 
@@ -258,7 +257,7 @@ export default function SkillsPage() {
                   disabled={projectsLoading || projects.length === 0}
                 >
                   <SelectTrigger className="md:w-96">
-                    <SelectValue placeholder={projectsLoading ? "Loading projects..." : "Select project"} />
+                    <SelectValue placeholder={projectsLoading ? t("skills.loadingProjects") : t("skills.selectProject")} />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
@@ -274,7 +273,7 @@ export default function SkillsPage() {
                 <Input
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search skills..."
+                  placeholder={t("skills.searchPlaceholder")}
                   className="md:max-w-sm"
                 />
               </div>
@@ -289,33 +288,33 @@ export default function SkillsPage() {
                 <div className="flex items-center justify-between border-b px-4 py-3">
                   <div className="flex items-center gap-2">
                     <BookText className="size-4 text-primary" />
-                    <h3 className="text-sm font-medium">Installed In Project</h3>
+                    <h3 className="text-sm font-medium">{t("skills.installedInProject")}</h3>
                   </div>
                   {!installedSkillsLoading && selectedProjectId && (
                     <span className="text-xs text-muted-foreground">
-                      {installedSkills.length} total
+                      {t("skills.total", { count: installedSkills.length })}
                     </span>
                   )}
                 </div>
                 {installedSkillsLoading ? (
                   <div className="py-10 text-center text-muted-foreground flex items-center justify-center gap-2">
                     <Loader2 className="size-4 animate-spin" />
-                    Loading installed skills...
+                    {t("skills.loadingInstalled")}
                   </div>
                 ) : !selectedProjectId ? (
                   <Empty>
                     <EmptyHeader>
                       <EmptyMedia variant="icon"><BookText /></EmptyMedia>
-                      <EmptyTitle>Select a project</EmptyTitle>
-                      <EmptyDescription>Choose a project to view installed skills.</EmptyDescription>
+                      <EmptyTitle>{t("skills.selectProjectTitle")}</EmptyTitle>
+                      <EmptyDescription>{t("skills.selectProjectDescription")}</EmptyDescription>
                     </EmptyHeader>
                   </Empty>
                 ) : filteredInstalledSkills.length === 0 ? (
                   <Empty>
                     <EmptyHeader>
                       <EmptyMedia variant="icon"><BookText /></EmptyMedia>
-                      <EmptyTitle>No installed skills</EmptyTitle>
-                      <EmptyDescription>Installed project skills will appear here.</EmptyDescription>
+                      <EmptyTitle>{t("skills.noInstalledTitle")}</EmptyTitle>
+                      <EmptyDescription>{t("skills.noInstalledDescription")}</EmptyDescription>
                     </EmptyHeader>
                   </Empty>
                 ) : (
@@ -333,14 +332,14 @@ export default function SkillsPage() {
                         <div className="min-w-0 flex-1">
                           <p className="font-medium text-sm truncate">{skill.name}</p>
                           <p className="text-xs text-muted-foreground line-clamp-2 mt-1">
-                            {skill.description || "No description"}
+                            {skill.description || t("skills.noDescription")}
                           </p>
                           <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
                             {skill.license ? (
-                              <Badge variant="outline">License: {skill.license}</Badge>
+                              <Badge variant="outline">{t("skills.license", { license: skill.license })}</Badge>
                             ) : null}
                             {skill.compatibility ? (
-                              <Badge variant="outline">Compatibility: {skill.compatibility}</Badge>
+                              <Badge variant="outline">{t("skills.compatibility", { compatibility: skill.compatibility })}</Badge>
                             ) : null}
                           </div>
                         </div>
@@ -351,24 +350,22 @@ export default function SkillsPage() {
               </div>
 
               <div className="space-y-1">
-                <h3 className="text-lg font-medium">Bundled Skills Catalog</h3>
+                <h3 className="text-lg font-medium">{t("skills.catalogTitle")}</h3>
                 <p className="text-sm text-muted-foreground">
-                  Install prebuilt skills into the selected project. Skills are copied to
-                  <span className="font-mono"> .meta/skills </span>
-                  of that project.
+                  {t("skills.catalogDescription", { path: ".meta/skills" })}
                 </p>
               </div>
               {bundledSkillsLoading ? (
                 <div className="py-14 text-center text-muted-foreground flex items-center justify-center gap-2">
                   <Loader2 className="size-4 animate-spin" />
-                  Loading bundled skills...
+                  {t("skills.loadingBundled")}
                 </div>
               ) : filteredBundledSkills.length === 0 ? (
                 <Empty className="border">
                   <EmptyHeader>
                     <EmptyMedia variant="icon"><Puzzle /></EmptyMedia>
-                    <EmptyTitle>No bundled skills found</EmptyTitle>
-                    <EmptyDescription>Try a different search or select another project.</EmptyDescription>
+                    <EmptyTitle>{t("skills.noBundledTitle")}</EmptyTitle>
+                    <EmptyDescription>{t("skills.noBundledDescription")}</EmptyDescription>
                   </EmptyHeader>
                 </Empty>
               ) : (
@@ -384,14 +381,14 @@ export default function SkillsPage() {
                           <h3 className="font-medium truncate">{skill.name}</h3>
                         </div>
                         <p className="mt-1 text-sm text-muted-foreground">
-                          {skill.description || "No description"}
+                          {skill.description || t("skills.noDescription")}
                         </p>
                         <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
                           {skill.license ? (
-                            <Badge variant="outline">License: {skill.license}</Badge>
+                            <Badge variant="outline">{t("skills.license", { license: skill.license })}</Badge>
                           ) : null}
                           {skill.compatibility ? (
-                            <Badge variant="outline">Compatibility: {skill.compatibility}</Badge>
+                            <Badge variant="outline">{t("skills.compatibility", { compatibility: skill.compatibility })}</Badge>
                           ) : null}
                         </div>
                       </div>
@@ -409,14 +406,14 @@ export default function SkillsPage() {
                         {installingSkill === skill.name ? (
                           <>
                             <Loader2 className="size-4 animate-spin" />
-                            Installing
+                            {t("skills.installing")}
                           </>
                         ) : skill.installed ? (
-                          "Installed"
+                          t("skills.installed")
                         ) : (
                           <>
                             <PackagePlus className="size-4" />
-                            Install
+                            {t("skills.install")}
                           </>
                         )}
                       </Button>
@@ -433,15 +430,15 @@ export default function SkillsPage() {
         <SheetContent side="right" className="w-full sm:max-w-2xl flex flex-col">
           <SheetHeader>
             <SheetTitle className="truncate pr-8">
-              Skill: {selectedSkill?.name ?? ""}
+              {t("skills.sheetTitle", { name: selectedSkill?.name ?? "" })}
             </SheetTitle>
             <SheetDescription>
-              {selectedSkill?.description || "Skill instructions"}
+              {selectedSkill?.description || t("skills.instructions")}
             </SheetDescription>
           </SheetHeader>
           <div className="flex-1 overflow-y-auto px-4 pb-4">
             <pre className="rounded-lg border bg-muted/30 p-3 text-sm font-mono whitespace-pre-wrap break-words">
-              {selectedSkill?.content || "No skill content."}
+              {selectedSkill?.content || t("skills.noContent")}
             </pre>
           </div>
         </SheetContent>

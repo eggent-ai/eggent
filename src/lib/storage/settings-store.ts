@@ -50,7 +50,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   general: {
     darkMode: false,
-    language: "en",
+    language: "auto",
   },
   auth: {
     enabled: true,

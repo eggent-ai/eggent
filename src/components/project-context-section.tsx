@@ -14,6 +14,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { useI18n } from "@/i18n/provider";
 
 interface ProjectSkillItem {
   name: string;
@@ -30,6 +31,7 @@ interface ProjectContextSectionProps {
 const EMPTY_MCP_JSON = JSON.stringify({ mcpServers: {} }, null, 2);
 
 export function ProjectContextSection({ projectId }: ProjectContextSectionProps) {
+  const { t } = useI18n();
   const [mcpContent, setMcpContent] = useState<string | null>(null);
   const [mcpDraft, setMcpDraft] = useState(EMPTY_MCP_JSON);
   const [mcpLoading, setMcpLoading] = useState(true);
@@ -124,7 +126,7 @@ export function ProjectContextSection({ projectId }: ProjectContextSectionProps)
         throw new Error(
           typeof payload?.error === "string"
             ? payload.error
-            : "Failed to save MCP config"
+            : t("projectContext.saveMcpFailed")
         );
       }
 
@@ -132,11 +134,11 @@ export function ProjectContextSection({ projectId }: ProjectContextSectionProps)
         typeof payload?.content === "string" ? payload.content : mcpDraft;
       setMcpContent(content);
       setMcpDraft(content);
-      setMcpStatus("MCP configuration saved.");
+      setMcpStatus(t("projectContext.mcpSaved"));
       setMcpStatusTone("success");
     } catch (error) {
       setMcpStatus(
-        error instanceof Error ? error.message : "Failed to save MCP config"
+        error instanceof Error ? error.message : t("projectContext.saveMcpFailed")
       );
       setMcpStatusTone("error");
     } finally {
@@ -155,20 +157,20 @@ export function ProjectContextSection({ projectId }: ProjectContextSectionProps)
           <div className="flex items-center justify-between px-4 py-3 border-b">
             <div className="flex items-center gap-2">
               <Wrench className="size-4 text-primary" />
-              <h4 className="text-sm font-medium">MCP Servers</h4>
+              <h4 className="text-sm font-medium">{t("projectContext.mcpServers")}</h4>
             </div>
           </div>
 
           {mcpLoading ? (
             <div className="p-8 text-center text-muted-foreground flex items-center justify-center gap-2">
               <Loader2 className="size-4 animate-spin" />
-              Loading MCP config...
+              {t("projectContext.loadingMcp")}
             </div>
           ) : (
             <div className="space-y-3 p-4">
               {!mcpContent && (
                 <p className="text-xs text-muted-foreground">
-                  No `.mcp.json` found for this project. Save to create it.
+                  {t("projectContext.noMcp")}
                 </p>
               )}
               {mcpStatus ? (
@@ -198,10 +200,10 @@ export function ProjectContextSection({ projectId }: ProjectContextSectionProps)
                   {mcpSaving ? (
                     <>
                       <Loader2 className="size-4 animate-spin" />
-                      Saving...
+                      {t("common.saving")}
                     </>
                   ) : (
-                    "Save"
+                    t("common.save")
                   )}
                 </Button>
                 <Button
@@ -210,7 +212,7 @@ export function ProjectContextSection({ projectId }: ProjectContextSectionProps)
                   onClick={() => setMcpDraft(mcpBaseline)}
                   disabled={mcpSaving || !mcpDirty}
                 >
-                  Reset
+                  {t("common.reset")}
                 </Button>
               </div>
             </div>
@@ -221,11 +223,11 @@ export function ProjectContextSection({ projectId }: ProjectContextSectionProps)
           <div className="flex items-center justify-between px-4 py-3 border-b">
             <div className="flex items-center gap-2">
               <Puzzle className="size-4 text-primary" />
-              <h4 className="text-sm font-medium">Project Skills</h4>
+              <h4 className="text-sm font-medium">{t("projectContext.projectSkills")}</h4>
             </div>
             {!skillsLoading && (
               <span className="text-xs text-muted-foreground">
-                {skills.length} total
+                {t("projectSkills.total", { count: skills.length })}
               </span>
             )}
           </div>
@@ -233,14 +235,14 @@ export function ProjectContextSection({ projectId }: ProjectContextSectionProps)
           {skillsLoading ? (
             <div className="p-8 text-center text-muted-foreground flex items-center justify-center gap-2">
               <Loader2 className="size-4 animate-spin" />
-              Loading skills...
+              {t("projectContext.loadingSkills")}
             </div>
           ) : skills.length === 0 ? (
             <Empty>
               <EmptyHeader>
                 <EmptyMedia variant="icon"><Puzzle /></EmptyMedia>
-                <EmptyTitle>No skills configured</EmptyTitle>
-                <EmptyDescription>Project skills will appear here after installation.</EmptyDescription>
+                <EmptyTitle>{t("projectContext.noSkillsTitle")}</EmptyTitle>
+                <EmptyDescription>{t("projectContext.noSkillsDescription")}</EmptyDescription>
               </EmptyHeader>
             </Empty>
           ) : (
@@ -258,7 +260,7 @@ export function ProjectContextSection({ projectId }: ProjectContextSectionProps)
                   <div className="min-w-0 flex-1">
                     <p className="font-medium text-sm truncate">{skill.name}</p>
                     <p className="text-xs text-muted-foreground line-clamp-2 mt-1">
-                      {skill.description || "No description"}
+                      {skill.description || t("skills.noDescription")}
                     </p>
                   </div>
                 </button>
@@ -272,15 +274,15 @@ export function ProjectContextSection({ projectId }: ProjectContextSectionProps)
         <SheetContent side="right" className="w-full sm:max-w-2xl flex flex-col">
           <SheetHeader>
             <SheetTitle className="truncate pr-8">
-              Skill: {selectedSkill?.name ?? ""}
+              {t("projectContext.skillTitle", { name: selectedSkill?.name ?? "" })}
             </SheetTitle>
             <SheetDescription>
-              {selectedSkill?.description || "Skill instructions"}
+              {selectedSkill?.description || t("projectContext.skillInstructions")}
             </SheetDescription>
           </SheetHeader>
           <div className="flex-1 overflow-y-auto px-4 pb-4">
             <pre className="rounded-lg border bg-muted/30 p-3 text-sm font-mono whitespace-pre-wrap break-words">
-              {selectedSkill?.content || "No skill content."}
+              {selectedSkill?.content || t("projectContext.noSkillContent")}
             </pre>
           </div>
         </SheetContent>

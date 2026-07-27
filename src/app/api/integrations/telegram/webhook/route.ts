@@ -1,7 +1,10 @@
+import { NextRequest } from "next/server";
 import {
   buildTelegramWebhookUrl,
   getTelegramIntegrationRuntimeConfig,
 } from "@/lib/storage/telegram-integration-store";
+import { getServerTranslator } from "@/i18n/server";
+import type { MessageKey } from "@/i18n/messages";
 
 export const dynamic = "force-dynamic";
 
@@ -44,27 +47,28 @@ function ensureWebhookConfigured(config: {
   botToken: string;
   webhookSecret: string;
   publicBaseUrl: string;
-}): { botToken: string; webhookSecret: string; webhookUrl: string } {
+}, t: (key: MessageKey) => string): { botToken: string; webhookSecret: string; webhookUrl: string } {
   const botToken = config.botToken.trim();
   const webhookSecret = config.webhookSecret.trim();
   if (!botToken) {
-    throw new Error("Telegram bot token is not configured");
+    throw new Error(t("api.error.telegramTokenMissing"));
   }
   if (!webhookSecret) {
-    throw new Error("Telegram webhook secret is not configured");
+    throw new Error(t("api.error.telegramSecretMissing"));
   }
   const webhookUrl = buildTelegramWebhookUrl(config.publicBaseUrl);
   return { botToken, webhookSecret, webhookUrl };
 }
 
-export async function GET() {
+export async function GET(req: NextRequest) {
+  const t = await getServerTranslator(req.headers.get("accept-language"));
   try {
     const config = await getTelegramIntegrationRuntimeConfig();
     if (!config.botToken.trim()) {
       return Response.json({
         configured: false,
         webhook: null,
-        message: "Telegram bot token is not configured",
+        message: t("api.error.telegramTokenMissing"),
       });
     }
 
@@ -97,17 +101,18 @@ export async function GET() {
         error:
           error instanceof Error
             ? error.message
-            : "Failed to load Telegram webhook status",
+            : t("api.error.telegramWebhookStatusFailed"),
       },
       { status: 500 }
     );
   }
 }
 
-export async function POST() {
+export async function POST(req: NextRequest) {
+  const t = await getServerTranslator(req.headers.get("accept-language"));
   try {
     const runtime = await getTelegramIntegrationRuntimeConfig();
-    const { botToken, webhookSecret, webhookUrl } = ensureWebhookConfigured(runtime);
+    const { botToken, webhookSecret, webhookUrl } = ensureWebhookConfigured(runtime, t);
 
     await callTelegramApi(botToken, "setWebhook", {
       url: webhookUrl,
@@ -118,7 +123,7 @@ export async function POST() {
     return Response.json({
       success: true,
       webhookUrl,
-      message: "Webhook has been configured",
+      message: t("api.success.telegramWebhookConfigured"),
     });
   } catch (error) {
     return Response.json(
@@ -126,20 +131,21 @@ export async function POST() {
         error:
           error instanceof Error
             ? error.message
-            : "Failed to configure Telegram webhook",
+            : t("api.error.telegramWebhookConfigureFailed"),
       },
       { status: 500 }
     );
   }
 }
 
-export async function DELETE() {
+export async function DELETE(req: NextRequest) {
+  const t = await getServerTranslator(req.headers.get("accept-language"));
   try {
     const runtime = await getTelegramIntegrationRuntimeConfig();
     const botToken = runtime.botToken.trim();
     if (!botToken) {
       return Response.json(
-        { error: "Telegram bot token is not configured" },
+        { error: t("api.error.telegramTokenMissing") },
         { status: 400 }
       );
     }
@@ -150,7 +156,7 @@ export async function DELETE() {
 
     return Response.json({
       success: true,
-      message: "Webhook has been removed",
+      message: t("api.success.telegramWebhookRemoved"),
     });
   } catch (error) {
     return Response.json(
@@ -158,7 +164,7 @@ export async function DELETE() {
         error:
           error instanceof Error
             ? error.message
-            : "Failed to remove Telegram webhook",
+            : t("api.error.telegramWebhookRemoveFailed"),
       },
       { status: 500 }
     );

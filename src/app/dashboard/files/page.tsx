@@ -10,6 +10,7 @@ import { SiteHeader } from "@/components/site-header";
 import { Button } from "@/components/ui/button";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { Textarea } from "@/components/ui/textarea";
+import { useI18n } from "@/i18n/provider";
 
 type FilePayload = {
   projectId: string;
@@ -28,6 +29,7 @@ function formatFileSize(bytes?: number) {
 }
 
 export default function GenericFileEditorPage() {
+  const { t } = useI18n();
   const searchParams = useSearchParams();
   const projectId = searchParams.get("project") || "none";
   const filePath = searchParams.get("path") || "";
@@ -49,7 +51,7 @@ export default function GenericFileEditorPage() {
     let cancelled = false;
     async function load() {
       if (!filePath) {
-        setError("No file selected.");
+        setError(t("files.noFileSelected"));
         setLoading(false);
         return;
       }
@@ -60,14 +62,14 @@ export default function GenericFileEditorPage() {
         const params = new URLSearchParams({ project: projectId, path: filePath });
         const res = await fetch(`/api/files/content?${params.toString()}`, { cache: "no-store" });
         const json = await res.json();
-        if (!res.ok) throw new Error(json.error || "Failed to load file");
+        if (!res.ok) throw new Error(json.error || t("files.loadFailed"));
         if (cancelled) return;
         const payload = json as FilePayload;
         setMetadata(payload);
         setContent(payload.content || "");
         setDraft(payload.content || "");
       } catch (loadError) {
-        if (!cancelled) setError(loadError instanceof Error ? loadError.message : "Failed to load file");
+        if (!cancelled) setError(loadError instanceof Error ? loadError.message : t("files.loadFailed"));
       } finally {
         if (!cancelled) setLoading(false);
       }
@@ -90,26 +92,26 @@ export default function GenericFileEditorPage() {
         body: JSON.stringify({ content: draft }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed to save file");
+      if (!res.ok) throw new Error(json.error || t("files.saveFailed"));
       const payload = json as FilePayload;
       setMetadata(payload);
       setContent(payload.content || draft);
       setDraft(payload.content || draft);
-      setStatus("File saved.");
+      setStatus(t("files.saved"));
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "Failed to save file");
+      setError(saveError instanceof Error ? saveError.message : t("files.saveFailed"));
     } finally {
       setSaving(false);
     }
   }
 
   const dirty = draft !== content;
-  const title = metadata?.filename || filePath.split("/").pop() || "File";
+  const title = metadata?.filename || filePath.split("/").pop() || t("files.defaultTitle");
 
   return (
     <div className="[--header-height:calc(--spacing(14))]">
       <SidebarProvider className="flex flex-col">
-        <SiteHeader title="File Preview" />
+        <SiteHeader title={t("files.previewTitle")} />
         <div className="flex flex-1">
           <AppSidebar />
           <SidebarInset>
@@ -117,7 +119,7 @@ export default function GenericFileEditorPage() {
               <div className="space-y-1">
                 <h2 className="text-2xl font-semibold">{title}</h2>
                 <p className="break-all text-sm text-muted-foreground">
-                  {projectId === "none" ? "Orchestrator" : `Project ${projectId}`} / {filePath}
+                  {projectId === "none" ? t("common.orchestrator") : t("common.projectWithId", { id: projectId })} / {filePath}
                 </p>
               </div>
 
@@ -126,9 +128,9 @@ export default function GenericFileEditorPage() {
                   <div className="flex items-start gap-2 min-w-0">
                     <FileText className="mt-1 size-4 shrink-0 text-primary" />
                     <div className="min-w-0">
-                      <div className="truncate text-sm font-medium">Text preview</div>
+                      <div className="truncate text-sm font-medium">{t("files.textPreview")}</div>
                       <div className="text-xs text-muted-foreground">
-                        {formatFileSize(metadata?.size)}{metadata?.updatedAt ? ` · Updated ${new Date(metadata.updatedAt).toLocaleString()}` : ""}
+                        {formatFileSize(metadata?.size)}{metadata?.updatedAt ? ` · ${t("common.updated", { date: new Date(metadata.updatedAt).toLocaleString() })}` : ""}
                       </div>
                     </div>
                   </div>
@@ -136,12 +138,12 @@ export default function GenericFileEditorPage() {
                     <Button variant="outline" asChild className="gap-2">
                       <a href={downloadHref} download={title}>
                         <Download className="size-4" />
-                        Download
+                        {t("common.download")}
                       </a>
                     </Button>
                     <Button onClick={save} disabled={loading || saving || !dirty} className="gap-2">
                       {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
-                      Save
+                      {t("common.save")}
                     </Button>
                   </div>
                 </div>
@@ -155,7 +157,7 @@ export default function GenericFileEditorPage() {
 
                 {loading ? (
                   <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Loader2 className="size-4 animate-spin" /> Loading file...
+                    <Loader2 className="size-4 animate-spin" /> {t("common.loadingFile")}
                   </div>
                 ) : error ? null : (
                   <Textarea

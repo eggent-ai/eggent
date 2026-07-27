@@ -12,6 +12,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { MODEL_PROVIDERS } from "@/lib/providers/model-config";
 import type { AppSettings, ChatAuthMethod } from "@/lib/types";
+import { useI18n } from "@/i18n/provider";
 
 export type UpdateSettingsFn = (path: string, value: unknown) => void;
 
@@ -76,6 +77,8 @@ function ModelSelect({
   onChange: (value: string) => void;
   placeholder?: string;
 }) {
+  const { t } = useI18n();
+
   return (
     <div className="space-y-1.5">
       <div className="relative">
@@ -91,7 +94,7 @@ function ModelSelect({
           `}
         >
           <option value="">
-            {loading ? "Loading models..." : placeholder || "Select model"}
+            {loading ? t("modelWizard.loadingModels") : placeholder || t("modelWizard.selectModel")}
           </option>
           {models.map((model) => (
             <option key={model.id} value={model.id}>
@@ -124,6 +127,7 @@ function useModels(
   type: "chat" | "embedding" = "chat",
   baseUrl?: string
 ) {
+  const { t } = useI18n();
   const [models, setModels] = useState<Array<{ id: string; name: string }>>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -152,7 +156,7 @@ function useModels(
       };
 
       if (!response.ok) {
-        throw new Error(payload.error || "Failed to fetch models");
+        throw new Error(payload.error || t("modelWizard.fetchModelsFailed"));
       }
 
       if (payload.models?.length) {
@@ -173,7 +177,7 @@ function useModels(
         }
       }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Failed to load models");
+      setError(cause instanceof Error ? cause.message : t("modelWizard.loadModelsFailed"));
 
       const providerConfig = MODEL_PROVIDERS[provider];
       const dynamicProviders = [
@@ -192,7 +196,7 @@ function useModels(
     } finally {
       setLoading(false);
     }
-  }, [provider, apiKey, requiresApiKey, type, baseUrl]);
+  }, [provider, apiKey, requiresApiKey, type, baseUrl, t]);
 
   useEffect(() => {
     void fetchModels();
@@ -208,6 +212,7 @@ export function ChatModelWizard({
   settings: AppSettings;
   updateSettings: UpdateSettingsFn;
 }) {
+  const { t } = useI18n();
   const provider = settings.chatModel.provider;
   const apiKey = settings.chatModel.apiKey || "";
   const model = settings.chatModel.model;
@@ -269,22 +274,22 @@ export function ChatModelWizard({
         error?: string;
       };
       if (!response.ok) {
-        throw new Error(payload.error || "Failed to check connection");
+        throw new Error(payload.error || t("modelWizard.checkConnectionFailed"));
       }
       setConnectionStatus({
         connected: Boolean(payload.connected),
-        message: payload.message || "Status updated",
+        message: payload.message || t("modelWizard.statusUpdated"),
         detail: payload.detail,
       });
     } catch (cause) {
       setConnectionStatus(null);
       setConnectionError(
-        cause instanceof Error ? cause.message : "Failed to check connection"
+        cause instanceof Error ? cause.message : t("modelWizard.checkConnectionFailed")
       );
     } finally {
       setConnectionLoading(false);
     }
-  }, [apiKey, isCliProvider, provider, selectedAuthMethod]);
+  }, [apiKey, isCliProvider, provider, selectedAuthMethod, t]);
 
   useEffect(() => {
     if (!provider) {
@@ -336,18 +341,18 @@ export function ChatModelWizard({
   return (
     <section className="border rounded-xl p-5 bg-card space-y-5 transition-all duration-300">
       <div className="flex items-center justify-between">
-        <h3 className="font-semibold text-lg">Chat Model</h3>
+        <h3 className="font-semibold text-lg">{t("modelWizard.chatModel")}</h3>
         <div className="flex items-center gap-4">
-          <StepIndicator step={1} currentStep={currentStep} label="Provider" />
-          <StepIndicator step={2} currentStep={currentStep} label="Method" />
-          <StepIndicator step={3} currentStep={currentStep} label="Connect" />
-          <StepIndicator step={4} currentStep={currentStep} label="Model" />
+          <StepIndicator step={1} currentStep={currentStep} label={t("modelWizard.provider")} />
+          <StepIndicator step={2} currentStep={currentStep} label={t("modelWizard.method")} />
+          <StepIndicator step={3} currentStep={currentStep} label={t("modelWizard.connect")} />
+          <StepIndicator step={4} currentStep={currentStep} label={t("modelWizard.model")} />
         </div>
       </div>
 
       <div className="space-y-2">
         <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          Step 1 — Provider
+          {t("modelWizard.stepProvider")}
         </Label>
         <select
           value={provider}
@@ -378,13 +383,13 @@ export function ChatModelWizard({
           }}
           className="w-full rounded-md border bg-background px-3 py-2 text-sm"
         >
-          <option value="">Select provider...</option>
+          <option value="">{t("modelWizard.selectProvider")}</option>
           {Object.entries(MODEL_PROVIDERS).map(([key, providerOption]) => (
             <option key={key} value={key}>
               {providerOption.name}
             </option>
           ))}
-          <option value="custom">Custom (OpenAI-compatible)</option>
+          <option value="custom">{t("modelWizard.customProvider")}</option>
         </select>
       </div>
 
@@ -394,7 +399,7 @@ export function ChatModelWizard({
         }`}
       >
         <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          Step 2 — Connection Method
+          {t("modelWizard.stepMethod")}
         </Label>
         <select
           value={selectedAuthMethod}
@@ -413,7 +418,7 @@ export function ChatModelWizard({
         >
           {availableAuthMethods.map((authMethod) => (
             <option key={authMethod} value={authMethod}>
-              {authMethod === "oauth" ? "OAuth" : "API key"}
+              {authMethod === "oauth" ? t("modelWizard.oauth") : t("modelWizard.apiKeyAuth")}
             </option>
           ))}
         </select>
@@ -425,7 +430,7 @@ export function ChatModelWizard({
         }`}
       >
         <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          Step 3 — Connection
+          {t("modelWizard.stepConnection")}
         </Label>
 
         {showApiKeyInput ? (
@@ -436,26 +441,22 @@ export function ChatModelWizard({
               onChange={(event) => updateSettings("chatModel.apiKey", event.target.value)}
               placeholder={
                 providerConfig?.envKey
-                  ? `Enter key or set ${providerConfig.envKey} in .env`
+                  ? t("modelWizard.enterKeyOrEnv", { envKey: providerConfig.envKey })
                   : isCustomProvider
-                    ? "Optional token (leave empty for local servers)"
+                    ? t("modelWizard.optionalToken")
                     : "sk-..."
               }
               disabled={!hasProvider}
             />
             {providerConfig?.envKey && (
               <p className="text-xs text-muted-foreground">
-                Or set{" "}
-                <code className="bg-muted px-1 py-0.5 rounded text-[11px]">
-                  {providerConfig.envKey}
-                </code>{" "}
-                as an environment variable
+                {t("modelWizard.envHint", { envKey: providerConfig.envKey })}
               </p>
             )}
           </div>
         ) : (
           <div className="text-sm text-muted-foreground rounded-lg border bg-muted/30 p-3">
-            API key input is not required for this connection mode.
+            {t("modelWizard.noApiKeyRequiredMode")}
           </div>
         )}
 
@@ -469,7 +470,7 @@ export function ChatModelWizard({
             </ul>
             {connectionHelp.command && (
               <p className="text-sm">
-                Command:{" "}
+                {t("modelWizard.command")} 
                 <code className="bg-muted px-1 py-0.5 rounded text-[11px]">
                   {connectionHelp.command}
                 </code>
@@ -480,7 +481,7 @@ export function ChatModelWizard({
 
         {isCliProvider && (
           <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">
-            OAuth tokens are read from local CLI auth files.
+            {t("modelWizard.cliTokens")}
           </div>
         )}
 
@@ -496,20 +497,20 @@ export function ChatModelWizard({
             ) : (
               <RefreshCw className="size-4" />
             )}
-            Check connection
+            {t("modelWizard.checkConnection")}
           </button>
         )}
 
         {provider === "ollama" && selectedAuthMethod === "api_key" && (
           <div className="flex items-center gap-2 text-sm text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/30 rounded-lg px-3 py-2">
             <Check className="size-4" />
-            API Key not required — connecting to local Ollama
+            {t("modelWizard.ollamaNoKey")}
           </div>
         )}
         {provider === "custom" && selectedAuthMethod === "api_key" && !apiKey.trim() && (
           <div className="flex items-center gap-2 text-sm text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/30 rounded-lg px-3 py-2">
             <Check className="size-4" />
-            API Key optional — works for local OpenAI-compatible servers (LM Studio, etc.)
+            {t("modelWizard.customNoKey")}
           </div>
         )}
 
@@ -543,7 +544,7 @@ export function ChatModelWizard({
           }`}
         >
           <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Base URL
+            {t("modelWizard.baseUrl")}
           </Label>
           <Input
             value={settings.chatModel.baseUrl || ""}
@@ -573,7 +574,7 @@ export function ChatModelWizard({
           error={error}
           disabled={!hasConnection}
           onChange={(value) => updateSettings("chatModel.model", value)}
-          placeholder="Select model..."
+          placeholder={t("modelWizard.selectModel")}
         />
       </div>
 
@@ -583,7 +584,7 @@ export function ChatModelWizard({
         }`}
       >
         <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          Temperature
+          {t("modelWizard.temperature")}
         </Label>
         <Input
           type="number"
@@ -609,6 +610,7 @@ export function EmbeddingsModelWizard({
   settings: AppSettings;
   updateSettings: UpdateSettingsFn;
 }) {
+  const { t } = useI18n();
   const provider = settings.embeddingsModel.provider;
   const apiKey = settings.embeddingsModel.apiKey || "";
   const model = settings.embeddingsModel.model;
@@ -686,23 +688,23 @@ export function EmbeddingsModelWizard({
   return (
     <section className="border rounded-xl p-5 bg-card space-y-5 transition-all duration-300">
       <div className="flex items-center justify-between">
-        <h3 className="font-semibold text-lg">Embeddings Model</h3>
+        <h3 className="font-semibold text-lg">{t("modelWizard.embeddingsModel")}</h3>
         <div className="flex items-center gap-4">
-          <StepIndicator step={1} currentStep={currentStep} label="Provider" />
+          <StepIndicator step={1} currentStep={currentStep} label={t("modelWizard.provider")} />
           {showApiKeyInput && (
-            <StepIndicator step={2} currentStep={currentStep} label="API Key" />
+            <StepIndicator step={2} currentStep={currentStep} label={t("modelWizard.apiKey")} />
           )}
           <StepIndicator
             step={showApiKeyInput ? 3 : 2}
             currentStep={currentStep}
-            label="Model"
+            label={t("modelWizard.model")}
           />
         </div>
       </div>
 
       <div className="space-y-2">
         <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          Step 1 — Provider
+          {t("modelWizard.stepProvider")}
         </Label>
         <select
           value={provider}
@@ -721,7 +723,7 @@ export function EmbeddingsModelWizard({
           }}
           className="w-full rounded-md border bg-background px-3 py-2 text-sm"
         >
-          <option value="">Select provider...</option>
+          <option value="">{t("modelWizard.selectProvider")}</option>
           {Object.entries(embeddingProviders).map(([key, providerOption]) => (
             <option key={key} value={key}>
               {providerOption.name}
@@ -736,7 +738,7 @@ export function EmbeddingsModelWizard({
         } ${!showApiKeyInput ? "hidden" : ""}`}
       >
         <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          Step 2 — API Key {provider === "custom" && !requiresApiKey ? "(optional)" : ""}
+          {provider === "custom" && !requiresApiKey ? t("modelWizard.stepApiKeyOptional") : t("modelWizard.stepApiKey")}
         </Label>
         <Input
           type="password"
@@ -746,20 +748,16 @@ export function EmbeddingsModelWizard({
           }
           placeholder={
             providerConfig.envKey
-              ? `Enter key or set ${providerConfig.envKey} in .env`
+              ? t("modelWizard.enterKeyOrEnv", { envKey: providerConfig.envKey })
               : provider === "custom"
-                ? "Optional token (leave empty for local servers)"
+                ? t("modelWizard.optionalToken")
                 : "sk-..."
           }
           disabled={!hasProvider}
         />
         {providerConfig.envKey && (
           <p className="text-xs text-muted-foreground">
-            Or set{" "}
-            <code className="bg-muted px-1 py-0.5 rounded text-[11px]">
-              {providerConfig.envKey}
-            </code>{" "}
-            as an environment variable
+            {t("modelWizard.envHint", { envKey: providerConfig.envKey })}
           </p>
         )}
       </div>
@@ -767,7 +765,7 @@ export function EmbeddingsModelWizard({
       {hasProvider && !requiresApiKey && provider === "ollama" && (
         <div className="flex items-center gap-2 text-sm text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/30 rounded-lg px-3 py-2">
           <Check className="size-4" />
-          API Key not required — connecting to local Ollama
+          {t("modelWizard.ollamaNoKey")}
         </div>
       )}
 
@@ -778,7 +776,7 @@ export function EmbeddingsModelWizard({
           }`}
         >
           <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-            Base URL
+            {t("modelWizard.baseUrl")}
           </Label>
           <Input
             value={settings.embeddingsModel.baseUrl || ""}
@@ -801,7 +799,7 @@ export function EmbeddingsModelWizard({
         }`}
       >
         <Label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-          {showApiKeyInput ? "Step 3" : "Step 2"} — Model
+          {t("modelWizard.stepDynamicModel", { step: showApiKeyInput ? t("modelWizard.step3") : t("modelWizard.step2") })}
         </Label>
         <div className="flex gap-2">
           <div className="flex-1">
@@ -822,7 +820,7 @@ export function EmbeddingsModelWizard({
                 }
                 updateSettings("embeddingsModel.dimensions", dimensions);
               }}
-              placeholder="Select embedding model..."
+              placeholder={t("modelWizard.selectEmbeddingModel")}
             />
           </div>
           <div className="w-24">
@@ -835,14 +833,14 @@ export function EmbeddingsModelWizard({
                   parseInt(event.target.value, 10)
                 )
               }
-              placeholder="Dims"
-              title="Embedding Dimensions"
+              placeholder={t("modelWizard.dims")}
+              title={t("modelWizard.embeddingDimensions")}
               disabled={requiresApiKey && !hasApiKey}
             />
           </div>
         </div>
         <p className="text-[10px] text-muted-foreground">
-          Dimensions are auto-detected for known models. Adjust if necessary.
+          {t("modelWizard.dimensionsHint")}
         </p>
       </div>
     </section>

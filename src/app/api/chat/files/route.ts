@@ -4,17 +4,19 @@ import {
     saveChatFile,
     deleteChatFile,
 } from "@/lib/storage/chat-files-store";
+import { getServerTranslator } from "@/i18n/server";
 
 /**
  * GET /api/chat/files?chatId=xxx
  * List all files uploaded to a chat
  */
 export async function GET(req: NextRequest) {
+    const t = await getServerTranslator(req.headers.get("accept-language"));
     const chatId = req.nextUrl.searchParams.get("chatId");
 
     if (!chatId) {
         return Response.json(
-            { error: "chatId is required" },
+            { error: t("api.error.chatIdRequired") },
             { status: 400 }
         );
     }
@@ -25,7 +27,7 @@ export async function GET(req: NextRequest) {
     } catch (error) {
         console.error("Error getting chat files:", error);
         return Response.json(
-            { error: "Failed to get chat files" },
+            { error: t("api.error.failedGetChatFiles") },
             { status: 500 }
         );
     }
@@ -36,6 +38,7 @@ export async function GET(req: NextRequest) {
  * Upload a file to a chat (multipart/form-data)
  */
 export async function POST(req: NextRequest) {
+    const t = await getServerTranslator(req.headers.get("accept-language"));
     try {
         const formData = await req.formData();
         const chatId = formData.get("chatId") as string;
@@ -43,14 +46,14 @@ export async function POST(req: NextRequest) {
 
         if (!chatId) {
             return Response.json(
-                { error: "chatId is required" },
+                { error: t("api.error.chatIdRequired") },
                 { status: 400 }
             );
         }
 
         if (!file) {
             return Response.json(
-                { error: "file is required" },
+                { error: t("api.error.fileRequired") },
                 { status: 400 }
             );
         }
@@ -62,7 +65,7 @@ export async function POST(req: NextRequest) {
     } catch (error) {
         console.error("Error uploading chat file:", error);
         return Response.json(
-            { error: "Failed to upload file" },
+            { error: t("api.error.failedUploadFile") },
             { status: 500 }
         );
     }
@@ -73,12 +76,13 @@ export async function POST(req: NextRequest) {
  * Delete a file from a chat
  */
 export async function DELETE(req: NextRequest) {
+    const t = await getServerTranslator(req.headers.get("accept-language"));
     const chatId = req.nextUrl.searchParams.get("chatId");
     const filename = req.nextUrl.searchParams.get("filename");
 
     if (!chatId || !filename) {
         return Response.json(
-            { error: "chatId and filename are required" },
+            { error: t("api.error.chatIdAndFilenameRequired") },
             { status: 400 }
         );
     }
@@ -87,7 +91,7 @@ export async function DELETE(req: NextRequest) {
         const deleted = await deleteChatFile(chatId, filename);
         if (!deleted) {
             return Response.json(
-                { error: "File not found" },
+                { error: t("api.error.fileNotFound") },
                 { status: 404 }
             );
         }
@@ -95,7 +99,7 @@ export async function DELETE(req: NextRequest) {
     } catch (error) {
         console.error("Error deleting chat file:", error);
         return Response.json(
-            { error: "Failed to delete file" },
+            { error: t("api.error.failedDeleteFile") },
             { status: 500 }
         );
     }

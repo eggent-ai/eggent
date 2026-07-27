@@ -2,20 +2,23 @@ import { createUIMessageStreamResponse } from "ai";
 import { NextRequest } from "next/server";
 import { createPiChatUIMessageStream } from "@/lib/pi/chat-runner";
 import { createChat, getChat } from "@/lib/storage/chat-store";
+import { getServerTranslator } from "@/i18n/server";
+import type { MessageKey } from "@/i18n/messages";
 
 export const maxDuration = 300; // 5 min max for long agent runs
 
-function formatChatStreamError(error: unknown): string {
+function formatChatStreamError(error: unknown, t: (key: MessageKey, values?: Record<string, string | number | boolean | null | undefined>) => string): string {
   const raw = error instanceof Error ? error.message : String(error);
   const compact = raw.replace(/\s+/g, " ").trim();
   if (!compact) {
-    return "Generation failed after tool execution. Please retry.";
+    return t("api.error.generationAfterTools");
   }
   const short = compact.length > 220 ? `${compact.slice(0, 220)}...` : compact;
-  return `Generation failed after tool execution: ${short}`;
+  return t("api.error.generationAfterToolsDetails", { details: short });
 }
 
 export async function POST(req: NextRequest) {
+  const t = await getServerTranslator(req.headers.get("accept-language"));
   try {
     const body = await req.json();
     const { chatId, currentPath } = body;
@@ -43,7 +46,7 @@ export async function POST(req: NextRequest) {
 
     if (!message || typeof message !== "string") {
       return Response.json(
-        { error: "Message is required" },
+        { error: t("api.error.messageRequired") },
         { status: 400 }
       );
     }
@@ -52,11 +55,11 @@ export async function POST(req: NextRequest) {
     let resolvedChatId = chatId;
     if (!resolvedChatId) {
       resolvedChatId = crypto.randomUUID();
-      await createChat(resolvedChatId, "New Chat", projectId);
+      await createChat(resolvedChatId, t("api.chat.newTitle"), projectId);
     } else {
       const existing = await getChat(resolvedChatId);
       if (!existing) {
-        await createChat(resolvedChatId, "New Chat", projectId);
+        await createChat(resolvedChatId, t("api.chat.newTitle"), projectId);
       }
     }
 
@@ -94,7 +97,7 @@ export async function POST(req: NextRequest) {
       },
       onError: (error) => {
         console.error("Chat stream response error:", error);
-        return formatChatStreamError(error);
+        return formatChatStreamError(error, t);
       },
     });
   } catch (error) {
@@ -102,7 +105,7 @@ export async function POST(req: NextRequest) {
     return Response.json(
       {
         error:
-          error instanceof Error ? error.message : "Internal server error",
+          error instanceof Error ? error.message : t("api.error.internal"),
       },
       { status: 500 }
     );

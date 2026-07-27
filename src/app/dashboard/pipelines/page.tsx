@@ -18,20 +18,24 @@ import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { Textarea } from "@/components/ui/textarea";
 import { useBackgroundSync } from "@/hooks/use-background-sync";
 import { useAppStore } from "@/store/app-store";
+import { useI18n } from "@/i18n/provider";
+import type { MessageKey } from "@/i18n/messages";
 import type { PipelineDefinition, PipelineRun } from "@/lib/pipelines/types";
 
-const EMPTY_STEPS = JSON.stringify(
-  [
-    {
-      id: "agent-1",
-      name: "Agent project step",
-      projectId: "project-id-here",
-      instructions: "Run this Eggent project as the next agent. Use previous artifacts as input and save handoff output in the artifacts directory."
-    },
-  ],
-  null,
-  2
-);
+function buildEmptySteps(t: (key: MessageKey) => string) {
+  return JSON.stringify(
+    [
+      {
+        id: "agent-1",
+        name: t("pipelines.defaultStepName"),
+        projectId: "project-id-here",
+        instructions: t("pipelines.defaultStepInstructions"),
+      },
+    ],
+    null,
+    2
+  );
+}
 
 function formatDate(value?: string) {
   if (!value) return "";
@@ -50,20 +54,21 @@ function statusVariant(status: string): "default" | "secondary" | "destructive" 
 }
 
 export default function PipelinesPage() {
+  const { t } = useI18n();
   const { activeProjectId, currentPath, projects, setProjects } = useAppStore();
   const syncTick = useBackgroundSync({ topics: ["pipelines", "global"] });
   const [pipelines, setPipelines] = useState<PipelineDefinition[]>([]);
   const [runs, setRuns] = useState<PipelineRun[]>([]);
   const [selectedPipelineId, setSelectedPipelineId] = useState("");
-  const [runInput, setRunInput] = useState("Нужно выполнить цепочку агентов.");
+  const [runInput, setRunInput] = useState(() => t("pipelines.defaultRunInput"));
   const [loading, setLoading] = useState(false);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
   const [editingId, setEditingId] = useState<string | null>(null);
-  const [editName, setEditName] = useState("New pipeline");
+  const [editName, setEditName] = useState(() => t("pipelines.newName"));
   const [editDescription, setEditDescription] = useState("");
-  const [editSteps, setEditSteps] = useState(EMPTY_STEPS);
+  const [editSteps, setEditSteps] = useState(() => buildEmptySteps(t));
   const [saving, setSaving] = useState(false);
 
   const selectedPipeline = useMemo(
@@ -100,7 +105,7 @@ export default function PipelinesPage() {
         }
       } catch (loadError) {
         if (!cancelled) {
-          setError(loadError instanceof Error ? loadError.message : "Failed to load pipelines");
+          setError(loadError instanceof Error ? loadError.message : t("pipelines.errors.load"));
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -120,19 +125,19 @@ export default function PipelinesPage() {
       projectId: project.id,
       instructions:
         index === 0
-          ? "Run this project agent first. Save the initial output in the artifacts directory."
-          : "Run this project agent after previous project agents. Read artifacts and save your handoff output.",
+          ? t("pipelines.firstStepInstructions")
+          : t("pipelines.nextStepInstructions"),
     }));
-    setEditSteps(JSON.stringify(steps.length > 0 ? steps : JSON.parse(EMPTY_STEPS), null, 2));
+    setEditSteps(JSON.stringify(steps.length > 0 ? steps : JSON.parse(buildEmptySteps(t)), null, 2));
   }
 
   function beginEdit(pipeline?: PipelineDefinition) {
     setError(null);
     if (!pipeline) {
       setEditingId(null);
-      setEditName("New pipeline");
+      setEditName(t("pipelines.newName"));
       setEditDescription("");
-      setEditSteps(EMPTY_STEPS);
+      setEditSteps(buildEmptySteps(t));
       return;
     }
     setEditingId(pipeline.id);
@@ -147,7 +152,7 @@ export default function PipelinesPage() {
       setError(null);
       const steps = JSON.parse(editSteps);
       if (!Array.isArray(steps) || steps.length === 0) {
-        throw new Error("Steps must be a non-empty JSON array");
+        throw new Error(t("pipelines.errors.stepsNonEmpty"));
       }
       const payload = {
         id: editingId || undefined,
@@ -161,27 +166,27 @@ export default function PipelinesPage() {
         body: JSON.stringify(payload),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed to save pipeline");
+      if (!res.ok) throw new Error(json.error || t("pipelines.errors.save"));
       setSelectedPipelineId(json.pipeline.id);
       beginEdit(json.pipeline);
     } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : "Failed to save pipeline");
+      setError(saveError instanceof Error ? saveError.message : t("pipelines.errors.save"));
     } finally {
       setSaving(false);
     }
   }
 
   async function deletePipeline(id: string) {
-    if (!confirm("Delete this pipeline?")) return;
+    if (!confirm(t("pipelines.deleteConfirm"))) return;
     try {
       setError(null);
       const res = await fetch(`/api/pipelines/${id}`, { method: "DELETE" });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed to delete pipeline");
+      if (!res.ok) throw new Error(json.error || t("pipelines.errors.delete"));
       setEditingId(null);
       setSelectedPipelineId("");
     } catch (deleteError) {
-      setError(deleteError instanceof Error ? deleteError.message : "Failed to delete pipeline");
+      setError(deleteError instanceof Error ? deleteError.message : t("pipelines.errors.delete"));
     }
   }
 
@@ -202,9 +207,9 @@ export default function PipelinesPage() {
         }),
       });
       const json = await res.json();
-      if (!res.ok) throw new Error(json.error || "Failed to start pipeline");
+      if (!res.ok) throw new Error(json.error || t("pipelines.errors.start"));
     } catch (runError) {
-      setError(runError instanceof Error ? runError.message : "Failed to start pipeline");
+      setError(runError instanceof Error ? runError.message : t("pipelines.errors.start"));
     } finally {
       setRunning(false);
     }
@@ -213,7 +218,7 @@ export default function PipelinesPage() {
   return (
     <div className="[--header-height:calc(--spacing(14))]">
       <SidebarProvider className="flex flex-col">
-        <SiteHeader title="Pipelines" />
+        <SiteHeader title={t("pipelines.title")} />
         <div className="flex flex-1">
           <AppSidebar />
           <SidebarInset>
@@ -223,21 +228,21 @@ export default function PipelinesPage() {
               <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                 <div className="space-y-1">
                   <h2 className="flex items-center gap-2 text-2xl font-semibold">
-                    <GitBranch className="size-6" /> Pipelines
+                    <GitBranch className="size-6" /> {t("pipelines.title")}
                   </h2>
                   <p className="max-w-2xl text-sm text-muted-foreground">
-                    Reusable workflows that run selected Eggent projects one after another and pass artifacts between steps.
+                    {t("pipelines.description")}
                   </p>
                 </div>
                 <Button variant="outline" onClick={() => beginEdit()} className="gap-2 md:self-start">
-                  <GitBranch className="size-4" /> New pipeline
+                  <GitBranch className="size-4" /> {t("pipelines.new")}
                 </Button>
               </div>
 
               <Alert>
                 <GitBranch className="size-4" />
                 <AlertDescription>
-                  Use pipelines when the same task needs multiple project agents in a fixed order. For a one-off chain, you can also ask Eggent in chat to run projects in sequence.
+                  {t("pipelines.hint")}
                 </AlertDescription>
               </Alert>
 
@@ -251,20 +256,20 @@ export default function PipelinesPage() {
                 <div className="flex min-w-0 flex-col gap-4">
                   <Card>
                     <CardHeader>
-                      <CardTitle>Saved pipelines</CardTitle>
-                      <CardDescription>Select a workflow to edit or run.</CardDescription>
+                      <CardTitle>{t("pipelines.savedTitle")}</CardTitle>
+                      <CardDescription>{t("pipelines.savedDescription")}</CardDescription>
                     </CardHeader>
                     <CardContent>
                       {loading ? (
                         <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                          <Loader2 className="size-4 animate-spin" /> Loading...
+                          <Loader2 className="size-4 animate-spin" /> {t("common.loading")}
                         </div>
                       ) : pipelines.length === 0 ? (
                         <Empty className="border">
                           <EmptyHeader>
                             <EmptyMedia variant="icon"><GitBranch /></EmptyMedia>
-                            <EmptyTitle>No pipelines yet</EmptyTitle>
-                            <EmptyDescription>Create a chain of project agents to run repeatable workflows.</EmptyDescription>
+                            <EmptyTitle>{t("pipelines.noPipelinesTitle")}</EmptyTitle>
+                            <EmptyDescription>{t("pipelines.noPipelinesDescription")}</EmptyDescription>
                           </EmptyHeader>
                         </Empty>
                       ) : (
@@ -282,7 +287,7 @@ export default function PipelinesPage() {
                             >
                               <div className="font-medium">{pipeline.name}</div>
                               <div className="mt-1 line-clamp-2 text-xs text-muted-foreground">
-                                {pipeline.description || `${pipeline.steps.length} steps`}
+                                {pipeline.description || t("pipelines.stepsCount", { count: pipeline.steps.length })}
                               </div>
                             </button>
                           ))}
@@ -293,13 +298,13 @@ export default function PipelinesPage() {
 
                   <Card>
                     <CardHeader>
-                      <CardTitle>Run selected pipeline</CardTitle>
-                      <CardDescription>Provide the initial task for the first step.</CardDescription>
+                      <CardTitle>{t("pipelines.runTitle")}</CardTitle>
+                      <CardDescription>{t("pipelines.runDescription")}</CardDescription>
                     </CardHeader>
                     <CardContent className="flex flex-col gap-3">
                       <Select value={selectedPipeline?.id || ""} onValueChange={setSelectedPipelineId}>
                         <SelectTrigger className="w-full">
-                          <SelectValue placeholder="Select pipeline" />
+                          <SelectValue placeholder={t("pipelines.selectPipeline")} />
                         </SelectTrigger>
                         <SelectContent>
                           <SelectGroup>
@@ -313,7 +318,7 @@ export default function PipelinesPage() {
                         value={runInput}
                         onChange={(event) => setRunInput(event.target.value)}
                         className="min-h-28 field-sizing-fixed resize-y"
-                        placeholder="Describe the task for this chain..."
+                        placeholder={t("pipelines.runPlaceholder")}
                       />
                       <Button
                         className="w-full gap-2"
@@ -321,7 +326,7 @@ export default function PipelinesPage() {
                         disabled={!selectedPipeline || running}
                       >
                         {running ? <Loader2 className="size-4 animate-spin" /> : <Play className="size-4" />}
-                        Start run
+                        {t("pipelines.startRun")}
                       </Button>
                     </CardContent>
                   </Card>
@@ -330,8 +335,8 @@ export default function PipelinesPage() {
                 <div className="flex min-w-0 flex-col gap-4">
                   <Card className="min-w-0 overflow-hidden">
                     <CardHeader>
-                      <CardTitle>Pipeline editor</CardTitle>
-                      <CardDescription>Name the workflow and define the ordered project steps.</CardDescription>
+                      <CardTitle>{t("pipelines.editorTitle")}</CardTitle>
+                      <CardDescription>{t("pipelines.editorDescription")}</CardDescription>
                       <CardAction>
                         <div className="flex gap-2">
                           {editingId ? (
@@ -341,41 +346,41 @@ export default function PipelinesPage() {
                           ) : null}
                           <Button size="sm" className="gap-2" onClick={savePipeline} disabled={saving}>
                             {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
-                            Save
+                            {t("common.save")}
                           </Button>
                         </div>
                       </CardAction>
                     </CardHeader>
                     <CardContent className="grid min-w-0 gap-4">
                       <div className="grid gap-2">
-                        <Label htmlFor="pipeline-name">Name</Label>
+                        <Label htmlFor="pipeline-name">{t("pipelines.name")}</Label>
                         <Input id="pipeline-name" value={editName} onChange={(event) => setEditName(event.target.value)} />
                       </div>
                       <div className="grid gap-2">
-                        <Label htmlFor="pipeline-description">Description</Label>
+                        <Label htmlFor="pipeline-description">{t("pipelines.descriptionLabel")}</Label>
                         <Input
                           id="pipeline-description"
                           value={editDescription}
                           onChange={(event) => setEditDescription(event.target.value)}
-                          placeholder="What this workflow is for"
+                          placeholder={t("pipelines.descriptionPlaceholder")}
                         />
                       </div>
                       <div className="min-w-0 rounded-lg border bg-muted/30 p-3 text-xs text-muted-foreground">
-                        <div className="mb-2 font-medium text-foreground">Pipeline = sequence of Eggent projects</div>
+                        <div className="mb-2 font-medium text-foreground">{t("pipelines.sequenceTitle")}</div>
                         <p>
-                          Each step should set <code>projectId</code>. That project directory is launched as an Eggent agent with context.md, memory.md, skills/, .mcp.json and model.json.
+                          {t("pipelines.sequenceDescription")}
                         </p>
                         {projects.length > 0 ? (
                           <div className="mt-2 break-words">
-                            Available projects: {projects.map((project) => `${project.name} (${project.id})`).join(", ")}
+                            {t("pipelines.availableProjects", { projects: projects.map((project) => `${project.name} (${project.id})`).join(", ") })}
                           </div>
                         ) : null}
                         <Button size="sm" variant="outline" className="mt-3" onClick={createProjectSequenceTemplate}>
-                          Use current projects as sequence
+                          {t("pipelines.useCurrentProjects")}
                         </Button>
                       </div>
                       <div className="grid min-w-0 gap-2">
-                        <Label htmlFor="pipeline-steps">Steps JSON</Label>
+                        <Label htmlFor="pipeline-steps">{t("pipelines.stepsJson")}</Label>
                         <Textarea
                           id="pipeline-steps"
                           value={editSteps}
@@ -384,7 +389,7 @@ export default function PipelinesPage() {
                           spellCheck={false}
                         />
                         <p className="text-xs text-muted-foreground">
-                          Each step needs a projectId. Steps run top-to-bottom and can read artifacts from previous steps.
+                          {t("pipelines.stepsHelp")}
                         </p>
                       </div>
                     </CardContent>
@@ -392,16 +397,16 @@ export default function PipelinesPage() {
 
                   <Card className="min-w-0 overflow-hidden">
                     <CardHeader>
-                      <CardTitle>Run history</CardTitle>
-                      <CardDescription>Recent pipeline executions and their step status.</CardDescription>
+                      <CardTitle>{t("pipelines.runHistoryTitle")}</CardTitle>
+                      <CardDescription>{t("pipelines.runHistoryDescription")}</CardDescription>
                     </CardHeader>
                     <CardContent>
                       {runs.length === 0 ? (
                         <Empty className="border">
                           <EmptyHeader>
                             <EmptyMedia variant="icon"><Play /></EmptyMedia>
-                            <EmptyTitle>No runs yet</EmptyTitle>
-                            <EmptyDescription>Run a pipeline to see its execution history here.</EmptyDescription>
+                            <EmptyTitle>{t("pipelines.noRunsTitle")}</EmptyTitle>
+                            <EmptyDescription>{t("pipelines.noRunsDescription")}</EmptyDescription>
                           </EmptyHeader>
                         </Empty>
                       ) : (
@@ -428,7 +433,7 @@ export default function PipelinesPage() {
                               </div>
                               {run.error ? <div className="mt-2 text-xs text-destructive">{run.error}</div> : null}
                               <div className="mt-2 truncate text-xs text-muted-foreground">
-                                Artifacts: {run.artifactsDir}
+                                {t("pipelines.artifacts", { path: run.artifactsDir })}
                               </div>
                             </div>
                           ))}

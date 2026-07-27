@@ -5,6 +5,7 @@ import {
   handleExternalMediaMessage,
 } from "@/lib/external/handle-external-message";
 import { getExternalApiToken } from "@/lib/storage/external-api-token-store";
+import { getServerTranslator } from "@/i18n/server";
 
 function parseBearerToken(req: NextRequest): string | null {
   const header = req.headers.get("authorization");
@@ -53,6 +54,7 @@ function normalizeKind(value: string): "document" | "photo" | "audio" | "video" 
 }
 
 export async function POST(req: NextRequest) {
+  const t = await getServerTranslator(req.headers.get("accept-language"));
   try {
     const storedToken = await getExternalApiToken();
     const envToken = process.env.EXTERNAL_API_TOKEN?.trim();
@@ -60,8 +62,7 @@ export async function POST(req: NextRequest) {
     if (!expectedToken) {
       return Response.json(
         {
-          error:
-            "External API token is not configured. Set EXTERNAL_API_TOKEN or generate token in API page.",
+          error: t("api.error.externalTokenMissing"),
         },
         { status: 503 }
       );
@@ -70,7 +71,7 @@ export async function POST(req: NextRequest) {
     const providedToken = parseBearerToken(req);
     if (!providedToken || !safeTokenMatch(providedToken, expectedToken)) {
       return Response.json(
-        { error: "Unauthorized" },
+        { error: t("api.error.unauthorized") },
         {
           status: 401,
           headers: {
@@ -83,7 +84,7 @@ export async function POST(req: NextRequest) {
     const formData = await req.formData();
     const file = formData.get("file");
     if (!(file instanceof File)) {
-      return Response.json({ error: "file is required" }, { status: 400 });
+      return Response.json({ error: t("api.error.fileRequired") }, { status: 400 });
     }
 
     const buffer = Buffer.from(await file.arrayBuffer());
@@ -113,7 +114,7 @@ export async function POST(req: NextRequest) {
 
     return Response.json(
       {
-        error: error instanceof Error ? error.message : "Internal server error",
+        error: error instanceof Error ? error.message : t("api.error.internal"),
       },
       { status: 500 }
     );

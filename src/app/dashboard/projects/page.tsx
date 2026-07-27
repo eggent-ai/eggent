@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAppStore } from "@/store/app-store";
+import { useI18n } from "@/i18n/provider";
 
 type OnboardingStep = -1 | 0;
 
@@ -29,6 +30,11 @@ interface AuthStatusResponse {
   authenticated: boolean;
   username: string | null;
   mustChangeCredentials: boolean;
+}
+
+function ProjectsLoadingFallback() {
+  const { t } = useI18n();
+  return <div className="p-4 text-sm text-muted-foreground">{t("common.loading")}</div>;
 }
 
 function OnboardingStepIndicator({
@@ -68,6 +74,7 @@ function OnboardingStepIndicator({
 }
 
 function ProjectsPageClient() {
+  const { t } = useI18n();
   const router = useRouter();
   const searchParams = useSearchParams();
   const { projects, setProjects, setActiveProjectId } = useAppStore();
@@ -119,7 +126,7 @@ function ProjectsPageClient() {
       const res = await fetch("/api/auth/status", { cache: "no-store" });
       const data = (await res.json()) as Partial<AuthStatusResponse>;
       if (!res.ok) {
-        throw new Error("Failed to load auth status");
+        throw new Error(t("projects.errors.loadAuth"));
       }
 
       const currentUsername =
@@ -208,7 +215,7 @@ function ProjectsPageClient() {
 
       const payload = (await res.json()) as { id?: string; error?: string };
       if (!res.ok || !payload?.id) {
-        throw new Error(payload?.error || "Failed to create project");
+        throw new Error(payload?.error || t("projects.errors.create"));
       }
 
       setNewName("");
@@ -220,7 +227,7 @@ function ProjectsPageClient() {
       await loadProjects();
     } catch (error) {
       setCreateError(
-        error instanceof Error ? error.message : "Failed to create project"
+        error instanceof Error ? error.message : t("projects.errors.create")
       );
     } finally {
       setCreatingProject(false);
@@ -233,15 +240,15 @@ function ProjectsPageClient() {
     const passwordConfirm = credentialPasswordConfirm.trim();
 
     if (!username) {
-      setCredentialsError("Username is required.");
+      setCredentialsError(t("projects.errors.usernameRequired"));
       return;
     }
     if (password.length < 8) {
-      setCredentialsError("Password must be at least 8 characters.");
+      setCredentialsError(t("projects.errors.passwordMin"));
       return;
     }
     if (password !== passwordConfirm) {
-      setCredentialsError("Password confirmation does not match.");
+      setCredentialsError(t("projects.errors.passwordMismatch"));
       return;
     }
 
@@ -260,11 +267,11 @@ function ProjectsPageClient() {
         | { error?: string; success?: boolean }
         | null;
       if (!res.ok) {
-        throw new Error(payload?.error || "Failed to update credentials");
+        throw new Error(payload?.error || t("projects.errors.updateCredentials"));
       }
 
       setMustChangeCredentials(false);
-      setCredentialsStatus("Credentials updated.");
+      setCredentialsStatus(t("projects.credentialsUpdated"));
       setCredentialPassword("");
       setCredentialPasswordConfirm("");
 
@@ -273,7 +280,7 @@ function ProjectsPageClient() {
       router.refresh();
     } catch (error) {
       setCredentialsError(
-        error instanceof Error ? error.message : "Failed to update credentials"
+        error instanceof Error ? error.message : t("projects.errors.updateCredentials")
       );
     } finally {
       setCredentialsSaving(false);
@@ -281,7 +288,7 @@ function ProjectsPageClient() {
   }
 
   async function handleDelete(id: string) {
-    if (!confirm("Delete this project? This cannot be undone.")) return;
+    if (!confirm(t("projects.deleteConfirm"))) return;
     await fetch(`/api/projects/${id}`, { method: "DELETE" });
     await loadProjects();
   }
@@ -289,7 +296,7 @@ function ProjectsPageClient() {
   return (
     <div className="[--header-height:calc(--spacing(14))]">
       <SidebarProvider className="flex flex-col">
-        <SiteHeader title="Projects" />
+        <SiteHeader title={t("projects.title")} />
         <div className="flex flex-1">
           <AppSidebar />
           <SidebarInset>
@@ -298,9 +305,9 @@ function ProjectsPageClient() {
 
               <div className="flex items-center justify-between">
                 <div>
-                  <h2 className="text-2xl font-semibold">Projects</h2>
+                  <h2 className="text-2xl font-semibold">{t("projects.title")}</h2>
                   <p className="text-sm text-muted-foreground">
-                    Manage project workspaces and run onboarding for first setup.
+                    {t("projects.description")}
                   </p>
                 </div>
                 <Button
@@ -314,12 +321,12 @@ function ProjectsPageClient() {
                   {showCreate ? (
                     <>
                       <X className="size-4" />
-                      Cancel
+                      {t("common.cancel")}
                     </>
                   ) : (
                     <>
                       <Plus className="size-4" />
-                      New Project
+                      {t("projects.new")}
                     </>
                   )}
                 </Button>
@@ -328,28 +335,28 @@ function ProjectsPageClient() {
               {onboardingStep >= 0 && (
                 <section className="rounded-lg border bg-card p-4 space-y-4">
                   <div className="space-y-2">
-                    <h3 className="font-medium">Onboarding</h3>
+                    <h3 className="font-medium">{t("projects.onboarding.title")}</h3>
                     <div className="flex flex-wrap gap-4">
                       <OnboardingStepIndicator
                         step={0}
                         currentStep={onboardingStep}
-                        label="Credentials"
+                        label={t("projects.onboarding.credentials")}
                       />
-                      <div className="text-xs text-muted-foreground">Next: model setup in Settings</div>
+                      <div className="text-xs text-muted-foreground">{t("projects.onboarding.nextModel")}</div>
                     </div>
                   </div>
 
                   {onboardingStep === 0 && (
                     <div className="rounded-lg border p-4 space-y-4">
                       <div className="space-y-1">
-                        <h4 className="font-medium">Step 0: Replace default login</h4>
+                        <h4 className="font-medium">{t("projects.onboarding.replaceLogin")}</h4>
                         <p className="text-sm text-muted-foreground">
-                          Set a new username and password before continuing.
+                          {t("projects.onboarding.replaceLoginDescription")}
                         </p>
                       </div>
 
                       <div className="space-y-2">
-                        <Label htmlFor="credential-username">Username</Label>
+                        <Label htmlFor="credential-username">{t("projects.username")}</Label>
                         <Input
                           id="credential-username"
                           value={credentialUsername}
@@ -360,20 +367,20 @@ function ProjectsPageClient() {
                       </div>
 
                       <div className="space-y-2">
-                        <Label htmlFor="credential-password">New password</Label>
+                        <Label htmlFor="credential-password">{t("projects.newPassword")}</Label>
                         <Input
                           id="credential-password"
                           type="password"
                           value={credentialPassword}
                           onChange={(event) => setCredentialPassword(event.target.value)}
-                          placeholder="At least 8 characters"
+                          placeholder={t("projects.passwordMinPlaceholder")}
                           autoComplete="new-password"
                         />
                       </div>
 
                       <div className="space-y-2">
                         <Label htmlFor="credential-password-confirm">
-                          Confirm password
+                          {t("projects.confirmPassword")}
                         </Label>
                         <Input
                           id="credential-password-confirm"
@@ -382,7 +389,7 @@ function ProjectsPageClient() {
                           onChange={(event) =>
                             setCredentialPasswordConfirm(event.target.value)
                           }
-                          placeholder="Repeat password"
+                          placeholder={t("projects.repeatPasswordPlaceholder")}
                           autoComplete="new-password"
                         />
                       </div>
@@ -403,10 +410,10 @@ function ProjectsPageClient() {
                           {credentialsSaving ? (
                             <>
                               <Loader2 className="size-4 animate-spin" />
-                              Saving...
+                              {t("common.saving")}
                             </>
                           ) : (
-                            "Save and Open Settings"
+                            t("projects.saveAndOpenSettings")
                           )}
                         </Button>
                       </div>
@@ -418,34 +425,34 @@ function ProjectsPageClient() {
               {isCreateOpen && (
                 <div className="border rounded-lg p-4 bg-card space-y-4">
                   <div className="space-y-1">
-                    <h3 className="font-medium">Create Project</h3>
+                    <h3 className="font-medium">{t("projects.createTitle")}</h3>
                   </div>
 
                   <div className="space-y-2">
-                    <Label htmlFor="name">Project Name</Label>
+                    <Label htmlFor="name">{t("projects.projectName")}</Label>
                     <Input
                       id="name"
                       value={newName}
                       onChange={(e) => setNewName(e.target.value)}
-                      placeholder="My Project"
+                      placeholder={t("projects.projectNamePlaceholder")}
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="desc">Description</Label>
+                    <Label htmlFor="desc">{t("projects.descriptionLabel")}</Label>
                     <Input
                       id="desc"
                       value={newDescription}
                       onChange={(e) => setNewDescription(e.target.value)}
-                      placeholder="Brief description of the project"
+                      placeholder={t("projects.descriptionPlaceholder")}
                     />
                   </div>
                   <div className="space-y-2">
-                    <Label htmlFor="instructions">Instructions for AI Agent</Label>
+                    <Label htmlFor="instructions">{t("projects.instructions")}</Label>
                     <Textarea
                       id="instructions"
                       value={newInstructions}
                       onChange={(e) => setNewInstructions(e.target.value)}
-                      placeholder="Special instructions for the AI when working on this project..."
+                      placeholder={t("projects.instructionsPlaceholder")}
                       className="min-h-24"
                     />
                   </div>
@@ -465,15 +472,15 @@ function ProjectsPageClient() {
                       {creatingProject ? (
                         <>
                           <Loader2 className="size-4 animate-spin" />
-                          Creating...
+                          {t("common.creating")}
                         </>
                       ) : (
-                        "Create Project"
+                        t("projects.createTitle")
                       )}
                     </Button>
                     {!forceCreateVisible && (
                       <Button variant="ghost" onClick={() => setShowCreate(false)}>
-                        Close
+                        {t("common.close")}
                       </Button>
                     )}
                   </div>
@@ -485,8 +492,8 @@ function ProjectsPageClient() {
                   <Empty className="border">
                     <EmptyHeader>
                       <EmptyMedia variant="icon"><FolderOpen /></EmptyMedia>
-                      <EmptyTitle>No projects yet</EmptyTitle>
-                      <EmptyDescription>You can work in Orchestrator or create a dedicated project when needed.</EmptyDescription>
+                      <EmptyTitle>{t("projects.noProjectsTitle")}</EmptyTitle>
+                      <EmptyDescription>{t("projects.noProjectsDescription")}</EmptyDescription>
                     </EmptyHeader>
                   </Empty>
                 )}
@@ -513,7 +520,7 @@ function ProjectsPageClient() {
                             <Badge key={file} variant="outline" className="font-mono">{file}</Badge>
                           ))}
                           <span>
-                            Created: {new Date(project.createdAt).toLocaleDateString()}
+                            {t("common.created", { date: new Date(project.createdAt).toLocaleDateString() })}
                           </span>
                         </div>
                       </div>
@@ -542,7 +549,7 @@ function ProjectsPageClient() {
 
 export default function ProjectsPage() {
   return (
-    <Suspense fallback={<div className="p-4 text-sm text-muted-foreground">Loading...</div>}>
+    <Suspense fallback={<ProjectsLoadingFallback />}>
       <ProjectsPageClient />
     </Suspense>
   );

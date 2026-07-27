@@ -9,6 +9,8 @@ import {
   saveExternalSession,
   type ExternalSession,
 } from "@/lib/storage/external-session-store";
+import { getServerTranslator } from "@/i18n/server";
+import type { MessageKey } from "@/i18n/messages";
 import type { ChatMessage } from "@/lib/types";
 
 export interface HandleExternalMessageInput {
@@ -187,7 +189,8 @@ function chatBelongsToProject(
 
 async function ensureChatForProject(
   session: ExternalSession,
-  projectId: string | undefined
+  projectId: string | undefined,
+  t: (key: MessageKey, values?: Record<string, string | number | boolean | null | undefined>) => string
 ): Promise<string> {
   const key = contextKey(projectId);
   const existingId = session.activeChats[key];
@@ -199,7 +202,7 @@ async function ensureChatForProject(
   }
 
   const newChatId = crypto.randomUUID();
-  const title = `External session ${session.id}`;
+  const title = t("api.external.sessionTitle", { sessionId: session.id });
   await createChat(newChatId, title, projectId);
   session.activeChats[key] = newChatId;
   return newChatId;
@@ -217,6 +220,7 @@ interface ResolvedExternalMessageRunContext {
 async function resolveExternalMessageRunContext(
   input: HandleExternalMessageInput
 ): Promise<ResolvedExternalMessageRunContext> {
+  const t = await getServerTranslator();
   const sessionId = input.sessionId.trim();
   const explicitProjectId = input.projectId?.trim() ?? "";
   const explicitProjectName = input.projectName?.trim() ?? "";
@@ -226,7 +230,7 @@ async function resolveExternalMessageRunContext(
     typeof input.currentPath === "string" && !input.publicMode ? input.currentPath : undefined;
 
   if (!sessionId) {
-    throw new ExternalMessageError(400, { error: "sessionId is required" });
+    throw new ExternalMessageError(400, { error: t("api.error.sessionIdRequired") });
   }
 
   const session = await getOrCreateExternalSession(sessionId);
@@ -242,7 +246,7 @@ async function resolveExternalMessageRunContext(
     const resolvedProject = resolveProjectByIdOrName(projects, explicitProjectRef);
     if (resolvedProject.ambiguous) {
       throw new ExternalMessageError(409, {
-        error: `Project name "${explicitProjectRef}" is ambiguous. Use projectId instead.`,
+        error: t("api.error.projectNameAmbiguous", { project: explicitProjectRef }),
         availableProjects: projects.map((project) => ({
           id: project.id,
           name: project.name,
@@ -251,7 +255,7 @@ async function resolveExternalMessageRunContext(
     }
     if (!resolvedProject.project) {
       throw new ExternalMessageError(404, {
-        error: `Project "${explicitProjectRef}" not found`,
+        error: t("api.error.projectRefNotFound", { project: explicitProjectRef }),
         availableProjects: projects.map((project) => ({
           id: project.id,
           name: project.name,
@@ -271,12 +275,11 @@ async function resolveExternalMessageRunContext(
   if (explicitChatId) {
     const explicitChat = await getChat(explicitChatId);
     if (!explicitChat) {
-      throw new ExternalMessageError(404, { error: `Chat "${explicitChatId}" not found` });
+      throw new ExternalMessageError(404, { error: t("api.error.chatNotFound", { chatId: explicitChatId }) });
     }
     if (!chatBelongsToProject(explicitChat.projectId, resolvedProjectId)) {
       throw new ExternalMessageError(409, {
-        error:
-          'Provided chatId belongs to a different project context. Send matching chatId/projectId or omit chatId.',
+        error: t("api.error.chatProjectMismatch"),
       });
     }
     resolvedChatId = explicitChatId;
@@ -287,10 +290,10 @@ async function resolveExternalMessageRunContext(
       if (sessionChat && chatBelongsToProject(sessionChat.projectId, resolvedProjectId)) {
         resolvedChatId = sessionChatId;
       } else {
-        resolvedChatId = await ensureChatForProject(session, resolvedProjectId);
+        resolvedChatId = await ensureChatForProject(session, resolvedProjectId, t);
       }
     } else {
-      resolvedChatId = await ensureChatForProject(session, resolvedProjectId);
+      resolvedChatId = await ensureChatForProject(session, resolvedProjectId, t);
     }
   }
 
@@ -303,7 +306,7 @@ async function resolveExternalMessageRunContext(
         publicMode: true,
         lockedProjectId: resolvedProjectId || null,
         instructions:
-          "This is a public shared project chat. Stay within the locked project. Do not switch projects, create projects, list other projects, or reveal unrelated workspace details.",
+          t("api.external.publicModeInstructions"),
       }
     : input.runtimeData;
 
@@ -320,7 +323,8 @@ export async function handleExternalMessage(
 ): Promise<ExternalMessageResult> {
   const message = input.message.trim();
   if (!message) {
-    throw new ExternalMessageError(400, { error: "message is required" });
+    const t = await getServerTranslator();
+    throw new ExternalMessageError(400, { error: t("api.error.messageRequired") });
   }
 
   const {
@@ -381,14 +385,16 @@ export async function handleExternalMessage(
     const switchedContextKey = contextKey(switchSignal.projectId);
     session.currentPaths[switchedContextKey] = switchSignal.currentPath ?? "";
     activeCurrentPath = switchSignal.currentPath ?? "";
-    activeChatId = await ensureChatForProject(session, switchSignal.projectId ?? undefined);
+    const t = await getServerTranslator();
+    activeChatId = await ensureChatForProject(session, switchSignal.projectId ?? undefined, t);
   } else if (createSignal && projectByIdAfter.has(createSignal.projectId)) {
     activeProjectId = createSignal.projectId;
     session.activeProjectId = createSignal.projectId;
     const createdContextKey = contextKey(createSignal.projectId);
     session.currentPaths[createdContextKey] = "";
     activeCurrentPath = "";
-    activeChatId = await ensureChatForProject(session, createSignal.projectId);
+    const t = await getServerTranslator();
+    activeChatId = await ensureChatForProject(session, createSignal.projectId, t);
   } else {
     if (resolvedProjectId) {
       session.activeProjectId = resolvedProjectId;
@@ -464,7 +470,7 @@ export async function handleExternalMediaMessage(
   if (effectiveMessage) {
     return handleExternalMessage({
       ...input,
-      message: isVoice ? effectiveMessage : `${effectiveMessage}\n\nAttached file: ${saved.name}`,
+      message: isVoice ? effectiveMessage : `${effectiveMessage}\n\n${(await getServerTranslator())("api.external.attachedFile", { name: saved.name })}`,
       projectId: context.resolvedProjectId,
       chatId: context.resolvedChatId,
       currentPath: context.currentPath,
@@ -483,7 +489,7 @@ export async function handleExternalMediaMessage(
   return {
     success: true,
     sessionId: context.session.id,
-    reply: `File "${saved.name}" saved to chat files.`,
+    reply: (await getServerTranslator())("api.external.fileSaved", { name: saved.name }),
     context: {
       activeProjectId,
       activeProjectName: activeProject?.name ?? null,

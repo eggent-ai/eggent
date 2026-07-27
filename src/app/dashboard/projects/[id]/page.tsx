@@ -20,47 +20,50 @@ import {
   Settings2,
   Wrench,
 } from "lucide-react";
+import { useI18n } from "@/i18n/provider";
+import type { MessageKey } from "@/i18n/messages";
 import type { Project } from "@/lib/types";
 
-const projectFiles = [
+const projectFiles: Array<{ name: string; titleKey: MessageKey; descriptionKey: MessageKey; href: string; icon: typeof FileText }> = [
   {
     name: "context.md",
-    title: "Context",
-    description: "Primary instructions injected into the project agent.",
+    titleKey: "projectDetail.file.context.title",
+    descriptionKey: "projectDetail.file.context.description",
     href: "context",
     icon: FileText,
   },
   {
     name: "memory.md",
-    title: "Memory",
-    description: "Plain Markdown memory used by Eggent bridge tools.",
+    titleKey: "projectDetail.file.memory.title",
+    descriptionKey: "projectDetail.file.memory.description",
     href: "memory",
     icon: FileText,
   },
   {
     name: "skills/",
-    title: "Skills",
-    description: "Project-local skills, each with a SKILL.md file.",
+    titleKey: "projectDetail.file.skills.title",
+    descriptionKey: "projectDetail.file.skills.description",
     href: "skills",
     icon: Puzzle,
   },
   {
     name: ".mcp.json",
-    title: "MCP",
-    description: "Project-only MCP servers available to the agent.",
+    titleKey: "projectDetail.file.mcp.title",
+    descriptionKey: "projectDetail.file.mcp.description",
     href: "mcp",
     icon: Wrench,
   },
   {
     name: "model.json",
-    title: "Model settings",
-    description: "Model override or global model inheritance for this project.",
+    titleKey: "projectDetail.file.model.title",
+    descriptionKey: "projectDetail.file.model.description",
     href: "settings",
     icon: Settings2,
   },
 ];
 
 export default function ProjectDetailsPage() {
+  const { t } = useI18n();
   const params = useParams();
   const router = useRouter();
   const id = params.id as string;
@@ -76,7 +79,7 @@ export default function ProjectDetailsPage() {
           fetch(`/api/projects/${id}`, { cache: "no-store" }),
           fetch(`/api/chat/history?projectId=${encodeURIComponent(id)}`, { cache: "no-store" }),
         ]);
-        if (!projectRes.ok) throw new Error("Project not found");
+        if (!projectRes.ok) throw new Error(t("projectDetail.errors.notFound"));
         const projectJson = await projectRes.json();
         const chatsJson = await chatsRes.json().catch(() => []);
         if (cancelled) return;
@@ -105,8 +108,8 @@ export default function ProjectDetailsPage() {
   if (!project) {
     return (
       <div className="flex h-screen flex-col items-center justify-center gap-4">
-        <h1 className="text-2xl font-bold">Project Not Found</h1>
-        <Button onClick={() => router.push("/dashboard/projects")}>Back to Projects</Button>
+        <h1 className="text-2xl font-bold">{t("projectDetail.notFound")}</h1>
+        <Button onClick={() => router.push("/dashboard/projects")}>{t("projectDetail.backToProjects")}</Button>
       </div>
     );
   }
@@ -128,16 +131,16 @@ export default function ProjectDetailsPage() {
                       <ArrowLeft className="size-4" />
                     </Button>
                     <h1 className="text-2xl font-semibold tracking-tight">{project.name}</h1>
-                    <Badge variant="secondary">directory-backed agent</Badge>
+                    <Badge variant="secondary">{t("projectDetail.directoryBacked")}</Badge>
                   </div>
-                  <p className="text-muted-foreground">{project.description || "No description provided."}</p>
+                  <p className="text-muted-foreground">{project.description || t("projectDetail.noDescription")}</p>
                   <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
-                    This project is a directory. Its context, memory, skills, MCP, and model settings are stored as files in the project folder and used by Eggent when the agent runs. Scheduled tasks are managed by Eggent.
+                    {t("projectDetail.description")}
                   </p>
                 </div>
                 <Button asChild className="gap-2">
                   <Link href="/dashboard">
-                    <Bot className="size-4" /> Open chat
+                    <Bot className="size-4" /> {t("projectDetail.openChat")}
                   </Link>
                 </Button>
               </div>
@@ -145,12 +148,12 @@ export default function ProjectDetailsPage() {
               <section className="rounded-xl border bg-card p-4 md:p-5">
                 <div className="mb-4 flex items-center justify-between gap-3">
                   <div>
-                    <h2 className="text-lg font-semibold">Project folder</h2>
+                    <h2 className="text-lg font-semibold">{t("projectDetail.projectFolder")}</h2>
                     <p className="text-sm text-muted-foreground">data/projects/{project.id}/</p>
                   </div>
                   <Button variant="outline" asChild className="gap-2">
                     <Link href="/dashboard">
-                      <MessageSquare className="size-4" /> Chats {chatCount !== null ? `(${chatCount})` : ""}
+                      <MessageSquare className="size-4" /> {chatCount !== null ? t("projectDetail.chats", { count: `(${chatCount})` }) : t("projectDetail.chats", { count: "" })}
                     </Link>
                   </Button>
                 </div>
@@ -167,13 +170,13 @@ export default function ProjectDetailsPage() {
                         <div className="mb-3 flex items-center justify-between gap-3">
                           <div className="flex items-center gap-2">
                             <Icon className="size-4 text-primary" />
-                            <span className="font-medium">{item.title}</span>
+                            <span className="font-medium">{t(item.titleKey)}</span>
                           </div>
                           <Badge variant="outline" className="font-mono text-[11px]">
                             {item.name}
                           </Badge>
                         </div>
-                        <p className="text-sm text-muted-foreground">{item.description}</p>
+                        <p className="text-sm text-muted-foreground">{t(item.descriptionKey)}</p>
                       </Link>
                     );
                   })}
@@ -183,7 +186,7 @@ export default function ProjectDetailsPage() {
               <section className="rounded-xl border bg-card p-4 md:p-5">
                 <div className="mb-3 flex items-center gap-2">
                   <FileJson className="size-4 text-primary" />
-                  <h2 className="text-lg font-semibold">Runtime model</h2>
+                  <h2 className="text-lg font-semibold">{t("projectDetail.runtimeModel")}</h2>
                 </div>
                 <pre className="overflow-auto rounded-lg bg-muted p-3 text-xs">{`Eggent UI/API
   -> data/projects/${project.id}/context.md

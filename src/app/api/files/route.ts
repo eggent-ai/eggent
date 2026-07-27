@@ -3,14 +3,17 @@ import fs from "fs/promises";
 import path from "path";
 import { getProjectFiles, getWorkDir } from "@/lib/storage/project-store";
 import { publishUiSyncEvent } from "@/lib/realtime/event-bus";
+import { getServerTranslator } from "@/i18n/server";
 
 export async function GET(req: NextRequest) {
   const projectId = req.nextUrl.searchParams.get("project");
   const subPath = req.nextUrl.searchParams.get("path") || "";
 
+  const t = await getServerTranslator(req.headers.get("accept-language"));
+
   if (!projectId) {
     return Response.json(
-      { error: "Project ID required" },
+      { error: t("api.error.projectIdRequired") },
       { status: 400 }
     );
   }
@@ -30,6 +33,7 @@ function resolveSafePath(projectId: string, filePath: string) {
 }
 
 export async function POST(req: NextRequest) {
+  const t = await getServerTranslator(req.headers.get("accept-language"));
   const body = await req.json().catch(() => null) as {
     project?: unknown;
     path?: unknown;
@@ -43,14 +47,14 @@ export async function POST(req: NextRequest) {
   const content = typeof body?.content === "string" ? body.content : "";
 
   if (!projectId || !filePath) {
-    return Response.json({ error: "Project ID and path required" }, { status: 400 });
+    return Response.json({ error: t("api.error.projectIdAndPathRequired") }, { status: 400 });
   }
 
   let resolved;
   try {
     resolved = resolveSafePath(projectId, filePath);
   } catch {
-    return Response.json({ error: "Invalid file path" }, { status: 403 });
+    return Response.json({ error: t("api.error.invalidFilePath") }, { status: 403 });
   }
 
   try {
@@ -68,19 +72,20 @@ export async function POST(req: NextRequest) {
     return Response.json({ success: true, projectId, path: filePath, type: entryType });
   } catch (error) {
     const message = error instanceof Error && "code" in error && error.code === "EEXIST"
-      ? "File already exists"
-      : "Failed to create path";
+      ? t("api.error.fileAlreadyExists")
+      : t("api.error.failedCreatePath");
     return Response.json({ error: message }, { status: 400 });
   }
 }
 
 export async function DELETE(req: NextRequest) {
+  const t = await getServerTranslator(req.headers.get("accept-language"));
   const projectId = req.nextUrl.searchParams.get("project");
   const filePath = req.nextUrl.searchParams.get("path");
 
   if (!projectId || !filePath) {
     return Response.json(
-      { error: "Project ID and file path required" },
+      { error: t("api.error.projectIdAndFilePathRequired") },
       { status: 400 }
     );
   }
@@ -90,7 +95,7 @@ export async function DELETE(req: NextRequest) {
     resolved = resolveSafePath(projectId, filePath);
   } catch {
     return Response.json(
-      { error: "Invalid file path" },
+      { error: t("api.error.invalidFilePath") },
       { status: 403 }
     );
   }
@@ -109,6 +114,6 @@ export async function DELETE(req: NextRequest) {
     });
     return Response.json({ success: true });
   } catch {
-    return Response.json({ error: "File not found" }, { status: 404 });
+    return Response.json({ error: t("api.error.fileNotFound") }, { status: 404 });
   }
 }

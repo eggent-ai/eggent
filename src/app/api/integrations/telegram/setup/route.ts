@@ -9,6 +9,8 @@ import {
 } from "@/lib/storage/telegram-integration-store";
 import { setEggentTelegramBotCommands } from "@/lib/telegram/bot-commands";
 import { telegramPollingService } from "@/lib/telegram/polling-service";
+import { getServerTranslator } from "@/i18n/server";
+import type { MessageKey } from "@/i18n/messages";
 
 interface TelegramApiResponse {
   ok?: boolean;
@@ -66,7 +68,7 @@ async function deleteTelegramWebhook(botToken: string): Promise<void> {
   });
 }
 
-async function claimHostedTelegramBot(botToken: string): Promise<string | null> {
+async function claimHostedTelegramBot(botToken: string, t: (key: MessageKey) => string): Promise<string | null> {
   const claimUrl = process.env.EGGENT_CLOUD_TELEGRAM_CLAIM_URL?.trim();
   const instanceId = process.env.EGGENT_CLOUD_INSTANCE_ID?.trim();
   const instanceToken = process.env.EXTERNAL_API_TOKEN?.trim();
@@ -83,18 +85,18 @@ async function claimHostedTelegramBot(botToken: string): Promise<string | null> 
     });
     if (response.ok) return null;
     const payload = await response.json().catch(() => null) as { error?: string } | null;
-    return payload?.error || `Cloud Telegram claim failed (${response.status})`;
+    return payload?.error || `${t("api.error.telegramCloudClaimFailed")} (${response.status})`;
   } catch (error) {
-    return error instanceof Error ? error.message : "Cloud Telegram claim failed";
+    return error instanceof Error ? error.message : t("api.error.telegramCloudClaimFailed");
   }
 }
 
-async function setTelegramBotWelcome(botToken: string): Promise<void> {
-  const description = "Eggent is connected. Send /start to begin.";
+async function setTelegramBotWelcome(botToken: string, t: (key: MessageKey) => string): Promise<void> {
+  const description = t("api.telegram.botDescription");
   await Promise.allSettled([
     callTelegramBotApi(botToken, "setMyDescription", { description }),
     callTelegramBotApi(botToken, "setMyShortDescription", {
-      short_description: "Chat with your Eggent workspace.",
+      short_description: t("api.telegram.botShortDescription"),
     }),
   ]);
 }
@@ -156,6 +158,7 @@ function inferPublicBaseUrl(req: NextRequest): string {
 }
 
 export async function POST(req: NextRequest) {
+  const t = await getServerTranslator(req.headers.get("accept-language"));
   try {
     const body = (await req.json().catch(() => ({}))) as {
       botToken?: unknown;
@@ -171,7 +174,7 @@ export async function POST(req: NextRequest) {
     const botToken = inputToken || storedToken || runtime.botToken.trim();
     if (!botToken) {
       return Response.json(
-        { error: "Telegram bot token is required" },
+        { error: t("api.error.telegramTokenRequired") },
         { status: 400 }
       );
     }
@@ -179,7 +182,7 @@ export async function POST(req: NextRequest) {
     const requestedMode = body.mode === "webhook" ? "webhook" : "polling";
     const botInfo = await getTelegramBotInfo(botToken);
     const claimWarning = requestedMode === "polling"
-      ? await claimHostedTelegramBot(botToken)
+      ? await claimHostedTelegramBot(botToken, t)
       : null;
     if (claimWarning) {
       console.warn("Telegram cloud claim warning:", claimWarning);
@@ -206,7 +209,7 @@ export async function POST(req: NextRequest) {
         return Response.json(
           {
             error:
-              "Public base URL is required. Set APP_BASE_URL or access the app via public host.",
+              t("api.error.telegramPublicUrlRequired"),
           },
           { status: 400 }
         );
@@ -214,11 +217,11 @@ export async function POST(req: NextRequest) {
       const webhookUrl = buildTelegramWebhookUrl(publicBaseUrl);
       await setTelegramWebhook({ botToken, webhookUrl, webhookSecret });
       await setEggentTelegramBotCommands(botToken);
-      await setTelegramBotWelcome(botToken);
+      await setTelegramBotWelcome(botToken, t);
       const settings = await getTelegramIntegrationPublicSettings();
       return Response.json({
         success: true,
-        message: "Telegram webhook connected",
+        message: t("api.success.telegramWebhookConnected"),
         mode: "webhook",
         webhookUrl,
         botUsername: botInfo.username || null,
@@ -230,7 +233,7 @@ export async function POST(req: NextRequest) {
 
     await deleteTelegramWebhook(botToken);
     await setEggentTelegramBotCommands(botToken);
-    await setTelegramBotWelcome(botToken);
+    await setTelegramBotWelcome(botToken, t);
     const nextRuntime = await getTelegramIntegrationRuntimeConfig();
     if (!telegramPollingService.status.isRunning) {
       await telegramPollingService.start(nextRuntime);
@@ -241,8 +244,8 @@ export async function POST(req: NextRequest) {
     return Response.json({
       success: true,
       message: botInfo.username
-        ? `Long polling started. Open @${botInfo.username} and send /start.`
-        : "Long polling started. Open your bot in Telegram and send /start.",
+        ? t("api.success.telegramPollingOpenBot", { username: botInfo.username })
+        : t("api.success.telegramPollingOpenGeneric"),
       mode: "polling",
       botUsername: botInfo.username || null,
       botLink: botInfo.username ? `https://t.me/${botInfo.username}` : null,
@@ -255,7 +258,7 @@ export async function POST(req: NextRequest) {
         error:
           error instanceof Error
             ? error.message
-            : "Failed to configure Telegram integration",
+            : t("api.error.telegramSetupFailed"),
       },
       { status: 500 }
     );

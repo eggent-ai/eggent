@@ -11,6 +11,8 @@ import type { ChatMessage, ChatMessagePart } from "@/lib/types";
 import type { PiRuntimeStats } from "@/lib/pi/types";
 import type { PiPendingInteraction } from "@/lib/pi/interaction-types";
 import { useBackgroundSync } from "@/hooks/use-background-sync";
+import { useI18n } from "@/i18n/provider";
+import type { MessageKey } from "@/i18n/messages";
 import { generateClientId } from "@/lib/utils";
 
 /** Convert stored ChatMessage to UIMessage (parts format for useChat) */
@@ -320,11 +322,11 @@ function areUIMessagesEquivalentById(
   return true;
 }
 
-function formatChatErrorMessage(error: unknown): string {
+function formatChatErrorMessage(error: unknown, t: (key: MessageKey) => string): string {
   const raw = error instanceof Error ? error.message : String(error);
   const compact = raw.replace(/\s+/g, " ").trim();
   if (!compact) {
-    return "The model stopped before producing a final response. Please retry.";
+    return t("chat.errors.emptyFinal");
   }
   return compact.length > 280 ? `${compact.slice(0, 280)}...` : compact;
 }
@@ -384,14 +386,13 @@ function assistantMessageHasToolOutput(message: UIMessage): boolean {
   });
 }
 
-const NO_FINAL_RESPONSE_FALLBACK =
-  "Инструменты выполнились, но финальный ответ не получен. Напишите `continue`, и я завершу ответ.";
-
 interface ChatPanelProps {
   initialQuickSkills?: QuickSkillAction[];
 }
 
 export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
+  const { t } = useI18n();
+  const noFinalResponseFallback = t("chat.errors.noFinalAfterTools");
   const {
     activeChatId,
     setActiveChatId,
@@ -449,7 +450,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     let cancelled = false;
     fetch("/api/skills", { cache: "no-store" })
       .then((response) => {
-        if (!response.ok) throw new Error("Failed to load bundled skills");
+        if (!response.ok) throw new Error(t("chat.errors.loadBundledSkills"));
         return response.json() as Promise<QuickSkillAction[]>;
       })
       .then((skills) => {
@@ -497,7 +498,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     transport,
     onError: (error) => {
       console.error("Chat error:", error);
-      setChatError(formatChatErrorMessage(error));
+      setChatError(formatChatErrorMessage(error, t));
     },
   });
 
@@ -681,16 +682,16 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
       const wasStoppedByUser = stopRequestedRef.current;
       if (!wasStoppedByUser && hasToolOutput && !hasVisibleAssistantAnswer) {
         const alreadyPresent = assistantMessages.some(
-          (m) => extractVisibleAssistantText(m) === NO_FINAL_RESPONSE_FALLBACK
+          (m) => extractVisibleAssistantText(m) === noFinalResponseFallback
         );
-        setChatError(NO_FINAL_RESPONSE_FALLBACK);
+        setChatError(noFinalResponseFallback);
         if (!alreadyPresent) {
           setMessages((prev) => [
             ...prev,
             {
               id: generateClientId(),
               role: "assistant",
-              parts: [{ type: "text", text: NO_FINAL_RESPONSE_FALLBACK }],
+              parts: [{ type: "text", text: noFinalResponseFallback }],
             },
           ]);
         }
@@ -746,11 +747,11 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
       );
       const payload = await response.json().catch(() => null) as { error?: string } | null;
       if (!response.ok) {
-        throw new Error(payload?.error || "Failed to send response");
+        throw new Error(payload?.error || t("chat.errors.sendResponse"));
       }
       setInput("");
     } catch (error) {
-      setChatError(error instanceof Error ? error.message : "Failed to send response");
+      setChatError(error instanceof Error ? error.message : t("chat.errors.sendResponse"));
     }
   }, []);
 
@@ -802,7 +803,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         initialMessage?: string;
       } | null;
       if (!response.ok || !payload?.project?.id) {
-        throw new Error(payload?.error || "Failed to launch skill");
+        throw new Error(payload?.error || t("chat.errors.launchSkill"));
       }
 
       const projectId = payload.project.id;
@@ -821,7 +822,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
       registerOutgoingChat(messageText, projectId);
       sendMessage({ text: messageText });
     } catch (error) {
-      setChatError(error instanceof Error ? error.message : "Failed to launch skill");
+      setChatError(error instanceof Error ? error.message : t("chat.errors.launchSkill"));
     } finally {
       setLaunchingSkill(null);
     }

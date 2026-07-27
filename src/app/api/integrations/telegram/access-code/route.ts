@@ -1,7 +1,9 @@
 import { NextRequest } from "next/server";
 import { createTelegramAccessCode } from "@/lib/storage/telegram-integration-store";
+import { getServerTranslator } from "@/i18n/server";
 
 export async function POST(req: NextRequest) {
+  const t = await getServerTranslator(req.headers.get("accept-language"));
   try {
     const body = (await req.json().catch(() => ({}))) as {
       ttlMinutes?: unknown;
@@ -22,7 +24,7 @@ export async function POST(req: NextRequest) {
         error:
           error instanceof Error
             ? error.message
-            : "Failed to generate Telegram access code",
+            : t("api.error.telegramAccessCodeFailed"),
       },
       { status: 500 }
     );

@@ -2,14 +2,16 @@ import { NextRequest } from "next/server";
 import fs from "fs/promises";
 import path from "path";
 import { getWorkDir } from "@/lib/storage/project-store";
+import { getServerTranslator } from "@/i18n/server";
 
 export async function GET(req: NextRequest) {
+  const t = await getServerTranslator(req.headers.get("accept-language"));
   const projectId = req.nextUrl.searchParams.get("project");
   const filePath = req.nextUrl.searchParams.get("path");
 
   if (!projectId || !filePath) {
     return Response.json(
-      { error: "Project ID and file path required" },
+      { error: t("api.error.projectIdAndFilePathRequired") },
       { status: 400 }
     );
   }
@@ -22,7 +24,7 @@ export async function GET(req: NextRequest) {
   const resolvedWorkDir = path.resolve(workDir);
   if (!resolvedPath.startsWith(resolvedWorkDir)) {
     return Response.json(
-      { error: "Invalid file path" },
+      { error: t("api.error.invalidFilePath") },
       { status: 403 }
     );
   }
@@ -38,6 +40,6 @@ export async function GET(req: NextRequest) {
       },
     });
   } catch {
-    return Response.json({ error: "File not found" }, { status: 404 });
+    return Response.json({ error: t("api.error.fileNotFound") }, { status: 404 });
   }
 }

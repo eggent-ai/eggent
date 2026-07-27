@@ -24,6 +24,7 @@ import {
   SidebarMenuItem,
   useSidebar,
 } from "@/components/ui/sidebar"
+import { useI18n } from "@/i18n/provider"
 
 export function NavProjects({
   projects,
@@ -34,11 +35,12 @@ export function NavProjects({
     icon: LucideIcon
   }[]
 }) {
+  const { t } = useI18n()
   const { isMobile } = useSidebar()
 
   return (
     <SidebarGroup className="group-data-[collapsible=icon]:hidden">
-      <SidebarGroupLabel>Projects</SidebarGroupLabel>
+      <SidebarGroupLabel>{t("nav.projects")}</SidebarGroupLabel>
       <SidebarMenu>
         {projects.map((item) => (
           <SidebarMenuItem key={item.name}>
@@ -52,7 +54,7 @@ export function NavProjects({
               <DropdownMenuTrigger asChild>
                 <SidebarMenuAction showOnHover>
                   <MoreHorizontal />
-                  <span className="sr-only">More</span>
+                  <span className="sr-only">{t("nav.more")}</span>
                 </SidebarMenuAction>
               </DropdownMenuTrigger>
               <DropdownMenuContent
@@ -62,16 +64,16 @@ export function NavProjects({
               >
                 <DropdownMenuItem>
                   <Folder className="text-muted-foreground" />
-                  <span>View Project</span>
+                  <span>{t("nav.viewProject")}</span>
                 </DropdownMenuItem>
                 <DropdownMenuItem>
                   <Share className="text-muted-foreground" />
-                  <span>Share Project</span>
+                  <span>{t("nav.shareProject")}</span>
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem>
                   <Trash2 className="text-muted-foreground" />
-                  <span>Delete Project</span>
+                  <span>{t("nav.deleteProject")}</span>
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
@@ -80,7 +82,7 @@ export function NavProjects({
         <SidebarMenuItem>
           <SidebarMenuButton>
             <MoreHorizontal />
-            <span>More</span>
+            <span>{t("nav.more")}</span>
           </SidebarMenuButton>
         </SidebarMenuItem>
       </SidebarMenu>

@@ -1,14 +1,19 @@
+import { getServerTranslator } from "@/i18n/server";
+
 interface TelegramApiResponse {
   ok?: boolean;
   description?: string;
 }
 
-const EGGENT_TELEGRAM_BOT_COMMANDS = [
-  { command: "start", description: "Show help and current project" },
-  { command: "help", description: "Show available commands" },
-  { command: "code", description: "Activate access with a code" },
-  { command: "new", description: "Start a new conversation" },
-];
+async function getEggentTelegramBotCommands() {
+  const t = await getServerTranslator();
+  return [
+    { command: "start", description: t("telegram.command.start") },
+    { command: "help", description: t("telegram.command.help") },
+    { command: "code", description: t("telegram.command.code") },
+    { command: "new", description: t("telegram.command.new") },
+  ];
+}
 
 function parseTelegramError(status: number, payload: TelegramApiResponse | null): string {
   const description = payload?.description?.trim();
@@ -39,7 +44,7 @@ async function callTelegramBotApi(
 
 export async function setEggentTelegramBotCommands(botToken: string): Promise<void> {
   await callTelegramBotApi(botToken, "setMyCommands", {
-    commands: EGGENT_TELEGRAM_BOT_COMMANDS,
+    commands: await getEggentTelegramBotCommands(),
     scope: { type: "default" },
   });
 }

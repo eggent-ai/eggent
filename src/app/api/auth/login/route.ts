@@ -10,6 +10,7 @@ import {
   getSessionCookieOptionsForRequest,
   isRequestSecure,
 } from "@/lib/auth/session";
+import { getServerTranslator } from "@/i18n/server";
 
 interface LoginBody {
   username?: unknown;
@@ -21,6 +22,7 @@ function toTrimmedString(value: unknown): string {
 }
 
 export async function POST(req: NextRequest) {
+  const t = await getServerTranslator(req.headers.get("accept-language"));
   try {
     const body = (await req.json()) as LoginBody;
     const username = toTrimmedString(body.username);
@@ -28,7 +30,7 @@ export async function POST(req: NextRequest) {
 
     if (!username || !password) {
       return Response.json(
-        { error: "Username and password are required." },
+        { error: t("api.error.usernamePasswordRequired") },
         { status: 400 }
       );
     }
@@ -36,7 +38,7 @@ export async function POST(req: NextRequest) {
     const settings = await getSettings();
     if (!settings.auth.enabled) {
       return Response.json(
-        { error: "Authentication is disabled." },
+        { error: t("api.error.authDisabled") },
         { status: 403 }
       );
     }
@@ -44,7 +46,7 @@ export async function POST(req: NextRequest) {
     const userMatches = username === settings.auth.username;
     const passwordMatches = verifyPassword(password, settings.auth.passwordHash);
     if (!userMatches || !passwordMatches) {
-      return Response.json({ error: "Invalid credentials." }, { status: 401 });
+      return Response.json({ error: t("api.error.invalidCredentials") }, { status: 401 });
     }
 
     const mustChangeCredentials = isDefaultAuthCredentials(
@@ -65,7 +67,7 @@ export async function POST(req: NextRequest) {
   } catch (error) {
     return Response.json(
       {
-        error: error instanceof Error ? error.message : "Login failed.",
+        error: error instanceof Error ? error.message : t("api.error.loginFailed"),
       },
       { status: 500 }
     );

@@ -9,25 +9,29 @@ import {
   GitBranch,
   Send,
   Settings,
+  type LucideIcon,
 } from "lucide-react";
+import { useI18n } from "@/i18n/provider";
+import type { MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/utils";
 
-const SETTINGS_SECTIONS = [
-  { href: "/dashboard/settings", label: "General", icon: Settings },
-  { href: "/dashboard/projects", label: "Projects", icon: FolderOpen },
-  { href: "/dashboard/pipelines", label: "Pipelines", icon: GitBranch },
-  { href: "/dashboard/schedules", label: "Schedules", icon: CalendarClock },
-  { href: "/dashboard/messengers", label: "Messengers", icon: Send },
-  { href: "/dashboard/api", label: "API", icon: Cable },
-] as const;
+const SETTINGS_SECTIONS: Array<{ href: string; labelKey: MessageKey; icon: LucideIcon }> = [
+  { href: "/dashboard/settings", labelKey: "settings.nav.general", icon: Settings },
+  { href: "/dashboard/projects", labelKey: "settings.nav.projects", icon: FolderOpen },
+  { href: "/dashboard/pipelines", labelKey: "settings.nav.pipelines", icon: GitBranch },
+  { href: "/dashboard/schedules", labelKey: "settings.nav.schedules", icon: CalendarClock },
+  { href: "/dashboard/messengers", labelKey: "settings.nav.messengers", icon: Send },
+  { href: "/dashboard/api", labelKey: "settings.nav.api", icon: Cable },
+];
 
 export function SettingsNavigation() {
   const pathname = usePathname();
+  const { t } = useI18n();
 
   return (
     <nav aria-label="Settings sections" className="rounded-xl border bg-card/80 p-1.5 shadow-sm backdrop-blur">
       <div className="flex items-center gap-1 overflow-x-auto">
-        {SETTINGS_SECTIONS.map(({ href, label, icon: Icon }) => {
+        {SETTINGS_SECTIONS.map(({ href, labelKey, icon: Icon }) => {
           const active =
             pathname === href ||
             pathname.startsWith(`${href}/`) ||
@@ -45,7 +49,7 @@ export function SettingsNavigation() {
               )}
             >
               <Icon className="size-4" />
-              <span>{label}</span>
+              <span>{t(labelKey)}</span>
             </Link>
           );
         })}

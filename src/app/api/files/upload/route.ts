@@ -3,6 +3,7 @@ import fs from "fs/promises";
 import path from "path";
 import { getWorkDir } from "@/lib/storage/project-store";
 import { publishUiSyncEvent } from "@/lib/realtime/event-bus";
+import { getServerTranslator } from "@/i18n/server";
 
 function resolveSafeDir(projectId: string, dirPath: string) {
   const workDir = getWorkDir(projectId);
@@ -38,6 +39,7 @@ function resolveSafeChildPath(rootDir: string, relativePath: string) {
 }
 
 export async function POST(req: NextRequest) {
+  const t = await getServerTranslator(req.headers.get("accept-language"));
   const formData = await req.formData();
   const projectId = String(formData.get("project") || "");
   const dirPath = String(formData.get("path") || "");
@@ -46,17 +48,17 @@ export async function POST(req: NextRequest) {
   const directories = formData.getAll("directories").map((item) => String(item || ""));
 
   if (!projectId) {
-    return Response.json({ error: "Project ID required" }, { status: 400 });
+    return Response.json({ error: t("api.error.projectIdRequired") }, { status: 400 });
   }
   if (files.length === 0 && directories.length === 0) {
-    return Response.json({ error: "No files or directories provided" }, { status: 400 });
+    return Response.json({ error: t("api.error.noFilesOrDirectories") }, { status: 400 });
   }
 
   let targetDir: string;
   try {
     targetDir = resolveSafeDir(projectId, dirPath);
   } catch {
-    return Response.json({ error: "Invalid directory path" }, { status: 403 });
+    return Response.json({ error: t("api.error.invalidDirectoryPath") }, { status: 403 });
   }
 
   await fs.mkdir(targetDir, { recursive: true });
@@ -68,7 +70,7 @@ export async function POST(req: NextRequest) {
   for (const rawDirectory of directories) {
     const safeDirectory = safeRelativePath(rawDirectory);
     if (!safeDirectory) {
-      errors.push({ name: rawDirectory || "(unnamed directory)", error: "Invalid directory path" });
+      errors.push({ name: rawDirectory || "(unnamed directory)", error: t("api.error.invalidDirectoryPath") });
       continue;
     }
 
@@ -77,7 +79,7 @@ export async function POST(req: NextRequest) {
       await fs.mkdir(targetPath, { recursive: true });
       createdDirectories.push(path.posix.join(dirPath.replace(/\\/g, "/"), safeDirectory).replace(/^\.\//, ""));
     } catch {
-      errors.push({ name: safeDirectory, error: "Failed to create directory" });
+      errors.push({ name: safeDirectory, error: t("api.error.failedCreateDirectory") });
     }
   }
 
@@ -85,7 +87,7 @@ export async function POST(req: NextRequest) {
     const file = files[index];
     const safeFilePath = safeRelativePath(relativePaths[index] || file.name);
     if (!safeFilePath) {
-      errors.push({ name: file.name || "(unnamed)", error: "Invalid filename" });
+      errors.push({ name: file.name || "(unnamed)", error: t("api.error.invalidFilename") });
       continue;
     }
 
@@ -98,8 +100,8 @@ export async function POST(req: NextRequest) {
       uploaded.push({ name: path.posix.basename(safeFilePath), path: relativePath, size: buffer.length });
     } catch (error) {
       const message = error instanceof Error && "code" in error && error.code === "EEXIST"
-        ? "File already exists"
-        : "Failed to write file";
+        ? t("api.error.fileAlreadyExists")
+        : t("api.error.failedWriteFile");
       errors.push({ name: safeFilePath, error: message });
     }
   }

@@ -9,6 +9,7 @@ import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { useI18n } from "@/i18n/provider";
 
 type PiSchedule = {
   id: string;
@@ -46,6 +47,7 @@ function statusVariant(job: PiSchedule): "default" | "secondary" | "destructive"
 }
 
 export default function PiSchedulesPage() {
+  const { t } = useI18n();
   const [schedules, setSchedules] = useState<PiSchedule[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -67,7 +69,7 @@ export default function PiSchedulesPage() {
   return (
     <div className="[--header-height:calc(--spacing(14))]">
       <SidebarProvider className="flex flex-col">
-        <SiteHeader title="Schedules" />
+        <SiteHeader title={t("schedules.title")} />
         <div className="flex flex-1">
           <AppSidebar />
           <SidebarInset>
@@ -76,14 +78,14 @@ export default function PiSchedulesPage() {
 
               <div className="flex flex-col gap-3 md:flex-row md:items-start md:justify-between">
                 <div className="space-y-1">
-                  <h2 className="text-2xl font-semibold">Scheduled Tasks</h2>
+                  <h2 className="text-2xl font-semibold">{t("schedules.heading")}</h2>
                   <p className="text-sm text-muted-foreground">
-                    View scheduled work managed by Eggent.
+                    {t("schedules.description")}
                   </p>
                 </div>
                 <Button variant="outline" onClick={load} disabled={loading} className="gap-2 md:self-start">
                   {loading ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-                  Refresh
+                  {t("schedules.refresh")}
                 </Button>
               </div>
 
@@ -91,35 +93,31 @@ export default function PiSchedulesPage() {
                 <div className="flex items-center justify-between border-b px-4 py-3">
                   <div className="flex items-center gap-2">
                     <CalendarClock className="size-4 text-primary" />
-                    <h3 className="text-sm font-medium">Scheduled Tasks</h3>
+                    <h3 className="text-sm font-medium">{t("schedules.heading")}</h3>
                   </div>
                   {!loading && (
                     <span className="text-xs text-muted-foreground">
-                      {schedules.length} total
+                      {t("schedules.total", { count: schedules.length })}
                     </span>
                   )}
                 </div>
 
                 <div className="border-b bg-muted/20 px-4 py-3 text-sm text-muted-foreground">
-                  Create or change schedules from chat. Eggent uses the
-                  <span className="font-mono"> Agent </span>
-                  tool with a
-                  <span className="font-mono"> schedule </span>
-                  value.
+                  {t("schedules.hint")}
                 </div>
 
                 {loading ? (
                   <div className="py-12 text-center text-muted-foreground flex items-center justify-center gap-2">
                     <Loader2 className="size-4 animate-spin" />
-                    Loading schedules...
+                    {t("schedules.loading")}
                   </div>
                 ) : schedules.length === 0 ? (
                   <Empty>
                     <EmptyHeader>
                       <EmptyMedia variant="icon"><CalendarClock /></EmptyMedia>
-                      <EmptyTitle>No scheduled tasks found</EmptyTitle>
+                      <EmptyTitle>{t("schedules.emptyTitle")}</EmptyTitle>
                       <EmptyDescription>
-                        Schedules will appear here after they are created from an Eggent chat/session.
+                        {t("schedules.emptyDescription")}
                       </EmptyDescription>
                     </EmptyHeader>
                   </Empty>
@@ -128,12 +126,12 @@ export default function PiSchedulesPage() {
                     <table className="w-full text-sm">
                       <thead className="bg-muted/40 text-left text-xs uppercase tracking-wide text-muted-foreground">
                         <tr>
-                          <th className="px-4 py-3 font-medium">Task</th>
-                          <th className="px-4 py-3 font-medium">Project</th>
-                          <th className="px-4 py-3 font-medium">Schedule</th>
-                          <th className="px-4 py-3 font-medium">Next Run</th>
-                          <th className="px-4 py-3 font-medium">Last Run</th>
-                          <th className="px-4 py-3 font-medium">Status</th>
+                          <th className="px-4 py-3 font-medium">{t("schedules.table.task")}</th>
+                          <th className="px-4 py-3 font-medium">{t("schedules.table.project")}</th>
+                          <th className="px-4 py-3 font-medium">{t("schedules.table.schedule")}</th>
+                          <th className="px-4 py-3 font-medium">{t("schedules.table.nextRun")}</th>
+                          <th className="px-4 py-3 font-medium">{t("schedules.table.lastRun")}</th>
+                          <th className="px-4 py-3 font-medium">{t("schedules.table.status")}</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y">
@@ -145,12 +143,12 @@ export default function PiSchedulesPage() {
                                 {job.prompt || job.description}
                               </div>
                               <div className="mt-1 text-xs text-muted-foreground">
-                                Agent: {job.subagent_type || "general-purpose"}
+                                {t("schedules.agent", { agent: job.subagent_type || "general-purpose" })}
                               </div>
                             </td>
                             <td className="px-4 py-3 align-top">
                               <div>{job.projectName}</div>
-                              <div className="text-xs text-muted-foreground">Session {job.sessionId}</div>
+                              <div className="text-xs text-muted-foreground">{t("schedules.session", { sessionId: job.sessionId })}</div>
                             </td>
                             <td className="px-4 py-3 align-top">
                               <div className="font-mono text-xs">{job.schedule || "—"}</div>
@@ -159,11 +157,11 @@ export default function PiSchedulesPage() {
                             <td className="px-4 py-3 align-top whitespace-nowrap">{formatDate(job.nextRun)}</td>
                             <td className="px-4 py-3 align-top whitespace-nowrap">
                               <div>{formatDate(job.lastRun)}</div>
-                              <div className="text-xs text-muted-foreground">Runs: {job.runCount ?? 0}</div>
+                              <div className="text-xs text-muted-foreground">{t("schedules.runs", { count: job.runCount ?? 0 })}</div>
                             </td>
                             <td className="px-4 py-3 align-top">
                               <Badge variant={statusVariant(job)}>
-                                {job.enabled ? job.lastStatus || "scheduled" : "disabled"}
+                                {job.enabled ? job.lastStatus || t("schedules.status.scheduled") : t("schedules.status.disabled")}
                               </Badge>
                             </td>
                           </tr>

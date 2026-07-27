@@ -3,6 +3,8 @@
 import { useRef, useCallback, useState, useEffect, useMemo } from "react";
 import { Send, Square, Paperclip, X, FileIcon, ImageIcon, Mic, MicOff, Loader2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { useI18n } from "@/i18n/provider";
+import type { MessageKey } from "@/i18n/messages";
 import type { ChatFile } from "@/lib/types";
 import type { PiRuntimeStats } from "@/lib/pi/types";
 import type { PiPendingInteraction } from "@/lib/pi/interaction-types";
@@ -52,32 +54,32 @@ function isImageFile(file: File): boolean {
   return file.type.startsWith("image/");
 }
 
-function getVoiceInputUnavailableMessage(): string | null {
+function getVoiceInputUnavailableMessage(t: (key: MessageKey) => string): string | null {
   if (typeof window !== "undefined" && !window.isSecureContext) {
-    return "Voice input requires HTTPS. Open Eggent via a secure domain or use localhost; browsers block microphone access on public HTTP addresses.";
+    return t("chat.voiceHttpsRequired");
   }
   if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
-    return "Voice input is not supported by this browser.";
+    return t("chat.voiceUnsupportedBrowser");
   }
   if (typeof MediaRecorder === "undefined") {
-    return "Audio recording is not supported by this browser.";
+    return t("chat.audioUnsupportedBrowser");
   }
   return null;
 }
 
-function getVoiceInputErrorMessage(error: unknown): string {
+function getVoiceInputErrorMessage(error: unknown, t: (key: MessageKey) => string): string {
   if (error instanceof DOMException) {
     if (error.name === "NotAllowedError" || error.name === "SecurityError") {
-      return "Microphone access was blocked. Allow microphone permissions and make sure Eggent is opened over HTTPS.";
+      return t("chat.microphoneBlocked");
     }
     if (error.name === "NotFoundError" || error.name === "DevicesNotFoundError") {
-      return "No microphone was found on this device.";
+      return t("chat.microphoneMissing");
     }
     if (error.name === "NotReadableError" || error.name === "TrackStartError") {
-      return "The microphone is already in use by another app or cannot be read.";
+      return t("chat.microphoneBusy");
     }
   }
-  return error instanceof Error ? error.message : "Failed to start recording";
+  return error instanceof Error ? error.message : t("chat.recordingFailed");
 }
 
 interface SlashCommand {
@@ -106,8 +108,6 @@ interface ChatInputProps {
   runtimeStats?: PiRuntimeStats | null;
 }
 
-const ATTACHMENT_ONLY_PROMPT = "Посмотри прикреплённое изображение.";
-
 export function ChatInput({
   input,
   setInput,
@@ -123,6 +123,7 @@ export function ChatInput({
   focusSignal,
   runtimeStats,
 }: ChatInputProps) {
+  const { t } = useI18n();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const slashMenuRef = useRef<HTMLDivElement>(null);
@@ -276,8 +277,8 @@ export function ChatInput({
       onSubmit();
       return;
     }
-    onSubmit(input.trim() ? undefined : ATTACHMENT_ONLY_PROMPT);
-  }, [canSubmit, input, isLoading, onSubmit, pendingInteraction]);
+    onSubmit(input.trim() ? undefined : t("chat.attachmentOnlyPrompt"));
+  }, [canSubmit, input, isLoading, onSubmit, pendingInteraction, t]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -491,7 +492,7 @@ export function ChatInput({
 
   const startRecording = useCallback(async () => {
     if (disabled || isLoading || isRecording || isTranscribing) return;
-    const unavailableMessage = getVoiceInputUnavailableMessage();
+    const unavailableMessage = getVoiceInputUnavailableMessage(t);
     if (unavailableMessage) {
       setSpeechError(unavailableMessage);
       return;
@@ -502,7 +503,7 @@ export function ChatInput({
     try {
       stream = await navigator.mediaDevices.getUserMedia({ audio: true });
     } catch (error) {
-      setSpeechError(getVoiceInputErrorMessage(error));
+      setSpeechError(getVoiceInputErrorMessage(error, t));
       return;
     }
     audioStreamRef.current = stream;
@@ -526,7 +527,7 @@ export function ChatInput({
     };
     recorder.start();
     setIsRecording(true);
-  }, [disabled, isLoading, isRecording, isTranscribing, stopAudioTracks, transcribeRecording]);
+  }, [disabled, isLoading, isRecording, isTranscribing, stopAudioTracks, transcribeRecording, t]);
 
   const stopRecording = useCallback(() => {
     const recorder = mediaRecorderRef.current;
@@ -545,10 +546,10 @@ export function ChatInput({
       void startRecording().catch((error) => {
         stopAudioTracks();
         setIsRecording(false);
-        setSpeechError(getVoiceInputErrorMessage(error));
+        setSpeechError(getVoiceInputErrorMessage(error, t));
       });
     }
-  }, [isRecording, startRecording, stopAudioTracks, stopRecording]);
+  }, [isRecording, startRecording, stopAudioTracks, stopRecording, t]);
 
   useEffect(() => {
     return () => {
@@ -639,7 +640,7 @@ export function ChatInput({
         {/* Drag drop overlay hint */}
         {isDragging && (
           <div className="pointer-events-none absolute inset-0 z-10 flex items-center justify-center rounded-xl border-2 border-dashed border-primary bg-primary/10">
-            <p className="text-primary font-medium">Drop files here</p>
+            <p className="text-primary font-medium">{t("chat.dropFiles")}</p>
           </div>
         )}
 
@@ -650,7 +651,7 @@ export function ChatInput({
               className="absolute bottom-full left-0 right-0 z-30 mb-2 overflow-hidden rounded-2xl border bg-popover text-popover-foreground shadow-xl"
             >
               <div className="border-b px-3 py-2 text-xs font-medium text-muted-foreground">
-                {slashCommandsLoading ? "Loading commands…" : "Slash commands"}
+                {slashCommandsLoading ? t("chat.loadingCommands") : t("chat.slashCommands")}
               </div>
               {filteredSlashCommands.length > 0 ? (
                 <div className="max-h-72 overflow-y-auto py-1">
@@ -680,7 +681,7 @@ export function ChatInput({
                               <span className="font-mono text-[11px] text-muted-foreground">{command.argumentHint}</span>
                             )}
                             <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] uppercase tracking-wide text-muted-foreground">
-                              {isSkill ? "Skill" : "Prompt"}
+                              {isSkill ? t("chat.skill") : t("chat.prompt")}
                             </span>
                           </span>
                           {command.description && (
@@ -694,10 +695,10 @@ export function ChatInput({
                   })}
                 </div>
               ) : (
-                <div className="px-3 py-3 text-sm text-muted-foreground">No matching commands.</div>
+                <div className="px-3 py-3 text-sm text-muted-foreground">{t("chat.noMatchingCommands")}</div>
               )}
               <div className="border-t px-3 py-1.5 text-[11px] text-muted-foreground">
-                ↑/↓ select · Enter/Tab insert · then send normally
+                {t("chat.commandHelp")}
               </div>
             </div>
           )}
@@ -718,7 +719,7 @@ export function ChatInput({
               onClick={() => fileInputRef.current?.click()}
               disabled={disabled || Boolean(pendingInteraction) || !chatId}
               className="h-10 w-10 shrink-0 rounded-xl text-muted-foreground hover:text-foreground"
-              title={chatId ? "Attach files" : "Send a message first to attach files"}
+              title={chatId ? t("chat.attachFiles") : t("chat.attachFilesDisabled")}
             >
               <Paperclip className="size-4" />
             </Button>
@@ -729,7 +730,7 @@ export function ChatInput({
               onClick={toggleRecording}
               disabled={disabled || Boolean(pendingInteraction) || isLoading || isTranscribing}
               className="h-10 w-10 shrink-0 rounded-xl text-muted-foreground hover:text-foreground disabled:opacity-50"
-              title={isRecording ? "Stop dictation" : "Dictate with microphone"}
+              title={isRecording ? t("chat.stopDictation") : t("chat.dictate")}
             >
               {isTranscribing ? (
                 <Loader2 className="size-4 animate-spin" />
@@ -748,8 +749,8 @@ export function ChatInput({
               onKeyDown={handleKeyDown}
               onPaste={handlePaste}
               placeholder={pendingInteraction
-                ? pendingInteraction.placeholder || (pendingInteraction.kind === "confirm" ? "Answer yes/no…" : "Send input to the waiting tool…")
-                : isDragging ? "Drop files here..." : "Send a message or paste an image..."}
+                ? pendingInteraction.placeholder || (pendingInteraction.kind === "confirm" ? t("chat.confirmPlaceholder") : t("chat.waitingToolPlaceholder"))
+                : isDragging ? t("chat.dropFilesPlaceholder") : t("chat.placeholder")}
               disabled={disabled}
               rows={1}
               className="min-h-[30px] max-h-[200px] w-full translate-y-px resize-none border-0 bg-transparent px-1 pt-2.5 pb-1.5 text-sm leading-5 placeholder:text-muted-foreground focus:outline-none disabled:opacity-50"
@@ -779,7 +780,7 @@ export function ChatInput({
         </div>
         {(isRecording || isTranscribing || speechError) && (
           <div className={`mt-2 text-center text-xs ${speechError ? "text-destructive" : "text-muted-foreground"}`}>
-            {speechError || (isRecording ? "Recording… press the microphone again to transcribe." : "Transcribing audio locally…")}
+            {speechError || (isRecording ? t("chat.recording") : t("chat.transcribing"))}
           </div>
         )}
         <div className="mt-2 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">

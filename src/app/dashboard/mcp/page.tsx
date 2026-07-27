@@ -13,6 +13,7 @@ import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectVa
 import { Textarea } from "@/components/ui/textarea";
 import { Globe, Loader2, Terminal, Wrench } from "lucide-react";
 import { useAppStore } from "@/store/app-store";
+import { useI18n } from "@/i18n/provider";
 
 interface McpServerItem {
   id: string;
@@ -83,6 +84,7 @@ function normalizeServers(input: unknown): McpServerItem[] {
 const EMPTY_MCP_JSON = JSON.stringify({ mcpServers: {} }, null, 2);
 
 export default function McpPage() {
+  const { t } = useI18n();
   const { projects, setProjects, activeProjectId } = useAppStore();
   const [selectedProjectId, setSelectedProjectId] = useState("");
   const [servers, setServers] = useState<McpServerItem[]>([]);
@@ -160,7 +162,7 @@ export default function McpPage() {
         const message =
           typeof payload?.error === "string"
             ? payload.error
-            : "Failed to load MCP servers";
+            : t("mcp.errors.load");
         setStatusMessage(message);
         setStatusTone("error");
         setServers([]);
@@ -175,7 +177,7 @@ export default function McpPage() {
       setDraftContent(content ?? EMPTY_MCP_JSON);
       setServers(normalizeServers(payload?.servers));
     } catch {
-      setStatusMessage("Failed to load MCP servers");
+      setStatusMessage(t("mcp.errors.load"));
       setStatusTone("error");
       setServers([]);
       setRawContent(null);
@@ -206,7 +208,7 @@ export default function McpPage() {
         throw new Error(
           typeof payload?.error === "string"
             ? payload.error
-            : "Failed to save MCP servers"
+            : t("mcp.errors.save")
         );
       }
 
@@ -215,11 +217,11 @@ export default function McpPage() {
       setRawContent(content);
       setDraftContent(content);
       setServers(normalizeServers(payload?.servers));
-      setStatusMessage("MCP configuration saved.");
+      setStatusMessage(t("mcp.saved"));
       setStatusTone("success");
     } catch (error) {
       setStatusMessage(
-        error instanceof Error ? error.message : "Failed to save MCP servers"
+        error instanceof Error ? error.message : t("mcp.errors.save")
       );
       setStatusTone("error");
     } finally {
@@ -247,17 +249,15 @@ export default function McpPage() {
   return (
     <div className="[--header-height:calc(--spacing(14))]">
       <SidebarProvider className="flex flex-col">
-        <SiteHeader title="MCP" />
+        <SiteHeader title={t("mcp.title")} />
         <div className="flex flex-1">
           <AppSidebar />
           <SidebarInset>
             <div className="flex flex-1 flex-col gap-4 p-4 md:p-6 max-w-5xl mx-auto w-full">
               <div className="space-y-1">
-                <h2 className="text-2xl font-semibold">MCP Servers</h2>
+                <h2 className="text-2xl font-semibold">{t("mcp.heading")}</h2>
                 <p className="text-sm text-muted-foreground">
-                  View and edit MCP servers configured for each project from
-                  <span className="font-mono"> .mcp.json </span>
-                  and switch between projects. Runtime access is provided by Eggent.
+                  {t("mcp.description", { file: ".mcp.json" })}
                 </p>
               </div>
 
@@ -268,7 +268,7 @@ export default function McpPage() {
                   disabled={projectsLoading || projects.length === 0}
                 >
                   <SelectTrigger className="md:w-96">
-                    <SelectValue placeholder={projectsLoading ? "Loading projects..." : "Select project"} />
+                    <SelectValue placeholder={projectsLoading ? t("mcp.loadingProjects") : t("mcp.selectProject")} />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
@@ -284,7 +284,7 @@ export default function McpPage() {
                 <Input
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
-                  placeholder="Search MCP servers..."
+                  placeholder={t("mcp.searchPlaceholder")}
                   className="md:max-w-sm"
                 />
               </div>
@@ -299,11 +299,11 @@ export default function McpPage() {
                 <div className="flex items-center justify-between border-b px-4 py-3">
                   <div className="flex items-center gap-2">
                     <Wrench className="size-4 text-primary" />
-                    <h3 className="text-sm font-medium">Servers In Project</h3>
+                    <h3 className="text-sm font-medium">{t("mcp.serversInProject")}</h3>
                   </div>
                   {!loading && selectedProjectId && (
                     <span className="text-xs text-muted-foreground">
-                      {servers.length} total
+                      {t("mcp.total", { count: servers.length })}
                     </span>
                   )}
                 </div>
@@ -311,22 +311,22 @@ export default function McpPage() {
                 {loading ? (
                   <div className="py-12 text-center text-muted-foreground flex items-center justify-center gap-2">
                     <Loader2 className="size-4 animate-spin" />
-                    Loading MCP servers...
+                    {t("mcp.loadingServers")}
                   </div>
                 ) : !selectedProjectId ? (
                   <Empty>
                     <EmptyHeader>
                       <EmptyMedia variant="icon"><Wrench /></EmptyMedia>
-                      <EmptyTitle>Select a project</EmptyTitle>
-                      <EmptyDescription>Choose a project to view MCP servers.</EmptyDescription>
+                      <EmptyTitle>{t("mcp.selectProjectTitle")}</EmptyTitle>
+                      <EmptyDescription>{t("mcp.selectProjectDescription")}</EmptyDescription>
                     </EmptyHeader>
                   </Empty>
                 ) : filteredServers.length === 0 ? (
                   <Empty>
                     <EmptyHeader>
                       <EmptyMedia variant="icon"><Wrench /></EmptyMedia>
-                      <EmptyTitle>No MCP servers</EmptyTitle>
-                      <EmptyDescription>Servers configured in .mcp.json will appear here.</EmptyDescription>
+                      <EmptyTitle>{t("mcp.noServersTitle")}</EmptyTitle>
+                      <EmptyDescription>{t("mcp.noServersDescription")}</EmptyDescription>
                     </EmptyHeader>
                   </Empty>
                 ) : (
@@ -348,11 +348,11 @@ export default function McpPage() {
                         {server.transport === "stdio" ? (
                           <div className="space-y-1 text-sm text-muted-foreground">
                             <p>
-                              Command: <span className="font-mono">{server.command || "-"}</span>
+                              {t("mcp.command")} <span className="font-mono">{server.command || "-"}</span>
                             </p>
                             {server.args && server.args.length > 0 ? (
                               <p>
-                                Args: <span className="font-mono">{server.args.join(" ")}</span>
+                                {t("mcp.args")} <span className="font-mono">{server.args.join(" ")}</span>
                               </p>
                             ) : null}
                             {server.cwd ? (
@@ -363,7 +363,7 @@ export default function McpPage() {
                             {server.env && Object.keys(server.env).length > 0 ? (
                               <details className="pt-1">
                                 <summary className="cursor-pointer text-xs">
-                                  Environment ({Object.keys(server.env).length})
+                                  {t("mcp.environment", { count: Object.keys(server.env).length })}
                                 </summary>
                                 <pre className="mt-2 rounded border bg-muted/30 p-2 text-xs font-mono whitespace-pre-wrap break-words">
                                   {JSON.stringify(server.env, null, 2)}
@@ -379,7 +379,7 @@ export default function McpPage() {
                             {server.headers && Object.keys(server.headers).length > 0 ? (
                               <details className="pt-1">
                                 <summary className="cursor-pointer text-xs">
-                                  Headers ({Object.keys(server.headers).length})
+                                  {t("mcp.headers", { count: Object.keys(server.headers).length })}
                                 </summary>
                                 <pre className="mt-2 rounded border bg-muted/30 p-2 text-xs font-mono whitespace-pre-wrap break-words">
                                   {JSON.stringify(server.headers, null, 2)}
@@ -397,17 +397,17 @@ export default function McpPage() {
               {selectedProjectId ? (
                 <div className="rounded-lg border bg-card">
                   <div className="flex items-center justify-between border-b px-4 py-3">
-                    <h3 className="text-sm font-medium">Raw .mcp.json</h3>
+                    <h3 className="text-sm font-medium">{t("mcp.raw")}</h3>
                     {!loading && (
                       <span className="text-xs text-muted-foreground">
-                        Edit JSON directly
+                        {t("mcp.editJson")}
                       </span>
                     )}
                   </div>
                   <div className="space-y-3 p-4">
                     {!loading && !rawContent && (
                       <p className="text-xs text-muted-foreground">
-                        `.mcp.json` does not exist yet for this project. Save to create it.
+                        {t("mcp.createHint")}
                       </p>
                     )}
                     <Textarea
@@ -427,10 +427,10 @@ export default function McpPage() {
                         {saving ? (
                           <>
                             <Loader2 className="size-4 animate-spin" />
-                            Saving...
+                            {t("common.saving")}
                           </>
                         ) : (
-                          "Save .mcp.json"
+                          t("mcp.save")
                         )}
                       </Button>
                       <Button
@@ -438,7 +438,7 @@ export default function McpPage() {
                         onClick={() => setDraftContent(baselineContent)}
                         disabled={loading || saving || !hasDraftChanges}
                       >
-                        Reset
+                        {t("mcp.reset")}
                       </Button>
                     </div>
                   </div>

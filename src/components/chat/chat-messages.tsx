@@ -8,6 +8,8 @@ import { CheckCircle2, Loader2, MessageCircle, Sparkles, TriangleAlert } from "l
 import type { UIMessage } from "ai";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { useI18n } from "@/i18n/provider";
+import type { MessageKey } from "@/i18n/messages";
 import type { PiPendingInteraction } from "@/lib/pi/interaction-types";
 
 export interface QuickSkillAction {
@@ -32,26 +34,27 @@ interface ChatMessagesProps {
   launchingSkill?: string | null;
 }
 
-function interactionKindLabel(kind: PiPendingInteraction["kind"]): string {
+function interactionKindLabelKey(kind: PiPendingInteraction["kind"]): MessageKey {
   switch (kind) {
     case "select":
-      return "Choose";
+      return "chat.interaction.choose";
     case "confirm":
-      return "Confirm";
+      return "chat.interaction.confirm";
     case "secret":
-      return "Secret";
+      return "chat.interaction.secret";
     case "oauth_url":
-      return "OAuth";
+      return "chat.interaction.oauth";
     case "device_code":
-      return "Device code";
+      return "chat.interaction.deviceCode";
     case "terminal_input":
-      return "Terminal input";
+      return "chat.interaction.terminalInput";
     default:
-      return "Input";
+      return "chat.interaction.input";
   }
 }
 
 export function ChatMessages({ messages, isLoading, errorMessage, compactionStatus, pendingInteraction, onRespondToInteraction, quickSkills = [], onLaunchSkill, launchingSkill }: ChatMessagesProps) {
+  const { t } = useI18n();
   const scrollRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollRef = useRef(true);
@@ -86,9 +89,9 @@ export function ChatMessages({ messages, isLoading, errorMessage, compactionStat
             <EmptyMedia variant="icon" className="bg-primary/10 text-primary">
               <MessageCircle />
             </EmptyMedia>
-            <EmptyTitle>Start a conversation</EmptyTitle>
+            <EmptyTitle>{t("chat.emptyTitle")}</EmptyTitle>
             <EmptyDescription>
-              Ask anything, paste an image, or attach files. Eggent will use the current project context when needed.
+              {t("chat.emptyDescription")}
             </EmptyDescription>
           </EmptyHeader>
           {quickSkills.length > 0 ? (
@@ -97,7 +100,7 @@ export function ChatMessages({ messages, isLoading, errorMessage, compactionStat
               <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-12 bg-gradient-to-l from-background via-background/80 to-transparent backdrop-blur-[1px]" />
               <div
                 className="flex snap-x snap-mandatory gap-3 overflow-x-auto scroll-smooth px-6 pb-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-                aria-label="Bundled skills"
+                aria-label={t("chat.bundledSkills")}
               >
                 {quickSkills.map((skill) => (
                   <button
@@ -117,7 +120,7 @@ export function ChatMessages({ messages, isLoading, errorMessage, compactionStat
                       </div>
                     </div>
                     <div className="mt-4 text-xs font-medium text-primary">
-                      {launchingSkill === skill.name ? "Creating project…" : "Set up"}
+                      {launchingSkill === skill.name ? t("chat.creatingProject") : t("chat.setUp")}
                     </div>
                   </button>
                 ))}
@@ -148,8 +151,8 @@ export function ChatMessages({ messages, isLoading, errorMessage, compactionStat
             </div>
             <div className="flex min-w-0 flex-1 flex-col gap-3 rounded-2xl border bg-card p-4 shadow-sm">
               <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="secondary">{interactionKindLabel(pendingInteraction.kind)}</Badge>
-                <span className="text-sm font-medium">Eggent is waiting for input</span>
+                <Badge variant="secondary">{t(interactionKindLabelKey(pendingInteraction.kind))}</Badge>
+                <span className="text-sm font-medium">{t("chat.waitingForInput")}</span>
               </div>
               <div className="flex flex-col gap-1">
                 <p className="text-sm font-medium">{pendingInteraction.title}</p>
@@ -175,19 +178,19 @@ export function ChatMessages({ messages, isLoading, errorMessage, compactionStat
               {pendingInteraction.kind === "confirm" ? (
                 <div className="flex flex-wrap gap-2">
                   <Button type="button" size="sm" onClick={() => onRespondToInteraction?.(true)}>
-                    Yes
+                    {t("chat.yes")}
                   </Button>
                   <Button type="button" variant="outline" size="sm" onClick={() => onRespondToInteraction?.(false)}>
-                    No
+                    {t("chat.no")}
                   </Button>
                 </div>
               ) : null}
               <p className="text-xs text-muted-foreground">
                 {pendingInteraction.kind === "select"
-                  ? "Choose an option above or type the exact value below."
+                  ? t("chat.selectHelp")
                   : pendingInteraction.kind === "confirm"
-                    ? "Choose Yes/No above, or type a response below."
-                    : "Type your response in the chat box below. It will be sent to the waiting tool, not to the model."}
+                    ? t("chat.confirmHelp")
+                    : t("chat.inputHelp")}
               </p>
             </div>
           </div>
@@ -219,7 +222,7 @@ export function ChatMessages({ messages, isLoading, errorMessage, compactionStat
             </div>
             <div className="flex items-center">
               <span className="text-sm text-muted-foreground">
-                Thinking...
+                {t("chat.thinking")}
               </span>
             </div>
           </div>
