@@ -110,6 +110,7 @@ const enMessages = {
   "chat.emptyTitle": "Start a conversation",
   "chat.emptyDescription": "Ask anything, paste an image, or attach files. Eggent will use the current project context when needed.",
   "chat.bundledSkills": "Bundled skills",
+  "chat.templatesTitle": "Templates",
   "chat.creatingProject": "Creating project…",
   "chat.setUp": "Set up",
   "chat.interaction.choose": "Choose",

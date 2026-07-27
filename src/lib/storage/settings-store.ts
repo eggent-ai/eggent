@@ -5,6 +5,7 @@ import {
   DEFAULT_AUTH_PASSWORD_HASH,
   DEFAULT_AUTH_USERNAME,
 } from "@/lib/auth/password";
+import { normalizeLocalePreference } from "@/i18n/locales";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const SETTINGS_DIR = path.join(DATA_DIR, "settings");
@@ -50,7 +51,7 @@ export const DEFAULT_SETTINGS: AppSettings = {
   },
   general: {
     darkMode: false,
-    language: "auto",
+    language: normalizeLocalePreference(process.env.EGGENT_DEFAULT_LANGUAGE),
   },
   auth: {
     enabled: true,

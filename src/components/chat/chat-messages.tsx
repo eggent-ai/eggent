@@ -95,14 +95,18 @@ export function ChatMessages({ messages, isLoading, errorMessage, compactionStat
             </EmptyDescription>
           </EmptyHeader>
           {quickSkills.length > 0 ? (
-            <div className="relative mt-6 w-full max-w-[min(100vw-2rem,56rem)] min-w-0">
-              <div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-12 bg-gradient-to-r from-background via-background/80 to-transparent backdrop-blur-[1px]" />
+            <div className="mt-6 w-full max-w-[min(100vw-2rem,56rem)] min-w-0 space-y-3">
+              <div className="px-6 text-left text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
+                {t("chat.templatesTitle")}
+              </div>
+              <div className="relative min-w-0">
+                <div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-12 bg-gradient-to-r from-background via-background/80 to-transparent backdrop-blur-[1px]" />
               <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-12 bg-gradient-to-l from-background via-background/80 to-transparent backdrop-blur-[1px]" />
-              <div
-                className="flex snap-x snap-mandatory gap-3 overflow-x-auto scroll-smooth px-6 pb-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-                aria-label={t("chat.bundledSkills")}
-              >
-                {quickSkills.map((skill) => (
+                <div
+                  className="flex snap-x snap-mandatory gap-3 overflow-x-auto scroll-smooth px-6 pb-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
+                  aria-label={t("chat.bundledSkills")}
+                >
+                  {quickSkills.map((skill) => (
                   <button
                     key={skill.name}
                     type="button"
@@ -123,7 +127,8 @@ export function ChatMessages({ messages, isLoading, errorMessage, compactionStat
                       {launchingSkill === skill.name ? t("chat.creatingProject") : t("chat.setUp")}
                     </div>
                   </button>
-                ))}
+                  ))}
+                </div>
               </div>
             </div>
           ) : null}
