@@ -24,6 +24,11 @@ export interface UsageMeter {
   /** ISO 4217 code, only meaningful when unit is "currency". */
   currency?: string;
   state?: "ok" | "warning" | "critical" | "exhausted";
+  /**
+   * "agentOnly" meters are omitted from the UI but still reported to the agent,
+   * for quotas that are real but not currently relevant to show.
+   */
+  visibility?: "visible" | "agentOnly";
 }
 
 export interface UsageNotice {
@@ -38,6 +43,11 @@ export interface UsageSnapshot {
   plan?: { label: string; endsAt?: string };
   meters: UsageMeter[];
   notice?: UsageNotice;
+  /**
+   * Guidance written by the provider for the agent rather than for the UI, e.g.
+   * to explain why a quota is currently not being consumed.
+   */
+  agentNote?: string;
   /** Provider hint for how long this snapshot stays valid. */
   refreshAfterSec?: number;
 }
@@ -52,7 +62,27 @@ const MIN_TTL_MS = 5_000;
 const MAX_TTL_MS = 10 * 60_000;
 const REQUEST_TIMEOUT_MS = 5_000;
 
-let cache: { snapshot: UsageSnapshot; expiresAt: number } | null = null;
+let cache: { snapshot: UsageSnapshot; expiresAt: number; backendActive: boolean } | null = null;
+
+/**
+ * Whether this workspace is currently running on the credential the usage
+ * provider issued, rather than on a provider the user connected themselves.
+ *
+ * Reported to the provider so it can decide what is still worth showing: a quota
+ * that is not being consumed right now is usually noise in the UI, even though
+ * the agent should still be able to answer questions about it.
+ */
+async function isProviderBackendActive(): Promise<boolean> {
+  try {
+    const { getManagedProviderId, getPiSettingsManager } = await import("@/lib/pi/config-store");
+    const providerId = await getManagedProviderId();
+    if (!providerId) return false;
+    return getPiSettingsManager().getDefaultProvider() === providerId;
+  } catch {
+    // If the runtime cannot be inspected, do not claim the backend is inactive.
+    return true;
+  }
+}
 
 export function getUsageProviderConfig(): UsageProviderConfig | null {
   const url = process.env.EGGENT_USAGE_API_URL?.trim();
@@ -92,6 +122,7 @@ function parseMeter(raw: unknown): UsageMeter | null {
     unit,
     currency: typeof record.currency === "string" ? record.currency : undefined,
     state,
+    visibility: record.visibility === "agentOnly" ? "agentOnly" : "visible",
   };
 }
 
@@ -132,12 +163,14 @@ export function parseUsageSnapshot(raw: unknown): UsageSnapshot | null {
   }
 
   const notice = parseNotice(record.notice);
-  if (!meters.length && !plan && !notice) return null;
+  const agentNote = typeof record.agentNote === "string" ? record.agentNote.trim() || undefined : undefined;
+  if (!meters.length && !plan && !notice && !agentNote) return null;
 
   return {
     plan,
     meters,
     notice,
+    agentNote,
     refreshAfterSec: asFiniteNumber(record.refreshAfterSec) ?? undefined,
   };
 }
@@ -155,13 +188,17 @@ export async function getUsageSnapshot(options: { force?: boolean } = {}): Promi
   const config = getUsageProviderConfig();
   if (!config) return null;
 
+  const backendActive = await isProviderBackendActive();
   const now = Date.now();
-  if (!options.force && cache && cache.expiresAt > now) {
+  if (!options.force && cache && cache.expiresAt > now && cache.backendActive === backendActive) {
     return cache.snapshot;
   }
 
+  const url = new URL(config.url);
+  url.searchParams.set("backend", backendActive ? "active" : "inactive");
+
   try {
-    const response = await fetch(config.url, {
+    const response = await fetch(url.toString(), {
       headers: {
         Accept: "application/json",
         ...(config.token ? { Authorization: `Bearer ${config.token}` } : {}),
@@ -181,7 +218,7 @@ export async function getUsageSnapshot(options: { force?: boolean } = {}): Promi
     const ttl = snapshot.refreshAfterSec
       ? Math.min(Math.max(snapshot.refreshAfterSec * 1000, MIN_TTL_MS), MAX_TTL_MS)
       : DEFAULT_TTL_MS;
-    cache = { snapshot, expiresAt: now + ttl };
+    cache = { snapshot, expiresAt: now + ttl, backendActive };
     return snapshot;
   } catch (error) {
     console.warn("[eggent] Failed to reach usage provider:", error instanceof Error ? error.message : error);

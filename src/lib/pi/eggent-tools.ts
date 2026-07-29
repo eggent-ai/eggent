@@ -375,13 +375,16 @@ export async function createEggentPiTools(options: {
           for (const meter of snapshot.meters) {
             lines.push(formatUsageMeter(meter));
           }
+          if (snapshot.agentNote) {
+            lines.push(`Important context: ${snapshot.agentNote}`);
+          }
           if (snapshot.notice) {
             lines.push(`Notice: ${snapshot.notice.title} — ${snapshot.notice.body}`);
             if (snapshot.notice.actionUrl) {
               lines.push(`Action: ${snapshot.notice.actionLabel || "Open"} → ${snapshot.notice.actionUrl}`);
             }
           }
-          lines.push("Report these numbers to the user directly and in their language.");
+          lines.push("Report these numbers to the user directly and in their language, including any important context above.");
           return textResult(lines.join("\n"), { available: true, snapshot });
         },
       })]

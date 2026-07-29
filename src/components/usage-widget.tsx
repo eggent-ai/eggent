@@ -12,6 +12,7 @@ interface UsageMeter {
   unit: "currency" | "bytes" | "count";
   currency?: string;
   state?: "ok" | "warning" | "critical" | "exhausted";
+  visibility?: "visible" | "agentOnly";
 }
 
 interface UsageSnapshot {
@@ -100,6 +101,11 @@ export function UsageWidget() {
 
   if (unavailable || !snapshot) return null;
 
+  // Meters the provider marked as agent-only are answers to questions, not
+  // things worth taking up sidebar space.
+  const visibleMeters = snapshot.meters.filter((meter) => meter.visibility !== "agentOnly");
+  if (!visibleMeters.length && !snapshot.plan && !snapshot.notice) return null;
+
   return (
     <div className="mx-2 mb-2 rounded-lg border bg-sidebar-accent/40 p-3 space-y-2 text-xs">
       {snapshot.plan ? (
@@ -113,7 +119,7 @@ export function UsageWidget() {
         </div>
       ) : null}
 
-      {snapshot.meters.map((meter) => {
+      {visibleMeters.map((meter) => {
         const ratio = meter.limit > 0 ? Math.min(1, Math.max(0, meter.used / meter.limit)) : 0;
         return (
           <div key={meter.id} className="space-y-1">
