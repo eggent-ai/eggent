@@ -110,6 +110,21 @@ async function resolveManagedImageBackend(): Promise<{ baseUrl: string; token: s
   }
 }
 
+/**
+ * Reads an optional charge report the provider attached to a response.
+ *
+ * Eggent has no price table of its own — it only forwards a figure the provider
+ * already formatted, so deployments without billing simply report nothing.
+ */
+function extractProviderCharge(payload: unknown): { formatted: string } | null {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) return null;
+  const charge = (payload as Record<string, unknown>).eggent_charge;
+  if (!charge || typeof charge !== "object" || Array.isArray(charge)) return null;
+  const formatted = (charge as Record<string, unknown>).formatted;
+  if (typeof formatted !== "string" || !formatted.trim()) return null;
+  return { formatted: formatted.trim() };
+}
+
 function imageExtension(mediaType?: string): string {
   const normalized = mediaType?.toLowerCase().split(";")[0].trim();
   if (normalized === "image/jpeg") return "jpg";
@@ -400,7 +415,7 @@ export async function createEggentPiTools(options: {
         size: Type.Optional(Type.String({ description: "Optional size/resolution shorthand, e.g. 1K, 2K, 4K, 1024x1024, 2048x2048." })),
         resolution: Type.Optional(Type.String({ description: "Optional resolution tier, e.g. 512, 1K, 2K, 4K." })),
         aspect_ratio: Type.Optional(Type.String({ description: "Optional aspect ratio, e.g. 1:1, 16:9, 9:16, 4:3." })),
-        quality: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")], { description: "Optional quality. Defaults to auto." })),
+        quality: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("low"), Type.Literal("medium"), Type.Literal("high")], { description: "Optional quality. Defaults to medium, which is a good balance of look and cost. Use high only when the user asks for maximum quality, since it costs several times more; auto/low are the cheapest and noticeably rougher." })),
         output_format: Type.Optional(Type.Union([Type.Literal("png"), Type.Literal("jpeg"), Type.Literal("webp")], { description: "Output format. Defaults to png/provider default." })),
         background: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("transparent"), Type.Literal("opaque")], { description: "Optional background mode." })),
       }),
@@ -434,7 +449,10 @@ export async function createEggentPiTools(options: {
         if (params.size) body.size = params.size;
         if (params.resolution) body.resolution = params.resolution;
         if (params.aspect_ratio) body.aspect_ratio = params.aspect_ratio;
-        if (params.quality) body.quality = params.quality;
+        // Providers treat "auto" as their cheapest tier, which produces visibly
+        // poor images. Default to medium unless the caller asked for something
+        // specific, and let "auto" through only when it was requested explicitly.
+        body.quality = params.quality || "medium";
         if (params.output_format) body.output_format = params.output_format;
         if (params.background) body.background = params.background;
         if (inputReferences.length > 0) body.input_references = inputReferences;
@@ -463,15 +481,26 @@ export async function createEggentPiTools(options: {
         }
 
         const savedImages = await writeGeneratedImages(options, payload);
+        // The provider may report what this request cost. Eggent does not price
+        // anything itself; it only passes the provider's own formatted figure on
+        // so the user can connect the picture to the spend.
+        const charge = extractProviderCharge(payload);
         const result = {
           success: true,
           provider: backend.providerLabel,
           imageCount: savedImages.length,
           images: savedImages,
           referenceImageCount: inputReferences.length,
-          note: savedImages.length > 0
-            ? "Generated image files were saved locally. Show the paths to the user and offer one short next action."
-            : "Image provider returned no inline base64 images; inspect rawResponse for URLs or provider-specific output.",
+          quality: body.quality,
+          cost: charge?.formatted,
+          note: [
+            savedImages.length > 0
+              ? "Generated image files were saved locally. Show the paths to the user and offer one short next action."
+              : "Image provider returned no inline base64 images; inspect rawResponse for URLs or provider-specific output.",
+            charge?.formatted
+              ? `This request cost ${charge.formatted}. Tell the user that figure in one short sentence so image spend stays visible.`
+              : "",
+          ].filter(Boolean).join(" "),
           rawResponse: savedImages.length > 0 ? undefined : payload,
         };
         return textResult(JSON.stringify(result, null, 2), result);
