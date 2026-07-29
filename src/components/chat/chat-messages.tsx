@@ -4,7 +4,7 @@ import { useCallback, useEffect, useRef } from "react";
 import { MessageBubble } from "./message-bubble";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
-import { CheckCircle2, Loader2, MessageCircle, Sparkles, TriangleAlert } from "lucide-react";
+import { CheckCircle2, ExternalLink, Loader2, MessageCircle, Sparkles, TriangleAlert } from "lucide-react";
 import type { UIMessage } from "ai";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -22,11 +22,20 @@ export interface PiCompactionStatus {
   message: string;
 }
 
+export interface EggentActionNotice {
+  level: "info" | "warning" | "critical";
+  title: string;
+  body: string;
+  actionLabel?: string;
+  actionUrl?: string;
+}
+
 interface ChatMessagesProps {
   messages: UIMessage[];
   isLoading: boolean;
   errorMessage?: string | null;
   compactionStatus?: PiCompactionStatus | null;
+  actionNotice?: EggentActionNotice | null;
   pendingInteraction?: PiPendingInteraction | null;
   onRespondToInteraction?: (value: string | boolean | null, cancel?: boolean) => void;
   quickSkills?: QuickSkillAction[];
@@ -53,7 +62,7 @@ function interactionKindLabelKey(kind: PiPendingInteraction["kind"]): MessageKey
   }
 }
 
-export function ChatMessages({ messages, isLoading, errorMessage, compactionStatus, pendingInteraction, onRespondToInteraction, quickSkills = [], onLaunchSkill, launchingSkill }: ChatMessagesProps) {
+export function ChatMessages({ messages, isLoading, errorMessage, compactionStatus, actionNotice, pendingInteraction, onRespondToInteraction, quickSkills = [], onLaunchSkill, launchingSkill }: ChatMessagesProps) {
   const { t } = useI18n();
   const scrollRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -216,6 +225,28 @@ export function ChatMessages({ messages, isLoading, errorMessage, compactionStat
               <span className="text-sm text-muted-foreground">
                 {compactionStatus.message}
               </span>
+            </div>
+          </div>
+        ) : null}
+
+        {actionNotice ? (
+          <div className="flex gap-3 py-3">
+            <div className={`flex size-8 shrink-0 items-center justify-center rounded-full ${actionNotice.level === "critical" ? "bg-destructive/10 text-destructive" : "bg-amber-500/10 text-amber-600"}`}>
+              <TriangleAlert className="size-4" />
+            </div>
+            <div className={`flex-1 rounded-lg border p-3 space-y-2 ${actionNotice.level === "critical" ? "border-destructive/40" : "border-amber-500/40"}`}>
+              {actionNotice.title ? <div className="text-sm font-medium">{actionNotice.title}</div> : null}
+              {actionNotice.body ? (
+                <p className="text-sm text-muted-foreground whitespace-pre-wrap">{actionNotice.body}</p>
+              ) : null}
+              {actionNotice.actionUrl ? (
+                <Button size="sm" variant={actionNotice.level === "critical" ? "default" : "outline"} asChild>
+                  <a href={actionNotice.actionUrl} target="_blank" rel="noreferrer noopener">
+                    {actionNotice.actionLabel || t("usage.openAction")}
+                    <ExternalLink className="ml-2 size-3.5" />
+                  </a>
+                </Button>
+              ) : null}
             </div>
           </div>
         ) : null}

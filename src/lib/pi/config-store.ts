@@ -191,29 +191,79 @@ export function getPiSettingsManager(cwd = process.cwd()): SettingsManager {
   return SettingsManager.create(cwd, getPiAgentDir());
 }
 
-export async function getEggentAiModelLockState(cwd = process.cwd()): Promise<{ locked: boolean; label: string }> {
+/**
+ * Whether this deployment forbids switching away from the managed model at all.
+ *
+ * Self-hosted Eggent never sets this, so the OSS behaviour is unchanged: the
+ * managed lock stays advisory and the user can always opt out. A managed
+ * deployment sets EGGENT_MANAGED_AI_ENFORCED=true, and then the lock cannot be
+ * lifted from inside the workspace.
+ */
+export function isManagedAiEnforced(): boolean {
+  return isTruthyEnv(process.env.EGGENT_MANAGED_AI_ENFORCED);
+}
+
+/** Where users should go to run Eggent with their own model. */
+export function selfHostedDocsUrl(): string {
+  return process.env.EGGENT_SELF_HOSTED_DOCS_URL?.trim() || "https://github.com/eggent-ai/eggent";
+}
+
+export interface EggentAiModelLockState {
+  locked: boolean;
+  label: string;
+  /** True when the lock cannot be lifted from inside this workspace. */
+  enforced: boolean;
+  /** Where to send users who want to run their own model. Only set when enforced. */
+  selfHostedUrl?: string;
+}
+
+export async function getEggentAiModelLockState(cwd = process.cwd()): Promise<EggentAiModelLockState> {
   const label = eggentAiModelLabel();
+
+  // Checked before the override file on purpose: an enforced deployment must not
+  // be unlockable by writing eggent-ai-lock.json from inside the workspace.
+  if (isManagedAiEnforced()) {
+    return { locked: true, label, enforced: true, selfHostedUrl: selfHostedDocsUrl() };
+  }
+
   const override = await readEggentAiLockOverride();
-  if (override.disabled === true) return { locked: false, label };
+  if (override.disabled === true) return { locked: false, label, enforced: false };
 
   if (isTruthyEnv(process.env.EGGENT_AI_MODEL_LOCKED) || isTruthyEnv(process.env.EGGENT_MANAGED_AI_LOCKED)) {
-    return { locked: true, label };
+    return { locked: true, label, enforced: false };
   }
 
   const settingsManager = getPiSettingsManager(cwd);
   const defaultProvider = settingsManager.getDefaultProvider();
-  if (!defaultProvider) return { locked: false, label };
+  if (!defaultProvider) return { locked: false, label, enforced: false };
 
   const auth: Record<string, StoredCredentialRecord> = await readAuthJson().catch(() => ({}));
   const key = auth[defaultProvider]?.key;
   if (typeof key === "string" && key.startsWith("eggw_")) {
-    return { locked: true, label };
+    return { locked: true, label, enforced: false };
   }
 
-  return { locked: false, label };
+  return { locked: false, label, enforced: false };
+}
+
+/**
+ * The provider backed by the managed gateway credential, identified by its
+ * `eggw_` token prefix. Returns null when no managed credential is present.
+ */
+export async function getManagedProviderId(): Promise<string | null> {
+  const auth: Record<string, StoredCredentialRecord> = await readAuthJson().catch(() => ({}));
+  for (const [providerId, record] of Object.entries(auth)) {
+    if (typeof record?.key === "string" && record.key.startsWith("eggw_")) return providerId;
+  }
+  return null;
 }
 
 export async function disableEggentAiModelLock(cwd = process.cwd()): Promise<void> {
+  if (isManagedAiEnforced()) {
+    throw new Error(
+      `Model selection is managed for this workspace. To use your own model or provider, run Eggent self-hosted: ${selfHostedDocsUrl()}`
+    );
+  }
   await writeEggentAiLockOverride({ disabled: true });
   // Keep the managed gateway credential in auth.json. Once the text/agent model
   // is unlocked, this token becomes the separate Eggent Images backend so users

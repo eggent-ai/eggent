@@ -84,6 +84,8 @@ interface PiState {
   modelLock?: {
     locked: boolean;
     label: string;
+    enforced?: boolean;
+    selfHostedUrl?: string;
   };
   imageGeneration?: {
     enabled: boolean;
@@ -439,6 +441,8 @@ export default function SettingsPage() {
   const currentModelIsAvailable = Boolean(piState?.current?.model?.available);
   const modelLocked = Boolean(piState?.modelLock?.locked);
   const modelLockLabel = piState?.modelLock?.label || "Eggent AI";
+  const modelLockEnforced = Boolean(piState?.modelLock?.enforced);
+  const modelLockSelfHostedUrl = piState?.modelLock?.selfHostedUrl || "https://github.com/eggent-ai/eggent";
   const eggentImagesEnabled = Boolean(piState?.imageGeneration?.enabled);
 
   if (loading || !settings) {
@@ -517,13 +521,24 @@ export default function SettingsPage() {
                       <div className="text-xs font-mono text-muted-foreground">managed</div>
                       <h4 className="font-medium">{modelLockLabel}</h4>
                       <p className="text-sm text-muted-foreground">
-                        Your workspace uses included Eggent AI credits. To use your own provider key, log out from Eggent AI first.
+                        {modelLockEnforced
+                          ? t("settings.modelLock.enforcedDescription", { label: modelLockLabel })
+                          : "Your workspace uses included Eggent AI credits. To use your own provider key, log out from Eggent AI first."}
                       </p>
                     </div>
-                    <Button variant="outline" className="gap-2" onClick={() => logoutProvider("eggent-ai")}>
-                      <LogOut className="size-4" />
-                      Use my own provider key
-                    </Button>
+                    {modelLockEnforced ? (
+                      <Button variant="outline" className="gap-2" asChild>
+                        <a href={modelLockSelfHostedUrl} target="_blank" rel="noreferrer noopener">
+                          <ExternalLink className="size-4" />
+                          {t("settings.modelLock.selfHostedCta")}
+                        </a>
+                      </Button>
+                    ) : (
+                      <Button variant="outline" className="gap-2" onClick={() => logoutProvider("eggent-ai")}>
+                        <LogOut className="size-4" />
+                        Use my own provider key
+                      </Button>
+                    )}
                   </div>
                 ) : null}
 

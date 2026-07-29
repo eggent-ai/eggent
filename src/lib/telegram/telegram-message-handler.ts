@@ -31,7 +31,9 @@ import { getServerTranslator } from "@/i18n/server";
 import type { MessageKey } from "@/i18n/messages";
 import crypto from "node:crypto";
 
-const TELEGRAM_TEXT_LIMIT = 4096;
+// Leave headroom under Telegram's hard 4096 limit: HTML escaping expands the payload
+// (`&` becomes `&amp;`) and each chunk may gain a reopened code fence.
+const TELEGRAM_CHUNK_LIMIT = 3500;
 const TELEGRAM_FILE_MAX_BYTES = 30 * 1024 * 1024;
 const TELEGRAM_TYPING_INTERVAL_MS = 4000;
 const TELEGRAM_PROGRESS_MESSAGES: Array<{ delayMs: number; key: MessageKey }> = [
@@ -39,6 +41,10 @@ const TELEGRAM_PROGRESS_MESSAGES: Array<{ delayMs: number; key: MessageKey }> = 
     { delayMs: 35_000, key: "telegram.bot.progress.medium" },
     { delayMs: 75_000, key: "telegram.bot.progress.long" },
 ];
+// After the scripted messages run out, keep a heartbeat going so a long task
+// never leaves the chat silent for more than this interval.
+const TELEGRAM_PROGRESS_HEARTBEAT_MS = 45_000;
+const TELEGRAM_PROGRESS_HEARTBEAT_MAX = 12;
 
 export interface TelegramUpdate {
     update_id?: unknown;
@@ -441,10 +447,95 @@ function extractAccessCodeCandidate(text: string): string | null {
 }
 
 function normalizeOutgoingText(text: string, t: (key: MessageKey) => string): string {
-    const value = text.trim();
-    if (!value) return t("telegram.bot.emptyAgentReply");
-    if (value.length <= TELEGRAM_TEXT_LIMIT) return value;
-    return `${value.slice(0, TELEGRAM_TEXT_LIMIT - 1)}…`;
+    return text.trim() || t("telegram.bot.emptyAgentReply");
+}
+
+function splitOverlongLine(line: string, limit: number): string[] {
+    if (line.length <= limit) return [line];
+    const pieces: string[] = [];
+    for (let index = 0; index < line.length; index += limit) {
+        pieces.push(line.slice(index, index + limit));
+    }
+    return pieces;
+}
+
+/**
+ * Split raw markdown into Telegram-sized chunks *before* it is rendered to HTML.
+ *
+ * Splitting after rendering can cut a message in the middle of a tag, which makes
+ * Telegram reject the whole message with "Can't find end tag corresponding to
+ * start tag". Fenced code blocks that straddle a boundary are closed at the end
+ * of one chunk and reopened at the start of the next.
+ */
+export function splitTelegramMarkdown(text: string): string[] {
+    const chunks: string[] = [];
+    let buffer: string[] = [];
+    let bufferLength = 0;
+    let openFence: string | null = null;
+
+    const flush = () => {
+        if (!buffer.length) return;
+        const parts = [...buffer];
+        if (openFence !== null) parts.push("```");
+        const chunk = parts.join("\n").trim();
+        if (chunk && chunk !== "```") chunks.push(chunk);
+        buffer = [];
+        bufferLength = 0;
+        if (openFence !== null) {
+            const reopened = `\`\`\`${openFence}`;
+            buffer.push(reopened);
+            bufferLength = reopened.length + 1;
+        }
+    };
+
+    for (const rawLine of text.split("\n")) {
+        for (const line of splitOverlongLine(rawLine, TELEGRAM_CHUNK_LIMIT)) {
+            if (bufferLength + line.length + 1 > TELEGRAM_CHUNK_LIMIT) flush();
+            buffer.push(line);
+            bufferLength += line.length + 1;
+
+            const fence = /^```(.*)$/.exec(line.trim());
+            if (fence) {
+                openFence = openFence === null ? (fence[1] || "") : null;
+            }
+        }
+    }
+
+    flush();
+    return chunks;
+}
+
+async function callTelegramSendMessage(params: {
+    botToken: string;
+    chatId: number | string;
+    text: string;
+    parseMode: "HTML" | null;
+    replyToMessageId?: number;
+}): Promise<{ ok: boolean; status: number; description?: string }> {
+    const response = await fetch(`https://api.telegram.org/bot${params.botToken}/sendMessage`, {
+        method: "POST",
+        headers: {
+            "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+            chat_id: params.chatId,
+            text: params.text,
+            ...(params.parseMode ? { parse_mode: params.parseMode } : {}),
+            ...(typeof params.replyToMessageId === "number"
+                ? { reply_to_message_id: params.replyToMessageId }
+                : {}),
+        }),
+    });
+
+    const payload = (await response.json().catch(() => null)) as
+        | { ok?: boolean; description?: string }
+        | null;
+
+    return {
+        ok: response.ok && Boolean(payload?.ok),
+        status: response.status,
+        description: payload?.description,
+    };
 }
 
 function escapeTelegramHtml(text: string): string {
@@ -519,26 +610,51 @@ function startTelegramProgressNotifier(params: {
         });
     };
 
+    const sendProgress = (key: MessageKey) => {
+        if (stopped) return;
+        void sendTelegramMessage(
+            params.botToken,
+            params.chatId,
+            params.t(key),
+            params.replyToMessageId
+        ).catch((error) => {
+            console.warn("[Telegram] Failed to send progress message:", error);
+        });
+    };
+
     safeSendChatAction();
     timers.push(setInterval(safeSendChatAction, TELEGRAM_TYPING_INTERVAL_MS));
 
     for (const progress of TELEGRAM_PROGRESS_MESSAGES) {
-        timers.push(setTimeout(() => {
-            if (stopped) return;
-            void sendTelegramMessage(
-                params.botToken,
-                params.chatId,
-                params.t(progress.key),
-                params.replyToMessageId
-            ).catch((error) => {
-                console.warn("[Telegram] Failed to send progress message:", error);
-            });
-        }, progress.delayMs));
+        timers.push(setTimeout(() => sendProgress(progress.key), progress.delayMs));
     }
+
+    // Keep reassuring the user after the scripted messages are exhausted: p90 of
+    // real replies lands well past the last scripted message, and silence there
+    // reads as "the bot is dead".
+    const lastScriptedDelay = TELEGRAM_PROGRESS_MESSAGES.length
+        ? TELEGRAM_PROGRESS_MESSAGES[TELEGRAM_PROGRESS_MESSAGES.length - 1].delayMs
+        : 0;
+    let heartbeats = 0;
+    const beat = () => {
+        if (stopped || heartbeats >= TELEGRAM_PROGRESS_HEARTBEAT_MAX) return;
+        heartbeats += 1;
+        sendProgress("telegram.bot.progress.long");
+    };
+    timers.push(setTimeout(() => {
+        if (stopped) return;
+        // Send immediately, then keep the same cadence, so the gap after the last
+        // scripted message is never longer than the heartbeat interval itself.
+        beat();
+        timers.push(setInterval(beat, TELEGRAM_PROGRESS_HEARTBEAT_MS));
+    }, lastScriptedDelay + TELEGRAM_PROGRESS_HEARTBEAT_MS));
 
     return () => {
         stopped = true;
-        for (const timer of timers) clearTimeout(timer);
+        for (const timer of timers) {
+            clearTimeout(timer);
+            clearInterval(timer);
+        }
     };
 }
 
@@ -549,27 +665,41 @@ export async function sendTelegramMessage(
     replyToMessageId?: number,
     t?: (key: MessageKey) => string
 ): Promise<void> {
-    const response = await fetch(`https://api.telegram.org/bot${botToken}/sendMessage`, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-            chat_id: chatId,
-            text: markdownToTelegramHtml(normalizeOutgoingText(text, t || ((key) => key))),
-            parse_mode: "HTML",
-            ...(typeof replyToMessageId === "number" ? { reply_to_message_id: replyToMessageId } : {}),
-        }),
-    });
+    const normalized = normalizeOutgoingText(text, t || ((key) => key));
+    const chunks = splitTelegramMarkdown(normalized);
+    if (!chunks.length) return;
 
-    const payload = (await response.json().catch(() => null)) as
-        | { ok?: boolean; description?: string }
-        | null;
+    let isFirstChunk = true;
+    for (const chunk of chunks) {
+        const replyTo = isFirstChunk ? replyToMessageId : undefined;
+        isFirstChunk = false;
 
-    if (!response.ok || !payload?.ok) {
-        throw new Error(
-            `Telegram sendMessage failed (${response.status})${payload?.description ? `: ${payload.description}` : ""}`
+        const rendered = await callTelegramSendMessage({
+            botToken,
+            chatId,
+            text: markdownToTelegramHtml(chunk),
+            parseMode: "HTML",
+            replyToMessageId: replyTo,
+        });
+        if (rendered.ok) continue;
+
+        // Telegram rejected the rendered markup. Retry this chunk as plain text so
+        // the user still receives the content instead of silence.
+        console.warn(
+            `[Telegram] Falling back to plain text (${rendered.status})${rendered.description ? `: ${rendered.description}` : ""}`
         );
+        const plain = await callTelegramSendMessage({
+            botToken,
+            chatId,
+            text: chunk,
+            parseMode: null,
+            replyToMessageId: replyTo,
+        });
+        if (!plain.ok) {
+            throw new Error(
+                `Telegram sendMessage failed (${plain.status})${plain.description ? `: ${plain.description}` : ""}`
+            );
+        }
     }
 }
 

@@ -64,6 +64,36 @@ function getLatestPiCompactionStatus(messages: UIMessage[]): PiCompactionStatus 
   return null;
 }
 
+export interface EggentActionNotice {
+  level: "info" | "warning" | "critical";
+  title: string;
+  body: string;
+  actionLabel?: string;
+  actionUrl?: string;
+  timestamp?: string;
+}
+
+function isEggentActionNotice(value: unknown): value is EggentActionNotice {
+  if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
+  const record = value as Record<string, unknown>;
+  return typeof record.title === "string" || typeof record.body === "string";
+}
+
+/** Only surface a notice raised during the current turn, not stale ones from history. */
+function getLatestEggentNotice(messages: UIMessage[]): EggentActionNotice | null {
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const message = messages[i];
+    if (message.role === "user") return null;
+    for (let j = message.parts.length - 1; j >= 0; j -= 1) {
+      const part = message.parts[j] as { type?: string; data?: unknown };
+      if (part.type === "data-eggentNotice" && isEggentActionNotice(part.data)) {
+        return part.data;
+      }
+    }
+  }
+  return null;
+}
+
 function isPiInteraction(value: unknown): value is PiPendingInteraction {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const record = value as Record<string, unknown>;
@@ -504,6 +534,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
 
   const runtimeStats = useMemo(() => getLatestPiRuntimeStats(messages), [messages]);
   const compactionStatus = useMemo(() => getLatestPiCompactionStatus(messages), [messages]);
+  const actionNotice = useMemo(() => getLatestEggentNotice(messages), [messages]);
   const pendingInteraction = useMemo(() => getLatestPendingInteraction(messages), [messages]);
   const displayRuntimeStats = useMemo(() => {
     if (!runtimeStats) return configuredRuntimeStats;
@@ -848,6 +879,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         isLoading={isLoading}
         errorMessage={chatError}
         compactionStatus={compactionStatus}
+        actionNotice={actionNotice}
         pendingInteraction={pendingInteraction}
         onRespondToInteraction={(value, cancel) => pendingInteraction ? respondToInteraction(pendingInteraction, value, cancel) : undefined}
         quickSkills={showQuickSkills}

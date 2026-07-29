@@ -7,6 +7,7 @@ import { getPiAuthPath, getPiModelsPath } from "@/lib/pi/config-store";
 import { getPipelineDefinitions, upsertPipelineDefinition } from "@/lib/pipelines/store";
 import { startPipelineRunInBackground } from "@/lib/pipelines/runner";
 import { managePiSchedules } from "@/lib/pi/schedule-host";
+import { formatUsageMeter, getUsageSnapshot, isUsageProviderConfigured } from "@/lib/usage/usage-provider";
 import {
   createProject,
   createSkill,
@@ -352,6 +353,39 @@ export async function createEggentPiTools(options: {
         return textResult(JSON.stringify(result, null, 2), result);
       },
     }),
+    ...(isUsageProviderConfigured()
+      ? [defineTool({
+        name: "eggent_usage_status",
+        label: "Check Workspace Usage",
+        description: "Report how much of this workspace's quota is used and how much is left, plus the current plan. Use this whenever the user asks about their balance, remaining credits or tokens, limits, quota, plan, trial, or how much they have left (\"сколько осталось\", \"какой у меня баланс\", \"сколько токенов\", \"я платный?\"). Always call this instead of guessing or saying the information is unavailable.",
+        parameters: Type.Object({}),
+        execute: async () => {
+          const snapshot = await getUsageSnapshot();
+          if (!snapshot) {
+            return textResult(
+              "Usage information is temporarily unavailable. Tell the user you could not read the current quota right now and suggest checking again shortly.",
+              { available: false }
+            );
+          }
+
+          const lines: string[] = [];
+          if (snapshot.plan) {
+            lines.push(`Plan: ${snapshot.plan.label}${snapshot.plan.endsAt ? ` (until ${snapshot.plan.endsAt})` : ""}`);
+          }
+          for (const meter of snapshot.meters) {
+            lines.push(formatUsageMeter(meter));
+          }
+          if (snapshot.notice) {
+            lines.push(`Notice: ${snapshot.notice.title} — ${snapshot.notice.body}`);
+            if (snapshot.notice.actionUrl) {
+              lines.push(`Action: ${snapshot.notice.actionLabel || "Open"} → ${snapshot.notice.actionUrl}`);
+            }
+          }
+          lines.push("Report these numbers to the user directly and in their language.");
+          return textResult(lines.join("\n"), { available: true, snapshot });
+        },
+      })]
+      : []),
     defineTool({
       name: "eggent_generate_image",
       label: "Generate or Edit Image",

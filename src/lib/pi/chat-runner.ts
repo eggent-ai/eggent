@@ -5,6 +5,7 @@ import { cancelPendingInteractionsForRun } from "@/lib/pi/pending-interactions";
 import { retainPiMcpOAuthSession, retainPiScheduleSession, takeRetainedPiScheduleSession } from "@/lib/pi/schedule-host";
 import type { PiChatRunOptions, PiRuntimeStats, PiToolRecord } from "@/lib/pi/types";
 import { getChat, saveChat } from "@/lib/storage/chat-store";
+import { clearUsageSnapshotCache } from "@/lib/usage/usage-provider";
 import type { ChatMessage, ChatMessagePart } from "@/lib/types";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -41,6 +42,68 @@ function formatPiChatError(error: unknown): string {
   const message = compact || "The model stopped before producing a final response.";
   const short = message.length > 500 ? `${message.slice(0, 500)}...` : message;
   return `Generation failed: ${short}`;
+}
+
+export interface EggentActionNotice {
+  level: "info" | "warning" | "critical";
+  title: string;
+  body: string;
+  actionLabel?: string;
+  actionUrl?: string;
+}
+
+/**
+ * Providers may attach an actionable notice to a failure, for example when a
+ * managed deployment refuses a request because a quota is exhausted. Eggent does
+ * not interpret the reason — it only forwards the notice so the UI can render an
+ * action instead of dumping a raw provider error into the chat.
+ */
+export function extractEggentNotice(error: unknown): EggentActionNotice | null {
+  const raw = error instanceof Error ? error.message : String(error);
+  if (!raw.includes("eggent_notice")) return null;
+
+  const start = raw.indexOf("{");
+  const end = raw.lastIndexOf("}");
+  if (start < 0 || end <= start) return null;
+
+  for (let cursor = end; cursor > start; cursor = raw.lastIndexOf("}", cursor - 1)) {
+    let parsed: unknown;
+    try {
+      parsed = JSON.parse(raw.slice(start, cursor + 1));
+    } catch {
+      continue;
+    }
+
+    const queue: unknown[] = [parsed];
+    while (queue.length) {
+      const node = queue.shift();
+      if (!node || typeof node !== "object") continue;
+      const record = node as Record<string, unknown>;
+
+      const candidate = record.eggent_notice;
+      if (candidate && typeof candidate === "object") {
+        const notice = candidate as Record<string, unknown>;
+        const title = typeof notice.title === "string" ? notice.title.trim() : "";
+        const body = typeof notice.body === "string" ? notice.body.trim() : "";
+        if (title || body) {
+          const actionUrl = typeof notice.actionUrl === "string" ? notice.actionUrl.trim() : "";
+          return {
+            level: notice.level === "critical" || notice.level === "warning" ? notice.level : "info",
+            title,
+            body,
+            actionLabel: typeof notice.actionLabel === "string" ? notice.actionLabel.trim() || undefined : undefined,
+            actionUrl: /^https?:\/\//i.test(actionUrl) ? actionUrl : undefined,
+          };
+        }
+      }
+
+      for (const value of Object.values(record)) {
+        if (value && typeof value === "object") queue.push(value);
+      }
+    }
+  }
+
+  return null;
 }
 
 function getToolArgs(event: Record<string, unknown>) {
@@ -874,8 +937,21 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
           currentPromptUsage ?? lastTurnUsage,
           addUsage(baselineUsage, currentPromptUsage)
         );
-        const errorText = formatPiChatError(error);
+        const notice = extractEggentNotice(error);
+        // A provider-supplied notice is already written for the end user in their
+        // language, so show that instead of the raw "Generation failed: ..." text.
+        const errorText = notice
+          ? [notice.title, notice.body].filter(Boolean).join("\n\n")
+          : formatPiChatError(error);
         closeTextPart();
+        if (notice) {
+          safeWrite({
+            type: "data-eggentNotice",
+            id: `eggent-notice-${crypto.randomUUID()}`,
+            data: { ...notice, timestamp: new Date().toISOString() },
+          });
+          clearUsageSnapshotCache();
+        }
         console.error("Pi chat stream execution error:", error);
         await persistAssistantMessage({
           chatId: options.chatId,

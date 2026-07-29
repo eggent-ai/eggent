@@ -43,6 +43,12 @@ export async function DELETE(req: NextRequest) {
   }
   const lock = await getEggentAiModelLockState();
   if (lock.locked) {
+    if (lock.enforced) {
+      return NextResponse.json({
+        error: `Model selection is managed for this workspace. To use your own model or provider, run Eggent self-hosted: ${lock.selfHostedUrl}`,
+        selfHostedUrl: lock.selfHostedUrl,
+      }, { status: 403 });
+    }
     if (provider !== "eggent-ai") {
       return NextResponse.json({ error: "Provider credentials are managed by Eggent AI for this workspace." }, { status: 403 });
     }

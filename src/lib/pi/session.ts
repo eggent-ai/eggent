@@ -20,7 +20,8 @@ import {
   loadProjectModelSettings,
   loadProjectSkillsMetadata,
 } from "@/lib/storage/project-store";
-import { getEggentAiModelLockState, getPiModelRegistry, getPiModelRuntime, getPiSettingsManager } from "@/lib/pi/config-store";
+import { getEggentAiModelLockState, getManagedProviderId, getPiModelRegistry, getPiModelRuntime, getPiSettingsManager } from "@/lib/pi/config-store";
+import { isUsageProviderConfigured } from "@/lib/usage/usage-provider";
 
 const EGGENT_CONTEXT_FILE_CANDIDATES = [
   "AGENTS.md",
@@ -164,6 +165,9 @@ function buildEggentProjectContext(options: {
     id?: string;
     name?: string;
   };
+  managedModelEnforced?: boolean;
+  selfHostedUrl?: string;
+  usageToolAvailable?: boolean;
 }): string {
   return [
     "# Eggent runtime context",
@@ -188,6 +192,15 @@ function buildEggentProjectContext(options: {
       : "Current runtime model: not selected",
     options.mcpServerIds?.length ? `Configured project MCP servers: ${options.mcpServerIds.join(", ")}` : "Configured project MCP servers: none",
     "If the user asks which model/provider is being used, answer from the Current runtime model line above rather than from model self-identification.",
+    options.managedModelEnforced
+      ? [
+          "This workspace runs on the managed Eggent model, and the model/provider cannot be changed from inside it.",
+          "If the user wants to use their own model, provider, API key, OAuth login, or a local model such as Ollama:",
+          `- Tell them plainly that switching models is not available in this workspace, and that Eggent is open source and can be self-hosted with any provider: ${options.selfHostedUrl}`,
+          "- Do not walk them through connecting another provider here, do not edit settings.json / models.json / auth.json, and do not suggest workarounds for the restriction.",
+          "- Helping them set up a self-hosted Eggent (install steps, Docker, server sizing) is fine and encouraged.",
+        ].join("\n")
+      : "",
     "",
     "Project instructions:",
     options.projectInstructions?.trim() || "No project-specific instructions configured.",
@@ -216,6 +229,9 @@ function buildEggentProjectContext(options: {
     options.chatFiles?.length
       ? "- Uploaded chat files are listed above. Read them by absolute path when the user asks about attached/uploaded files."
       : "- No uploaded chat files are currently attached to this chat.",
+    options.usageToolAvailable
+      ? "- eggent_usage_status for any question about balance, remaining credits/tokens, quota, limits, plan or trial. Call it and answer with the real numbers; never guess and never tell the user this information is unavailable to you."
+      : "",
     "- eggent_list_pipelines / eggent_start_pipeline for existing configured pipelines.",
     "- eggent_start_project_sequence for ad-hoc requests that name project ids in order, such as 'first in project A, then in project B'.",
   ]
@@ -275,8 +291,22 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
       )
     : undefined;
   const globalConfiguredModel = findAvailableModel(settingsManager.getDefaultProvider(), settingsManager.getDefaultModel());
-  const configuredModel = projectConfiguredModel || globalConfiguredModel || availableModels[0];
   const modelLock = await getEggentAiModelLockState(cwd);
+
+  // When the managed model is enforced, resolve it from the managed credential on
+  // every run instead of trusting settings.json / model.json. Those files live in
+  // the workspace and the agent can edit them with bash, so API-level checks alone
+  // would not hold.
+  const enforcedManagedModel = modelLock.enforced
+    ? await (async () => {
+        const managedProvider = await getManagedProviderId();
+        if (!managedProvider) return undefined;
+        return availableModels.find((model) => model.provider === managedProvider);
+      })()
+    : undefined;
+
+  const configuredModel =
+    enforcedManagedModel || projectConfiguredModel || globalConfiguredModel || availableModels[0];
   const project = projectId ? await getProject(projectId) : null;
   if (projectId) {
     await ensureProjectMcpAdapterConfig(projectId, cwd);
@@ -313,6 +343,9 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
             name: configuredModel.name,
           }
       : undefined,
+    managedModelEnforced: modelLock.enforced,
+    selfHostedUrl: modelLock.selfHostedUrl,
+    usageToolAvailable: isUsageProviderConfigured(),
   });
   const explicitContextFiles = loadEggentContextFiles(cwd, agentDir);
 
