@@ -187,8 +187,11 @@ function buildEggentProjectContext(options: {
     options.projectDescription ? `Project description: ${options.projectDescription}` : "",
     `Working directory: ${options.cwd}`,
     `Memory file: memory.md`,
-    options.runtimeModel?.provider && options.runtimeModel?.id
-      ? `Current runtime model: ${options.runtimeModel.provider}/${options.runtimeModel.id}${options.runtimeModel.name ? ` (${options.runtimeModel.name})` : ""}`
+    // A managed workspace reports a label without a provider id, so require only
+    // the id here. Requiring the provider made managed workspaces claim "not
+    // selected", which left users believing no model was configured at all.
+    options.runtimeModel?.id
+      ? `Current runtime model: ${options.runtimeModel.provider ? `${options.runtimeModel.provider}/` : ""}${options.runtimeModel.id}${options.runtimeModel.name && options.runtimeModel.name !== options.runtimeModel.id ? ` (${options.runtimeModel.name})` : ""}`
       : "Current runtime model: not selected",
     options.mcpServerIds?.length ? `Configured project MCP servers: ${options.mcpServerIds.join(", ")}` : "Configured project MCP servers: none",
     "If the user asks which model/provider is being used, answer from the Current runtime model line above rather than from model self-identification.",
