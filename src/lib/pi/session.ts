@@ -20,7 +20,7 @@ import {
   loadProjectModelSettings,
   loadProjectSkillsMetadata,
 } from "@/lib/storage/project-store";
-import { getEggentAiModelLockState, getManagedProviderId, getPiModelRegistry, getPiModelRuntime, getPiSettingsManager } from "@/lib/pi/config-store";
+import { deploymentContext, ensureWebSearchWorkflow, getEggentAiModelLockState, getManagedProviderId, getPiModelRegistry, getPiModelRuntime, getPiSettingsManager } from "@/lib/pi/config-store";
 import { isUsageProviderConfigured } from "@/lib/usage/usage-provider";
 
 const EGGENT_CONTEXT_FILE_CANDIDATES = [
@@ -168,6 +168,7 @@ function buildEggentProjectContext(options: {
   managedModelEnforced?: boolean;
   selfHostedUrl?: string;
   usageToolAvailable?: boolean;
+  deploymentContext?: string;
 }): string {
   return [
     "# Eggent runtime context",
@@ -181,6 +182,15 @@ function buildEggentProjectContext(options: {
     "Eggent is a universal AI assistant and automation workspace, not just a coding assistant.",
     "Do not introduce yourself as a coding assistant unless the user specifically asks for coding work. Code, files, and commands are capabilities, not Eggent's identity.",
     "Eggent configures the runtime; the runtime owns reasoning, tools, skills, sessions, compaction, extensions, and tool execution.",
+    "",
+    // "What are you?" is the single most common opening message, and vague
+    // answers to it lose users in the first minute. Give one concrete shape to
+    // describe instead of letting each run improvise.
+    "Answering \"who/what are you\", \"what can you do\", and comparison questions:",
+    "- Describe Eggent as a workspace where the assistant does things, not only answers: projects that each keep their own memory, instructions, skills and MCP servers; files; scheduled jobs; pipelines; sub-agents; and Telegram as a second interface to the same workspace. Eggent is open source.",
+    "- Keep it to a few lines and end by asking what the user actually wants to do. Offer concrete openers that match this product: send a document to analyse, point at a site or channel, or describe a work process to automate.",
+    "- For comparisons with other assistants or agents (Claude Code, Codex, Hermes, a plain chat subscription): name two or three real differences, do not disparage the other tool, and say plainly what Eggent is worse at. Then ask which task they are choosing for, because a comparison without a task is meaningless.",
+    "- When the user already runs another agent, the useful answer is how to interoperate with it, not why to replace it: an MCP server on either side, shared skill files, exchanged files, or Eggent's external API. Lead with that.",
     "",
     options.projectId ? `Project id: ${options.projectId}` : "Project id: orchestrator",
     options.projectName ? `Project name: ${options.projectName}` : "",
@@ -204,6 +214,16 @@ function buildEggentProjectContext(options: {
           "- Helping them set up a self-hosted Eggent (install steps, Docker, server sizing) is fine and encouraged.",
         ].join("\n")
       : "",
+    // Supplied by the operator of this deployment. Eggent does not know what it
+    // says, so it is quoted rather than summarized, and it outranks guesswork.
+    options.deploymentContext
+      ? [
+          "",
+          "Deployment context (written by the operator of this deployment, authoritative):",
+          options.deploymentContext,
+          "Use this block verbatim when the user asks what this service costs, how to pay, what the trial covers, where to get support, or whether a free alternative exists. Never invent terms, prices or contacts that are not written here, and never tell the user you have no information about it while this block exists.",
+        ].join("\n")
+      : "",
     "",
     "Project instructions:",
     options.projectInstructions?.trim() || "No project-specific instructions configured.",
@@ -211,6 +231,8 @@ function buildEggentProjectContext(options: {
     ...formatChatFilesContext(options.chatFiles ?? []),
     "",
     "Available Eggent bridge tools:",
+    "- eggent_ask_user to ask the user a question as a card with buttons instead of plain text. Use it for setup choices and confirmations, especially inside skills: a questionnaire typed into chat loses people who do not know the answers, while buttons do not. Ask one question at a time and always include an option that lets the user hand the decision back to you.",
+    "- eggent_manage_telegram to connect, check or disconnect this workspace's Telegram bot. When a user supplies a BotFather token, this is the only way to actually connect it; calling the Telegram API by hand sends a message without ever wiring up delivery.",
     "- list_projects / create_project / switch_project for navigating Eggent projects.",
     options.projectId
       ? "- eggent_memory_search / eggent_memory_save / eggent_memory_delete for the project memory.md file."
@@ -219,6 +241,12 @@ function buildEggentProjectContext(options: {
       ? "- Use pi-mcp-adapter's mcp proxy tool for MCP servers configured in this project's .mcp.json."
       : "- Project MCP tools are available through pi-mcp-adapter after switching into a project.",
     "- MCP OAuth tokens are persisted in the Pi agent data directory and can be reused across chats/sessions for the same MCP server id and URL. When using an already configured MCP server, call `mcp({ connect: \"<server>\" })` first; call `auth-start` only if connect returns `auth_required` or explicitly says re-authentication is required.",
+    // Eggent runs headless, so a child process that wants to open a browser can
+    // never succeed here. Agents used to spend dozens of turns rediscovering
+    // that; state the rule and the two working alternatives up front.
+    "- Choosing an MCP transport: interactive OAuth works only over the `http` transport, where Eggent runs the flow itself. If a server documents both an npm/stdio client and an HTTP endpoint, configure the HTTP one whenever the server needs a user login.",
+    "- `stdio` MCP servers cannot log a user in: there is no browser in this environment, and the server's own device/federation login will fail. Authenticate them by passing an existing token or service-account key through the `env` field of upsert_mcp_server instead.",
+    "- If an MCP server fails with `browser can not be opened`, `federation id authentication`, `Connection closed` immediately after start, or an equivalent, stop retrying at once. Do not install vendor CLIs, inspect binaries, or hunt for client ids. Tell the user the server needs a login that cannot happen in this environment and offer the three real options: the same server over HTTP transport, a token supplied through `env`, or running Eggent self-hosted where a browser is available.",
     options.mcpServerIds?.includes("higgsfield")
       ? "- Higgsfield is configured as an MCP server in this project. For Higgsfield image/video generation in Eggent cloud/web, prefer the `mcp` proxy (`connect`, `search`, `describe`, then tool call) over the `higgsfield` CLI. Do not run `higgsfield auth login`, `higgsfield account status`, or `higgsfield workspace set` unless the user explicitly asks for CLI setup; MCP OAuth is separate from CLI auth and is already persisted after successful authentication."
       : "",
@@ -277,6 +305,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
   const projectId = normalizeProjectId(options.projectId);
   const cwd = resolveCwd({ ...options, projectId });
   const agentDir = options.agentDir || getAgentDir();
+  await ensureWebSearchWorkflow();
   const modelRuntime = await getPiModelRuntime();
   const modelRegistry = await getPiModelRegistry(modelRuntime);
   const settingsManager = getPiSettingsManager(cwd);
@@ -349,6 +378,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     managedModelEnforced: modelLock.enforced,
     selfHostedUrl: modelLock.selfHostedUrl,
     usageToolAvailable: isUsageProviderConfigured(),
+    deploymentContext: deploymentContext(),
   });
   const explicitContextFiles = loadEggentContextFiles(cwd, agentDir);
 

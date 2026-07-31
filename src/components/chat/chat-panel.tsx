@@ -438,6 +438,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
   const [inputFocusSignal, setInputFocusSignal] = useState(0);
   const [configuredRuntimeStats, setConfiguredRuntimeStats] = useState<PiRuntimeStats | null>(null);
   const [quickSkills, setQuickSkills] = useState<QuickSkillAction[]>(initialQuickSkills);
+  const [deploymentNotice, setDeploymentNotice] = useState<string | null>(null);
   const [launchingSkill, setLaunchingSkill] = useState<string | null>(null);
 
   // Internal chatId that stays stable during a message send.
@@ -488,6 +489,21 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
       })
       .catch(() => {
         if (!cancelled) setQuickSkills([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/deployment", { cache: "no-store" })
+      .then((response) => (response.ok ? (response.json() as Promise<{ notice?: string | null }>) : null))
+      .then((data) => {
+        if (!cancelled) setDeploymentNotice(data?.notice?.trim() || null);
+      })
+      .catch(() => {
+        // Purely informational; an empty notice is the normal self-hosted case.
       });
     return () => {
       cancelled = true;
@@ -885,6 +901,11 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         quickSkills={showQuickSkills}
         onLaunchSkill={launchBundledSkill}
         launchingSkill={launchingSkill}
+        onPickStarter={(prompt) => {
+          setInput(prompt);
+          setInputFocusSignal((value) => value + 1);
+        }}
+        deploymentNote={deploymentNotice}
       />
       <ChatInput
         input={input}

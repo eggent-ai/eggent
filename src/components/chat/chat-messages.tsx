@@ -41,7 +41,12 @@ interface ChatMessagesProps {
   quickSkills?: QuickSkillAction[];
   onLaunchSkill?: (skillName: string) => void;
   launchingSkill?: string | null;
+  onPickStarter?: (prompt: string) => void;
+  deploymentNote?: string | null;
 }
+
+/** Suggested first moves shown on an empty chat. */
+const STARTER_KEYS = ["chat.starter.file", "chat.starter.research", "chat.starter.process"] as const;
 
 function interactionKindLabelKey(kind: PiPendingInteraction["kind"]): MessageKey {
   switch (kind) {
@@ -62,7 +67,7 @@ function interactionKindLabelKey(kind: PiPendingInteraction["kind"]): MessageKey
   }
 }
 
-export function ChatMessages({ messages, isLoading, errorMessage, compactionStatus, actionNotice, pendingInteraction, onRespondToInteraction, quickSkills = [], onLaunchSkill, launchingSkill }: ChatMessagesProps) {
+export function ChatMessages({ messages, isLoading, errorMessage, compactionStatus, actionNotice, pendingInteraction, onRespondToInteraction, quickSkills = [], onLaunchSkill, launchingSkill, onPickStarter, deploymentNote }: ChatMessagesProps) {
   const { t } = useI18n();
   const scrollRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -103,6 +108,35 @@ export function ChatMessages({ messages, isLoading, errorMessage, compactionStat
               {t("chat.emptyDescription")}
             </EmptyDescription>
           </EmptyHeader>
+
+          {/*
+            Openers, not decoration. Most first messages are "what are you?",
+            which is what people ask when a blank box gives them nothing to
+            aim at. Naming three concrete things to try answers it up front.
+          */}
+          {onPickStarter ? (
+            <div className="mt-5 flex w-full max-w-[min(100vw-2rem,42rem)] min-w-0 flex-col gap-2 px-6">
+              {STARTER_KEYS.map((key) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() => onPickStarter(t(`${key}.prompt` as MessageKey))}
+                  className="w-full rounded-xl border bg-card/60 px-4 py-3 text-left text-sm transition hover:-translate-y-0.5 hover:border-primary/50 hover:bg-card hover:shadow-sm"
+                >
+                  <span className="font-medium">{t(`${key}.title` as MessageKey)}</span>
+                  <span className="mt-0.5 block text-xs text-muted-foreground">
+                    {t(`${key}.hint` as MessageKey)}
+                  </span>
+                </button>
+              ))}
+            </div>
+          ) : null}
+
+          {deploymentNote ? (
+            <p className="mt-4 max-w-[min(100vw-2rem,42rem)] px-6 text-xs leading-relaxed text-muted-foreground">
+              {deploymentNote}
+            </p>
+          ) : null}
           {quickSkills.length > 0 ? (
             <div className="mt-6 w-full max-w-[min(100vw-2rem,56rem)] min-w-0 space-y-3">
               <div className="px-6 text-left text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">

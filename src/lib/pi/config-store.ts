@@ -48,6 +48,47 @@ function getEggentAiLockOverridePath(): string {
   return path.join(getPiAgentDir(), "eggent-ai-lock.json");
 }
 
+let webSearchWorkflowEnsured = false;
+
+/**
+ * Keep pi-web-access out of its interactive "search curator" mode.
+ *
+ * The curator streams results into a browser window it opens itself. Eggent
+ * serves a web UI and registers a UI context for MCP prompts, so the extension
+ * believes a terminal user is present, tries to open a browser that does not
+ * exist, and the failure path throws instead of falling back — surfacing
+ * `sendCuratorFallbackUpdate is not defined` to the user in place of results.
+ *
+ * Pinning the workflow to "none" resolves it before that branch is reached. Only
+ * the workflow key is written, so provider API keys in the same file survive.
+ */
+export async function ensureWebSearchWorkflow(): Promise<void> {
+  if (webSearchWorkflowEnsured) return;
+  webSearchWorkflowEnsured = true;
+
+  const configPath = path.join(getPiAgentDir(), "web-search.json");
+  try {
+    let config: Record<string, unknown> = {};
+    try {
+      const parsed: unknown = JSON.parse(await fs.readFile(configPath, "utf-8"));
+      if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+        config = parsed as Record<string, unknown>;
+      }
+    } catch {
+      // Missing or unreadable config: start from an empty one.
+    }
+
+    if (config.workflow === "none") return;
+    config.workflow = "none";
+    await fs.mkdir(path.dirname(configPath), { recursive: true });
+    await fs.writeFile(configPath, `${JSON.stringify(config, null, 2)}\n`, "utf-8");
+  } catch (error) {
+    // Web search still works without this; never block a run over it.
+    console.warn("[eggent] Could not pin the web search workflow:", error instanceof Error ? error.message : error);
+    webSearchWorkflowEnsured = false;
+  }
+}
+
 async function readEggentAiLockOverride(): Promise<{ disabled?: boolean }> {
   try {
     const content = await fs.readFile(getEggentAiLockOverridePath(), "utf-8");
@@ -206,6 +247,35 @@ export function isManagedAiEnforced(): boolean {
 /** Where users should go to run Eggent with their own model. */
 export function selfHostedDocsUrl(): string {
   return process.env.EGGENT_SELF_HOSTED_DOCS_URL?.trim() || "https://github.com/eggent-ai/eggent";
+}
+
+/**
+ * Free-form text supplied by whoever operates this deployment, injected into the
+ * agent's context verbatim.
+ *
+ * Eggent itself has no opinion about what belongs here. A hosted deployment may
+ * describe its terms, where to pay, or who to contact; self-hosted Eggent
+ * normally leaves it unset, in which case no such block exists at all. Keeping
+ * the text outside the codebase is what lets one binary serve both.
+ */
+export function deploymentContext(): string | undefined {
+  const raw = process.env.EGGENT_DEPLOYMENT_CONTEXT?.trim();
+  if (!raw) return undefined;
+  // Operators write this in an .env file, so allow the usual escaped newlines.
+  return raw.replace(/\\n/g, "\n").slice(0, 4000);
+}
+
+/**
+ * One short line the operator wants shown to the user on an empty chat.
+ *
+ * Separate from {@link deploymentContext} on purpose: that text is addressed to
+ * the model and reads like instructions, which is not something to put in front
+ * of a person. Unset means nothing is rendered.
+ */
+export function deploymentNotice(): string | undefined {
+  const raw = process.env.EGGENT_DEPLOYMENT_NOTICE?.trim();
+  if (!raw) return undefined;
+  return raw.replace(/\\n/g, "\n").slice(0, 500);
 }
 
 export interface EggentAiModelLockState {

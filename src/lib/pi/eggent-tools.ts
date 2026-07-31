@@ -181,6 +181,185 @@ export async function createEggentPiTools(options: {
 
   const tools: ToolDefinition[] = [
     defineTool({
+      name: "eggent_ask_user",
+      label: "Ask The User",
+      description:
+        "Ask the user one question and wait for the answer, rendered as a card with buttons or an input field instead of plain chat text. Use for setup choices, confirmations before a destructive or expensive step, and any point where a skill or workflow needs a decision. Prefer choice over free_text: a person who cannot answer a typed question can still press a button. Always offer a choice that lets the user defer to you (for example \"choose for me\") so the flow never dead-ends on someone who does not know the answer. Ask one question at a time; do not use this to interview the user through a long questionnaire.",
+      parameters: Type.Object({
+        question: Type.String({ description: "The question, in the user's language. Keep it to one sentence." }),
+        kind: Type.Optional(
+          Type.Union([Type.Literal("choice"), Type.Literal("confirm"), Type.Literal("free_text")], {
+            description: "choice = pick one of `options` (default when options are given), confirm = yes/no, free_text = typed answer.",
+          })
+        ),
+        options: Type.Optional(
+          Type.Array(Type.String(), {
+            description: "Answer choices for kind=choice, 2 to 6 of them, each a short label in the user's language.",
+          })
+        ),
+        placeholder: Type.Optional(Type.String({ description: "Hint shown in the input field for kind=free_text." })),
+        title: Type.Optional(Type.String({ description: "Short card heading. Defaults to the question." })),
+      }),
+      execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
+        const question = params.question?.trim();
+        if (!question) return textResult(JSON.stringify({ success: false, error: "question is required" }, null, 2));
+
+        const options = (params.options ?? []).map((option) => option.trim()).filter(Boolean).slice(0, 6);
+        const kind = params.kind ?? (options.length >= 2 ? "choice" : "free_text");
+        const title = params.title?.trim() || question;
+
+        // Without a UI the question would hang until it times out, which reads to
+        // the user as the agent freezing. Say so instead and let it keep working.
+        if (ctx?.hasUI === false) {
+          return textResult(
+            JSON.stringify(
+              {
+                success: false,
+                error: "No interactive UI is attached to this run, so the user cannot be prompted.",
+                note: "Ask the question as normal chat text, or pick a sensible default and say which default you picked.",
+              },
+              null,
+              2
+            )
+          );
+        }
+
+        try {
+          let answer: string | boolean | undefined;
+          if (kind === "confirm") {
+            answer = await ctx.ui.confirm(title, question);
+          } else if (kind === "choice") {
+            if (options.length < 2) {
+              return textResult(
+                JSON.stringify({ success: false, error: "kind=choice needs at least 2 options" }, null, 2)
+              );
+            }
+            answer = await ctx.ui.select(title, options);
+          } else {
+            answer = await ctx.ui.input(title, params.placeholder?.trim() || question);
+          }
+
+          if (answer === undefined) {
+            return textResult(
+              JSON.stringify(
+                {
+                  success: false,
+                  cancelled: true,
+                  note: "The user dismissed the question. Do not ask it again; continue with a reasonable default and tell them what you assumed.",
+                },
+                null,
+                2
+              )
+            );
+          }
+
+          return textResult(JSON.stringify({ success: true, kind, answer }, null, 2), { kind });
+        } catch (error) {
+          return textResult(
+            JSON.stringify(
+              {
+                success: false,
+                error: error instanceof Error ? error.message : "Could not ask the user.",
+                note: "Continue without the answer: pick a sensible default and say which default you picked.",
+              },
+              null,
+              2
+            )
+          );
+        }
+      },
+    }),
+    defineTool({
+      name: "eggent_manage_telegram",
+      label: "Manage Telegram Bot",
+      description:
+        "Connect, inspect or disconnect the Telegram bot of this workspace. Use this whenever the user gives a bot token from BotFather or asks to hook the workspace up to Telegram. Sending a message with curl does NOT connect a bot: only this tool registers the token so incoming messages reach the workspace. Never repeat the token back to the user or write it into files.",
+      parameters: Type.Object({
+        action: Type.Union([Type.Literal("status"), Type.Literal("connect"), Type.Literal("disconnect")], {
+          description: "status = report the current connection, connect = register a bot, disconnect = remove it.",
+        }),
+        bot_token: Type.Optional(
+          Type.String({
+            description: "BotFather token, for action=connect. Omit to re-apply the token already stored.",
+          })
+        ),
+        mode: Type.Optional(
+          Type.Union([Type.Literal("polling"), Type.Literal("webhook")], {
+            description: "Delivery mode. Defaults to polling, which works without a public URL.",
+          })
+        ),
+      }),
+      execute: async (_toolCallId, params) => {
+        try {
+          const { getTelegramIntegrationPublicSettings } = await import("@/lib/storage/telegram-integration-store");
+          const { connectTelegramBot, disconnectTelegramBot } = await import("@/lib/telegram/setup");
+          const { getServerTranslator } = await import("@/i18n/server");
+          const t = await getServerTranslator(null);
+
+          if (params.action === "status") {
+            const settings = await getTelegramIntegrationPublicSettings();
+            return textResult(
+              JSON.stringify(
+                {
+                  success: true,
+                  connected: Boolean(settings.botToken),
+                  mode: settings.detectedMode,
+                  defaultProjectId: settings.defaultProjectId || null,
+                  allowedUserIds: settings.allowedUserIds,
+                  updatedAt: settings.updatedAt,
+                },
+                null,
+                2
+              )
+            );
+          }
+
+          if (params.action === "disconnect") {
+            const result = await disconnectTelegramBot(t);
+            return textResult(
+              JSON.stringify({ success: true, disconnected: true, ...result }, null, 2)
+            );
+          }
+
+          const result = await connectTelegramBot({
+            botToken: params.bot_token,
+            mode: params.mode === "webhook" ? "webhook" : "polling",
+            fallbackPublicBaseUrl: process.env.APP_BASE_URL?.trim(),
+            t,
+          });
+
+          return textResult(
+            JSON.stringify(
+              {
+                success: true,
+                connected: true,
+                mode: result.mode,
+                botUsername: result.botUsername,
+                botLink: result.botLink,
+                webhookUrl: result.webhookUrl ?? null,
+                claimWarning: result.claimWarning,
+                note: "The bot is registered and receiving updates. Tell the user to open the bot link and send it a message. Do not repeat the token.",
+              },
+              null,
+              2
+            )
+          );
+        } catch (error) {
+          return textResult(
+            JSON.stringify(
+              {
+                success: false,
+                error: error instanceof Error ? error.message : "Telegram setup failed.",
+                note: "Report this to the user as-is. Do not fall back to calling the Telegram API directly with curl: that can send a message but never connects the bot to this workspace.",
+              },
+              null,
+              2
+            )
+          );
+        }
+      },
+    }),
+    defineTool({
       name: "list_projects",
       label: "List Eggent Projects",
       description: "List Eggent projects. Each project is a directory-backed pi agent configuration with context.md, memory.md, skills/, .mcp.json, and model.json. Scheduled tasks are managed by pi-subagents.",
