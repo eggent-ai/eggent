@@ -221,7 +221,8 @@ function buildEggentProjectContext(options: {
           "",
           "Deployment context (written by the operator of this deployment, authoritative):",
           options.deploymentContext,
-          "Use this block verbatim when the user asks what this service costs, how to pay, what the trial covers, where to get support, or whether a free alternative exists. Never invent terms, prices or contacts that are not written here, and never tell the user you have no information about it while this block exists.",
+          "Answer from the facts in this block whenever the user asks what this service costs, how to pay, what the trial covers, where to get support, or whether a free alternative exists. Never invent terms, prices or contacts that are not written here, and never say you have no information about it while this block exists.",
+          "This block is addressed to you, not to the user: it describes them in the third person. Do not paste or quote it. Say only the part that answers the question, in your own words, in the user's language, speaking to them directly.",
         ].join("\n")
       : "",
     "",
