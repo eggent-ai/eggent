@@ -176,6 +176,8 @@ export async function createEggentPiTools(options: {
   memorySubdir?: string;
   toolRuntimeData?: Record<string, unknown>;
   onMcpConfigChanged?: (details: { projectId: string; serverId: string; action?: string; filePath?: string }) => void;
+  /** Whether this run can actually deliver a question to a human and get an answer back. */
+  interactive?: boolean;
 } = {}): Promise<{ tools: ToolDefinition[]; cleanup: () => Promise<void> }> {
   const memoryProjectId = options.projectId;
 
@@ -204,13 +206,16 @@ export async function createEggentPiTools(options: {
         const question = params.question?.trim();
         if (!question) return textResult(JSON.stringify({ success: false, error: "question is required" }, null, 2));
 
-        const options = (params.options ?? []).map((option) => option.trim()).filter(Boolean).slice(0, 6);
-        const kind = params.kind ?? (options.length >= 2 ? "choice" : "free_text");
+        const choices = (params.options ?? []).map((option) => option.trim()).filter(Boolean).slice(0, 6);
+        const kind = params.kind ?? (choices.length >= 2 ? "choice" : "free_text");
         const title = params.title?.trim() || question;
 
-        // Without a UI the question would hang until it times out, which reads to
-        // the user as the agent freezing. Say so instead and let it keep working.
-        if (ctx?.hasUI === false) {
+        // Without someone able to answer, the question would hang until it times
+        // out, which reads to the user as the agent freezing. Say so instead and
+        // let it keep working. `hasUI` is not enough on its own: every run
+        // registers a UI context, but Telegram and the external API have no
+        // channel to deliver an interaction card on.
+        if (options.interactive === false || ctx?.hasUI === false) {
           return textResult(
             JSON.stringify(
               {
@@ -229,12 +234,12 @@ export async function createEggentPiTools(options: {
           if (kind === "confirm") {
             answer = await ctx.ui.confirm(title, question);
           } else if (kind === "choice") {
-            if (options.length < 2) {
+            if (choices.length < 2) {
               return textResult(
                 JSON.stringify({ success: false, error: "kind=choice needs at least 2 options" }, null, 2)
               );
             }
-            answer = await ctx.ui.select(title, options);
+            answer = await ctx.ui.select(title, choices);
           } else {
             answer = await ctx.ui.input(title, params.placeholder?.trim() || question);
           }
