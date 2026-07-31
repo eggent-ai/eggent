@@ -5,6 +5,8 @@ import remarkGfm from "remark-gfm";
 import { Bot, User } from "lucide-react";
 import { CodeBlock } from "./code-block";
 import { ToolOutput } from "./tool-output";
+import { ToolGroup } from "./tool-group";
+import type { ReactNode } from "react";
 import type { UIMessage } from "ai";
 
 interface MessageBubbleProps {
@@ -97,37 +99,75 @@ export function MessageBubble({ message }: MessageBubbleProps) {
     );
   }
 
-  const renderedParts = message.parts.map((part, idx) => {
+  // Consecutive tool calls are collected so they can be shown as one collapsed
+  // row instead of a stack of boxes. Rendering of an individual call is
+  // unchanged; only the grouping around it is new.
+  const renderedParts: ReactNode[] = [];
+  let pendingTools: { node: ReactNode; name: string; running: boolean }[] = [];
+
+  const flushTools = () => {
+    if (!pendingTools.length) return;
+    const group = pendingTools;
+    pendingTools = [];
+
+    // A single call is not a fence; leave it as it was.
+    if (group.length === 1) {
+      renderedParts.push(group[0].node);
+      return;
+    }
+
+    renderedParts.push(
+      <ToolGroup
+        key={`tools-${renderedParts.length}`}
+        count={group.length}
+        running={group.some((item) => item.running)}
+        names={group.map((item) => item.name)}
+      >
+        {group.map((item) => item.node)}
+      </ToolGroup>
+    );
+  };
+
+  message.parts.forEach((part, idx) => {
     if (part.type === "text") {
-      return renderMarkdownBlock(part.text, `text-${idx}`);
+      flushTools();
+      renderedParts.push(renderMarkdownBlock(part.text, `text-${idx}`));
+      return;
     }
 
     const tool = toolPartInfo(part);
-    if (!tool) return null;
+    if (!tool) return;
 
     if (tool.toolName === "response" && tool.state === "output-available") {
-      return renderMarkdownBlock(valueToText(tool.output), `response-${tool.toolCallId || idx}`);
+      flushTools();
+      renderedParts.push(renderMarkdownBlock(valueToText(tool.output), `response-${tool.toolCallId || idx}`));
+      return;
     }
 
-    return (
-      <ToolOutput
-        key={`tool-${tool.toolCallId || idx}-${idx}`}
-        toolName={tool.toolName}
-        args={
-          typeof tool.input === "object" && tool.input !== null
-            ? (tool.input as Record<string, unknown>)
-            : {}
-        }
-        result={
-          tool.state === "output-available"
-            ? valueToText(tool.output)
-            : tool.state === "output-error"
-              ? valueToText(tool.output) || "Error occurred"
-              : "Running..."
-        }
-      />
-    );
+    pendingTools.push({
+      name: tool.toolName,
+      running: tool.state !== "output-available" && tool.state !== "output-error",
+      node: (
+        <ToolOutput
+          key={`tool-${tool.toolCallId || idx}-${idx}`}
+          toolName={tool.toolName}
+          args={
+            typeof tool.input === "object" && tool.input !== null
+              ? (tool.input as Record<string, unknown>)
+              : {}
+          }
+          result={
+            tool.state === "output-available"
+              ? valueToText(tool.output)
+              : tool.state === "output-error"
+                ? valueToText(tool.output) || "Error occurred"
+                : "Running..."
+          }
+        />
+      ),
+    });
   });
+  flushTools();
 
   if (!renderedParts.some(Boolean)) return null;
 

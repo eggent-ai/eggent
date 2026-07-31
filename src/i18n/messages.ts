@@ -122,6 +122,8 @@ const enMessages = {
   "chat.emptyDescription": "Ask anything, paste an image, or attach files. Eggent will use the current project context when needed.",
   "chat.bundledSkills": "Bundled skills",
   "chat.templatesTitle": "Templates",
+  "chat.tools.group": "Tools",
+  "chat.tools.running": "running…",
   "chat.starter.file.title": "Send a document",
   "chat.starter.file.hint": "A spreadsheet, PDF or photo — Eggent reads it and works with what is inside.",
   "chat.starter.file.prompt": "I'm attaching a file. Read it and tell me what you can do with it.",
