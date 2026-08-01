@@ -170,7 +170,16 @@ function buildEggentProjectContext(options: {
   usageToolAvailable?: boolean;
   deploymentContext?: string;
 }): string {
-  return [
+  // Ordering here is load-bearing, not cosmetic.
+  //
+  // Providers cache a prompt by its exact prefix and bill cached tokens at a
+  // tenth of the price, so everything after the first workspace-specific
+  // character is re-billed in full on every call. Guidance that reads the same
+  // in every workspace therefore comes first, and anything naming this
+  // particular workspace - its project, its model, its deployment block - is
+  // pushed to the end. Moving one line of workspace-specific text upwards makes
+  // every line below it uncacheable.
+  const shared: string[] = [
     "# Eggent runtime context",
     "",
     options.projectId
@@ -192,19 +201,7 @@ function buildEggentProjectContext(options: {
     "- For comparisons with other assistants or agents (Claude Code, Codex, Hermes, a plain chat subscription): name two or three real differences, do not disparage the other tool, and say plainly what Eggent is worse at. Then ask which task they are choosing for, because a comparison without a task is meaningless.",
     "- When the user already runs another agent, the useful answer is how to interoperate with it, not why to replace it: an MCP server on either side, shared skill files, exchanged files, or Eggent's external API. Lead with that.",
     "",
-    options.projectId ? `Project id: ${options.projectId}` : "Project id: orchestrator",
-    options.projectName ? `Project name: ${options.projectName}` : "",
-    options.projectDescription ? `Project description: ${options.projectDescription}` : "",
-    `Working directory: ${options.cwd}`,
-    `Memory file: memory.md`,
-    // A managed workspace reports a label without a provider id, so require only
-    // the id here. Requiring the provider made managed workspaces claim "not
-    // selected", which left users believing no model was configured at all.
-    options.runtimeModel?.id
-      ? `Current runtime model: ${options.runtimeModel.provider ? `${options.runtimeModel.provider}/` : ""}${options.runtimeModel.id}${options.runtimeModel.name && options.runtimeModel.name !== options.runtimeModel.id ? ` (${options.runtimeModel.name})` : ""}`
-      : "Current runtime model: not selected",
-    options.mcpServerIds?.length ? `Configured project MCP servers: ${options.mcpServerIds.join(", ")}` : "Configured project MCP servers: none",
-    "If the user asks which model/provider is being used, answer from the Current runtime model line above rather than from model self-identification.",
+    "If the user asks which model/provider is being used, answer from the Current runtime model line below rather than from model self-identification.",
     options.managedModelEnforced
       ? [
           "This workspace runs on the managed Eggent model, and the model/provider cannot be changed from inside it.",
@@ -214,22 +211,6 @@ function buildEggentProjectContext(options: {
           "- Helping them set up a self-hosted Eggent (install steps, Docker, server sizing) is fine and encouraged.",
         ].join("\n")
       : "",
-    // Supplied by the operator of this deployment. Eggent does not know what it
-    // says, so it is quoted rather than summarized, and it outranks guesswork.
-    options.deploymentContext
-      ? [
-          "",
-          "Deployment context (written by the operator of this deployment, authoritative):",
-          options.deploymentContext,
-          "Answer from the facts in this block whenever the user asks what this service costs, how to pay, what the trial covers, where to get support, or whether a free alternative exists. Never invent terms, prices or contacts that are not written here, and never say you have no information about it while this block exists.",
-          "This block is addressed to you, not to the user: it describes them in the third person. Do not paste or quote it. Say only the part that answers the question, in your own words, in the user's language, speaking to them directly.",
-        ].join("\n")
-      : "",
-    "",
-    "Project instructions:",
-    options.projectInstructions?.trim() || "No project-specific instructions configured.",
-    ...formatProjectSkillsContext({ projectId: options.projectId, cwd: options.cwd, skills: options.projectSkills ?? [] }),
-    ...formatChatFilesContext(options.chatFiles ?? []),
     "",
     "Available Eggent bridge tools:",
     "- eggent_ask_user to ask the user a question as a card with buttons instead of plain text. Use it for setup choices and confirmations, especially inside skills: a questionnaire typed into chat loses people who do not know the answers, while buttons do not. Ask one question at a time and always include an option that lets the user hand the decision back to you.",
@@ -248,27 +229,62 @@ function buildEggentProjectContext(options: {
     "- Choosing an MCP transport: interactive OAuth works only over the `http` transport, where Eggent runs the flow itself. If a server documents both an npm/stdio client and an HTTP endpoint, configure the HTTP one whenever the server needs a user login.",
     "- `stdio` MCP servers cannot log a user in: there is no browser in this environment, and the server's own device/federation login will fail. Authenticate them by passing an existing token or service-account key through the `env` field of upsert_mcp_server instead.",
     "- If an MCP server fails with `browser can not be opened`, `federation id authentication`, `Connection closed` immediately after start, or an equivalent, stop retrying at once. Do not install vendor CLIs, inspect binaries, or hunt for client ids. Tell the user the server needs a login that cannot happen in this environment and offer the three real options: the same server over HTTP transport, a token supplied through `env`, or running Eggent self-hosted where a browser is available.",
-    options.mcpServerIds?.includes("higgsfield")
-      ? "- Higgsfield is configured as an MCP server in this project. For Higgsfield image/video generation in Eggent cloud/web, prefer the `mcp` proxy (`connect`, `search`, `describe`, then tool call) over the `higgsfield` CLI. Do not run `higgsfield auth login`, `higgsfield account status`, or `higgsfield workspace set` unless the user explicitly asks for CLI setup; MCP OAuth is separate from CLI auth and is already persisted after successful authentication."
-      : "",
     "- Use pi-web-access tools (web_search, fetch_content, get_search_content) for internet access when available.",
     "- When installing project skills with the `skills` CLI from a non-interactive web run, pass `-y`/`--yes` (for example `npx skills add owner/repo -y`) to avoid terminal selection prompts that cannot be reliably controlled from chat.",
     "- eggent_manage_schedules for listing or clearing pi-subagents scheduled tasks. Do not use Agent.schedule to manage existing schedules.",
     "- eggent_generate_image for image generation/editing/restyling requests. Use reference_image_paths from uploaded chat files when the user asks to edit or use an attached picture. This tool is separate from the text model; if an image backend is not configured, explain that image generation must be enabled separately.",
+    options.usageToolAvailable
+      ? "- eggent_usage_status for any question about balance, remaining credits/tokens, quota, limits, plan or trial. Call it and answer with the real numbers; never guess and never tell the user this information is unavailable to you."
+      : "",
+    "- eggent_list_pipelines / eggent_start_pipeline for existing configured pipelines.",
+    "- eggent_start_project_sequence for ad-hoc requests that name project ids in order, such as 'first in project A, then in project B'.",
+  ];
+
+  // Everything below names this workspace, so it is where the shared prefix
+  // ends. Keep new workspace-specific facts here rather than above.
+  const thisWorkspace: string[] = [
+    "",
+    "## This workspace",
+    options.projectId ? `Project id: ${options.projectId}` : "Project id: orchestrator",
+    options.projectName ? `Project name: ${options.projectName}` : "",
+    options.projectDescription ? `Project description: ${options.projectDescription}` : "",
+    `Working directory: ${options.cwd}`,
+    `Memory file: memory.md`,
+    // A managed workspace reports a label without a provider id, so require only
+    // the id here. Requiring the provider made managed workspaces claim "not
+    // selected", which left users believing no model was configured at all.
+    options.runtimeModel?.id
+      ? `Current runtime model: ${options.runtimeModel.provider ? `${options.runtimeModel.provider}/` : ""}${options.runtimeModel.id}${options.runtimeModel.name && options.runtimeModel.name !== options.runtimeModel.id ? ` (${options.runtimeModel.name})` : ""}`
+      : "Current runtime model: not selected",
+    options.mcpServerIds?.length ? `Configured project MCP servers: ${options.mcpServerIds.join(", ")}` : "Configured project MCP servers: none",
+    options.mcpServerIds?.includes("higgsfield")
+      ? "- Higgsfield is configured as an MCP server in this project. For Higgsfield image/video generation in Eggent cloud/web, prefer the `mcp` proxy (`connect`, `search`, `describe`, then tool call) over the `higgsfield` CLI. Do not run `higgsfield auth login`, `higgsfield account status`, or `higgsfield workspace set` unless the user explicitly asks for CLI setup; MCP OAuth is separate from CLI auth and is already persisted after successful authentication."
+      : "",
+    // Supplied by the operator of this deployment. Eggent does not know what it
+    // says, so it is quoted rather than summarized, and it outranks guesswork.
+    options.deploymentContext
+      ? [
+          "",
+          "Deployment context (written by the operator of this deployment, authoritative):",
+          options.deploymentContext,
+          "Answer from the facts in this block whenever the user asks what this service costs, how to pay, what the trial covers, where to get support, or whether a free alternative exists. Never invent terms, prices or contacts that are not written here, and never say you have no information about it while this block exists.",
+          "This block is addressed to you, not to the user: it describes them in the third person. Do not paste or quote it. Say only the part that answers the question, in your own words, in the user's language, speaking to them directly.",
+        ].join("\n")
+      : "",
+    "",
+    "Project instructions:",
+    options.projectInstructions?.trim() || "No project-specific instructions configured.",
+    ...formatProjectSkillsContext({ projectId: options.projectId, cwd: options.cwd, skills: options.projectSkills ?? [] }),
+    ...formatChatFilesContext(options.chatFiles ?? []),
     options.projectSkills?.length
       ? "- Project-local skills are listed above and are available as Pi skills in this project scope. Prefer those exact skill paths when activating a project skill."
       : "- No project-local skills are installed for this project.",
     options.chatFiles?.length
       ? "- Uploaded chat files are listed above. Read them by absolute path when the user asks about attached/uploaded files."
       : "- No uploaded chat files are currently attached to this chat.",
-    options.usageToolAvailable
-      ? "- eggent_usage_status for any question about balance, remaining credits/tokens, quota, limits, plan or trial. Call it and answer with the real numbers; never guess and never tell the user this information is unavailable to you."
-      : "",
-    "- eggent_list_pipelines / eggent_start_pipeline for existing configured pipelines.",
-    "- eggent_start_project_sequence for ad-hoc requests that name project ids in order, such as 'first in project A, then in project B'.",
-  ]
-    .filter(Boolean)
-    .join("\n");
+  ];
+
+  return [...shared, ...thisWorkspace].filter(Boolean).join("\n");
 }
 
 function getEggentPiSessionDir(): string {

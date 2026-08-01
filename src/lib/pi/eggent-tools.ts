@@ -858,9 +858,16 @@ export async function createEggentPiTools(options: {
     }),
   ];
 
+  // Registered on every run, including web ones with no Telegram attached.
+  //
+  // Providers cache a prompt by its exact prefix, and the tool list is part of
+  // that prefix, so a tool that appears only on Telegram runs splits the fleet
+  // into two cache lineages. The Telegram one stays warm because most traffic
+  // arrives there; the web one goes cold, and a cold call costs about three
+  // times a warm one. One list keeps both on the same warm prefix, and a run
+  // with no Telegram channel simply says so when the tool is called.
   const telegramRuntime = getTelegramRuntimeData(options.toolRuntimeData);
-  if (telegramRuntime) {
-    tools.push(defineTool({
+  tools.push(defineTool({
       name: "telegram_send_file",
       label: "Send File to Telegram",
       description: "Send a local file to the current Telegram chat as a document. Use this when the user asks to send, return, export, download, or share a file in Telegram.",
@@ -869,6 +876,13 @@ export async function createEggentPiTools(options: {
         caption: Type.Optional(Type.String({ description: "Optional caption to include with the file." })),
       }),
       execute: async (_toolCallId, params) => {
+        if (!telegramRuntime) {
+          return textResult(JSON.stringify({
+            success: false,
+            error: "This run is not attached to a Telegram chat, so there is nowhere to send the file.",
+            note: "Tell the user the file is on disk and give its path. Offer Telegram only if they connect a bot.",
+          }, null, 2));
+        }
         try {
           const resolvedPath = resolveOutgoingTelegramFilePath(options, params.file_path);
           const stat = await fs.stat(resolvedPath);
@@ -907,8 +921,7 @@ export async function createEggentPiTools(options: {
           return textResult(JSON.stringify({ success: false, error: error instanceof Error ? error.message : "Failed to send file to Telegram." }, null, 2));
         }
       },
-    }));
-  }
+  }));
 
   return { tools, cleanup: async () => {} };
 }
