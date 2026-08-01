@@ -327,6 +327,46 @@ export async function getEggentAiModelLockState(cwd = process.cwd()): Promise<Eg
 }
 
 /**
+ * The managed gateway token this workspace was provisioned with.
+ *
+ * It normally lives in auth.json, but that file is user-editable and the
+ * credential can be lost - by a disconnect, by overwriting the entry with
+ * something else, by hand. The deployment also passes the same token in the
+ * environment, so the workspace can always recover its own included access
+ * instead of asking the user for a key they were never given.
+ */
+function managedTokenFromEnv(): string | null {
+  const candidates = [process.env.EGGENT_MANAGED_AI_TOKEN, process.env.EGGENT_USAGE_API_TOKEN];
+  for (const candidate of candidates) {
+    const token = candidate?.trim();
+    if (token && token.startsWith("eggw_")) return token;
+  }
+  return null;
+}
+
+/** Whether the workspace can be put back on the included model at all. */
+export async function managedCredentialRecoverable(): Promise<boolean> {
+  return Boolean((await getManagedProviderId()) || managedTokenFromEnv());
+}
+
+/**
+ * Put the managed token back into auth.json when it is missing.
+ *
+ * Overwrites whatever sits under the managed provider id: if it is not the
+ * gateway token, it cannot serve the included model anyway.
+ */
+async function restoreManagedCredential(): Promise<string | null> {
+  const existing = await getManagedProviderId();
+  if (existing) return existing;
+  const token = managedTokenFromEnv();
+  if (!token) return null;
+  const auth = await readAuthJson();
+  auth["eggent-ai"] = { type: "api_key", key: token } as never;
+  await writeAuthJson(auth);
+  return "eggent-ai";
+}
+
+/**
  * The provider backed by the managed gateway credential, identified by its
  * `eggw_` token prefix. Returns null when no managed credential is present.
  */
@@ -366,7 +406,7 @@ export async function disableEggentAiModelLock(cwd = process.cwd()): Promise<voi
  * credential the workspace already had.
  */
 export async function enableEggentAiModelLock(cwd = process.cwd()): Promise<void> {
-  const managedProvider = await getManagedProviderId();
+  const managedProvider = (await getManagedProviderId()) || (await restoreManagedCredential());
   if (!managedProvider) {
     throw new Error("This workspace has no Eggent AI credential to switch back to.");
   }
@@ -401,6 +441,16 @@ export async function updatePiModelDefaults(options: {
   const settingsManager = getPiSettingsManager(cwd);
   const provider = options.provider?.trim();
   const model = options.model?.trim();
+
+  // Choosing the included model back is a switch, not a sign-in. Users get here
+  // by picking Eggent AI from the provider list and pressing save, and asking
+  // them for an API key at that point asks for a key they were never given.
+  if (provider && (provider === "eggent-ai" || provider === (await getManagedProviderId()))) {
+    if (await managedCredentialRecoverable()) {
+      await enableEggentAiModelLock(cwd);
+      return getPiSettingsState(cwd);
+    }
+  }
 
   // A provider can be picked from the catalog long before it has a key, and
   // saving that selection used to succeed silently: every later message then
@@ -605,9 +655,11 @@ export async function getPiModelsState() {
     };
   }
 
-  // The managed credential survives switching to your own provider, so the UI
-  // can offer a way back instead of an empty API-key box for a key that exists.
+  // The managed credential survives switching to your own provider, and can be
+  // recovered from the environment even when auth.json lost it, so the UI can
+  // always offer a way back instead of an empty API-key box.
   const managedProviderId = await getManagedProviderId();
+  const managedRecoverable = await managedCredentialRecoverable();
 
   return {
     agentDir: getPiAgentDir(),
@@ -616,7 +668,7 @@ export async function getPiModelsState() {
     modelsFile: getPiModelsPath(),
     modelLock,
     imageGeneration,
-    managed: { available: Boolean(managedProviderId), providerId: managedProviderId, label: modelLock.label },
+    managed: { available: managedRecoverable, providerId: managedProviderId || "eggent-ai", label: modelLock.label },
     current: currentModel ? {
       provider: settings.defaultProvider,
       providerName: modelRegistry.getProviderDisplayName(settings.defaultProvider || currentModel.provider),

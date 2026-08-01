@@ -670,6 +670,16 @@ export default function SettingsPage() {
                       </div>
                     ) : null}
 
+                    {/* Picking the included model from the list is the obvious way
+                        back, so the action belongs here rather than only in the
+                        card above - and it is a switch, not a sign-in. */}
+                    {selectedProviderIsManaged && managedAvailable ? (
+                      <Button onClick={returnToEggentAi} disabled={returningToManaged} className="gap-2">
+                        {returningToManaged ? <Loader2 className="size-4 animate-spin" /> : <PlugZap className="size-4" />}
+                        {t("settings.managedReturn.cta", { label: managedLabel })}
+                      </Button>
+                    ) : null}
+
                     {selectedOauthProvider && !selectedProviderConnected ? (
                       <Button onClick={startOAuthLogin} disabled={oauthSaving} className="gap-2">
                         {oauthSaving ? <Loader2 className="size-4 animate-spin" /> : <PlugZap className="size-4" />}
