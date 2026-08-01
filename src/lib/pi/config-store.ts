@@ -102,6 +102,11 @@ async function readEggentAiLockOverride(): Promise<{ disabled?: boolean }> {
   }
 }
 
+/** Back to the default state: no override file rather than an empty one. */
+async function removeEggentAiLockOverride(): Promise<void> {
+  await fs.rm(getEggentAiLockOverridePath(), { force: true });
+}
+
 async function writeEggentAiLockOverride(content: { disabled?: boolean }): Promise<void> {
   const filePath = getEggentAiLockOverridePath();
   await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
@@ -410,10 +415,19 @@ export async function enableEggentAiModelLock(cwd = process.cwd()): Promise<void
   if (!managedProvider) {
     throw new Error("This workspace has no Eggent AI credential to switch back to.");
   }
-  await writeEggentAiLockOverride({});
+  await removeEggentAiLockOverride();
+
+  // The model id, never the display label: settings.json is matched against the
+  // registry by exact id, and a label that matches nothing silently falls back
+  // to whatever model happens to be first - which is some other provider.
+  const modelRuntime = await getPiModelRuntime();
+  const modelRegistry = await getPiModelRegistry(modelRuntime);
+  await modelRegistry.refresh();
+  const managedModel = modelRegistry.getAll().find((model) => model.provider === managedProvider);
+
   const settingsManager = getPiSettingsManager(cwd);
   settingsManager.setDefaultProvider(managedProvider);
-  settingsManager.setDefaultModel(eggentAiModelLabel());
+  settingsManager.setDefaultModel(managedModel?.id || managedProvider);
   await settingsManager.flush();
 }
 
@@ -534,8 +548,17 @@ export async function getResolvedPiRuntimeModel(projectId?: string | null): Prom
       )
     : undefined;
   const globalConfiguredModel = findAvailableModel(settingsManager.getDefaultProvider(), settingsManager.getDefaultModel());
-  const configuredModel = projectConfiguredModel || globalConfiguredModel || availableModels[0];
   const modelLock = await getEggentAiModelLockState(cwd);
+  // Same rule as the session: on the managed model, resolve it from the managed
+  // credential so the reported context window belongs to the model that will run.
+  const managedModel = modelLock.locked
+    ? await (async () => {
+        const managedProvider = await getManagedProviderId();
+        if (!managedProvider) return undefined;
+        return availableModels.find((model) => model.provider === managedProvider);
+      })()
+    : undefined;
+  const configuredModel = managedModel || projectConfiguredModel || globalConfiguredModel || availableModels[0];
 
   return {
     model: configuredModel

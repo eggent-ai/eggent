@@ -342,11 +342,16 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
   const globalConfiguredModel = findAvailableModel(settingsManager.getDefaultProvider(), settingsManager.getDefaultModel());
   const modelLock = await getEggentAiModelLockState(cwd);
 
-  // When the managed model is enforced, resolve it from the managed credential on
-  // every run instead of trusting settings.json / model.json. Those files live in
-  // the workspace and the agent can edit them with bash, so API-level checks alone
-  // would not hold.
-  const enforcedManagedModel = modelLock.enforced
+  // Whenever the workspace is on the managed model, resolve it from the managed
+  // credential rather than trusting settings.json / models.json.
+  //
+  // Under enforcement this is a security property: those files live in the
+  // workspace and the agent can edit them with bash, so API-level checks alone
+  // would not hold. It matters just as much unenforced: the chat footer reports
+  // the lock label while the run resolves settings by exact model id, so one
+  // stale or mistyped id sent the run to whichever provider happened to be first
+  // in the list while the UI kept saying Eggent AI.
+  const managedModel = modelLock.locked
     ? await (async () => {
         const managedProvider = await getManagedProviderId();
         if (!managedProvider) return undefined;
@@ -355,7 +360,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     : undefined;
 
   const configuredModel =
-    enforcedManagedModel || projectConfiguredModel || globalConfiguredModel || availableModels[0];
+    managedModel || projectConfiguredModel || globalConfiguredModel || availableModels[0];
   const project = projectId ? await getProject(projectId) : null;
   if (projectId) {
     await ensureProjectMcpAdapterConfig(projectId, cwd);
