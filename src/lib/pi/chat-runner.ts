@@ -1,6 +1,7 @@
 import { createUIMessageStream } from "ai";
 import type { UIMessage } from "ai";
 import { createEggentPiSession } from "@/lib/pi/session";
+import { getPiModelsState } from "@/lib/pi/config-store";
 import { cancelPendingInteractionsForRun } from "@/lib/pi/pending-interactions";
 import { retainPiMcpOAuthSession, retainPiScheduleSession, takeRetainedPiScheduleSession } from "@/lib/pi/schedule-host";
 import type { PiChatRunOptions, PiRuntimeStats, PiToolRecord } from "@/lib/pi/types";
@@ -340,9 +341,40 @@ function isEmptyZeroTokenTurn(
   return (usage?.total ?? 0) === 0 && (usage?.input ?? 0) === 0 && (usage?.output ?? 0) === 0;
 }
 
+/**
+ * Why a turn produced nothing, checked against the workspace's own settings first.
+ *
+ * A zero-token turn usually means the selected provider cannot be reached at
+ * all, and by far the most common reason is that it has no credential in this
+ * workspace - something we can verify rather than guess at. Blaming the
+ * provider for it sent at least one user to disconnect and re-add providers
+ * until they had none left, so name the real cause when we know it.
+ */
+async function emptyTurnError(): Promise<Error> {
+  try {
+    const state = await getPiModelsState();
+    const provider = state.settings?.defaultProvider?.trim();
+    if (!provider) {
+      return new Error(
+        "No model is selected for this workspace. Open Settings, pick a provider you have connected, and choose its model."
+      );
+    }
+    const connected = (state.availableModels ?? []).some((model) => model.provider === provider);
+    if (!connected) {
+      const name = state.providers?.find((item) => item.id === provider)?.name || provider;
+      return new Error(
+        `${name} is selected as the default provider, but this workspace has no credential for it, so nothing can run. Open Settings and connect ${name}, or switch to a provider that is already connected.`
+      );
+    }
+  } catch {
+    // Fall through to the generic message rather than hiding the original failure.
+  }
+  return emptyZeroTokenTurnError();
+}
+
 function emptyZeroTokenTurnError(): Error {
   return new Error(
-    "Model returned an empty response with 0 tokens. The provider may be rate-limiting, out of quota, or refusing this model. Try another model or reconnect the provider."
+    "Model returned an empty response with 0 tokens. The provider may be rate-limiting or out of quota, or the model may be refusing this request."
   );
 }
 
@@ -619,7 +651,7 @@ export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?:
     currentPromptUsage = currentPromptUsage ?? subtractUsage(getSessionTokenUsage(session), baselineUsage);
     lastTurnUsage = lastTurnUsage ?? currentPromptUsage;
     if (isEmptyZeroTokenTurn(assistantText, tools.values(), currentPromptUsage)) {
-      throw emptyZeroTokenTurnError();
+      throw await emptyTurnError();
     }
     await persistAssistantMessage({
       chatId: options.chatId,
@@ -911,7 +943,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         currentPromptUsage = currentPromptUsage ?? subtractUsage(getSessionTokenUsage(session), baselineUsage);
         lastTurnUsage = lastTurnUsage ?? currentPromptUsage;
         if (isEmptyZeroTokenTurn(assistantText, tools.values(), currentPromptUsage)) {
-          throw emptyZeroTokenTurnError();
+          throw await emptyTurnError();
         }
         const finalStats = buildPiRuntimeStats(session, currentPromptUsage, addUsage(baselineUsage, currentPromptUsage));
         emitStats(finalStats);

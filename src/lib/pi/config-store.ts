@@ -176,6 +176,16 @@ export async function deletePiCredential(provider: string): Promise<void> {
   }
 
   const auth = await readAuthJson();
+  // The managed gateway token is not the user's to delete, and deleting it is
+  // unrecoverable from inside the workspace: it also backs image generation and
+  // is the only way back to the included model. Switching away from Eggent AI
+  // already unlocks the model choice without touching this credential.
+  const key = auth[provider]?.key;
+  if (typeof key === "string" && key.startsWith("eggw_")) {
+    throw new Error(
+      "This is the included Eggent AI credential and cannot be removed here. Pick another provider to stop using it; it stays available so you can switch back."
+    );
+  }
   delete auth[provider];
   await writeAuthJson(auth);
 }
@@ -347,6 +357,26 @@ export async function disableEggentAiModelLock(cwd = process.cwd()): Promise<voi
   }
 }
 
+/**
+ * Put the workspace back on the included Eggent AI model.
+ *
+ * Switching to your own provider only sets an override file; the managed
+ * credential stays. Without this there was no way back short of editing files
+ * on disk, and the settings screen offered an empty API-key box for a
+ * credential the workspace already had.
+ */
+export async function enableEggentAiModelLock(cwd = process.cwd()): Promise<void> {
+  const managedProvider = await getManagedProviderId();
+  if (!managedProvider) {
+    throw new Error("This workspace has no Eggent AI credential to switch back to.");
+  }
+  await writeEggentAiLockOverride({});
+  const settingsManager = getPiSettingsManager(cwd);
+  settingsManager.setDefaultProvider(managedProvider);
+  settingsManager.setDefaultModel(eggentAiModelLabel());
+  await settingsManager.flush();
+}
+
 export async function getPiSettingsState(cwd = process.cwd()) {
   const settingsManager = getPiSettingsManager(cwd);
   const globalSettings = settingsManager.getGlobalSettings();
@@ -371,6 +401,28 @@ export async function updatePiModelDefaults(options: {
   const settingsManager = getPiSettingsManager(cwd);
   const provider = options.provider?.trim();
   const model = options.model?.trim();
+
+  // A provider can be picked from the catalog long before it has a key, and
+  // saving that selection used to succeed silently: every later message then
+  // failed with a generic model error while the workspace looked configured.
+  // Refuse the selection instead, and say what is missing.
+  if (provider) {
+    const modelRuntime = await getPiModelRuntime();
+    const modelRegistry = await getPiModelRegistry(modelRuntime);
+    await modelRegistry.refresh();
+    const available = modelRegistry.getAvailable().filter((entry) => entry.provider === provider);
+    if (available.length === 0) {
+      const name = modelRegistry.getProviderDisplayName(provider) || provider;
+      throw new Error(
+        `${name} has no credentials in this workspace yet, so it cannot be made the default. Connect it first - add its API key or sign in - and then pick the model.`
+      );
+    }
+    if (model && !available.some((entry) => entry.id === model)) {
+      const name = modelRegistry.getProviderDisplayName(provider) || provider;
+      throw new Error(`${name} has no available model "${model}" in this workspace.`);
+    }
+  }
+
   if (provider && model) {
     settingsManager.setDefaultModelAndProvider(provider, model);
   } else if (provider) {
@@ -553,6 +605,10 @@ export async function getPiModelsState() {
     };
   }
 
+  // The managed credential survives switching to your own provider, so the UI
+  // can offer a way back instead of an empty API-key box for a key that exists.
+  const managedProviderId = await getManagedProviderId();
+
   return {
     agentDir: getPiAgentDir(),
     authFile: getPiAuthPath(),
@@ -560,6 +616,7 @@ export async function getPiModelsState() {
     modelsFile: getPiModelsPath(),
     modelLock,
     imageGeneration,
+    managed: { available: Boolean(managedProviderId), providerId: managedProviderId, label: modelLock.label },
     current: currentModel ? {
       provider: settings.defaultProvider,
       providerName: modelRegistry.getProviderDisplayName(settings.defaultProvider || currentModel.provider),

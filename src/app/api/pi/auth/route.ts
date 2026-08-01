@@ -57,7 +57,14 @@ export async function DELETE(req: NextRequest) {
   }
 
   const settings = await getPiSettingsState();
-  await deletePiCredential(provider);
+  try {
+    await deletePiCredential(provider);
+  } catch (error) {
+    return NextResponse.json(
+      { error: error instanceof Error ? error.message : "Failed to remove the credential" },
+      { status: 400 }
+    );
+  }
   if (settings.defaultProvider === provider) {
     await setPiDefaultToFirstAvailableModel();
   }

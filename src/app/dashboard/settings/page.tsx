@@ -87,6 +87,11 @@ interface PiState {
     enforced?: boolean;
     selfHostedUrl?: string;
   };
+  managed?: {
+    available: boolean;
+    providerId?: string | null;
+    label?: string;
+  };
   imageGeneration?: {
     enabled: boolean;
     provider: "eggent" | "none";
@@ -125,6 +130,7 @@ export default function SettingsPage() {
   const [piLoading, setPiLoading] = useState(true);
   const [piError, setPiError] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState("");
+  const [returningToManaged, setReturningToManaged] = useState(false);
   const [apiKeyEnv, setApiKeyEnv] = useState("");
   const [savingProvider, setSavingProvider] = useState(false);
   const [oauthSaving, setOauthSaving] = useState(false);
@@ -268,6 +274,22 @@ export default function SettingsPage() {
       setPiError(error instanceof Error ? error.message : t("settings.errors.saveProviderKey"));
     } finally {
       setSavingProvider(false);
+    }
+  }
+
+  async function returnToEggentAi() {
+    try {
+      setReturningToManaged(true);
+      setPiError(null);
+      const res = await fetch("/api/pi/auth/eggent", { method: "POST" });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(json?.error || t("settings.errors.returnToManaged"));
+      setPiState(json);
+      await loadPiState();
+    } catch (error) {
+      setPiError(error instanceof Error ? error.message : t("settings.errors.returnToManaged"));
+    } finally {
+      setReturningToManaged(false);
     }
   }
 
@@ -438,6 +460,11 @@ export default function SettingsPage() {
   const selectedProviderName = selectedProviderState?.name || selectedOauthProvider?.name || selectedApiKeyProvider?.name || defaultProviderSelection;
   const selectedProviderConnected = Boolean(defaultProviderSelection && modelChoices.length > 0);
   const selectedProviderHasStoredCredential = Boolean(piState?.credentials.some((item) => item.provider === defaultProviderSelection));
+  const managedProviderId = piState?.managed?.providerId || "";
+  const managedLabel = piState?.managed?.label || piState?.modelLock?.label || "Eggent AI";
+  // Offered only when the credential is actually there and is not already in use.
+  const managedAvailable = Boolean(piState?.managed?.available) && piState?.settings?.defaultProvider !== managedProviderId;
+  const selectedProviderIsManaged = Boolean(managedProviderId) && defaultProviderSelection === managedProviderId;
   const currentModelIsAvailable = Boolean(piState?.current?.model?.available);
   const modelLocked = Boolean(piState?.modelLock?.locked);
   const modelLockLabel = piState?.modelLock?.label || "Eggent AI";
@@ -493,39 +520,32 @@ export default function SettingsPage() {
 
                 {piLoading ? <div className="flex items-center gap-2 text-sm text-muted-foreground"><Loader2 className="size-4 animate-spin" /> Loading providers...</div> : null}
 
-                {currentModelIsAvailable ? (
-                  <div className="rounded-lg border p-4">
-                    <div className="flex flex-wrap items-start justify-between gap-3">
-                      <div>
-                        <div className="text-xs font-mono text-muted-foreground">current default</div>
-                        <h4 className="font-medium">{piState?.current?.providerName || piState?.current?.provider}</h4>
-                        <p className="text-sm text-muted-foreground">
+                {/* What is answering right now. One statement, no actions: every
+                    action lives in the numbered steps below, so there is exactly
+                    one place to disconnect a provider. */}
+                {currentModelIsAvailable || modelLocked ? (
+                  <div className="rounded-lg border bg-muted/30 p-4">
+                    <div className="text-xs font-mono text-muted-foreground">{t("settings.activeNow")}</div>
+                    <h4 className="font-medium">{modelLocked ? modelLockLabel : (piState?.current?.providerName || piState?.current?.provider)}</h4>
+                    <p className="text-sm text-muted-foreground">
+                      {modelLocked ? t("settings.modelLock.includedCredits") : (
+                        <>
                           <span className="font-mono">{piState?.current?.model?.id}</span>
-                          {!modelLocked && currentCredential?.type ? ` · ${currentCredential.type === "oauth" ? "OAuth/subscription" : "API key"}` : ""}
-                          {!modelLocked && piState?.settings?.defaultThinkingLevel ? ` · thinking ${piState.settings.defaultThinkingLevel}` : ""}
-                        </p>
-                      </div>
-                      {!modelLocked && piState?.current?.provider && piState.current.stored ? (
-                        <Button variant="outline" className="gap-2 text-destructive" onClick={() => logoutProvider(piState.current?.provider || "")}>
-                          <LogOut className="size-4" />
-                          Logout
-                        </Button>
-                      ) : null}
-                    </div>
+                          {currentCredential?.type ? ` · ${currentCredential.type === "oauth" ? t("settings.authOauth") : t("settings.authApiKey")}` : ""}
+                          {piState?.settings?.defaultThinkingLevel ? ` · ${t("settings.thinking")} ${piState.settings.defaultThinkingLevel}` : ""}
+                        </>
+                      )}
+                    </p>
                   </div>
                 ) : null}
 
                 {modelLocked ? (
                   <div className="rounded-lg border p-4 space-y-3">
-                    <div>
-                      <div className="text-xs font-mono text-muted-foreground">managed</div>
-                      <h4 className="font-medium">{modelLockLabel}</h4>
-                      <p className="text-sm text-muted-foreground">
-                        {modelLockEnforced
-                          ? t("settings.modelLock.enforcedDescription", { label: modelLockLabel })
-                          : "Your workspace uses included Eggent AI credits. To use your own provider key, log out from Eggent AI first."}
-                      </p>
-                    </div>
+                    <p className="text-sm text-muted-foreground">
+                      {modelLockEnforced
+                        ? t("settings.modelLock.enforcedDescription", { label: modelLockLabel })
+                        : t("settings.modelLock.switchAwayHint", { label: modelLockLabel })}
+                    </p>
                     {modelLockEnforced ? (
                       <Button variant="outline" className="gap-2" asChild>
                         <a href={modelLockSelfHostedUrl} target="_blank" rel="noreferrer noopener">
@@ -535,10 +555,26 @@ export default function SettingsPage() {
                       </Button>
                     ) : (
                       <Button variant="outline" className="gap-2" onClick={() => logoutProvider("eggent-ai")}>
-                        <LogOut className="size-4" />
-                        Use my own provider key
+                        <KeyRound className="size-4" />
+                        {t("settings.modelLock.useOwnProvider")}
                       </Button>
                     )}
+                  </div>
+                ) : null}
+
+                {/* The way back. The managed credential survives switching away,
+                    so this is a state change, not a re-authentication - which is
+                    why it must not be an empty API-key box. */}
+                {!modelLocked && managedAvailable ? (
+                  <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 space-y-3">
+                    <div>
+                      <h4 className="font-medium">{t("settings.managedReturn.title", { label: managedLabel })}</h4>
+                      <p className="text-sm text-muted-foreground">{t("settings.managedReturn.description", { label: managedLabel })}</p>
+                    </div>
+                    <Button variant="outline" className="gap-2" onClick={returnToEggentAi} disabled={returningToManaged}>
+                      {returningToManaged ? <Loader2 className="size-4 animate-spin" /> : <PlugZap className="size-4" />}
+                      {t("settings.managedReturn.cta", { label: managedLabel })}
+                    </Button>
                   </div>
                 ) : null}
 
@@ -560,7 +596,7 @@ export default function SettingsPage() {
                 {!modelLocked ? <>
                 <div className="rounded-lg border p-4 space-y-3">
                   <div>
-                    <div className="text-xs font-mono text-muted-foreground">provider</div>
+                    <div className="text-xs font-mono text-muted-foreground">{t("settings.step", { number: 1 })}</div>
                     <h4 className="font-medium">{t("settings.chooseProvider")}</h4>
                     <p className="text-xs text-muted-foreground">{t("settings.chooseProviderDescription")}</p>
                   </div>
@@ -582,39 +618,64 @@ export default function SettingsPage() {
                   </Select>
                 </div>
 
+                {/* Step 2 shows exactly one way to connect: the sign-in button for
+                    an OAuth provider, the key field for an API one. The managed
+                    provider is neither - it is already connected, so offering an
+                    empty key box for it only looked like the key was lost. */}
                 {defaultProviderSelection ? (
                   <div className="rounded-lg border p-4 space-y-4">
                     <div>
-                      <div className="text-xs font-mono text-muted-foreground">/login</div>
+                      <div className="text-xs font-mono text-muted-foreground">{t("settings.step", { number: 2 })}</div>
                       <h4 className="font-medium">{t("settings.connectProvider", { provider: selectedProviderName })}</h4>
                       <p className="text-xs text-muted-foreground">
-                        {selectedProviderConnected
-                          ? t("settings.providerConnectedDescription")
-                          : t("settings.providerDisconnectedDescription")}
+                        {selectedProviderIsManaged
+                          ? t("settings.managedProviderHint", { label: managedLabel })
+                          : selectedProviderConnected
+                            ? t("settings.providerConnectedDescription")
+                            : t("settings.providerDisconnectedDescription")}
                       </p>
                     </div>
+
+                    {selectedProviderConnected ? (
+                      <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-emerald-600/30 bg-emerald-600/5 px-3 py-2">
+                        <span className="text-sm text-emerald-700 dark:text-emerald-400">
+                          {t("settings.providerConnectedBadge", { provider: selectedProviderName })}
+                        </span>
+                        {selectedProviderState?.stored && !selectedProviderIsManaged ? (
+                          <Button variant="ghost" size="sm" className="gap-2 text-destructive" onClick={() => logoutProvider(defaultProviderSelection)}>
+                            <LogOut className="size-4" /> {t("settings.disconnect")}
+                          </Button>
+                        ) : null}
+                      </div>
+                    ) : null}
 
                     {selectedOauthProvider && !selectedProviderConnected ? (
                       <Button onClick={startOAuthLogin} disabled={oauthSaving} className="gap-2">
                         {oauthSaving ? <Loader2 className="size-4 animate-spin" /> : <PlugZap className="size-4" />}
-                        Login with subscription
+                        {t("settings.loginWithSubscription")}
                       </Button>
                     ) : null}
 
-                    {selectedApiKeyProvider ? (
+                    {selectedApiKeyProvider && !selectedProviderIsManaged ? (
                       <div className="space-y-3">
+                        <Label className="text-xs text-muted-foreground">
+                          {selectedProviderHasStoredCredential ? t("settings.replaceKeyLabel") : t("settings.apiKeyLabel", { provider: selectedProviderName })}
+                        </Label>
                         <div className="grid gap-3 md:grid-cols-[1fr_auto]">
-                          <Input value={apiKey} onChange={(event) => setApiKey(event.target.value)} type="password" placeholder={`API key for ${selectedProviderName}`} />
+                          <Input value={apiKey} onChange={(event) => setApiKey(event.target.value)} type="password" placeholder={t("settings.apiKeyPlaceholder", { provider: selectedProviderName })} />
                           <Button onClick={saveProviderKey} disabled={savingProvider || !apiKey.trim()} className="gap-2">
                             {savingProvider ? <Loader2 className="size-4 animate-spin" /> : <KeyRound className="size-4" />}
                             {selectedProviderHasStoredCredential ? t("settings.replaceKey") : t("settings.saveKey")}
                           </Button>
                         </div>
-                        <Textarea value={apiKeyEnv} onChange={(event) => setApiKeyEnv(event.target.value)} rows={4} className="font-mono text-xs" placeholder={t("settings.providerEnvPlaceholder")} />
+                        <details>
+                          <summary className="cursor-pointer text-xs text-muted-foreground">{t("settings.providerEnvSummary")}</summary>
+                          <Textarea value={apiKeyEnv} onChange={(event) => setApiKeyEnv(event.target.value)} rows={4} className="mt-2 font-mono text-xs" placeholder={t("settings.providerEnvPlaceholder")} />
+                        </details>
                       </div>
                     ) : null}
 
-                    {!selectedOauthProvider && !selectedApiKeyProvider ? (
+                    {!selectedOauthProvider && !selectedApiKeyProvider && !selectedProviderIsManaged ? (
                       <p className="text-sm text-muted-foreground">{t("settings.noLoginMethod")}</p>
                     ) : null}
                   </div>
@@ -642,7 +703,7 @@ export default function SettingsPage() {
                 {selectedProviderConnected ? (
                   <div className="rounded-lg border p-4 space-y-3">
                     <div>
-                      <div className="text-xs font-mono text-muted-foreground">/model</div>
+                      <div className="text-xs font-mono text-muted-foreground">{t("settings.step", { number: 3 })}</div>
                       <h4 className="font-medium">{t("settings.chooseModel", { provider: selectedProviderName })}</h4>
                       <p className="text-xs text-muted-foreground">{t("settings.chooseModelDescription")}</p>
                     </div>
@@ -676,11 +737,6 @@ export default function SettingsPage() {
                         {t("settings.saveModel")}
                       </Button>
                     </div>
-                    {selectedProviderState?.stored ? (
-                      <Button variant="ghost" className="gap-2 px-0 text-destructive" onClick={() => logoutProvider(defaultProviderSelection)}>
-                        <LogOut className="size-4" /> {t("settings.logoutFromProvider", { provider: selectedProviderName })}
-                      </Button>
-                    ) : null}
                   </div>
                 ) : null}
 
