@@ -2,6 +2,7 @@ import { createUIMessageStream } from "ai";
 import type { UIMessage } from "ai";
 import { createEggentPiSession } from "@/lib/pi/session";
 import { getPiModelsState } from "@/lib/pi/config-store";
+import { getServerTranslator } from "@/i18n/server";
 import { cancelPendingInteractionsForRun } from "@/lib/pi/pending-interactions";
 import { retainPiMcpOAuthSession, retainPiScheduleSession, takeRetainedPiScheduleSession } from "@/lib/pi/schedule-host";
 import type { PiChatRunOptions, PiRuntimeStats, PiToolRecord } from "@/lib/pi/types";
@@ -37,12 +38,13 @@ function stringifyForDisplay(value: unknown): string {
   }
 }
 
-function formatPiChatError(error: unknown): string {
+async function formatPiChatError(error: unknown): Promise<string> {
+  const t = await getServerTranslator();
   const raw = error instanceof Error ? error.message : String(error);
   const compact = raw.replace(/\s+/g, " ").trim();
-  const message = compact || "The model stopped before producing a final response.";
+  const message = compact || t("chat.errors.stoppedEarly");
   const short = message.length > 500 ? `${message.slice(0, 500)}...` : message;
-  return `Generation failed: ${short}`;
+  return t("chat.errors.generationFailed", { details: short });
 }
 
 export interface EggentActionNotice {
@@ -351,31 +353,22 @@ function isEmptyZeroTokenTurn(
  * until they had none left, so name the real cause when we know it.
  */
 async function emptyTurnError(): Promise<Error> {
+  const t = await getServerTranslator();
   try {
     const state = await getPiModelsState();
     const provider = state.settings?.defaultProvider?.trim();
     if (!provider) {
-      return new Error(
-        "No model is selected for this workspace. Open Settings, pick a provider you have connected, and choose its model."
-      );
+      return new Error(t("chat.errors.noModelSelected"));
     }
     const connected = (state.availableModels ?? []).some((model) => model.provider === provider);
     if (!connected) {
       const name = state.providers?.find((item) => item.id === provider)?.name || provider;
-      return new Error(
-        `${name} is selected as the default provider, but this workspace has no credential for it, so nothing can run. Open Settings and connect ${name}, or switch to a provider that is already connected.`
-      );
+      return new Error(t("chat.errors.providerNoCredential", { provider: name }));
     }
   } catch {
     // Fall through to the generic message rather than hiding the original failure.
   }
-  return emptyZeroTokenTurnError();
-}
-
-function emptyZeroTokenTurnError(): Error {
-  return new Error(
-    "Model returned an empty response with 0 tokens. The provider may be rate-limiting or out of quota, or the model may be refusing this request."
-  );
+  return new Error(t("chat.errors.emptyResponse"));
 }
 
 function hasScheduleManagementIntent(text: string): boolean {
@@ -974,7 +967,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         // language, so show that instead of the raw "Generation failed: ..." text.
         const errorText = notice
           ? [notice.title, notice.body].filter(Boolean).join("\n\n")
-          : formatPiChatError(error);
+          : await formatPiChatError(error);
         closeTextPart();
         if (notice) {
           safeWrite({
