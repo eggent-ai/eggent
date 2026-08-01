@@ -221,6 +221,15 @@ export default function SettingsPage() {
     }
   }
 
+  /**
+   * Saves everything the page is holding, not just the general settings.
+   *
+   * The model lives in a different store behind its own button, so a user who
+   * picked a model and pressed the page's main Save button got a green
+   * confirmation for settings that never included their model. Whichever button
+   * is pressed, a pending model choice is written too - and if it cannot be
+   * written, the error is shown instead of the success tick.
+   */
   async function handleSaveSettings() {
     if (!settings) return;
     await fetch("/api/settings", {
@@ -228,6 +237,10 @@ export default function SettingsPage() {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(settings),
     });
+    if (modelSelectionDirty) {
+      const savedModel = await saveDefaultModel();
+      if (!savedModel) return;
+    }
     setSaved(true);
     setTimeout(() => setSaved(false), 2000);
   }
@@ -362,10 +375,10 @@ export default function SettingsPage() {
     setDefaultModelSelection(firstModel?.id || "");
   }
 
-  async function saveDefaultModel() {
+  async function saveDefaultModel(): Promise<boolean> {
     const providerId = defaultProviderSelection.trim();
     const modelId = defaultModelSelection.trim();
-    if (!providerId || !modelId) return;
+    if (!providerId || !modelId) return false;
     try {
       setSavingDefaultModel(true);
       setPiError(null);
@@ -377,8 +390,10 @@ export default function SettingsPage() {
       const json = await res.json();
       if (!res.ok) throw new Error(json.error || t("settings.errors.saveDefaultModel"));
       await loadPiState();
+      return true;
     } catch (error) {
       setPiError(error instanceof Error ? error.message : t("settings.errors.saveDefaultModel"));
+      return false;
     } finally {
       setSavingDefaultModel(false);
     }
@@ -465,6 +480,12 @@ export default function SettingsPage() {
   // Offered only when the credential is actually there and is not already in use.
   const managedAvailable = Boolean(piState?.managed?.available) && piState?.settings?.defaultProvider !== managedProviderId;
   const selectedProviderIsManaged = Boolean(managedProviderId) && defaultProviderSelection === managedProviderId;
+  // True while the page holds a model choice the server does not have yet.
+  const modelSelectionDirty = Boolean(defaultProviderSelection && defaultModelSelection) && (
+    piState?.settings?.defaultProvider !== defaultProviderSelection ||
+    piState?.settings?.defaultModel !== defaultModelSelection ||
+    piState?.settings?.defaultThinkingLevel !== defaultThinkingLevel
+  );
   const currentModelIsAvailable = Boolean(piState?.current?.model?.available);
   const modelLocked = Boolean(piState?.modelLock?.locked);
   const modelLockLabel = piState?.modelLock?.label || "Eggent AI";
@@ -702,10 +723,19 @@ export default function SettingsPage() {
 
                 {selectedProviderConnected ? (
                   <div className="rounded-lg border p-4 space-y-3">
-                    <div>
-                      <div className="text-xs font-mono text-muted-foreground">{t("settings.step", { number: 3 })}</div>
-                      <h4 className="font-medium">{t("settings.chooseModel", { provider: selectedProviderName })}</h4>
-                      <p className="text-xs text-muted-foreground">{t("settings.chooseModelDescription")}</p>
+                    <div className="flex flex-wrap items-start justify-between gap-2">
+                      <div>
+                        <div className="text-xs font-mono text-muted-foreground">{t("settings.step", { number: 3 })}</div>
+                        <h4 className="font-medium">{t("settings.chooseModel", { provider: selectedProviderName })}</h4>
+                        <p className="text-xs text-muted-foreground">{t("settings.chooseModelDescription")}</p>
+                      </div>
+                      {/* The model lives in its own store, so say plainly when the
+                          page is holding a choice the workspace does not have yet. */}
+                      {modelSelectionDirty ? (
+                        <Badge variant="outline" className="border-amber-500/40 text-amber-700 dark:text-amber-400">
+                          {t("settings.unsavedModel")}
+                        </Badge>
+                      ) : null}
                     </div>
                     <div className="grid gap-3 md:grid-cols-[1fr_160px_auto]">
                       <Select value={defaultModelSelection} onValueChange={setDefaultModelSelection}>

@@ -50,6 +50,7 @@ const enMessages = {
   "settings.imageGeneration.separateSetup": "Separate setup",
   "settings.imageGeneration.enabledDescription": "Image generation and reference-image editing use Eggent separately from the text/agent model. Image calls consume Eggent AI credits only when they are made.",
   "settings.imageGeneration.disabledDescription": "Image generation is separate from your text/agent model. OAuth logins are not used for images automatically; connect an image provider or enable Eggent later.",
+  "settings.unsavedModel": "Not saved yet",
   "settings.step": "Step {number}",
   "settings.activeNow": "Answering now",
   "settings.authOauth": "signed in",
