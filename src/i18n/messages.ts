@@ -50,7 +50,7 @@ const enMessages = {
   "settings.imageGeneration.ownDescription": "This workspace runs on your own model, so images need your own provider and model too. Switching back to the included model turns both on again.",
   "settings.imageGeneration.selectProvider": "Image provider",
   "settings.imageGeneration.noProviders": "Connect a provider first",
-  "settings.imageGeneration.modelPlaceholder": "Image model id, for example gpt-image-1",
+  "settings.imageGeneration.modelPlaceholder": "Image model id from your provider",
   "settings.imageGeneration.clear": "Turn off",
   "settings.textModel.title": "Text model",
   "settings.textModel.description": "Choose a provider, connect it, then pick its model.",
