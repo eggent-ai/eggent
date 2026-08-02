@@ -14,11 +14,15 @@ import type { PiSessionOptions } from "@/lib/pi/types";
 import { getChatFiles } from "@/lib/storage/chat-files-store";
 import type { ChatFile, ProjectSkillMetadata } from "@/lib/types";
 import {
+  ensureOrchestratorDiskLayout,
   ensureProjectMcpAdapterConfig,
+  GLOBAL_PROJECT_ID,
   getProject,
+  getProjectMemoryPath,
   getWorkDir,
   loadProjectModelSettings,
   loadProjectSkillsMetadata,
+  readProjectContext,
 } from "@/lib/storage/project-store";
 import { deploymentContext, ensureWebSearchWorkflow, fallbackRuntimeModel, getEggentAiModelLockState, getManagedProviderId, getPiModelRegistry, getPiModelRuntime, getPiSettingsManager } from "@/lib/pi/config-store";
 import { isUsageProviderConfigured } from "@/lib/usage/usage-provider";
@@ -118,7 +122,8 @@ function formatChatFilesContext(chatFiles: ChatFile[]): string[] {
 }
 
 function formatProjectSkillsContext(options: { projectId?: string; cwd: string; skills: ProjectSkillMetadata[] }): string[] {
-  if (!options.projectId || options.skills.length === 0) return [];
+  if (options.skills.length === 0) return [];
+  const scope = options.projectId ? "project" : "orchestrator";
   const rows = options.skills
     .map((skill) => {
       const skillFile = path.join(skill.skillDir, "SKILL.md");
@@ -131,8 +136,8 @@ function formatProjectSkillsContext(options: { projectId?: string; cwd: string; 
     .join("\n");
   return [
     "",
-    "Project-local Pi skills:",
-    "These Eggent project skills are passed to Pi as project-scoped skills for this session. When the user asks to use one, read its SKILL.md from the exact path below before acting. The session cwd is already the project root, so do not prefix paths with data/projects/<projectId>; use the cwd-relative path (for example ./skills/name/SKILL.md) or the absolute path exactly as shown.",
+    `Workspace-local Pi skills (${scope} scope):`,
+    "These Eggent skills are passed to Pi as workspace-scoped skills for this session. When the user asks to use one, read its SKILL.md from the exact path below before acting. The session cwd is already the workspace root, so do not prefix paths with data/projects/<projectId>; use the cwd-relative path (for example ./skills/name/SKILL.md) or the absolute path exactly as shown.",
     "| Skill | CWD-relative SKILL.md | Absolute SKILL.md | Description |",
     "| --- | --- | --- | --- |",
     rows,
@@ -156,7 +161,7 @@ function buildEggentProjectContext(options: {
   projectName?: string;
   projectDescription?: string;
   projectInstructions?: string;
-  memorySubdir: string;
+  memoryFilePath: string;
   cwd: string;
   chatFiles?: ChatFile[];
   projectSkills?: ProjectSkillMetadata[];
@@ -188,7 +193,7 @@ function buildEggentProjectContext(options: {
       : "Mode: Orchestrator",
     options.projectId
       ? "This Eggent project is the configuration for the current pi agent."
-      : "This orchestrator coordinates all Eggent projects. Each first-level subdirectory in the working directory is a project.",
+      : "This orchestrator coordinates all Eggent projects. Each first-level subdirectory of the working directory is a project; the orchestrator's own context.md, memory.md, skills/ and .mcp.json sit next to them in that directory and belong to it, not to any project.",
     "Eggent is a universal AI assistant and automation workspace, not just a coding assistant.",
     "Do not introduce yourself as a coding assistant unless the user specifically asks for coding work. Code, files, and commands are capabilities, not Eggent's identity.",
     "Eggent configures the runtime; the runtime owns reasoning, tools, skills, sessions, compaction, extensions, and tool execution.",
@@ -219,10 +224,10 @@ function buildEggentProjectContext(options: {
     "- list_projects / create_project / switch_project for navigating Eggent projects.",
     options.projectId
       ? "- eggent_memory_search / eggent_memory_save / eggent_memory_delete for the project memory.md file."
-      : "- Project memory tools require a selected project or explicit project_id.",
+      : "- eggent_memory_search / eggent_memory_save / eggent_memory_delete for the orchestrator's own memory.md file. Pass project_id to reach a specific project's memory instead.",
     options.projectId
       ? "- Use pi-mcp-adapter's mcp proxy tool for MCP servers configured in this project's .mcp.json."
-      : "- Project MCP tools are available through pi-mcp-adapter after switching into a project.",
+      : "- Use pi-mcp-adapter's mcp proxy tool for MCP servers configured in the orchestrator's own .mcp.json. A project's MCP servers become available after switching into that project.",
     "- MCP OAuth tokens are persisted in the Pi agent data directory and can be reused across chats/sessions for the same MCP server id and URL. When using an already configured MCP server, call `mcp({ connect: \"<server>\" })` first; call `auth-start` only if connect returns `auth_required` or explicitly says re-authentication is required.",
     // Eggent runs headless, so a child process that wants to open a browser can
     // never succeed here. Agents used to spend dozens of turns rediscovering
@@ -250,14 +255,16 @@ function buildEggentProjectContext(options: {
     options.projectName ? `Project name: ${options.projectName}` : "",
     options.projectDescription ? `Project description: ${options.projectDescription}` : "",
     `Working directory: ${options.cwd}`,
-    `Memory file: memory.md`,
+    `Memory file: ${options.memoryFilePath}`,
     // A managed workspace reports a label without a provider id, so require only
     // the id here. Requiring the provider made managed workspaces claim "not
     // selected", which left users believing no model was configured at all.
     options.runtimeModel?.id
       ? `Current runtime model: ${options.runtimeModel.provider ? `${options.runtimeModel.provider}/` : ""}${options.runtimeModel.id}${options.runtimeModel.name && options.runtimeModel.name !== options.runtimeModel.id ? ` (${options.runtimeModel.name})` : ""}`
       : "Current runtime model: not selected",
-    options.mcpServerIds?.length ? `Configured project MCP servers: ${options.mcpServerIds.join(", ")}` : "Configured project MCP servers: none",
+    options.mcpServerIds?.length
+      ? `Configured MCP servers in this workspace: ${options.mcpServerIds.join(", ")}`
+      : "Configured MCP servers in this workspace: none",
     options.mcpServerIds?.includes("higgsfield")
       ? "- Higgsfield is configured as an MCP server in this project. For Higgsfield image/video generation in Eggent cloud/web, prefer the `mcp` proxy (`connect`, `search`, `describe`, then tool call) over the `higgsfield` CLI. Do not run `higgsfield auth login`, `higgsfield account status`, or `higgsfield workspace set` unless the user explicitly asks for CLI setup; MCP OAuth is separate from CLI auth and is already persisted after successful authentication."
       : "",
@@ -273,13 +280,18 @@ function buildEggentProjectContext(options: {
         ].join("\n")
       : "",
     "",
-    "Project instructions:",
-    options.projectInstructions?.trim() || "No project-specific instructions configured.",
+    options.projectId ? "Project instructions:" : "Orchestrator instructions:",
+    options.projectInstructions?.trim()
+      || (options.projectId
+        ? "No project-specific instructions configured."
+        : "No orchestrator-specific instructions configured."),
     ...formatProjectSkillsContext({ projectId: options.projectId, cwd: options.cwd, skills: options.projectSkills ?? [] }),
     ...formatChatFilesContext(options.chatFiles ?? []),
     options.projectSkills?.length
-      ? "- Project-local skills are listed above and are available as Pi skills in this project scope. Prefer those exact skill paths when activating a project skill."
-      : "- No project-local skills are installed for this project.",
+      ? "- Workspace-local skills are listed above and are available as Pi skills in this scope. Prefer those exact skill paths when activating one."
+      : options.projectId
+        ? "- No project-local skills are installed for this project."
+        : "- No orchestrator skills are installed.",
     options.chatFiles?.length
       ? "- Uploaded chat files are listed above. Read them by absolute path when the user asks about attached/uploaded files."
       : "- No uploaded chat files are currently attached to this chat.",
@@ -371,16 +383,31 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     throw new Error((await getServerTranslator())("chat.errors.noModelSelected"));
   }
   const project = projectId ? await getProject(projectId) : null;
-  if (projectId) {
-    await ensureProjectMcpAdapterConfig(projectId, cwd);
+  // Project or orchestrator, the scope owns the same four files. Only the
+  // directory they are read from differs.
+  const scopeId = projectId ?? GLOBAL_PROJECT_ID;
+  if (!projectId) {
+    await ensureOrchestratorDiskLayout();
   }
+  // A project also gets its .mcp.json mirrored into the session cwd, so
+  // pi-mcp-adapter finds it when the run starts in a subdirectory. The
+  // orchestrator's subdirectories are the projects themselves, and mirroring
+  // there would overwrite a project's own config, so its file is only ensured
+  // in place.
+  await ensureProjectMcpAdapterConfig(scopeId, projectId ? cwd : undefined);
   const memorySubdir =
     options.memorySubdir ||
     (project?.memoryMode === "global" ? "main" : projectId || "main");
 
-  const projectSkills = projectId ? await loadProjectSkillsMetadata(projectId) : [];
+  // A project keeps its instructions in project.json (mirrored to context.md);
+  // the orchestrator has only the file.
+  const workspaceInstructions = project ? project.instructions : await readProjectContext(scopeId);
+  const projectSkills = await loadProjectSkillsMetadata(scopeId);
   const projectSkillPaths = projectSkills.map((skill) => path.join(skill.skillDir, "SKILL.md"));
-  const mcpServerIds = projectId ? loadConfiguredMcpServerIds(cwd) : [];
+  // Read the scope's own file rather than the session cwd: an orchestrator run
+  // started inside a project directory would otherwise report that project's
+  // servers as its own.
+  const mcpServerIds = loadConfiguredMcpServerIds(getWorkDir(scopeId));
   const chatFiles = options.chatId ? await getChatFiles(options.chatId) : [];
   const corePiToolsOnly = options.corePiToolsOnly === true;
 
@@ -388,8 +415,8 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     projectId,
     projectName: project?.name,
     projectDescription: project?.description,
-    projectInstructions: project?.instructions,
-    memorySubdir,
+    projectInstructions: workspaceInstructions,
+    memoryFilePath: getProjectMemoryPath(scopeId),
     cwd,
     chatFiles,
     projectSkills,
@@ -473,6 +500,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     : await createEggentPiTools({
         chatId: options.chatId,
         projectId,
+        scopeId,
         cwd,
         memorySubdir,
         toolRuntimeData: options.toolRuntimeData,

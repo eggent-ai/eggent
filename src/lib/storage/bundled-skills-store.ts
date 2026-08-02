@@ -4,6 +4,7 @@ import {
   createProject,
   getProject,
   getProjectSkillsDir,
+  isOrchestratorScope,
   validateSkillName,
 } from "@/lib/storage/project-store";
 
@@ -138,9 +139,12 @@ export async function installBundledSkill(
     return { success: false, error: validationError, code: 400 };
   }
 
-  const project = await getProject(projectId);
-  if (!project) {
-    return { success: false, error: "Project not found", code: 404 };
+  // "none" installs into the orchestrator's own skills directory.
+  if (!isOrchestratorScope(projectId)) {
+    const project = await getProject(projectId);
+    if (!project) {
+      return { success: false, error: "Project not found", code: 404 };
+    }
   }
 
   const sourceDir = path.join(BUNDLED_SKILLS_DIR, normalizedName);
@@ -165,7 +169,7 @@ export async function installBundledSkill(
   if (await dirExists(targetDir)) {
     return {
       success: false,
-      error: `Skill "${normalizedName}" is already installed in this project`,
+      error: `Skill "${normalizedName}" is already installed in this workspace`,
       code: 409,
     };
   }

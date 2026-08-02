@@ -17,6 +17,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { useAppStore } from "@/store/app-store";
+import { ORCHESTRATOR_SCOPE_ID } from "@/lib/orchestrator-scope";
 import { cn } from "@/lib/utils";
 import { useBackgroundSync } from "@/hooks/use-background-sync";
 
@@ -400,8 +401,14 @@ function TreeNode({
     }
 
     if (type === "directory") {
-      if (relativePath === "skills" && projectId !== "none") {
-        router.push(`/dashboard/projects/${projectId}/skills`);
+      // In the orchestrator scope this is data/projects/skills, which is the
+      // orchestrator's own skills directory rather than a project.
+      if (relativePath === "skills") {
+        router.push(
+          projectId === ORCHESTRATOR_SCOPE_ID
+            ? "/dashboard/skills"
+            : `/dashboard/projects/${projectId}/skills`
+        );
         return;
       }
       const willExpand = !expanded;

@@ -1,5 +1,9 @@
 import { NextRequest } from "next/server";
-import { getAllProjects, createProject } from "@/lib/storage/project-store";
+import {
+  createProject,
+  getAllProjects,
+  isReservedProjectId,
+} from "@/lib/storage/project-store";
 import { getServerTranslator } from "@/i18n/server";
 
 export async function GET() {
@@ -26,6 +30,15 @@ export async function POST(req: NextRequest) {
       .replace(/[^a-z0-9]+/g, "-")
       .replace(/^-|-$/g, "")
       || crypto.randomUUID().slice(0, 8);
+
+    // The orchestrator's own files live in data/projects itself, so a project
+    // may not claim "none" or any name those files already occupy.
+    if (isReservedProjectId(id)) {
+      return Response.json(
+        { error: t("projects.errors.reservedName", { name }) },
+        { status: 400 }
+      );
+    }
 
     const project = await createProject({
       id,

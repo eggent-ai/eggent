@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { AppSidebar } from "@/components/app-sidebar";
+import { OrchestratorFilesNavigation } from "@/components/orchestrator-files-navigation";
+import { SettingsNavigation } from "@/components/settings-navigation";
 import { SiteHeader } from "@/components/site-header";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -11,6 +13,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/
 import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Loader2, PackagePlus, Puzzle, BookText } from "lucide-react";
+import { ORCHESTRATOR_SCOPE_ID } from "@/lib/orchestrator-scope";
 import { useAppStore } from "@/store/app-store";
 import {
   Sheet,
@@ -40,7 +43,11 @@ interface InstalledSkillItem {
 export default function SkillsPage() {
   const { t } = useI18n();
   const { projects, setProjects, activeProjectId } = useAppStore();
-  const [selectedProjectId, setSelectedProjectId] = useState("");
+  // The orchestrator is a workspace with its own skills/ directory, and it is
+  // the scope a user lands in when no project is selected.
+  const [selectedProjectId, setSelectedProjectId] = useState(
+    activeProjectId ?? ORCHESTRATOR_SCOPE_ID
+  );
   const [bundledSkills, setBundledSkills] = useState<BundledSkillItem[]>([]);
   const [installedSkills, setInstalledSkills] = useState<InstalledSkillItem[]>([]);
   const [bundledSkillsLoading, setBundledSkillsLoading] = useState(true);
@@ -53,6 +60,7 @@ export default function SkillsPage() {
     null
   );
   const [isSkillSheetOpen, setIsSkillSheetOpen] = useState(false);
+  const isOrchestratorSelected = selectedProjectId === ORCHESTRATOR_SCOPE_ID;
 
   useEffect(() => {
     loadProjects();
@@ -60,34 +68,21 @@ export default function SkillsPage() {
   }, []);
 
   useEffect(() => {
-    if (projects.length === 0) {
-      setSelectedProjectId("");
-      return;
-    }
-
-    const hasCurrent = projects.some((project) => project.id === selectedProjectId);
-    if (hasCurrent) return;
-
-    const activeFromSidebar = activeProjectId
-      ? projects.find((project) => project.id === activeProjectId)
-      : null;
-
-    if (activeFromSidebar) {
-      setSelectedProjectId(activeFromSidebar.id);
-      return;
-    }
-
-    setSelectedProjectId(projects[0].id);
-  }, [projects, selectedProjectId, activeProjectId]);
+    if (isOrchestratorSelected) return;
+    if (projects.some((project) => project.id === selectedProjectId)) return;
+    // A project that disappeared (or was never loaded) falls back to the
+    // orchestrator rather than to an empty selection.
+    setSelectedProjectId(
+      activeProjectId && projects.some((project) => project.id === activeProjectId)
+        ? activeProjectId
+        : ORCHESTRATOR_SCOPE_ID
+    );
+  }, [projects, selectedProjectId, activeProjectId, isOrchestratorSelected]);
 
   useEffect(() => {
     loadBundledSkills(selectedProjectId);
-    if (!selectedProjectId) {
-      setInstalledSkills([]);
-      setInstalledSkillsLoading(false);
-      return;
-    }
     loadInstalledSkills(selectedProjectId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProjectId]);
 
   async function loadProjects() {
@@ -201,10 +196,10 @@ export default function SkillsPage() {
         loadBundledSkills(selectedProjectId),
         loadInstalledSkills(selectedProjectId),
       ]);
-      const projectName =
-        projects.find((project) => project.id === selectedProjectId)?.name ??
-        selectedProjectId;
-      setStatusMessage(t("skills.installedMessage", { skill: skillName, project: projectName }));
+      const workspaceName = isOrchestratorSelected
+        ? t("common.orchestrator")
+        : projects.find((project) => project.id === selectedProjectId)?.name ?? selectedProjectId;
+      setStatusMessage(t("skills.installedMessage", { skill: skillName, project: workspaceName }));
     } catch {
       setStatusMessage(t("skills.errors.install"));
     } finally {
@@ -243,24 +238,30 @@ export default function SkillsPage() {
           <AppSidebar />
           <SidebarInset>
             <div className="flex flex-1 flex-col gap-4 p-4 md:p-6 max-w-5xl mx-auto w-full">
+              <SettingsNavigation />
               <div className="space-y-1">
                 <h2 className="text-2xl font-semibold">{t("skills.title")}</h2>
                 <p className="text-sm text-muted-foreground">
-                  {t("skills.description", { path: ".meta/skills" })}
+                  {t("skills.description", { path: "skills/" })}
                 </p>
               </div>
+
+              {isOrchestratorSelected ? <OrchestratorFilesNavigation /> : null}
 
               <div className="flex flex-col md:flex-row gap-3">
                 <Select
                   value={selectedProjectId}
                   onValueChange={setSelectedProjectId}
-                  disabled={projectsLoading || projects.length === 0}
+                  disabled={projectsLoading}
                 >
                   <SelectTrigger className="md:w-96">
                     <SelectValue placeholder={projectsLoading ? t("skills.loadingProjects") : t("skills.selectProject")} />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
+                      <SelectItem value={ORCHESTRATOR_SCOPE_ID}>
+                        {t("common.orchestrator")}
+                      </SelectItem>
                       {projects.map((project) => (
                         <SelectItem key={project.id} value={project.id}>
                           {project.name} ({project.id})
@@ -288,7 +289,7 @@ export default function SkillsPage() {
                 <div className="flex items-center justify-between border-b px-4 py-3">
                   <div className="flex items-center gap-2">
                     <BookText className="size-4 text-primary" />
-                    <h3 className="text-sm font-medium">{t("skills.installedInProject")}</h3>
+                    <h3 className="text-sm font-medium">{t("skills.installedInWorkspace")}</h3>
                   </div>
                   {!installedSkillsLoading && selectedProjectId && (
                     <span className="text-xs text-muted-foreground">
@@ -352,7 +353,7 @@ export default function SkillsPage() {
               <div className="space-y-1">
                 <h3 className="text-lg font-medium">{t("skills.catalogTitle")}</h3>
                 <p className="text-sm text-muted-foreground">
-                  {t("skills.catalogDescription", { path: ".meta/skills" })}
+                  {t("skills.catalogDescription", { path: "skills/" })}
                 </p>
               </div>
               {bundledSkillsLoading ? (

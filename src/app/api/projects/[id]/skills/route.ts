@@ -1,14 +1,16 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getProject, loadProjectSkills } from "@/lib/storage/project-store";
+import { getProject, isOrchestratorScope, loadProjectSkills } from "@/lib/storage/project-store";
 
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const project = await getProject(id);
-  if (!project) {
-    return NextResponse.json({ error: "Project not found" }, { status: 404 });
+  if (!isOrchestratorScope(id)) {
+    const project = await getProject(id);
+    if (!project) {
+      return NextResponse.json({ error: "Project not found" }, { status: 404 });
+    }
   }
 
   try {
@@ -24,7 +26,7 @@ export async function GET(
     );
   } catch {
     return NextResponse.json(
-      { error: "Failed to load project skills" },
+      { error: "Failed to load workspace skills" },
       { status: 500 }
     );
   }

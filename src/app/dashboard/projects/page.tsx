@@ -13,6 +13,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
+  Bot,
   Check,
   FolderOpen,
   Loader2,
@@ -20,6 +21,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
+import { OrchestratorFilesNavigation } from "@/components/orchestrator-files-navigation";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAppStore } from "@/store/app-store";
 import { useI18n } from "@/i18n/provider";
@@ -488,6 +490,17 @@ function ProjectsPageClient() {
               )}
 
               <div className="space-y-3">
+                <div className="rounded-lg border bg-card p-4">
+                  <div className="flex items-center gap-2">
+                    <Bot className="size-5 text-primary" />
+                    <h3 className="font-semibold">{t("orchestrator.title")}</h3>
+                  </div>
+                  <p className="mt-1 text-sm text-muted-foreground">{t("orchestrator.description")}</p>
+                  <div className="mt-3">
+                    <OrchestratorFilesNavigation />
+                  </div>
+                </div>
+
                 {!projectsLoading && projects.length === 0 && (
                   <Empty className="border">
                     <EmptyHeader>

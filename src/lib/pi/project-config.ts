@@ -1,27 +1,34 @@
 import path from "path";
 import {
+  GLOBAL_PROJECT_ID,
   getProject,
+  getProjectContextPath,
+  getProjectMcpServersPath,
+  getProjectMemoryPath,
+  getProjectSkillsDir,
   getWorkDir,
   loadProjectMcpServers,
   loadProjectSkillsMetadata,
+  readProjectContext,
 } from "@/lib/storage/project-store";
 
 export async function getEggentPiProjectConfig(projectId?: string | null) {
   const project = projectId ? await getProject(projectId) : null;
-  const cwd = projectId ? getWorkDir(projectId) : getWorkDir(null);
-  const skills = projectId ? await loadProjectSkillsMetadata(projectId) : [];
-  const mcp = projectId ? await loadProjectMcpServers(projectId) : null;
-  const memoryFile = projectId ? path.join(cwd, "memory.md") : null;
+  // The orchestrator is a workspace too: same four files, resolved from its own
+  // working directory instead of a project directory.
+  const scopeId = projectId ?? GLOBAL_PROJECT_ID;
+  const cwd = getWorkDir(scopeId);
+  const skills = await loadProjectSkillsMetadata(scopeId);
+  const mcp = await loadProjectMcpServers(scopeId);
+  const instructions = project ? project.instructions || "" : await readProjectContext(scopeId);
 
   return {
     projectId: projectId || null,
     project,
     pi: {
       cwd,
-      contextFile: projectId
-        ? path.join(cwd, "context.md")
-        : path.join(cwd, "EGGENT_GLOBAL_CONTEXT.md"),
-      instructions: project?.instructions || "",
+      contextFile: getProjectContextPath(scopeId),
+      instructions,
       skills: skills.map((skill) => ({
         name: skill.name,
         description: skill.description,
@@ -29,12 +36,12 @@ export async function getEggentPiProjectConfig(projectId?: string | null) {
         skillFile: path.join(skill.skillDir, "SKILL.md"),
       })),
       mcpServers: mcp?.servers ?? [],
-      memoryFile,
+      memoryFile: getProjectMemoryPath(scopeId),
       files: {
-        context: path.join(cwd, "context.md"),
-        memory: path.join(cwd, "memory.md"),
-        skills: path.join(cwd, "skills"),
-        mcp: path.join(cwd, ".mcp.json"),
+        context: getProjectContextPath(scopeId),
+        memory: getProjectMemoryPath(scopeId),
+        skills: getProjectSkillsDir(scopeId),
+        mcp: getProjectMcpServersPath(scopeId),
         model: path.join(cwd, "model.json"),
       },
       bridgeTools: [

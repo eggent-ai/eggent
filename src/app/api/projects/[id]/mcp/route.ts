@@ -3,6 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import {
   getProject,
   getProjectMcpServersPath,
+  isOrchestratorScope,
   loadProjectMcpServers,
   saveProjectMcpServersContent,
 } from "@/lib/storage/project-store";
@@ -12,13 +13,18 @@ function isNotFoundError(error: unknown): boolean {
   return "code" in error && (error as { code?: string }).code === "ENOENT";
 }
 
+/** The orchestrator owns a .mcp.json too, and it has no project.json to look up. */
+async function scopeExists(id: string): Promise<boolean> {
+  if (isOrchestratorScope(id)) return true;
+  return Boolean(await getProject(id));
+}
+
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const project = await getProject(id);
-  if (!project) {
+  if (!(await scopeExists(id))) {
     return NextResponse.json({ error: "Project not found" }, { status: 404 });
   }
 
@@ -48,8 +54,7 @@ export async function PUT(
   { params }: { params: Promise<{ id: string }> }
 ) {
   const { id } = await params;
-  const project = await getProject(id);
-  if (!project) {
+  if (!(await scopeExists(id))) {
     return NextResponse.json({ error: "Project not found" }, { status: 404 });
   }
 

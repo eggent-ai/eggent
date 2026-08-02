@@ -182,6 +182,21 @@ data/projects/<projectId>/
 
 When a project is selected, Eggent runs the agent with that project as context. Sidebar folder selection is UI-only and does not silently change the agent working directory.
 
+### Orchestrator
+
+The orchestrator is the agent that answers when no project is selected. It is configured the same way, in its own working directory:
+
+```text
+data/projects/
+  context.md    # orchestrator instructions/context
+  memory.md     # orchestrator memory
+  skills/       # orchestrator-local skills
+  .mcp.json     # orchestrator MCP servers
+  <projectId>/  # projects it coordinates
+```
+
+Its files sit next to the project directories, so the orchestrator can coordinate projects while keeping its own configuration separate from each of them. Context, memory tools, Pi skill discovery, `/skill:*` commands, bundled skill installation, and MCP servers all use this scope whenever no project is selected. The orchestrator has no `model.json`: it answers on the workspace default model.
+
 ### Chat
 
 A chat stores messages, runtime stats, attached files, and the active project context. Uploaded and pasted chat files are exposed to the agent as readable context paths.

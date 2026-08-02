@@ -298,6 +298,10 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 isActive={
                   pathname.startsWith("/dashboard/settings") ||
                   pathname.startsWith("/dashboard/projects") ||
+                  pathname.startsWith("/dashboard/context") ||
+                  pathname.startsWith("/dashboard/memory") ||
+                  pathname.startsWith("/dashboard/skills") ||
+                  pathname.startsWith("/dashboard/mcp") ||
                   pathname.startsWith("/dashboard/pipelines") ||
                   pathname.startsWith("/dashboard/pipeline-runs") ||
                   pathname.startsWith("/dashboard/schedules") ||

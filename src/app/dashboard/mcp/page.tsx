@@ -2,6 +2,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { AppSidebar } from "@/components/app-sidebar";
+import { OrchestratorFilesNavigation } from "@/components/orchestrator-files-navigation";
+import { SettingsNavigation } from "@/components/settings-navigation";
 import { SiteHeader } from "@/components/site-header";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -12,6 +14,7 @@ import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { Globe, Loader2, Terminal, Wrench } from "lucide-react";
+import { ORCHESTRATOR_SCOPE_ID } from "@/lib/orchestrator-scope";
 import { useAppStore } from "@/store/app-store";
 import { useI18n } from "@/i18n/provider";
 
@@ -86,7 +89,11 @@ const EMPTY_MCP_JSON = JSON.stringify({ mcpServers: {} }, null, 2);
 export default function McpPage() {
   const { t } = useI18n();
   const { projects, setProjects, activeProjectId } = useAppStore();
-  const [selectedProjectId, setSelectedProjectId] = useState("");
+  // The orchestrator has a .mcp.json of its own, and it is the scope in use
+  // whenever no project is selected.
+  const [selectedProjectId, setSelectedProjectId] = useState(
+    activeProjectId ?? ORCHESTRATOR_SCOPE_ID
+  );
   const [servers, setServers] = useState<McpServerItem[]>([]);
   const [rawContent, setRawContent] = useState<string | null>(null);
   const [draftContent, setDraftContent] = useState(EMPTY_MCP_JSON);
@@ -96,6 +103,7 @@ export default function McpPage() {
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [statusTone, setStatusTone] = useState<"success" | "error" | null>(null);
   const [search, setSearch] = useState("");
+  const isOrchestratorSelected = selectedProjectId === ORCHESTRATOR_SCOPE_ID;
 
   useEffect(() => {
     loadProjects();
@@ -103,28 +111,18 @@ export default function McpPage() {
   }, []);
 
   useEffect(() => {
-    if (projects.length === 0) {
-      setSelectedProjectId("");
-      return;
-    }
-
-    const hasCurrent = projects.some((project) => project.id === selectedProjectId);
-    if (hasCurrent) return;
-
-    const activeFromSidebar = activeProjectId
-      ? projects.find((project) => project.id === activeProjectId)
-      : null;
-
-    if (activeFromSidebar) {
-      setSelectedProjectId(activeFromSidebar.id);
-      return;
-    }
-
-    setSelectedProjectId(projects[0].id);
-  }, [projects, selectedProjectId, activeProjectId]);
+    if (isOrchestratorSelected) return;
+    if (projects.some((project) => project.id === selectedProjectId)) return;
+    setSelectedProjectId(
+      activeProjectId && projects.some((project) => project.id === activeProjectId)
+        ? activeProjectId
+        : ORCHESTRATOR_SCOPE_ID
+    );
+  }, [projects, selectedProjectId, activeProjectId, isOrchestratorSelected]);
 
   useEffect(() => {
     loadProjectMcp(selectedProjectId);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProjectId]);
 
   async function loadProjects() {
@@ -254,6 +252,7 @@ export default function McpPage() {
           <AppSidebar />
           <SidebarInset>
             <div className="flex flex-1 flex-col gap-4 p-4 md:p-6 max-w-5xl mx-auto w-full">
+              <SettingsNavigation />
               <div className="space-y-1">
                 <h2 className="text-2xl font-semibold">{t("mcp.heading")}</h2>
                 <p className="text-sm text-muted-foreground">
@@ -261,17 +260,22 @@ export default function McpPage() {
                 </p>
               </div>
 
+              {isOrchestratorSelected ? <OrchestratorFilesNavigation /> : null}
+
               <div className="flex flex-col md:flex-row gap-3">
                 <Select
                   value={selectedProjectId}
                   onValueChange={setSelectedProjectId}
-                  disabled={projectsLoading || projects.length === 0}
+                  disabled={projectsLoading}
                 >
                   <SelectTrigger className="md:w-96">
                     <SelectValue placeholder={projectsLoading ? t("mcp.loadingProjects") : t("mcp.selectProject")} />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
+                      <SelectItem value={ORCHESTRATOR_SCOPE_ID}>
+                        {t("common.orchestrator")}
+                      </SelectItem>
                       {projects.map((project) => (
                         <SelectItem key={project.id} value={project.id}>
                           {project.name} ({project.id})
@@ -299,7 +303,7 @@ export default function McpPage() {
                 <div className="flex items-center justify-between border-b px-4 py-3">
                   <div className="flex items-center gap-2">
                     <Wrench className="size-4 text-primary" />
-                    <h3 className="text-sm font-medium">{t("mcp.serversInProject")}</h3>
+                    <h3 className="text-sm font-medium">{t("mcp.serversInWorkspace")}</h3>
                   </div>
                   {!loading && selectedProjectId && (
                     <span className="text-xs text-muted-foreground">
