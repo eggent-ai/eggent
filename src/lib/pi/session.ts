@@ -20,8 +20,9 @@ import {
   loadProjectModelSettings,
   loadProjectSkillsMetadata,
 } from "@/lib/storage/project-store";
-import { deploymentContext, ensureWebSearchWorkflow, getEggentAiModelLockState, getManagedProviderId, getPiModelRegistry, getPiModelRuntime, getPiSettingsManager } from "@/lib/pi/config-store";
+import { deploymentContext, ensureWebSearchWorkflow, fallbackRuntimeModel, getEggentAiModelLockState, getManagedProviderId, getPiModelRegistry, getPiModelRuntime, getPiSettingsManager } from "@/lib/pi/config-store";
 import { isUsageProviderConfigured } from "@/lib/usage/usage-provider";
+import { getServerTranslator } from "@/i18n/server";
 
 const EGGENT_CONTEXT_FILE_CANDIDATES = [
   "AGENTS.md",
@@ -359,8 +360,16 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
       })()
     : undefined;
 
-  const configuredModel =
-    managedModel || projectConfiguredModel || globalConfiguredModel || availableModels[0];
+  const configuredModel = managedModel
+    || projectConfiguredModel
+    || globalConfiguredModel
+    || (modelLock.locked ? availableModels[0] : await fallbackRuntimeModel(availableModels));
+  // A workspace that disconnected the included model and picked nothing else has
+  // no model at all. Saying so is the point: it used to fall back to the managed
+  // credential and keep answering as if nothing had been disconnected.
+  if (!configuredModel) {
+    throw new Error((await getServerTranslator())("chat.errors.noModelSelected"));
+  }
   const project = projectId ? await getProject(projectId) : null;
   if (projectId) {
     await ensureProjectMcpAdapterConfig(projectId, cwd);

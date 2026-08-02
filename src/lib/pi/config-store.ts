@@ -521,6 +521,22 @@ async function restoreManagedCredential(): Promise<string | null> {
  * The provider backed by the managed gateway credential, identified by its
  * `eggw_` token prefix. Returns null when no managed credential is present.
  */
+/**
+ * What a run should use when neither the project nor the workspace named a model.
+ *
+ * Never the managed one. Leaving the included model is a deliberate act, but the
+ * gateway credential stays behind on purpose, so "first available model" put the
+ * workspace straight back on it: settings said disconnected while every chat
+ * answer still came from the included model and still spent included credits.
+ * With no other provider connected there is no fallback at all, and the run says
+ * no model is selected instead of quietly choosing one.
+ */
+export async function fallbackRuntimeModel<T extends { provider: string }>(models: T[]): Promise<T | undefined> {
+  const managedProvider = await getManagedProviderId();
+  if (!managedProvider) return models[0];
+  return models.find((model) => model.provider !== managedProvider);
+}
+
 export async function getManagedProviderId(): Promise<string | null> {
   const auth: Record<string, StoredCredentialRecord> = await readAuthJson().catch(() => ({}));
   for (const [providerId, record] of Object.entries(auth)) {
@@ -704,7 +720,10 @@ export async function getResolvedPiRuntimeModel(projectId?: string | null): Prom
         return availableModels.find((model) => model.provider === managedProvider);
       })()
     : undefined;
-  const configuredModel = managedModel || projectConfiguredModel || globalConfiguredModel || availableModels[0];
+  const configuredModel = managedModel
+    || projectConfiguredModel
+    || globalConfiguredModel
+    || (modelLock.locked ? availableModels[0] : await fallbackRuntimeModel(availableModels));
 
   return {
     model: configuredModel
