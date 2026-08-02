@@ -4,10 +4,14 @@ import {
   installBundledSkill,
   listBundledSkills,
 } from "@/lib/storage/bundled-skills-store";
+import { getServerLocale } from "@/i18n/server";
 
 export async function GET(req: NextRequest) {
   const projectId = req.nextUrl.searchParams.get("projectId");
-  const bundledSkills = await listBundledSkills();
+  // Card copy is resolved server-side: the skills come from disk, not from the
+  // message dictionary, so the client cannot translate them.
+  const locale = await getServerLocale(req.headers.get("accept-language"));
+  const bundledSkills = await listBundledSkills(locale);
 
   if (!projectId) {
     return NextResponse.json(

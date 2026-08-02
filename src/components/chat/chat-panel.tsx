@@ -430,6 +430,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     currentPath,
     setCurrentPath,
     setActiveProjectId,
+    projects,
     setProjects,
     addChat,
   } = useAppStore();
@@ -439,6 +440,8 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
   const [configuredRuntimeStats, setConfiguredRuntimeStats] = useState<PiRuntimeStats | null>(null);
   const [quickSkills, setQuickSkills] = useState<QuickSkillAction[]>(initialQuickSkills);
   const [launchingSkill, setLaunchingSkill] = useState<string | null>(null);
+  /** Skill waiting for the user to say which workspace it goes into. */
+  const [pendingSkill, setPendingSkill] = useState<string | null>(null);
 
   // Internal chatId that stays stable during a message send.
   // Pre-generate a UUID so useChat always has a consistent id.
@@ -819,7 +822,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     registerOutgoingChat,
   ]);
 
-  const launchBundledSkill = useCallback(async (skillName: string) => {
+  const launchBundledSkill = useCallback(async (skillName: string, targetProjectId: string | null) => {
     if (isLoading || launchingSkill) return;
     try {
       setLaunchingSkill(skillName);
@@ -827,30 +830,40 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
       const response = await fetch("/api/skills/launch", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ skillName }),
+        body: JSON.stringify({
+          skillName,
+          ...(targetProjectId ? { projectId: targetProjectId } : {}),
+        }),
       });
       const payload = await response.json().catch(() => null) as {
         error?: string;
-        project?: { id?: string };
+        projectId?: string | null;
         initialMessage?: string;
       } | null;
-      if (!response.ok || !payload?.project?.id) {
+      if (!response.ok || !payload?.initialMessage) {
         throw new Error(payload?.error || t("chat.errors.launchSkill"));
       }
 
-      const projectId = payload.project.id;
-      const messageText = payload.initialMessage || `/skill:${skillName}`;
-      await refreshProjects();
-      activeProjectIdRef.current = projectId;
-      currentPathRef.current = "";
-      setActiveProjectId(projectId);
-      setCurrentPath("");
+      const projectId = payload.projectId ?? null;
+      const messageText = payload.initialMessage;
+      setPendingSkill(null);
       stopRequestedRef.current = false;
-      pendingProjectSwitchRef.current = true;
       submissionStartCountRef.current = messagesRef.current.length;
       handledSwitchToolCallsRef.current.clear();
       queuedSwitchResultRef.current = null;
-      shouldRefreshProjectsRef.current = true;
+
+      // Installing into a project means running there; the orchestrator scope
+      // is where the chat already is, so nothing needs to switch.
+      if (projectId) {
+        await refreshProjects();
+        activeProjectIdRef.current = projectId;
+        currentPathRef.current = "";
+        setActiveProjectId(projectId);
+        setCurrentPath("");
+        pendingProjectSwitchRef.current = true;
+        shouldRefreshProjectsRef.current = true;
+      }
+
       registerOutgoingChat(messageText, projectId);
       sendMessage({ text: messageText });
     } catch (error) {
@@ -859,6 +872,19 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
       setLaunchingSkill(null);
     }
   }, [isLoading, launchingSkill, refreshProjects, registerOutgoingChat, sendMessage, setActiveProjectId, setCurrentPath]);
+
+  // With no projects there is nothing to choose between, so the click just
+  // runs. Once projects exist, where the skill lives is a real decision with a
+  // cost attached, and the user makes it.
+  const requestSkillLaunch = useCallback((skillName: string) => {
+    if (isLoading || launchingSkill) return;
+    setChatError(null);
+    if (projects.length === 0) {
+      void launchBundledSkill(skillName, null);
+      return;
+    }
+    setPendingSkill(skillName);
+  }, [isLoading, launchingSkill, launchBundledSkill, projects.length]);
 
   const handleStop = useCallback(() => {
     const snapshot = messagesRef.current;
@@ -884,12 +910,14 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         pendingInteraction={pendingInteraction}
         onRespondToInteraction={(value, cancel) => pendingInteraction ? respondToInteraction(pendingInteraction, value, cancel) : undefined}
         quickSkills={showQuickSkills}
-        onLaunchSkill={launchBundledSkill}
+        onLaunchSkill={requestSkillLaunch}
         launchingSkill={launchingSkill}
-        onPickStarter={(prompt) => {
-          setInput(prompt);
-          setInputFocusSignal((value) => value + 1);
+        pendingSkill={pendingSkill ? quickSkills.find((skill) => skill.name === pendingSkill) ?? null : null}
+        projects={projects.map((project) => ({ id: project.id, name: project.name }))}
+        onConfirmSkillScope={(projectId) => {
+          if (pendingSkill) void launchBundledSkill(pendingSkill, projectId);
         }}
+        onCancelSkillScope={() => setPendingSkill(null)}
       />
       <ChatInput
         input={input}

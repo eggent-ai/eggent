@@ -1,20 +1,24 @@
 "use client";
 
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { MessageBubble } from "./message-bubble";
 import { Alert, AlertDescription } from "@/components/ui/alert";
-import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
-import { CheckCircle2, ExternalLink, Loader2, MessageCircle, Sparkles, TriangleAlert } from "lucide-react";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { ArrowRight, Bot, CheckCircle2, ExternalLink, FolderOpen, Loader2, MessageCircle, Sparkle, Sparkles, TriangleAlert } from "lucide-react";
 import type { UIMessage } from "ai";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n/provider";
 import type { MessageKey } from "@/i18n/messages";
+import { cn } from "@/lib/utils";
 import type { PiPendingInteraction } from "@/lib/pi/interaction-types";
 
 export interface QuickSkillAction {
   name: string;
   description: string;
+  /** Short card copy in the deployment language; falls back to name/description. */
+  title?: string;
+  summary?: string;
 }
 
 export interface PiCompactionStatus {
@@ -41,11 +45,103 @@ interface ChatMessagesProps {
   quickSkills?: QuickSkillAction[];
   onLaunchSkill?: (skillName: string) => void;
   launchingSkill?: string | null;
-  onPickStarter?: (prompt: string) => void;
+  /** Set while the user is choosing which workspace a skill goes into. */
+  pendingSkill?: QuickSkillAction | null;
+  projects?: Array<{ id: string; name: string }>;
+  onConfirmSkillScope?: (projectId: string | null) => void;
+  onCancelSkillScope?: () => void;
 }
 
-/** Suggested first moves shown on an empty chat. */
-const STARTER_KEYS = ["chat.starter.file", "chat.starter.research", "chat.starter.process"] as const;
+function SkillScopeChooser({
+  skill,
+  projects,
+  busy,
+  onConfirm,
+  onCancel,
+}: {
+  skill: QuickSkillAction;
+  projects: Array<{ id: string; name: string }>;
+  busy: boolean;
+  onConfirm: (projectId: string | null) => void;
+  onCancel: () => void;
+}) {
+  const { t } = useI18n();
+  const [scope, setScope] = useState<"orchestrator" | "project">("orchestrator");
+  const [projectId, setProjectId] = useState(projects[0]?.id ?? "");
+
+  const options = [
+    {
+      key: "orchestrator" as const,
+      icon: Bot,
+      title: t("chat.skillScope.orchestrator"),
+      hint: t("chat.skillScope.orchestratorHint"),
+    },
+    {
+      key: "project" as const,
+      icon: FolderOpen,
+      title: t("chat.skillScope.project"),
+      hint: t("chat.skillScope.projectHint"),
+    },
+  ];
+
+  return (
+    <div className="mt-8 rounded-2xl border bg-card p-5 text-left shadow-sm">
+      <h3 className="text-sm font-semibold">
+        {t("chat.skillScope.title", { skill: skill.title || skill.name })}
+      </h3>
+      <div className="mt-4 grid gap-3 sm:grid-cols-2">
+        {options.map(({ key, icon: Icon, title, hint }) => (
+          <button
+            key={key}
+            type="button"
+            onClick={() => setScope(key)}
+            aria-pressed={scope === key}
+            className={cn(
+              "flex flex-col rounded-xl border p-3 text-left transition",
+              scope === key ? "border-primary bg-primary/5" : "hover:border-primary/40 hover:bg-muted/40"
+            )}
+          >
+            <span className="flex items-center gap-2 text-sm font-medium">
+              <Icon className="size-4 text-primary" />
+              {title}
+            </span>
+            <span className="mt-1 text-xs leading-5 text-muted-foreground">{hint}</span>
+          </button>
+        ))}
+      </div>
+
+      {scope === "project" ? (
+        <div className="mt-3">
+          <Select value={projectId} onValueChange={setProjectId}>
+            <SelectTrigger className="w-full sm:w-80">
+              <SelectValue placeholder={t("chat.skillScope.selectProject")} />
+            </SelectTrigger>
+            <SelectContent>
+              {projects.map((project) => (
+                <SelectItem key={project.id} value={project.id}>
+                  {project.name}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+      ) : null}
+
+      <div className="mt-4 flex flex-wrap items-center gap-2">
+        <Button
+          onClick={() => onConfirm(scope === "project" ? projectId || null : null)}
+          disabled={busy || (scope === "project" && !projectId)}
+        >
+          {busy ? <Loader2 className="size-4 animate-spin" /> : null}
+          {t("chat.skillScope.confirm")}
+        </Button>
+        <Button variant="ghost" onClick={onCancel} disabled={busy}>
+          {t("common.cancel")}
+        </Button>
+      </div>
+    </div>
+  );
+}
 
 function interactionKindLabelKey(kind: PiPendingInteraction["kind"]): MessageKey {
   switch (kind) {
@@ -66,7 +162,7 @@ function interactionKindLabelKey(kind: PiPendingInteraction["kind"]): MessageKey
   }
 }
 
-export function ChatMessages({ messages, isLoading, errorMessage, compactionStatus, actionNotice, pendingInteraction, onRespondToInteraction, quickSkills = [], onLaunchSkill, launchingSkill, onPickStarter }: ChatMessagesProps) {
+export function ChatMessages({ messages, isLoading, errorMessage, compactionStatus, actionNotice, pendingInteraction, onRespondToInteraction, quickSkills = [], onLaunchSkill, launchingSkill, pendingSkill, projects = [], onConfirmSkillScope, onCancelSkillScope }: ChatMessagesProps) {
   const { t } = useI18n();
   const scrollRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -96,86 +192,89 @@ export function ChatMessages({ messages, isLoading, errorMessage, compactionStat
 
   if (messages.length === 0 && !isLoading) {
     return (
-      // Scrolls instead of clipping: openers plus templates are taller than a
-      // short viewport, and `m-auto` still centres the block when there is room.
+      // Scrolls instead of clipping: the quick-start row is taller than a short
+      // viewport, and `m-auto` still centres the block when there is room.
       <div className="flex min-w-0 flex-1 flex-col overflow-y-auto p-4 md:p-8">
-        <Empty className="m-auto min-w-0 border-none px-0 md:px-0">
-          <EmptyHeader>
-            <EmptyMedia variant="icon" className="bg-primary/10 text-primary">
-              <MessageCircle />
-            </EmptyMedia>
-            <EmptyTitle>{t("chat.emptyTitle")}</EmptyTitle>
-            <EmptyDescription>
+        <div className="m-auto w-full max-w-[min(100vw-2rem,60rem)] min-w-0">
+          <div className="flex flex-col items-center text-center">
+            <div className="flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+              <MessageCircle className="size-6" />
+            </div>
+            <h2 className="mt-4 text-2xl font-semibold tracking-tight">{t("chat.emptyTitle")}</h2>
+            <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
               {t("chat.emptyDescription")}
-            </EmptyDescription>
-          </EmptyHeader>
+            </p>
+          </div>
 
           {/*
-            Openers, not decoration. Most first messages are "what are you?",
-            which is what people ask when a blank box gives them nothing to
-            aim at. Naming three concrete things to try answers it up front.
+            The quick-start row is the answer to "what do I do with this?".
+            Cards carry short human copy resolved server-side, not the skill's
+            own model-facing name and description, and the first one is the
+            onboarding skill - so it leads, visually and in the order.
           */}
-          {onPickStarter ? (
-            <div className="mt-5 w-full max-w-[min(100vw-2rem,56rem)] min-w-0">
-              <div
-                className="flex snap-x snap-mandatory gap-3 overflow-x-auto scroll-smooth px-6 pb-2 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-                aria-label={t("chat.emptyTitle")}
-              >
-                {STARTER_KEYS.map((key) => (
-                  <button
-                    key={key}
-                    type="button"
-                    onClick={() => onPickStarter(t(`${key}.prompt` as MessageKey))}
-                    className="flex w-[min(17rem,76vw)] flex-none snap-center flex-col rounded-xl border bg-card/60 px-4 py-3 text-left text-sm transition hover:-translate-y-0.5 hover:border-primary/50 hover:bg-card hover:shadow-sm"
-                  >
-                    <span className="font-medium">{t(`${key}.title` as MessageKey)}</span>
-                    <span className="mt-1 block text-xs leading-5 text-muted-foreground">
-                      {t(`${key}.hint` as MessageKey)}
-                    </span>
-                  </button>
-                ))}
+          {pendingSkill && onConfirmSkillScope && onCancelSkillScope ? (
+            <SkillScopeChooser
+              skill={pendingSkill}
+              projects={projects}
+              busy={Boolean(launchingSkill)}
+              onConfirm={onConfirmSkillScope}
+              onCancel={onCancelSkillScope}
+            />
+          ) : quickSkills.length > 0 ? (
+            <div className="mt-8">
+              <div className="flex items-baseline justify-between gap-3">
+                <h3 className="text-sm font-semibold">{t("chat.quickStartTitle")}</h3>
+                <span className="text-xs text-muted-foreground">{t("chat.quickStartHint")}</span>
+              </div>
+              <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+                {quickSkills.map((skill, index) => {
+                  const isLaunching = launchingSkill === skill.name;
+                  const isLead = index === 0;
+                  return (
+                    <button
+                      key={skill.name}
+                      type="button"
+                      onClick={() => onLaunchSkill?.(skill.name)}
+                      disabled={!onLaunchSkill || Boolean(launchingSkill)}
+                      className={cn(
+                        "group flex min-h-44 flex-col justify-between rounded-2xl border p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60",
+                        isLead ? "border-primary/40 bg-primary/5" : "bg-card"
+                      )}
+                    >
+                      <div className="space-y-3">
+                        <div className="flex items-start justify-between gap-2">
+                          <div
+                            className={cn(
+                              "flex size-10 items-center justify-center rounded-xl transition",
+                              isLead
+                                ? "bg-primary text-primary-foreground"
+                                : "bg-primary/10 text-primary group-hover:bg-primary group-hover:text-primary-foreground"
+                            )}
+                          >
+                            {isLaunching ? <Loader2 className="size-5 animate-spin" /> : isLead ? <Sparkle className="size-5" /> : <Sparkles className="size-5" />}
+                          </div>
+                          {isLead ? (
+                            <Badge variant="secondary" className="shrink-0">{t("chat.startHere")}</Badge>
+                          ) : null}
+                        </div>
+                        <div>
+                          <div className="font-semibold leading-tight">{skill.title || skill.name}</div>
+                          <p className="mt-1.5 line-clamp-3 text-sm leading-5 text-muted-foreground">
+                            {skill.summary || skill.description}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="mt-4 flex items-center gap-1.5 text-xs font-medium text-primary">
+                        {isLaunching ? t("chat.startingSkill") : t("chat.setUp")}
+                        {isLaunching ? null : <ArrowRight className="size-3.5 transition group-hover:translate-x-0.5" />}
+                      </div>
+                    </button>
+                  );
+                })}
               </div>
             </div>
           ) : null}
-          {quickSkills.length > 0 ? (
-            <div className="mt-6 w-full max-w-[min(100vw-2rem,56rem)] min-w-0 space-y-3">
-              <div className="px-6 text-left text-xs font-semibold uppercase tracking-[0.18em] text-muted-foreground">
-                {t("chat.templatesTitle")}
-              </div>
-              <div className="relative min-w-0">
-                <div className="pointer-events-none absolute inset-y-0 left-0 z-10 w-12 bg-gradient-to-r from-background via-background/80 to-transparent backdrop-blur-[1px]" />
-              <div className="pointer-events-none absolute inset-y-0 right-0 z-10 w-12 bg-gradient-to-l from-background via-background/80 to-transparent backdrop-blur-[1px]" />
-                <div
-                  className="flex snap-x snap-mandatory gap-3 overflow-x-auto scroll-smooth px-6 pb-3 [scrollbar-width:none] [&::-webkit-scrollbar]:hidden"
-                  aria-label={t("chat.bundledSkills")}
-                >
-                  {quickSkills.map((skill) => (
-                  <button
-                    key={skill.name}
-                    type="button"
-                    onClick={() => onLaunchSkill?.(skill.name)}
-                    disabled={!onLaunchSkill || Boolean(launchingSkill)}
-                    className="group flex min-h-40 w-[min(18rem,78vw)] flex-none snap-center flex-col justify-between rounded-2xl border bg-card p-4 text-left shadow-sm transition hover:-translate-y-0.5 hover:border-primary/50 hover:shadow-md disabled:cursor-not-allowed disabled:opacity-60"
-                  >
-                    <div className="space-y-3">
-                      <div className="flex size-10 items-center justify-center rounded-xl bg-primary/10 text-primary transition group-hover:bg-primary group-hover:text-primary-foreground">
-                        {launchingSkill === skill.name ? <Loader2 className="size-5 animate-spin" /> : <Sparkles className="size-5" />}
-                      </div>
-                      <div>
-                        <div className="font-semibold leading-tight">{skill.name}</div>
-                        <p className="mt-2 line-clamp-3 text-sm leading-5 text-muted-foreground">{skill.description}</p>
-                      </div>
-                    </div>
-                    <div className="mt-4 text-xs font-medium text-primary">
-                      {launchingSkill === skill.name ? t("chat.creatingProject") : t("chat.setUp")}
-                    </div>
-                  </button>
-                  ))}
-                </div>
-              </div>
-            </div>
-          ) : null}
-        </Empty>
+        </div>
       </div>
     );
   }

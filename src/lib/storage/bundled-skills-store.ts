@@ -1,7 +1,6 @@
 import fs from "fs/promises";
 import path from "path";
 import {
-  createProject,
   getProject,
   getProjectSkillsDir,
   isOrchestratorScope,
@@ -11,28 +10,50 @@ import {
 const SKILL_FILE_NAME = "SKILL.md";
 const BUNDLED_SKILLS_DIR = path.join(process.cwd(), "bundled-skills");
 
+/** Where a card falls back to when a skill carries no card copy of its own. */
+const DEFAULT_CARD_ORDER = 100;
+
 export interface BundledSkill {
   name: string;
   description: string;
   license?: string;
   compatibility?: string;
+  /** Short human-facing card title in the requested language. */
+  title: string;
+  /** Short human-facing card summary in the requested language. */
+  summary: string;
+  /** Card position; lower comes first. */
+  order: number;
 }
 
-function projectNameForSkill(skillName: string): string {
-  return skillName
-    .split("-")
-    .filter(Boolean)
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
-async function uniqueProjectId(baseId: string): Promise<string> {
-  const normalized = baseId.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "skill";
-  let candidate = normalized;
-  for (let i = 2; await getProject(candidate); i += 1) {
-    candidate = `${normalized}-${i}`;
+/**
+ * Card copy for a skill, in the language this deployment runs in.
+ *
+ * A skill's own `name` and `description` are written for the model — long,
+ * English, and full of trigger phrases — which is unreadable on a card. Skills
+ * may therefore carry optional `title_<locale>` / `summary_<locale>` frontmatter
+ * keys purely for the UI. They are inert for the model: skill metadata passed to
+ * Pi reads only `name` and `description`.
+ *
+ * Resolution falls back locale → English → unsuffixed key → the model-facing
+ * text, so a skill without card copy renders exactly as it does today.
+ */
+function resolveCardText(
+  frontmatter: Record<string, string>,
+  field: "title" | "summary",
+  locale: string,
+  fallback: string
+): string {
+  const candidates = [
+    frontmatter[`${field}_${locale.toLowerCase()}`],
+    frontmatter[`${field}_en`],
+    frontmatter[field],
+  ];
+  for (const candidate of candidates) {
+    const value = candidate?.trim();
+    if (value) return value;
   }
-  return candidate;
+  return fallback;
 }
 
 function parseFrontmatter(raw: string): {
@@ -76,7 +97,8 @@ async function dirExists(dirPath: string): Promise<boolean> {
 
 async function readBundledSkillFromDir(
   dirPath: string,
-  fallbackName: string
+  fallbackName: string,
+  locale: string
 ): Promise<BundledSkill | null> {
   const skillFilePath = path.join(dirPath, SKILL_FILE_NAME);
   let skillContent = "";
@@ -96,15 +118,20 @@ async function readBundledSkillFromDir(
   if (!description) return null;
   if (name !== fallbackName.toLowerCase()) return null;
 
+  const parsedOrder = Number.parseInt(frontmatter.card_order ?? "", 10);
+
   return {
     name,
     description,
     license: frontmatter.license?.trim() || undefined,
     compatibility: frontmatter.compatibility?.trim() || undefined,
+    title: resolveCardText(frontmatter, "title", locale, name),
+    summary: resolveCardText(frontmatter, "summary", locale, description),
+    order: Number.isFinite(parsedOrder) ? parsedOrder : DEFAULT_CARD_ORDER,
   };
 }
 
-export async function listBundledSkills(): Promise<BundledSkill[]> {
+export async function listBundledSkills(locale = "en"): Promise<BundledSkill[]> {
   try {
     const entries = await fs.readdir(BUNDLED_SKILLS_DIR, {
       withFileTypes: true,
@@ -115,12 +142,15 @@ export async function listBundledSkills(): Promise<BundledSkill[]> {
       if (!entry.isDirectory()) continue;
       const skill = await readBundledSkillFromDir(
         path.join(BUNDLED_SKILLS_DIR, entry.name),
-        entry.name
+        entry.name,
+        locale
       );
       if (skill) result.push(skill);
     }
 
-    return result.sort((a, b) => a.name.localeCompare(b.name));
+    // Skills declare their own card order, so the onboarding one can lead the
+    // row without renaming its directory.
+    return result.sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
   } catch {
     return [];
   }
@@ -192,10 +222,22 @@ export async function installBundledSkill(
   }
 }
 
-export async function createProjectWithBundledSkill(
-  skillName: string
+/**
+ * Install a bundled skill into an existing workspace and hand back the message
+ * that starts it.
+ *
+ * Launching used to create a throwaway project for every skill, because the
+ * orchestrator had nowhere to keep one. It does now, so the caller chooses:
+ * "none" installs into the orchestrator, where the skill is available in every
+ * chat, and a project id installs it there, where it costs nothing until that
+ * project is opened. A skill already present in the target is reused rather
+ * than treated as an error - relaunching it is a normal thing to do.
+ */
+export async function launchBundledSkill(
+  skillName: string,
+  projectId: string
 ): Promise<
-  | { success: true; project: Awaited<ReturnType<typeof createProject>>; skill: BundledSkill; initialMessage: string }
+  | { success: true; skill: BundledSkill; projectId: string | null; initialMessage: string }
   | { success: false; error: string; code: number }
 > {
   const normalizedName = skillName.trim().toLowerCase();
@@ -204,30 +246,24 @@ export async function createProjectWithBundledSkill(
     return { success: false, error: validationError, code: 400 };
   }
 
-  const bundledSkills = await listBundledSkills();
-  const skill = bundledSkills.find((item) => item.name === normalizedName);
+  const skill = (await listBundledSkills()).find((item) => item.name === normalizedName);
   if (!skill) {
     return { success: false, error: "Bundled skill not found", code: 404 };
   }
 
-  const projectId = await uniqueProjectId(normalizedName);
-  const project = await createProject({
-    id: projectId,
-    name: projectNameForSkill(normalizedName),
-    description: skill.description,
-    instructions: `# ${projectNameForSkill(normalizedName)}\n\nThis project was created from the ${normalizedName} skill.\n`,
-    memoryMode: "global",
-  });
+  if (!isOrchestratorScope(projectId) && !(await getProject(projectId))) {
+    return { success: false, error: "Project not found", code: 404 };
+  }
 
-  const installed = await installBundledSkill(project.id, normalizedName);
-  if (!installed.success) {
+  const installed = await installBundledSkill(projectId, normalizedName);
+  if (!installed.success && installed.code !== 409) {
     return { success: false, error: installed.error, code: installed.code };
   }
 
   return {
     success: true,
-    project,
     skill,
+    projectId: isOrchestratorScope(projectId) ? null : projectId,
     initialMessage: `/skill:${normalizedName}`,
   };
 }
