@@ -3,7 +3,7 @@ import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent
 import fs from "fs/promises";
 import path from "path";
 import type { McpServerConfig } from "@/lib/types";
-import { getPiAuthPath, getPiModelsPath } from "@/lib/pi/config-store";
+import { getImageGenerationState, getPiAuthPath, resolveImageBackend } from "@/lib/pi/config-store";
 import { getPipelineDefinitions, upsertPipelineDefinition } from "@/lib/pipelines/store";
 import { startPipelineRunInBackground } from "@/lib/pipelines/runner";
 import { managePiSchedules } from "@/lib/pi/schedule-host";
@@ -83,28 +83,40 @@ async function readJsonFile(filePath: string): Promise<Record<string, unknown>> 
   return parsed && typeof parsed === "object" && !Array.isArray(parsed) ? parsed as Record<string, unknown> : {};
 }
 
-async function resolveManagedImageBackend(): Promise<{ baseUrl: string; token: string; providerLabel: string } | null> {
+interface ImageBackend {
+  baseUrl: string;
+  token: string;
+  providerLabel: string;
+  model: string;
+  managed: boolean;
+}
+
+/**
+ * Which backend answers image requests, if any.
+ *
+ * The included model covers text and images together, so its image backend is
+ * used only while it is the model answering - the gateway credential outlives a
+ * switch to your own provider, and using it afterwards silently spent included
+ * credits for a workspace that had deliberately left. A workspace on its own
+ * provider uses whatever image provider and model it selected in settings.
+ */
+async function resolveImageToolBackend(): Promise<ImageBackend | null> {
   try {
-    const [auth, models] = await Promise.all([
-      readJsonFile(getPiAuthPath()).catch((): Record<string, unknown> => ({})),
-      readJsonFile(getPiModelsPath()).catch((): Record<string, unknown> => ({})),
-    ]);
-    const credential = auth["eggent-ai"];
+    const resolved = await resolveImageBackend();
+    if (!resolved) return null;
+    const auth = await readJsonFile(getPiAuthPath()).catch((): Record<string, unknown> => ({}));
+    const credential = auth[resolved.providerId];
     const token = credential && typeof credential === "object" && !Array.isArray(credential)
       ? String((credential as Record<string, unknown>).key || "").trim()
       : "";
-    const providersValue = models["providers"];
-    const providers = providersValue && typeof providersValue === "object" && !Array.isArray(providersValue)
-      ? providersValue as Record<string, unknown>
-      : {};
-    const provider = providers["eggent-ai"];
-    const providerRecord = provider && typeof provider === "object" && !Array.isArray(provider)
-      ? provider as Record<string, unknown>
-      : {};
-    const baseUrl = String(providerRecord.baseUrl || "").trim().replace(/\/+$/, "");
-    const providerLabel = String(providerRecord.name || "Eggent Images").trim() || "Eggent Images";
-    if (!token.startsWith("eggw_") || !baseUrl) return null;
-    return { baseUrl, token, providerLabel };
+    if (!token) return null;
+    return {
+      baseUrl: resolved.baseUrl,
+      token,
+      providerLabel: resolved.managed ? "Eggent Images" : resolved.providerId,
+      model: resolved.model,
+      managed: resolved.managed,
+    };
   } catch {
     return null;
   }
@@ -604,15 +616,21 @@ export async function createEggentPiTools(options: {
         background: Type.Optional(Type.Union([Type.Literal("auto"), Type.Literal("transparent"), Type.Literal("opaque")], { description: "Optional background mode." })),
       }),
       execute: async (_toolCallId, params) => {
-        const backend = await resolveManagedImageBackend();
+        const backend = await resolveImageToolBackend();
         if (!backend) {
+          // Say which of the two ways out applies rather than "not configured":
+          // a workspace that left the included model has an image model to pick,
+          // and coming back turns text and images on together.
+          const state = await getImageGenerationState();
           return textResult(
             [
-              "Image generation is not configured for this workspace.",
-              "Text/chat models and image-generation models are configured separately.",
-              "If you are using your own OAuth/API model (for example Codex login), connect an image provider or enable Eggent Images before asking for generated/edited images.",
+              "This workspace cannot generate images right now.",
+              state.reason === "image_provider_not_connected" || state.reason === "image_provider_has_no_base_url"
+                ? `The image provider selected in Settings (${state.providerId}) is not usable: connect it, or choose another one.`
+                : "No image model is selected. Image generation is configured separately from the text model.",
+              "Tell the user they have two options: choose an image provider and model in Settings, or switch back to the included Eggent AI model, which covers text and images together. Do not attempt image generation through other tools.",
             ].join("\n"),
-            { configured: false, reason: "image_backend_not_configured" }
+            { configured: false, reason: state.reason || "image_backend_not_configured" }
           );
         }
 
@@ -626,7 +644,7 @@ export async function createEggentPiTools(options: {
         }
 
         const body: Record<string, unknown> = {
-          model: "eggent-ai",
+          model: backend.model,
           prompt: params.prompt,
           n: Math.max(1, Math.min(10, Math.trunc(Number(params.n || 1)))) || 1,
         };
@@ -641,12 +659,16 @@ export async function createEggentPiTools(options: {
         if (params.background) body.background = params.background;
         if (inputReferences.length > 0) body.input_references = inputReferences;
 
-        const response = await fetch(`${backend.baseUrl}/images`, {
+        // The managed gateway exposes /images and routes by header; a provider
+        // the user brought is plain OpenAI-compatible, so it gets the standard
+        // /images/generations path and none of our routing headers.
+        const endpoint = backend.managed ? `${backend.baseUrl}/images` : `${backend.baseUrl}/images/generations`;
+        const response = await fetch(endpoint, {
           method: "POST",
           headers: {
             Authorization: `Bearer ${backend.token}`,
             "Content-Type": "application/json",
-            "X-Eggent-AI-Request-Type": "image",
+            ...(backend.managed ? { "X-Eggent-AI-Request-Type": "image" } : {}),
           },
           body: JSON.stringify(body),
         });

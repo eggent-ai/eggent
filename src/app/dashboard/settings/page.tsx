@@ -94,10 +94,13 @@ interface PiState {
   };
   imageGeneration?: {
     enabled: boolean;
-    provider: "eggent" | "none";
+    provider: "eggent" | "custom" | "none";
     label: string;
+    providerId?: string;
+    model?: string;
     reason?: string;
   };
+  imageProviders?: Array<{ id: string; name: string }>;
 }
 
 type LoginEvent =
@@ -142,6 +145,9 @@ export default function SettingsPage() {
   const [defaultProviderSelection, setDefaultProviderSelection] = useState("");
   const [defaultModelSelection, setDefaultModelSelection] = useState("");
   const [defaultThinkingLevel, setDefaultThinkingLevel] = useState("high");
+  const [imageProviderSelection, setImageProviderSelection] = useState("");
+  const [imageModelSelection, setImageModelSelection] = useState("");
+  const [savingImageBackend, setSavingImageBackend] = useState(false);
   const [authUsername, setAuthUsername] = useState("");
   const [authPassword, setAuthPassword] = useState("");
   const [authPasswordConfirm, setAuthPasswordConfirm] = useState("");
@@ -204,12 +210,18 @@ export default function SettingsPage() {
       const defaultProvider = typeof stateJson?.settings?.defaultProvider === "string" ? stateJson.settings.defaultProvider : "";
       const defaultModel = typeof stateJson?.settings?.defaultModel === "string" ? stateJson.settings.defaultModel : "";
       const availablePiModels = Array.isArray(stateJson?.availableModels) ? stateJson.availableModels as PiModelState[] : [];
-      const firstAvailableModel = availablePiModels[0];
       const defaultProviderHasModels = Boolean(defaultProvider && availablePiModels.some((model) => model.provider === defaultProvider));
-      const providerSelection = defaultProviderHasModels ? defaultProvider : firstAvailableModel?.provider || "";
+      // Nothing is preselected when the workspace has no default provider.
+      // Falling back to the first available one put the included model back in
+      // the box right after someone had deliberately disconnected it, which read
+      // as "it is still on" and made the screen look like it ignored the click.
+      const providerSelection = defaultProviderHasModels ? defaultProvider : "";
       const firstProviderModel = availablePiModels.find((model) => model.provider === providerSelection);
       setDefaultProviderSelection(providerSelection);
       setDefaultModelSelection(defaultProviderHasModels && defaultModel ? defaultModel : firstProviderModel?.id || "");
+      const imageBackend = stateJson?.imageGeneration as { providerId?: string; model?: string; provider?: string } | undefined;
+      setImageProviderSelection(imageBackend?.provider === "custom" ? imageBackend.providerId || "" : "");
+      setImageModelSelection(imageBackend?.provider === "custom" ? imageBackend.model || "" : "");
       setDefaultThinkingLevel(typeof stateJson?.settings?.defaultThinkingLevel === "string" ? stateJson.settings.defaultThinkingLevel : "high");
       const raw = typeof rawJson.content === "string" ? rawJson.content : "";
       setModelsJson(raw);
@@ -287,6 +299,32 @@ export default function SettingsPage() {
       setPiError(error instanceof Error ? error.message : t("settings.errors.saveProviderKey"));
     } finally {
       setSavingProvider(false);
+    }
+  }
+
+  /**
+   * Save which provider and model answer image requests.
+   *
+   * Only reachable on a workspace running its own model: while the included
+   * model is active it serves images too, so there is nothing to choose.
+   */
+  async function saveImageBackend(clear = false) {
+    try {
+      setSavingImageBackend(true);
+      setPiError(null);
+      const res = await fetch("/api/pi/images", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(clear ? {} : { provider: imageProviderSelection, model: imageModelSelection }),
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok) throw new Error(json?.error || t("settings.errors.saveImageBackend"));
+      setPiState(json);
+      await loadPiState();
+    } catch (error) {
+      setPiError(error instanceof Error ? error.message : t("settings.errors.saveImageBackend"));
+    } finally {
+      setSavingImageBackend(false);
     }
   }
 
@@ -454,11 +492,19 @@ export default function SettingsPage() {
     }
   }
 
+  // The included model is deliberately absent from this list. It is not a
+  // provider you connect - coming back to it is one button of its own at the
+  // bottom - and leaving it in meant the same action appeared twice on one
+  // screen, in a list the user had just used to walk away from it.
   const providerChoices = useMemo(() => {
+    const managedId = piState?.managed?.providerId || "eggent-ai";
     return (piState?.providers ?? [])
+      .filter((item) => piState?.modelLock?.locked || item.id !== managedId)
       .map((item) => ({ id: item.id, name: item.name || item.id, availableModelCount: item.availableModelCount }))
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [piState]);
+
+  const imageProviderChoices = useMemo(() => piState?.imageProviders ?? [], [piState]);
 
   const modelChoices = useMemo(() => {
     return (piState?.availableModels ?? [])
@@ -479,7 +525,6 @@ export default function SettingsPage() {
   const managedLabel = piState?.managed?.label || piState?.modelLock?.label || "Eggent AI";
   // Offered only when the credential is actually there and is not already in use.
   const managedAvailable = Boolean(piState?.managed?.available) && piState?.settings?.defaultProvider !== managedProviderId;
-  const selectedProviderIsManaged = Boolean(managedProviderId) && defaultProviderSelection === managedProviderId;
   // True while the page holds a model choice the server does not have yet.
   const modelSelectionDirty = Boolean(defaultProviderSelection && defaultModelSelection) && (
     piState?.settings?.defaultProvider !== defaultProviderSelection ||
@@ -583,9 +628,208 @@ export default function SettingsPage() {
                   </div>
                 ) : null}
 
-                {/* The way back. The managed credential survives switching away,
-                    so this is a state change, not a re-authentication - which is
-                    why it must not be an empty API-key box. */}
+{!modelLocked ? <>
+                {/* One card, in the order the work actually happens: pick a
+                    provider, connect it, pick its model. Three separate cards
+                    made a single decision look like three, and the model card
+                    appearing out of nowhere further down was easy to miss. */}
+                <div className="rounded-lg border p-4 space-y-4">
+                  <div>
+                    <h4 className="font-medium">{t("settings.textModel.title")}</h4>
+                    <p className="text-xs text-muted-foreground">{t("settings.textModel.description")}</p>
+                  </div>
+
+                  <div className="space-y-2">
+                    <Label className="text-xs text-muted-foreground">{t("settings.chooseProvider")}</Label>
+                    <Select
+                      value={defaultProviderSelection}
+                      onValueChange={handleDefaultProviderChange}
+                      disabled={piLoading || providerChoices.length === 0}
+                    >
+                      <SelectTrigger className="w-full">
+                        <SelectValue placeholder={t("settings.selectProvider")} />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectGroup>
+                          {providerChoices.map((item) => (
+                            <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>
+                          ))}
+                        </SelectGroup>
+                      </SelectContent>
+                    </Select>
+                  </div>
+
+                  {/* Exactly one way to connect is shown: the sign-in button for
+                      an OAuth provider, the key field for an API one. */}
+                  {defaultProviderSelection ? (
+                    <div className="space-y-3 border-t pt-4">
+                      {selectedProviderConnected ? (
+                        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-emerald-600/30 bg-emerald-600/5 px-3 py-2">
+                          <span className="text-sm text-emerald-700 dark:text-emerald-400">
+                            {t("settings.providerConnectedBadge", { provider: selectedProviderName })}
+                          </span>
+                          {selectedProviderState?.stored ? (
+                            <Button variant="ghost" size="sm" className="gap-2 text-destructive" onClick={() => logoutProvider(defaultProviderSelection)}>
+                              <LogOut className="size-4" /> {t("settings.disconnect")}
+                            </Button>
+                          ) : null}
+                        </div>
+                      ) : (
+                        <p className="text-xs text-muted-foreground">{t("settings.providerDisconnectedDescription")}</p>
+                      )}
+
+                      {selectedOauthProvider && !selectedProviderConnected ? (
+                        <Button onClick={startOAuthLogin} disabled={oauthSaving} className="gap-2">
+                          {oauthSaving ? <Loader2 className="size-4 animate-spin" /> : <PlugZap className="size-4" />}
+                          {t("settings.loginWithSubscription")}
+                        </Button>
+                      ) : null}
+
+                      {selectedApiKeyProvider ? (
+                        <div className="space-y-3">
+                          <Label className="text-xs text-muted-foreground">
+                            {selectedProviderHasStoredCredential ? t("settings.replaceKeyLabel") : t("settings.apiKeyLabel", { provider: selectedProviderName })}
+                          </Label>
+                          <div className="grid gap-3 md:grid-cols-[1fr_auto]">
+                            <Input value={apiKey} onChange={(event) => setApiKey(event.target.value)} type="password" placeholder={t("settings.apiKeyPlaceholder", { provider: selectedProviderName })} />
+                            <Button onClick={saveProviderKey} disabled={savingProvider || !apiKey.trim()} className="gap-2">
+                              {savingProvider ? <Loader2 className="size-4 animate-spin" /> : <KeyRound className="size-4" />}
+                              {selectedProviderHasStoredCredential ? t("settings.replaceKey") : t("settings.saveKey")}
+                            </Button>
+                          </div>
+                          <details>
+                            <summary className="cursor-pointer text-xs text-muted-foreground">{t("settings.providerEnvSummary")}</summary>
+                            <Textarea value={apiKeyEnv} onChange={(event) => setApiKeyEnv(event.target.value)} rows={4} className="mt-2 font-mono text-xs" placeholder={t("settings.providerEnvPlaceholder")} />
+                          </details>
+                        </div>
+                      ) : null}
+
+                      {!selectedOauthProvider && !selectedApiKeyProvider ? (
+                        <p className="text-sm text-muted-foreground">{t("settings.noLoginMethod")}</p>
+                      ) : null}
+                    </div>
+                  ) : null}
+
+                  {oauthJob ? (
+                    <div className="rounded-md border bg-muted/20 p-3 space-y-3 text-sm">
+                      <div className="flex items-center justify-between gap-3">
+                        <div>{t("settings.status")} <span className="font-medium">{oauthJob.status}</span>{oauthJob.error ? <span className="text-destructive"> · {oauthJob.error}</span> : null}</div>
+                        {oauthJob.status === "running" ? <Button size="sm" variant="outline" onClick={cancelOAuthLogin}>{t("common.cancel")}</Button> : null}
+                      </div>
+                      {oauthJob.events.map((event) => {
+                        if (event.type === "auth_url") return <div key={event.id} className="space-y-1"><p>{event.instructions || t("settings.openAuthUrlInstruction")}</p><a href={event.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary underline"><ExternalLink className="size-3" />{t("settings.openAuthUrl")}</a><p className="break-all text-xs text-muted-foreground">{event.url}</p></div>;
+                        if (event.type === "device_code") return <div key={event.id} className="rounded-md bg-background p-3"><p>{t("settings.deviceCodeInstruction", { url: event.verificationUri })}</p><div className="mt-2 font-mono text-lg font-semibold tracking-widest">{event.userCode}</div></div>;
+                        if (event.type === "progress") return <p key={event.id} className="text-muted-foreground">{event.message}</p>;
+                        if (event.type === "select" && oauthJob.status === "running" && !answeredPrompts[event.promptId]) return <div key={event.id} className="space-y-2"><p className="font-medium">{event.message}</p><div className="flex flex-wrap gap-2">{event.options.map((option) => <Button key={option.id} size="sm" variant="outline" onClick={() => answerLoginPrompt(event.promptId, option.id)}>{option.label}</Button>)}</div></div>;
+                        if (event.type === "prompt" && oauthJob.status === "running" && !answeredPrompts[event.promptId]) return <div key={event.id} className="space-y-2"><Label>{event.message}</Label><div className="grid gap-2 md:grid-cols-[1fr_auto]"><Input value={promptInputs[event.promptId] || ""} placeholder={event.placeholder || ""} onChange={(inputEvent) => setPromptInputs((prev) => ({ ...prev, [event.promptId]: inputEvent.target.value }))} /><Button onClick={() => answerLoginPrompt(event.promptId, promptInputs[event.promptId] || "")} disabled={!event.allowEmpty && !promptInputs[event.promptId]?.trim()}>{t("settings.send")}</Button></div></div>;
+                        if (event.type === "completed") return <p key={event.id} className="text-emerald-600">{t("settings.loginCompleted")}</p>;
+                        if (event.type === "error") return <p key={event.id} className="text-destructive">{event.message}</p>;
+                        return null;
+                      })}
+                    </div>
+                  ) : null}
+
+                  {/* Stays visible but inert until the provider above can serve a
+                      model, so the last step is never a surprise. */}
+                  <div className="space-y-2 border-t pt-4">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <Label className="text-xs text-muted-foreground">{t("settings.chooseModelLabel")}</Label>
+                      {modelSelectionDirty ? (
+                        <Badge variant="outline" className="border-amber-500/40 text-amber-700 dark:text-amber-400">
+                          {t("settings.unsavedModel")}
+                        </Badge>
+                      ) : null}
+                    </div>
+                    <div className="grid gap-3 md:grid-cols-[1fr_160px_auto]">
+                      <Select value={defaultModelSelection} onValueChange={setDefaultModelSelection} disabled={!selectedProviderConnected}>
+                        <SelectTrigger className="w-full">
+                          <SelectValue placeholder={selectedProviderConnected ? t("settings.selectModel") : t("settings.selectProviderFirst")} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            {modelChoices.map((model) => (
+                              <SelectItem key={`${model.provider}/${model.id}`} value={model.id}>
+                                {model.id}{model.name && model.name !== model.id ? ` · ${model.name}` : ""}
+                              </SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                      <Select value={defaultThinkingLevel} onValueChange={setDefaultThinkingLevel} disabled={!selectedProviderConnected}>
+                        <SelectTrigger className="w-full">
+                          <SelectValue placeholder={t("settings.thinking")} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            {thinkingLevels.map((level) => <SelectItem key={level} value={level}>{level}</SelectItem>)}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                      <Button onClick={saveDefaultModel} disabled={savingDefaultModel || !defaultModelSelection || !selectedProviderConnected} className="gap-2">
+                        {savingDefaultModel ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+                        {t("settings.saveModel")}
+                      </Button>
+                    </div>
+                  </div>
+                </div>
+                </> : null}
+
+                {/* Images follow the text model. The included model covers both,
+                    so there is nothing to configure while it is on; a workspace
+                    on its own provider brings its own image model or has none. */}
+                <div className="rounded-lg border p-4 space-y-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <h4 className="font-medium">{t("settings.imageGeneration.title")}</h4>
+                      <p className="text-xs text-muted-foreground">
+                        {modelLocked
+                          ? t("settings.imageGeneration.includedDescription", { label: modelLockLabel })
+                          : t("settings.imageGeneration.ownDescription")}
+                      </p>
+                    </div>
+                    <Badge variant={eggentImagesEnabled ? "secondary" : "outline"}>
+                      {eggentImagesEnabled ? t("settings.imageGeneration.enabled") : t("settings.imageGeneration.unavailable")}
+                    </Badge>
+                  </div>
+
+                  {!modelLocked ? (
+                    <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
+                      <Select value={imageProviderSelection} onValueChange={setImageProviderSelection} disabled={imageProviderChoices.length === 0}>
+                        <SelectTrigger className="w-full">
+                          <SelectValue placeholder={imageProviderChoices.length === 0 ? t("settings.imageGeneration.noProviders") : t("settings.imageGeneration.selectProvider")} />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectGroup>
+                            {imageProviderChoices.map((item) => (
+                              <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>
+                            ))}
+                          </SelectGroup>
+                        </SelectContent>
+                      </Select>
+                      <Input
+                        value={imageModelSelection}
+                        onChange={(event) => setImageModelSelection(event.target.value)}
+                        placeholder={t("settings.imageGeneration.modelPlaceholder")}
+                        disabled={!imageProviderSelection}
+                      />
+                      <div className="flex gap-2">
+                        <Button onClick={() => saveImageBackend()} disabled={savingImageBackend || !imageProviderSelection || !imageModelSelection.trim()} className="gap-2">
+                          {savingImageBackend ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+                          {t("common.save")}
+                        </Button>
+                        {piState?.imageGeneration?.provider === "custom" ? (
+                          <Button variant="ghost" size="sm" className="text-destructive" onClick={() => saveImageBackend(true)} disabled={savingImageBackend}>
+                            {t("settings.imageGeneration.clear")}
+                          </Button>
+                        ) : null}
+                      </div>
+                    </div>
+                  ) : null}
+                </div>
+
+                {/* The way back, last, because it undoes everything above at
+                    once. The managed credential survives leaving, so this is a
+                    state change rather than a re-authentication. */}
                 {!modelLocked && managedAvailable ? (
                   <div className="rounded-lg border border-primary/30 bg-primary/5 p-4 space-y-3">
                     <div>
@@ -599,187 +843,7 @@ export default function SettingsPage() {
                   </div>
                 ) : null}
 
-                <div className="rounded-lg border p-4 space-y-2">
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <div className="text-xs font-mono text-muted-foreground">{t("settings.imageGeneration.title")}</div>
-                      <h4 className="font-medium">{eggentImagesEnabled ? t("settings.imageGeneration.eggent") : t("settings.imageGeneration.notConfigured")}</h4>
-                    </div>
-                    <Badge variant={eggentImagesEnabled ? "secondary" : "outline"}>{eggentImagesEnabled ? t("settings.imageGeneration.enabled") : t("settings.imageGeneration.separateSetup")}</Badge>
-                  </div>
-                  <p className="text-sm text-muted-foreground">
-                    {eggentImagesEnabled
-                      ? t("settings.imageGeneration.enabledDescription")
-                      : t("settings.imageGeneration.disabledDescription")}
-                  </p>
-                </div>
-
-                {!modelLocked ? <>
-                <div className="rounded-lg border p-4 space-y-3">
-                  <div>
-                    <div className="text-xs font-mono text-muted-foreground">{t("settings.step", { number: 1 })}</div>
-                    <h4 className="font-medium">{t("settings.chooseProvider")}</h4>
-                    <p className="text-xs text-muted-foreground">{t("settings.chooseProviderDescription")}</p>
-                  </div>
-                  <Select
-                    value={defaultProviderSelection}
-                    onValueChange={handleDefaultProviderChange}
-                    disabled={piLoading || providerChoices.length === 0}
-                  >
-                    <SelectTrigger className="w-full">
-                      <SelectValue placeholder={t("settings.selectProvider")} />
-                    </SelectTrigger>
-                    <SelectContent>
-                      <SelectGroup>
-                        {providerChoices.map((item) => (
-                          <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>
-                        ))}
-                      </SelectGroup>
-                    </SelectContent>
-                  </Select>
-                </div>
-
-                {/* Step 2 shows exactly one way to connect: the sign-in button for
-                    an OAuth provider, the key field for an API one. The managed
-                    provider is neither - it is already connected, so offering an
-                    empty key box for it only looked like the key was lost. */}
-                {defaultProviderSelection ? (
-                  <div className="rounded-lg border p-4 space-y-4">
-                    <div>
-                      <div className="text-xs font-mono text-muted-foreground">{t("settings.step", { number: 2 })}</div>
-                      <h4 className="font-medium">{t("settings.connectProvider", { provider: selectedProviderName })}</h4>
-                      <p className="text-xs text-muted-foreground">
-                        {selectedProviderIsManaged
-                          ? t("settings.managedProviderHint", { label: managedLabel })
-                          : selectedProviderConnected
-                            ? t("settings.providerConnectedDescription")
-                            : t("settings.providerDisconnectedDescription")}
-                      </p>
-                    </div>
-
-                    {selectedProviderConnected ? (
-                      <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-emerald-600/30 bg-emerald-600/5 px-3 py-2">
-                        <span className="text-sm text-emerald-700 dark:text-emerald-400">
-                          {t("settings.providerConnectedBadge", { provider: selectedProviderName })}
-                        </span>
-                        {selectedProviderState?.stored && !selectedProviderIsManaged ? (
-                          <Button variant="ghost" size="sm" className="gap-2 text-destructive" onClick={() => logoutProvider(defaultProviderSelection)}>
-                            <LogOut className="size-4" /> {t("settings.disconnect")}
-                          </Button>
-                        ) : null}
-                      </div>
-                    ) : null}
-
-                    {/* Picking the included model from the list is the obvious way
-                        back, so the action belongs here rather than only in the
-                        card above - and it is a switch, not a sign-in. */}
-                    {selectedProviderIsManaged && managedAvailable ? (
-                      <Button onClick={returnToEggentAi} disabled={returningToManaged} className="gap-2">
-                        {returningToManaged ? <Loader2 className="size-4 animate-spin" /> : <PlugZap className="size-4" />}
-                        {t("settings.managedReturn.cta", { label: managedLabel })}
-                      </Button>
-                    ) : null}
-
-                    {selectedOauthProvider && !selectedProviderConnected ? (
-                      <Button onClick={startOAuthLogin} disabled={oauthSaving} className="gap-2">
-                        {oauthSaving ? <Loader2 className="size-4 animate-spin" /> : <PlugZap className="size-4" />}
-                        {t("settings.loginWithSubscription")}
-                      </Button>
-                    ) : null}
-
-                    {selectedApiKeyProvider && !selectedProviderIsManaged ? (
-                      <div className="space-y-3">
-                        <Label className="text-xs text-muted-foreground">
-                          {selectedProviderHasStoredCredential ? t("settings.replaceKeyLabel") : t("settings.apiKeyLabel", { provider: selectedProviderName })}
-                        </Label>
-                        <div className="grid gap-3 md:grid-cols-[1fr_auto]">
-                          <Input value={apiKey} onChange={(event) => setApiKey(event.target.value)} type="password" placeholder={t("settings.apiKeyPlaceholder", { provider: selectedProviderName })} />
-                          <Button onClick={saveProviderKey} disabled={savingProvider || !apiKey.trim()} className="gap-2">
-                            {savingProvider ? <Loader2 className="size-4 animate-spin" /> : <KeyRound className="size-4" />}
-                            {selectedProviderHasStoredCredential ? t("settings.replaceKey") : t("settings.saveKey")}
-                          </Button>
-                        </div>
-                        <details>
-                          <summary className="cursor-pointer text-xs text-muted-foreground">{t("settings.providerEnvSummary")}</summary>
-                          <Textarea value={apiKeyEnv} onChange={(event) => setApiKeyEnv(event.target.value)} rows={4} className="mt-2 font-mono text-xs" placeholder={t("settings.providerEnvPlaceholder")} />
-                        </details>
-                      </div>
-                    ) : null}
-
-                    {!selectedOauthProvider && !selectedApiKeyProvider && !selectedProviderIsManaged ? (
-                      <p className="text-sm text-muted-foreground">{t("settings.noLoginMethod")}</p>
-                    ) : null}
-                  </div>
-                ) : null}
-
-                {oauthJob ? (
-                  <div className="rounded-md border bg-muted/20 p-3 space-y-3 text-sm">
-                    <div className="flex items-center justify-between gap-3">
-                      <div>{t("settings.status")} <span className="font-medium">{oauthJob.status}</span>{oauthJob.error ? <span className="text-destructive"> · {oauthJob.error}</span> : null}</div>
-                      {oauthJob.status === "running" ? <Button size="sm" variant="outline" onClick={cancelOAuthLogin}>{t("common.cancel")}</Button> : null}
-                    </div>
-                    {oauthJob.events.map((event) => {
-                      if (event.type === "auth_url") return <div key={event.id} className="space-y-1"><p>{event.instructions || t("settings.openAuthUrlInstruction")}</p><a href={event.url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary underline"><ExternalLink className="size-3" />{t("settings.openAuthUrl")}</a><p className="break-all text-xs text-muted-foreground">{event.url}</p></div>;
-                      if (event.type === "device_code") return <div key={event.id} className="rounded-md bg-background p-3"><p>{t("settings.deviceCodeInstruction", { url: event.verificationUri })}</p><div className="mt-2 font-mono text-lg font-semibold tracking-widest">{event.userCode}</div></div>;
-                      if (event.type === "progress") return <p key={event.id} className="text-muted-foreground">{event.message}</p>;
-                      if (event.type === "select" && oauthJob.status === "running" && !answeredPrompts[event.promptId]) return <div key={event.id} className="space-y-2"><p className="font-medium">{event.message}</p><div className="flex flex-wrap gap-2">{event.options.map((option) => <Button key={option.id} size="sm" variant="outline" onClick={() => answerLoginPrompt(event.promptId, option.id)}>{option.label}</Button>)}</div></div>;
-                      if (event.type === "prompt" && oauthJob.status === "running" && !answeredPrompts[event.promptId]) return <div key={event.id} className="space-y-2"><Label>{event.message}</Label><div className="grid gap-2 md:grid-cols-[1fr_auto]"><Input value={promptInputs[event.promptId] || ""} placeholder={event.placeholder || ""} onChange={(inputEvent) => setPromptInputs((prev) => ({ ...prev, [event.promptId]: inputEvent.target.value }))} /><Button onClick={() => answerLoginPrompt(event.promptId, promptInputs[event.promptId] || "")} disabled={!event.allowEmpty && !promptInputs[event.promptId]?.trim()}>{t("settings.send")}</Button></div></div>;
-                      if (event.type === "completed") return <p key={event.id} className="text-emerald-600">{t("settings.loginCompleted")}</p>;
-                      if (event.type === "error") return <p key={event.id} className="text-destructive">{event.message}</p>;
-                      return null;
-                    })}
-                  </div>
-                ) : null}
-
-                {selectedProviderConnected ? (
-                  <div className="rounded-lg border p-4 space-y-3">
-                    <div className="flex flex-wrap items-start justify-between gap-2">
-                      <div>
-                        <div className="text-xs font-mono text-muted-foreground">{t("settings.step", { number: 3 })}</div>
-                        <h4 className="font-medium">{t("settings.chooseModel", { provider: selectedProviderName })}</h4>
-                        <p className="text-xs text-muted-foreground">{t("settings.chooseModelDescription")}</p>
-                      </div>
-                      {/* The model lives in its own store, so say plainly when the
-                          page is holding a choice the workspace does not have yet. */}
-                      {modelSelectionDirty ? (
-                        <Badge variant="outline" className="border-amber-500/40 text-amber-700 dark:text-amber-400">
-                          {t("settings.unsavedModel")}
-                        </Badge>
-                      ) : null}
-                    </div>
-                    <div className="grid gap-3 md:grid-cols-[1fr_160px_auto]">
-                      <Select value={defaultModelSelection} onValueChange={setDefaultModelSelection}>
-                        <SelectTrigger className="w-full">
-                          <SelectValue placeholder={t("settings.selectModel")} />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectGroup>
-                            {modelChoices.map((model) => (
-                              <SelectItem key={`${model.provider}/${model.id}`} value={model.id}>
-                                {model.id}{model.name && model.name !== model.id ? ` · ${model.name}` : ""}
-                              </SelectItem>
-                            ))}
-                          </SelectGroup>
-                        </SelectContent>
-                      </Select>
-                      <Select value={defaultThinkingLevel} onValueChange={setDefaultThinkingLevel}>
-                        <SelectTrigger className="w-full">
-                          <SelectValue placeholder={t("settings.thinking")} />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectGroup>
-                            {thinkingLevels.map((level) => <SelectItem key={level} value={level}>{level}</SelectItem>)}
-                          </SelectGroup>
-                        </SelectContent>
-                      </Select>
-                      <Button onClick={saveDefaultModel} disabled={savingDefaultModel || !defaultModelSelection} className="gap-2">
-                        {savingDefaultModel ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
-                        {t("settings.saveModel")}
-                      </Button>
-                    </div>
-                  </div>
-                ) : null}
-
+                {!modelLocked ? (
                 <details className="rounded-lg border p-4">
                   <summary className="cursor-pointer text-sm font-medium">{t("settings.advancedModelsSummary")}</summary>
                   <div className="mt-4 space-y-2">
@@ -797,7 +861,7 @@ export default function SettingsPage() {
                     <Textarea value={modelsJson} onChange={(event) => setModelsJson(event.target.value)} rows={14} className="min-h-80 font-mono text-xs" />
                   </div>
                 </details>
-                </> : null}
+                ) : null}
               </section>
 
               <section className="rounded-xl border bg-card p-5 space-y-4">

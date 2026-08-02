@@ -134,28 +134,174 @@ function readJsonRecord(content: string): Record<string, unknown> {
     : {};
 }
 
-async function getEggentImagesState(): Promise<{ enabled: boolean; provider: "eggent" | "none"; label: string; reason?: string }> {
-  const [auth, modelsContent] = await Promise.all([
-    readAuthJson().catch((): Record<string, StoredCredentialRecord> => ({})),
-    readPiModelsJson().catch(() => JSON.stringify({ providers: {} })),
-  ]);
-  const credential = auth["eggent-ai"];
-  const token = typeof credential?.key === "string" ? credential.key : "";
-  const models = readJsonRecord(modelsContent);
+export interface ImageGenerationState {
+  enabled: boolean;
+  provider: "eggent" | "custom" | "none";
+  label: string;
+  providerId?: string;
+  model?: string;
+  reason?: string;
+}
+
+function getImageBackendPath(): string {
+  return path.join(getPiAgentDir(), "image-generation.json");
+}
+
+export async function readImageBackendConfig(): Promise<{ provider: string; model: string } | null> {
+  try {
+    const content = await fs.readFile(getImageBackendPath(), "utf-8");
+    const parsed = readJsonRecord(content);
+    const provider = typeof parsed.provider === "string" ? parsed.provider.trim() : "";
+    const model = typeof parsed.model === "string" ? parsed.model.trim() : "";
+    return provider && model ? { provider, model } : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeImageBackendConfig(content: { provider: string; model: string } | null): Promise<void> {
+  const filePath = getImageBackendPath();
+  if (!content) {
+    await fs.rm(filePath, { force: true }).catch(() => undefined);
+    return;
+  }
+  await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  await fs.writeFile(filePath, `${JSON.stringify(content, null, 2)}\n`, { mode: 0o600 });
+  await fs.chmod(filePath, 0o600).catch(() => undefined);
+}
+
+/** Base URL for a provider, taking a models.json override over the built-in one. */
+async function providerBaseUrl(providerId: string): Promise<string> {
+  const models = readJsonRecord(await readPiModelsJson().catch(() => "{}"));
   const providersValue = models.providers;
   const providers = providersValue && typeof providersValue === "object" && !Array.isArray(providersValue)
     ? providersValue as Record<string, unknown>
     : {};
-  const providerValue = providers["eggent-ai"];
-  const provider = providerValue && typeof providerValue === "object" && !Array.isArray(providerValue)
-    ? providerValue as Record<string, unknown>
-    : {};
-  const baseUrl = typeof provider.baseUrl === "string" ? provider.baseUrl.trim() : "";
-  const label = typeof provider.name === "string" && provider.name.trim() ? provider.name.trim() : eggentAiModelLabel();
-  if (token.startsWith("eggw_") && baseUrl) {
-    return { enabled: true, provider: "eggent", label };
+  const override = providers[providerId];
+  if (override && typeof override === "object" && !Array.isArray(override)) {
+    const url = (override as Record<string, unknown>).baseUrl;
+    if (typeof url === "string" && url.trim()) return url.trim().replace(/\/+$/, "");
   }
-  return { enabled: false, provider: "none", label: "Not configured", reason: "missing_managed_gateway_token" };
+  try {
+    const runtime = await getPiModelRuntime();
+    const provider = runtime.getProviders().find((item) => item.id === providerId) as { baseUrl?: string } | undefined;
+    if (typeof provider?.baseUrl === "string" && provider.baseUrl.trim()) {
+      return provider.baseUrl.trim().replace(/\/+$/, "");
+    }
+  } catch {
+    // Falls through to "no base url", which is reported as not configured.
+  }
+  return "";
+}
+
+/**
+ * Which image backend this workspace can actually use right now.
+ *
+ * Images used to be enabled by the mere presence of the managed gateway token,
+ * which survives switching to your own model - so a workspace that had
+ * deliberately left Eggent AI still showed Eggent image generation as active
+ * and still spent included credits on it. The two now travel together: the
+ * managed backend serves images only while the managed text model is the one
+ * answering. A workspace on its own provider brings its own image model, or has
+ * none, and both the settings screen and the agent say so plainly.
+ */
+export async function getImageGenerationState(): Promise<ImageGenerationState> {
+  const [auth, modelLock] = await Promise.all([
+    readAuthJson().catch((): Record<string, StoredCredentialRecord> => ({})),
+    getEggentAiModelLockState(),
+  ]);
+
+  if (modelLock.locked) {
+    const token = typeof auth["eggent-ai"]?.key === "string" ? auth["eggent-ai"].key : "";
+    const baseUrl = await providerBaseUrl("eggent-ai");
+    if (token.startsWith("eggw_") && baseUrl) {
+      return { enabled: true, provider: "eggent", label: modelLock.label, providerId: "eggent-ai" };
+    }
+    return { enabled: false, provider: "none", label: "Not configured", reason: "missing_managed_gateway_token" };
+  }
+
+  const configured = await readImageBackendConfig();
+  if (!configured) {
+    return { enabled: false, provider: "none", label: "Not configured", reason: "no_image_model_selected" };
+  }
+  const credential = auth[configured.provider];
+  if (!credential) {
+    return {
+      enabled: false,
+      provider: "none",
+      label: "Not configured",
+      providerId: configured.provider,
+      model: configured.model,
+      reason: "image_provider_not_connected",
+    };
+  }
+  const baseUrl = await providerBaseUrl(configured.provider);
+  if (!baseUrl) {
+    return {
+      enabled: false,
+      provider: "none",
+      label: "Not configured",
+      providerId: configured.provider,
+      model: configured.model,
+      reason: "image_provider_has_no_base_url",
+    };
+  }
+  return {
+    enabled: true,
+    provider: "custom",
+    label: `${configured.provider} · ${configured.model}`,
+    providerId: configured.provider,
+    model: configured.model,
+  };
+}
+
+/**
+ * The same decision as {@link getImageGenerationState}, plus the endpoint.
+ *
+ * Kept here rather than re-derived by the tool so there is one place that
+ * decides whether images are available and where they are sent.
+ */
+export async function resolveImageBackend(): Promise<
+  { providerId: string; model: string; baseUrl: string; managed: boolean } | null
+> {
+  const state = await getImageGenerationState();
+  if (!state.enabled || !state.providerId) return null;
+  const baseUrl = await providerBaseUrl(state.providerId);
+  if (!baseUrl) return null;
+  return {
+    providerId: state.providerId,
+    model: state.provider === "eggent" ? "eggent-ai" : state.model || "",
+    baseUrl,
+    managed: state.provider === "eggent",
+  };
+}
+
+/**
+ * Point image generation at one of the workspace's own providers.
+ *
+ * Only providers this workspace already holds a credential for are accepted, so
+ * saving cannot leave the same "selected but unusable" state that the text model
+ * used to allow. Passing null clears the choice.
+ */
+export async function setImageGenerationBackend(
+  input: { provider: string; model: string } | null
+): Promise<ImageGenerationState> {
+  if (!input) {
+    await writeImageBackendConfig(null);
+    return await getImageGenerationState();
+  }
+  const provider = input.provider.trim();
+  const model = input.model.trim();
+  if (!provider || !model) throw new Error("Choose an image provider and enter a model id.");
+  const auth = await readAuthJson().catch((): Record<string, StoredCredentialRecord> => ({}));
+  if (!auth[provider]) {
+    throw new Error(`Connect ${provider} first: this workspace has no credential for it.`);
+  }
+  if (!(await providerBaseUrl(provider))) {
+    throw new Error(`${provider} has no base URL, so it cannot serve image requests.`);
+  }
+  await writeImageBackendConfig({ provider, model });
+  return await getImageGenerationState();
 }
 
 async function writeAuthJson(content: Record<string, StoredCredentialRecord>): Promise<void> {
@@ -621,7 +767,7 @@ export async function getPiModelsState() {
     ? all.find((model) => model.provider === settings.defaultProvider && model.id === settings.defaultModel)
     : undefined;
   const modelLock = await getEggentAiModelLockState();
-  const imageGeneration = await getEggentImagesState();
+  const imageGeneration = await getImageGenerationState();
 
   if (modelLock.locked) {
     const lockedModel = currentModel
@@ -691,6 +837,12 @@ export async function getPiModelsState() {
     modelsFile: getPiModelsPath(),
     modelLock,
     imageGeneration,
+    // Only providers this workspace already holds a credential for can serve
+    // images, so the image picker offers exactly those and nothing else.
+    imageProviders: Object.keys(storedAuth)
+      .filter((provider) => provider !== "eggent-ai")
+      .map((provider) => ({ id: provider, name: modelRegistry.getProviderDisplayName(provider) }))
+      .sort((a, b) => a.name.localeCompare(b.name)),
     managed: { available: managedRecoverable, providerId: managedProviderId || "eggent-ai", label: modelLock.label },
     current: currentModel ? {
       provider: settings.defaultProvider,
