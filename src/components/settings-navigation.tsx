@@ -3,10 +3,13 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
+  Brain,
   Cable,
   CalendarClock,
+  FileText,
   FolderOpen,
   GitBranch,
+  Puzzle,
   Send,
   Settings,
   type LucideIcon,
@@ -18,6 +21,9 @@ import { cn } from "@/lib/utils";
 const SETTINGS_SECTIONS: Array<{ href: string; labelKey: MessageKey; icon: LucideIcon }> = [
   { href: "/dashboard/settings", labelKey: "settings.nav.general", icon: Settings },
   { href: "/dashboard/projects", labelKey: "settings.nav.projects", icon: FolderOpen },
+  { href: "/dashboard/context", labelKey: "settings.nav.context", icon: FileText },
+  { href: "/dashboard/memory", labelKey: "settings.nav.memory", icon: Brain },
+  { href: "/dashboard/skills", labelKey: "settings.nav.skills", icon: Puzzle },
   { href: "/dashboard/pipelines", labelKey: "settings.nav.pipelines", icon: GitBranch },
   { href: "/dashboard/schedules", labelKey: "settings.nav.schedules", icon: CalendarClock },
   { href: "/dashboard/messengers", labelKey: "settings.nav.messengers", icon: Send },

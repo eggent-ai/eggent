@@ -400,8 +400,8 @@ function TreeNode({
     }
 
     if (type === "directory") {
-      if (relativePath === "skills" && projectId !== "none") {
-        router.push(`/dashboard/projects/${projectId}/skills`);
+      if (relativePath === "skills") {
+        router.push(projectId === "none" ? "/dashboard/skills" : `/dashboard/projects/${projectId}/skills`);
         return;
       }
       const willExpand = !expanded;

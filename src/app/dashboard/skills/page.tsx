@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { AppSidebar } from "@/components/app-sidebar";
+import { SettingsNavigation } from "@/components/settings-navigation";
 import { SiteHeader } from "@/components/site-header";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -40,12 +41,12 @@ interface InstalledSkillItem {
 export default function SkillsPage() {
   const { t } = useI18n();
   const { projects, setProjects, activeProjectId } = useAppStore();
-  const [selectedProjectId, setSelectedProjectId] = useState("");
+  const [selectedProjectId, setSelectedProjectId] = useState(activeProjectId ?? "none");
   const [bundledSkills, setBundledSkills] = useState<BundledSkillItem[]>([]);
   const [installedSkills, setInstalledSkills] = useState<InstalledSkillItem[]>([]);
   const [bundledSkillsLoading, setBundledSkillsLoading] = useState(true);
   const [installedSkillsLoading, setInstalledSkillsLoading] = useState(true);
-  const [projectsLoading, setProjectsLoading] = useState(false);
+  const [projectsLoading, setProjectsLoading] = useState(true);
   const [installingSkill, setInstallingSkill] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
@@ -60,34 +61,21 @@ export default function SkillsPage() {
   }, []);
 
   useEffect(() => {
-    if (projects.length === 0) {
-      setSelectedProjectId("");
-      return;
-    }
-
-    const hasCurrent = projects.some((project) => project.id === selectedProjectId);
-    if (hasCurrent) return;
+    if (projectsLoading || selectedProjectId === "none") return;
+    if (projects.some((project) => project.id === selectedProjectId)) return;
 
     const activeFromSidebar = activeProjectId
       ? projects.find((project) => project.id === activeProjectId)
       : null;
-
-    if (activeFromSidebar) {
-      setSelectedProjectId(activeFromSidebar.id);
-      return;
-    }
-
-    setSelectedProjectId(projects[0].id);
-  }, [projects, selectedProjectId, activeProjectId]);
+    setSelectedProjectId(activeFromSidebar?.id ?? "none");
+  }, [projects, projectsLoading, selectedProjectId, activeProjectId]);
 
   useEffect(() => {
-    loadBundledSkills(selectedProjectId);
-    if (!selectedProjectId) {
-      setInstalledSkills([]);
-      setInstalledSkillsLoading(false);
-      return;
-    }
-    loadInstalledSkills(selectedProjectId);
+    const controller = new AbortController();
+    void loadBundledSkills(selectedProjectId, controller.signal);
+    void loadInstalledSkills(selectedProjectId, controller.signal);
+    return () => controller.abort();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedProjectId]);
 
   async function loadProjects() {
@@ -103,15 +91,16 @@ export default function SkillsPage() {
     }
   }
 
-  async function loadBundledSkills(projectId: string) {
+  async function loadBundledSkills(projectId: string, signal?: AbortSignal) {
     try {
-      setBundledSkillsLoading(true);
+      if (!signal?.aborted) setBundledSkillsLoading(true);
       const query = projectId
         ? `?projectId=${encodeURIComponent(projectId)}`
         : "";
-      const res = await fetch(`/api/skills${query}`);
+      const res = await fetch(`/api/skills${query}`, { signal });
       if (!res.ok) throw new Error(t("skills.errors.load"));
       const data = await res.json();
+      if (signal?.aborted) return;
       if (Array.isArray(data)) {
         setBundledSkills(
           data.map((item) => ({
@@ -135,18 +124,19 @@ export default function SkillsPage() {
         setBundledSkills([]);
       }
     } catch {
-      setBundledSkills([]);
+      if (!signal?.aborted) setBundledSkills([]);
     } finally {
-      setBundledSkillsLoading(false);
+      if (!signal?.aborted) setBundledSkillsLoading(false);
     }
   }
 
-  async function loadInstalledSkills(projectId: string) {
+  async function loadInstalledSkills(projectId: string, signal?: AbortSignal) {
     try {
-      setInstalledSkillsLoading(true);
-      const res = await fetch(`/api/projects/${encodeURIComponent(projectId)}/skills`);
+      if (!signal?.aborted) setInstalledSkillsLoading(true);
+      const res = await fetch(`/api/projects/${encodeURIComponent(projectId)}/skills`, { signal });
       if (!res.ok) throw new Error(t("skills.errors.loadProject"));
       const data = await res.json();
+      if (signal?.aborted) return;
       if (Array.isArray(data)) {
         setInstalledSkills(
           data.map((item) => ({
@@ -166,9 +156,9 @@ export default function SkillsPage() {
         setInstalledSkills([]);
       }
     } catch {
-      setInstalledSkills([]);
+      if (!signal?.aborted) setInstalledSkills([]);
     } finally {
-      setInstalledSkillsLoading(false);
+      if (!signal?.aborted) setInstalledSkillsLoading(false);
     }
   }
 
@@ -201,10 +191,10 @@ export default function SkillsPage() {
         loadBundledSkills(selectedProjectId),
         loadInstalledSkills(selectedProjectId),
       ]);
-      const projectName =
-        projects.find((project) => project.id === selectedProjectId)?.name ??
-        selectedProjectId;
-      setStatusMessage(t("skills.installedMessage", { skill: skillName, project: projectName }));
+      const workspaceName = selectedProjectId === "none"
+        ? t("common.orchestrator")
+        : projects.find((project) => project.id === selectedProjectId)?.name ?? selectedProjectId;
+      setStatusMessage(t("skills.installedMessage", { skill: skillName, project: workspaceName }));
     } catch {
       setStatusMessage(t("skills.errors.install"));
     } finally {
@@ -243,10 +233,11 @@ export default function SkillsPage() {
           <AppSidebar />
           <SidebarInset>
             <div className="flex flex-1 flex-col gap-4 p-4 md:p-6 max-w-5xl mx-auto w-full">
+              <SettingsNavigation />
               <div className="space-y-1">
                 <h2 className="text-2xl font-semibold">{t("skills.title")}</h2>
                 <p className="text-sm text-muted-foreground">
-                  {t("skills.description", { path: ".meta/skills" })}
+                  {t("skills.description", { path: "skills/" })}
                 </p>
               </div>
 
@@ -254,13 +245,14 @@ export default function SkillsPage() {
                 <Select
                   value={selectedProjectId}
                   onValueChange={setSelectedProjectId}
-                  disabled={projectsLoading || projects.length === 0}
+                  disabled={projectsLoading}
                 >
                   <SelectTrigger className="md:w-96">
                     <SelectValue placeholder={projectsLoading ? t("skills.loadingProjects") : t("skills.selectProject")} />
                   </SelectTrigger>
                   <SelectContent>
                     <SelectGroup>
+                      <SelectItem value="none">{t("common.orchestrator")}</SelectItem>
                       {projects.map((project) => (
                         <SelectItem key={project.id} value={project.id}>
                           {project.name} ({project.id})
@@ -288,7 +280,7 @@ export default function SkillsPage() {
                 <div className="flex items-center justify-between border-b px-4 py-3">
                   <div className="flex items-center gap-2">
                     <BookText className="size-4 text-primary" />
-                    <h3 className="text-sm font-medium">{t("skills.installedInProject")}</h3>
+                    <h3 className="text-sm font-medium">{t("skills.installedInWorkspace")}</h3>
                   </div>
                   {!installedSkillsLoading && selectedProjectId && (
                     <span className="text-xs text-muted-foreground">
@@ -352,7 +344,7 @@ export default function SkillsPage() {
               <div className="space-y-1">
                 <h3 className="text-lg font-medium">{t("skills.catalogTitle")}</h3>
                 <p className="text-sm text-muted-foreground">
-                  {t("skills.catalogDescription", { path: ".meta/skills" })}
+                  {t("skills.catalogDescription", { path: "skills/" })}
                 </p>
               </div>
               {bundledSkillsLoading ? (

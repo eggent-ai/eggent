@@ -2,6 +2,7 @@ import fs from "fs/promises";
 import path from "path";
 import {
   createProject,
+  GLOBAL_PROJECT_ID,
   getProject,
   getProjectSkillsDir,
   validateSkillName,
@@ -138,9 +139,11 @@ export async function installBundledSkill(
     return { success: false, error: validationError, code: 400 };
   }
 
-  const project = await getProject(projectId);
-  if (!project) {
-    return { success: false, error: "Project not found", code: 404 };
+  if (projectId !== GLOBAL_PROJECT_ID) {
+    const project = await getProject(projectId);
+    if (!project) {
+      return { success: false, error: "Project not found", code: 404 };
+    }
   }
 
   const sourceDir = path.join(BUNDLED_SKILLS_DIR, normalizedName);
@@ -165,7 +168,7 @@ export async function installBundledSkill(
   if (await dirExists(targetDir)) {
     return {
       success: false,
-      error: `Skill "${normalizedName}" is already installed in this project`,
+      error: `Skill "${normalizedName}" is already installed in this workspace`,
       code: 409,
     };
   }

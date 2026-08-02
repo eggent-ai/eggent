@@ -182,6 +182,19 @@ data/projects/<projectId>/
 
 When a project is selected, Eggent runs the agent with that project as context. Sidebar folder selection is UI-only and does not silently change the agent working directory.
 
+### Orchestrator
+
+The top-level orchestrator has the same persistent building blocks for cross-project work:
+
+```text
+data/orchestrator/
+  context.md    # orchestrator instructions/context
+  memory.md     # orchestrator memory
+  skills/       # orchestrator-local skills
+```
+
+Its working directory remains `data/projects/`, so it can coordinate project directories while keeping its own configuration separate. Orchestrator context, memory tools, Pi skill discovery, `/skill:*` commands, and bundled-skill installation use this scope whenever no project is selected.
+
 ### Chat
 
 A chat stores messages, runtime stats, attached files, and the active project context. Uploaded and pasted chat files are exposed to the agent as readable context paths.
