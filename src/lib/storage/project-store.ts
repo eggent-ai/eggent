@@ -14,30 +14,17 @@ import { publishUiSyncEvent } from "@/lib/realtime/event-bus";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const PROJECTS_DIR = path.join(DATA_DIR, "projects");
-const ORCHESTRATOR_DIR = path.join(DATA_DIR, "orchestrator");
 
-/** ID used for the orchestrator workspace — its work dir is data/projects. */
+/** ID used for "No Project (Global)" — work dir is data/projects */
 export const GLOBAL_PROJECT_ID = "none";
 
-export function isOrchestratorScope(projectId?: string | null): boolean {
-  return !projectId || projectId === GLOBAL_PROJECT_ID;
-}
-
 /**
- * Resolve work directory for a project or the orchestrator.
- * The orchestrator works across data/projects, while its persistent context,
- * memory, and skills live separately in data/orchestrator.
+ * Resolve work directory for a project or global context.
+ * When projectId is null/undefined or GLOBAL_PROJECT_ID ("none"), returns data/projects.
  */
 export function getWorkDir(projectId?: string | null): string {
-  if (isOrchestratorScope(projectId)) return PROJECTS_DIR;
-  return projectDir(projectId as string);
-}
-
-/** Persistent configuration directory for a project or the orchestrator. */
-export function getAgentScopeDir(projectId?: string | null): string {
-  return isOrchestratorScope(projectId)
-    ? ORCHESTRATOR_DIR
-    : projectDir(projectId as string);
+  if (!projectId || projectId === GLOBAL_PROJECT_ID) return PROJECTS_DIR;
+  return path.join(PROJECTS_DIR, projectId);
 }
 
 async function ensureDir(dir: string) {
@@ -52,26 +39,8 @@ const LEGACY_PROJECT_MCP_FILENAME = "mcp.json";
 export const PROJECT_MODEL_FILENAME = "model.json";
 export const PROJECT_METADATA_FILENAME = "project.json";
 
-const PROJECT_ID_REGEX = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/;
-
 function projectDir(projectId: string) {
-  const normalized = projectId.trim();
-  if (
-    !normalized ||
-    normalized !== projectId ||
-    normalized === "." ||
-    normalized === ".." ||
-    normalized.toLowerCase() === GLOBAL_PROJECT_ID ||
-    !PROJECT_ID_REGEX.test(normalized)
-  ) {
-    throw new Error(`Invalid or reserved project id: "${projectId}".`);
-  }
-
-  const resolved = path.resolve(PROJECTS_DIR, normalized);
-  if (path.dirname(resolved) !== path.resolve(PROJECTS_DIR)) {
-    throw new Error(`Project id escapes the projects directory: "${projectId}".`);
-  }
-  return resolved;
+  return path.join(PROJECTS_DIR, projectId);
 }
 
 function projectMetaDir(projectId: string) {
@@ -87,20 +56,20 @@ function legacyProjectMetaFile(projectId: string) {
 }
 
 export function getProjectContextPath(projectId: string): string {
-  return path.join(getAgentScopeDir(projectId), PROJECT_CONTEXT_FILENAME);
+  return path.join(projectDir(projectId), PROJECT_CONTEXT_FILENAME);
 }
 
 export function getProjectMemoryPath(projectId: string): string {
-  return path.join(getAgentScopeDir(projectId), PROJECT_MEMORY_FILENAME);
+  return path.join(projectDir(projectId), PROJECT_MEMORY_FILENAME);
 }
 
 export function getProjectModelSettingsPath(projectId: string): string {
   return path.join(projectDir(projectId), PROJECT_MODEL_FILENAME);
 }
 
-/** Path to a project's or the orchestrator's skills directory — Agent Skills spec. */
+/** Path to project's skills directory — Agent Skills spec */
 export function getProjectSkillsDir(projectId: string): string {
-  return path.join(getAgentScopeDir(projectId), PROJECT_SKILLS_DIRNAME);
+  return path.join(projectDir(projectId), PROJECT_SKILLS_DIRNAME);
 }
 
 /** Legacy path to project's .meta/instructions directory (kept for compatibility/migration). */
@@ -478,7 +447,6 @@ async function dirExists(dir: string): Promise<boolean> {
  * Keeps backward compatibility for existing projects.
  */
 async function migrateLegacySkillsDir(projectId: string): Promise<void> {
-  if (isOrchestratorScope(projectId)) return;
   const skillsDir = getProjectSkillsDir(projectId);
   const legacyDirs = [getProjectLegacySkillsDir(projectId), getProjectLegacyInstructionsDir(projectId)];
   if (await dirExists(skillsDir)) return;
@@ -503,11 +471,9 @@ async function migrateLegacySkillsDir(projectId: string): Promise<void> {
 }
 
 async function getProjectSkillDirs(projectId: string): Promise<string[]> {
-  const skillsDir = getProjectSkillsDir(projectId);
-  if (isOrchestratorScope(projectId)) return [skillsDir];
-
   await migrateLegacySkillsDir(projectId);
 
+  const skillsDir = getProjectSkillsDir(projectId);
   const legacySkillsDir = getProjectLegacySkillsDir(projectId);
   const legacyInstructionsDir = getProjectLegacyInstructionsDir(projectId);
   const dirs: string[] = [];
@@ -639,10 +605,6 @@ export async function createSkill(
 
   const description = params.description.trim().slice(0, 1024);
   if (!description) return { success: false, error: "Description is required (1–1024 characters)." };
-
-  if (!isOrchestratorScope(projectId) && !(await getProject(projectId))) {
-    return { success: false, error: `Project "${projectId}" not found.` };
-  }
 
   await migrateLegacySkillsDir(projectId);
   const baseDir = getProjectSkillsDir(projectId);
@@ -1421,26 +1383,6 @@ function defaultProjectMemory(projectName: string): string {
   return [`# ${projectName} memory`, "", "Persistent notes for this project/pi agent.", ""].join("\n");
 }
 
-function defaultOrchestratorContext(): string {
-  return ["# Orchestrator", "", "Persistent instructions and operating context for the Eggent orchestrator.", ""].join("\n");
-}
-
-function defaultOrchestratorMemory(): string {
-  return ["# Orchestrator memory", "", "Persistent notes for the Eggent orchestrator.", ""].join("\n");
-}
-
-export async function ensureOrchestratorDiskLayout(): Promise<void> {
-  await ensureDir(PROJECTS_DIR);
-  await ensureDir(ORCHESTRATOR_DIR);
-  await ensureDir(getProjectSkillsDir(GLOBAL_PROJECT_ID));
-  if ((await readTextIfExists(getProjectContextPath(GLOBAL_PROJECT_ID))) === null) {
-    await writeTextFile(getProjectContextPath(GLOBAL_PROJECT_ID), defaultOrchestratorContext());
-  }
-  if ((await readTextIfExists(getProjectMemoryPath(GLOBAL_PROJECT_ID))) === null) {
-    await writeTextFile(getProjectMemoryPath(GLOBAL_PROJECT_ID), defaultOrchestratorMemory());
-  }
-}
-
 function defaultProjectModelFile(): string {
   return JSON.stringify({ inheritsGlobal: true }, null, 2);
 }
@@ -1483,19 +1425,9 @@ async function ensureProjectDiskLayout(project: Project): Promise<Project> {
 }
 
 export async function readProjectContext(projectId: string): Promise<string> {
-  if (isOrchestratorScope(projectId)) {
-    await ensureOrchestratorDiskLayout();
-    return (await readTextIfExists(getProjectContextPath(GLOBAL_PROJECT_ID))) ?? defaultOrchestratorContext();
-  }
   const project = await getProject(projectId);
   if (!project) throw new Error("Project not found");
   return (await readTextIfExists(getProjectContextPath(projectId))) ?? project.instructions ?? "";
-}
-
-export async function saveOrchestratorContext(content: string): Promise<void> {
-  await ensureOrchestratorDiskLayout();
-  await writeTextFile(getProjectContextPath(GLOBAL_PROJECT_ID), content);
-  publishUiSyncEvent({ topic: "projects", reason: "orchestrator_context_updated" });
 }
 
 export async function saveProjectContext(projectId: string, content: string): Promise<Project | null> {
@@ -1506,17 +1438,12 @@ export async function saveProjectContext(projectId: string, content: string): Pr
 }
 
 export async function readProjectMemoryFile(projectId: string): Promise<string> {
-  if (isOrchestratorScope(projectId)) {
-    await ensureOrchestratorDiskLayout();
-    return (await readTextIfExists(getProjectMemoryPath(GLOBAL_PROJECT_ID))) ?? defaultOrchestratorMemory();
-  }
   const project = await getProject(projectId);
   if (!project) throw new Error("Project not found");
   return (await readTextIfExists(getProjectMemoryPath(projectId))) ?? defaultProjectMemory(project.name);
 }
 
 export async function saveProjectMemoryFile(projectId: string, content: string): Promise<void> {
-  if (isOrchestratorScope(projectId)) await ensureOrchestratorDiskLayout();
   await writeTextFile(getProjectMemoryPath(projectId), content);
   publishUiSyncEvent({ topic: "projects", projectId, reason: "project_memory_updated" });
 }
@@ -1637,10 +1564,6 @@ export async function getProject(projectId: string): Promise<Project | null> {
 export async function createProject(
   project: Omit<Project, "createdAt" | "updatedAt">
 ): Promise<Project> {
-  if (project.id.trim().toLowerCase() === GLOBAL_PROJECT_ID) {
-    throw new Error(`Project id "${GLOBAL_PROJECT_ID}" is reserved for the orchestrator.`);
-  }
-
   const now = new Date().toISOString();
   const fullProject: Project = {
     ...project,
@@ -1648,7 +1571,7 @@ export async function createProject(
     updatedAt: now,
   };
 
-  const projectRoot = projectDir(project.id);
+  const projectRoot = path.join(PROJECTS_DIR, project.id);
   await ensureDir(projectRoot);
   await ensureDir(getProjectSkillsDir(project.id));
 

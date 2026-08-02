@@ -14,15 +14,11 @@ import type { PiSessionOptions } from "@/lib/pi/types";
 import { getChatFiles } from "@/lib/storage/chat-files-store";
 import type { ChatFile, ProjectSkillMetadata } from "@/lib/types";
 import {
-  ensureOrchestratorDiskLayout,
   ensureProjectMcpAdapterConfig,
-  GLOBAL_PROJECT_ID,
   getProject,
-  getProjectMemoryPath,
   getWorkDir,
   loadProjectModelSettings,
   loadProjectSkillsMetadata,
-  readProjectContext,
 } from "@/lib/storage/project-store";
 import { deploymentContext, ensureWebSearchWorkflow, fallbackRuntimeModel, getEggentAiModelLockState, getManagedProviderId, getPiModelRegistry, getPiModelRuntime, getPiSettingsManager } from "@/lib/pi/config-store";
 import { isUsageProviderConfigured } from "@/lib/usage/usage-provider";
@@ -122,8 +118,7 @@ function formatChatFilesContext(chatFiles: ChatFile[]): string[] {
 }
 
 function formatProjectSkillsContext(options: { projectId?: string; cwd: string; skills: ProjectSkillMetadata[] }): string[] {
-  if (options.skills.length === 0) return [];
-  const scopeLabel = options.projectId ? "Project-local" : "Orchestrator";
+  if (!options.projectId || options.skills.length === 0) return [];
   const rows = options.skills
     .map((skill) => {
       const skillFile = path.join(skill.skillDir, "SKILL.md");
@@ -136,8 +131,8 @@ function formatProjectSkillsContext(options: { projectId?: string; cwd: string; 
     .join("\n");
   return [
     "",
-    `${scopeLabel} Pi skills:`,
-    `These Eggent ${options.projectId ? "project" : "orchestrator"} skills are passed to Pi for this session. When the user asks to use one, read its SKILL.md from the exact path below before acting. Use the cwd-relative or absolute path exactly as shown.`,
+    "Project-local Pi skills:",
+    "These Eggent project skills are passed to Pi as project-scoped skills for this session. When the user asks to use one, read its SKILL.md from the exact path below before acting. The session cwd is already the project root, so do not prefix paths with data/projects/<projectId>; use the cwd-relative path (for example ./skills/name/SKILL.md) or the absolute path exactly as shown.",
     "| Skill | CWD-relative SKILL.md | Absolute SKILL.md | Description |",
     "| --- | --- | --- | --- |",
     rows,
@@ -161,7 +156,7 @@ function buildEggentProjectContext(options: {
   projectName?: string;
   projectDescription?: string;
   projectInstructions?: string;
-  memoryFilePath: string;
+  memorySubdir: string;
   cwd: string;
   chatFiles?: ChatFile[];
   projectSkills?: ProjectSkillMetadata[];
@@ -193,7 +188,7 @@ function buildEggentProjectContext(options: {
       : "Mode: Orchestrator",
     options.projectId
       ? "This Eggent project is the configuration for the current pi agent."
-      : "This orchestrator coordinates all Eggent projects. Project directories are first-level subdirectories containing project.json; the orchestrator's own context, memory, and skills are loaded from its separate workspace configuration.",
+      : "This orchestrator coordinates all Eggent projects. Each first-level subdirectory in the working directory is a project.",
     "Eggent is a universal AI assistant and automation workspace, not just a coding assistant.",
     "Do not introduce yourself as a coding assistant unless the user specifically asks for coding work. Code, files, and commands are capabilities, not Eggent's identity.",
     "Eggent configures the runtime; the runtime owns reasoning, tools, skills, sessions, compaction, extensions, and tool execution.",
@@ -224,7 +219,7 @@ function buildEggentProjectContext(options: {
     "- list_projects / create_project / switch_project for navigating Eggent projects.",
     options.projectId
       ? "- eggent_memory_search / eggent_memory_save / eggent_memory_delete for the project memory.md file."
-      : "- eggent_memory_search / eggent_memory_save / eggent_memory_delete for the orchestrator memory.md file.",
+      : "- Project memory tools require a selected project or explicit project_id.",
     options.projectId
       ? "- Use pi-mcp-adapter's mcp proxy tool for MCP servers configured in this project's .mcp.json."
       : "- Project MCP tools are available through pi-mcp-adapter after switching into a project.",
@@ -255,7 +250,7 @@ function buildEggentProjectContext(options: {
     options.projectName ? `Project name: ${options.projectName}` : "",
     options.projectDescription ? `Project description: ${options.projectDescription}` : "",
     `Working directory: ${options.cwd}`,
-    `Memory file: ${options.memoryFilePath}`,
+    `Memory file: memory.md`,
     // A managed workspace reports a label without a provider id, so require only
     // the id here. Requiring the provider made managed workspaces claim "not
     // selected", which left users believing no model was configured at all.
@@ -278,17 +273,13 @@ function buildEggentProjectContext(options: {
         ].join("\n")
       : "",
     "",
-    options.projectId ? "Project instructions:" : "Orchestrator instructions:",
-    options.projectInstructions?.trim() || (options.projectId ? "No project-specific instructions configured." : "No orchestrator-specific instructions configured."),
+    "Project instructions:",
+    options.projectInstructions?.trim() || "No project-specific instructions configured.",
     ...formatProjectSkillsContext({ projectId: options.projectId, cwd: options.cwd, skills: options.projectSkills ?? [] }),
     ...formatChatFilesContext(options.chatFiles ?? []),
     options.projectSkills?.length
-      ? options.projectId
-        ? "- Project-local skills are listed above and are available as Pi skills in this project scope. Prefer those exact skill paths when activating a project skill."
-        : "- Orchestrator skills are listed above and are available as Pi skills in the orchestrator scope. Prefer those exact skill paths when activating an orchestrator skill."
-      : options.projectId
-        ? "- No project-local skills are installed for this project."
-        : "- No orchestrator skills are installed.",
+      ? "- Project-local skills are listed above and are available as Pi skills in this project scope. Prefer those exact skill paths when activating a project skill."
+      : "- No project-local skills are installed for this project.",
     options.chatFiles?.length
       ? "- Uploaded chat files are listed above. Read them by absolute path when the user asks about attached/uploaded files."
       : "- No uploaded chat files are currently attached to this chat.",
@@ -380,18 +371,14 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     throw new Error((await getServerTranslator())("chat.errors.noModelSelected"));
   }
   const project = projectId ? await getProject(projectId) : null;
-  const scopeId = projectId ?? GLOBAL_PROJECT_ID;
   if (projectId) {
     await ensureProjectMcpAdapterConfig(projectId, cwd);
-  } else {
-    await ensureOrchestratorDiskLayout();
   }
   const memorySubdir =
     options.memorySubdir ||
     (project?.memoryMode === "global" ? "main" : projectId || "main");
 
-  const workspaceInstructions = project?.instructions ?? await readProjectContext(scopeId);
-  const projectSkills = await loadProjectSkillsMetadata(scopeId);
+  const projectSkills = projectId ? await loadProjectSkillsMetadata(projectId) : [];
   const projectSkillPaths = projectSkills.map((skill) => path.join(skill.skillDir, "SKILL.md"));
   const mcpServerIds = projectId ? loadConfiguredMcpServerIds(cwd) : [];
   const chatFiles = options.chatId ? await getChatFiles(options.chatId) : [];
@@ -401,8 +388,8 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     projectId,
     projectName: project?.name,
     projectDescription: project?.description,
-    projectInstructions: workspaceInstructions,
-    memoryFilePath: getProjectMemoryPath(scopeId),
+    projectInstructions: project?.instructions,
+    memorySubdir,
     cwd,
     chatFiles,
     projectSkills,
@@ -486,7 +473,6 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     : await createEggentPiTools({
         chatId: options.chatId,
         projectId,
-        scopeId,
         cwd,
         memorySubdir,
         toolRuntimeData: options.toolRuntimeData,

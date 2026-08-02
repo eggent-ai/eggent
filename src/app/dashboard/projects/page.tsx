@@ -1,7 +1,6 @@
 "use client";
 
 import { Suspense, useCallback, useEffect, useState } from "react";
-import Link from "next/link";
 import { AppSidebar } from "@/components/app-sidebar";
 import { SiteHeader } from "@/components/site-header";
 import { SettingsNavigation } from "@/components/settings-navigation";
@@ -9,27 +8,15 @@ import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import {
-  Card,
-  CardContent,
-  CardDescription,
-  CardFooter,
-  CardHeader,
-  CardTitle,
-} from "@/components/ui/card";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
-  Bot,
-  Brain,
   Check,
-  FileText,
   FolderOpen,
   Loader2,
   Plus,
-  Puzzle,
   Trash2,
   X,
 } from "lucide-react";
@@ -153,7 +140,7 @@ function ProjectsPageClient() {
     } finally {
       setAuthStatusLoading(false);
     }
-  }, [t]);
+  }, []);
 
 
   useEffect(() => {
@@ -500,33 +487,7 @@ function ProjectsPageClient() {
                 </div>
               )}
 
-              <div className="flex flex-col gap-3">
-                <Card>
-                  <CardHeader>
-                    <div className="flex items-center gap-2">
-                      <Bot className="size-5 text-primary" />
-                      <CardTitle>{t("orchestrator.title")}</CardTitle>
-                    </div>
-                    <CardDescription>{t("orchestrator.description")}</CardDescription>
-                  </CardHeader>
-                  <CardContent className="flex flex-wrap gap-2">
-                    {["context.md", "memory.md", "skills/"].map((file) => (
-                      <Badge key={file} variant="outline" className="font-mono">{file}</Badge>
-                    ))}
-                  </CardContent>
-                  <CardFooter className="flex flex-wrap gap-2">
-                    <Button variant="outline" asChild onClick={() => setActiveProjectId(null)}>
-                      <Link href="/dashboard/context"><FileText data-icon="inline-start" />{t("settings.nav.context")}</Link>
-                    </Button>
-                    <Button variant="outline" asChild onClick={() => setActiveProjectId(null)}>
-                      <Link href="/dashboard/memory"><Brain data-icon="inline-start" />{t("settings.nav.memory")}</Link>
-                    </Button>
-                    <Button variant="outline" asChild onClick={() => setActiveProjectId(null)}>
-                      <Link href="/dashboard/skills"><Puzzle data-icon="inline-start" />{t("settings.nav.skills")}</Link>
-                    </Button>
-                  </CardFooter>
-                </Card>
-
+              <div className="space-y-3">
                 {!projectsLoading && projects.length === 0 && (
                   <Empty className="border">
                     <EmptyHeader>

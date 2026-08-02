@@ -184,8 +184,6 @@ async function writeGeneratedImages(options: { cwd?: string }, payload: unknown)
 export async function createEggentPiTools(options: {
   chatId?: string;
   projectId?: string;
-  /** Current storage scope: project id or "none" for the orchestrator. */
-  scopeId?: string;
   cwd?: string;
   memorySubdir?: string;
   toolRuntimeData?: Record<string, unknown>;
@@ -193,8 +191,7 @@ export async function createEggentPiTools(options: {
   /** Whether this run can actually deliver a question to a human and get an answer back. */
   interactive?: boolean;
 } = {}): Promise<{ tools: ToolDefinition[]; cleanup: () => Promise<void> }> {
-  const workspaceScopeId = options.scopeId ?? options.projectId;
-  const memoryProjectId = workspaceScopeId;
+  const memoryProjectId = options.projectId;
 
   const tools: ToolDefinition[] = [
     defineTool({
@@ -443,17 +440,17 @@ export async function createEggentPiTools(options: {
     }),
     defineTool({
       name: "create_skill",
-      label: "Create Eggent Workspace Skill",
-      description: "Create a skill in the current Eggent workspace (a project or the orchestrator). The skill is passed to Pi whenever that workspace runs.",
+      label: "Create Eggent Project Skill",
+      description: "Create a skill in an Eggent project. The skill is passed to pi when that project runs as an agent.",
       parameters: Type.Object({
-        project_id: Type.Optional(Type.String({ description: "Project id, or 'none' for the orchestrator. Defaults to the current workspace." })),
+        project_id: Type.Optional(Type.String({ description: "Project id. Defaults to current project." })),
         skill_name: Type.String({ description: "Skill name, lowercase/hyphenated." }),
         description: Type.String({ description: "Skill description: what it does and when to use it." }),
         body: Type.String({ description: "SKILL.md body/instructions." }),
       }),
       execute: async (_toolCallId, params) => {
-        const projectId = params.project_id || workspaceScopeId;
-        if (!projectId) return textResult("No workspace selected; pass project_id or use 'none' for the orchestrator.");
+        const projectId = params.project_id || options.projectId;
+        if (!projectId) return textResult("No project selected; pass project_id.");
         const result = await createSkill(projectId, {
           skill_name: params.skill_name,
           description: params.description,
@@ -718,27 +715,27 @@ export async function createEggentPiTools(options: {
     defineTool({
       name: "eggent_memory_save",
       label: "Save Eggent Memory",
-      description: "Save persistent memory for the current Eggent workspace (project agent or orchestrator).",
+      description: "Save persistent memory for the current Eggent/pi project agent.",
       parameters: Type.Object({
         text: Type.String({ description: "Memory text to save." }),
         area: Type.Optional(Type.String({ description: "Memory area/category. Defaults to main." })),
       }),
       execute: async (_toolCallId, params) => {
-        if (!memoryProjectId) return textResult("No Eggent workspace scope is available.");
+        if (!memoryProjectId) return textResult("No project selected; project memory is stored in the project's memory.md file.");
         await appendProjectMemory(memoryProjectId, params.text, params.area || "main");
-        return textResult("Saved to workspace memory.md.", { projectId: memoryProjectId, area: params.area || "main" });
+        return textResult("Saved to project memory.md.", { projectId: memoryProjectId, area: params.area || "main" });
       },
     }),
     defineTool({
       name: "eggent_memory_search",
       label: "Search Eggent Memory",
-      description: "Search the current Eggent workspace's memory.md file.",
+      description: "Search the current project's memory.md file.",
       parameters: Type.Object({
         query: Type.String({ description: "Memory search query." }),
         limit: Type.Optional(Type.Number({ description: "Maximum number of memories. Defaults to 5." })),
       }),
       execute: async (_toolCallId, params) => {
-        if (!memoryProjectId) return textResult("No Eggent workspace scope is available.");
+        if (!memoryProjectId) return textResult("No project selected; project memory is stored in the project's memory.md file.");
         const output = await searchProjectMemory(memoryProjectId, params.query, params.limit || 5);
         return textResult(output, { projectId: memoryProjectId });
       },
@@ -746,12 +743,12 @@ export async function createEggentPiTools(options: {
     defineTool({
       name: "eggent_memory_delete",
       label: "Delete Eggent Memory",
-      description: "Delete memory.md blocks matching a query for the current Eggent workspace.",
+      description: "Delete memory.md blocks matching a query for the current pi project agent.",
       parameters: Type.Object({
         query: Type.String({ description: "Query for memory.md blocks to delete." }),
       }),
       execute: async (_toolCallId, params) => {
-        if (!memoryProjectId) return textResult("No Eggent workspace scope is available.");
+        if (!memoryProjectId) return textResult("No project selected; project memory is stored in the project's memory.md file.");
         const output = await deleteProjectMemoryMatches(memoryProjectId, params.query);
         return textResult(output, { projectId: memoryProjectId });
       },

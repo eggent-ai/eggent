@@ -1,10 +1,10 @@
 "use client";
 
+import Link from "next/link";
 import { AppSidebar } from "@/components/app-sidebar";
-import { ProjectFileEditor } from "@/components/project-file-editor";
-import { SettingsNavigation } from "@/components/settings-navigation";
 import { SiteHeader } from "@/components/site-header";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n/provider";
 
 export default function MemoryPage() {
@@ -17,19 +17,16 @@ export default function MemoryPage() {
         <div className="flex flex-1">
           <AppSidebar />
           <SidebarInset>
-            <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-5 p-4 md:p-6">
-              <SettingsNavigation />
-              <div className="flex flex-col gap-1">
-                <h1 className="text-2xl font-semibold">{t("memory.title")}</h1>
-                <p className="text-sm text-muted-foreground">{t("memory.description")}</p>
-              </div>
-              <ProjectFileEditor
-                projectId="none"
-                endpoint="memory"
-                filename="memory.md"
-                title="memory.md"
-                description={t("memory.editorDescription")}
-              />
+            <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-4 p-4 md:p-6">
+              <section className="rounded-xl border bg-card p-5 space-y-3">
+                <h1 className="text-2xl font-semibold">{t("memory.removedTitle")}</h1>
+                <p className="text-sm text-muted-foreground">
+                  {t("memory.removedDescription", { file: "memory.md" })}
+                </p>
+                <Button asChild>
+                  <Link href="/dashboard/projects">{t("memory.openProjects")}</Link>
+                </Button>
+              </section>
             </div>
           </SidebarInset>
         </div>

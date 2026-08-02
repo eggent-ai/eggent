@@ -1,32 +1,27 @@
 import path from "path";
 import {
-  GLOBAL_PROJECT_ID,
   getProject,
-  getProjectContextPath,
-  getProjectMemoryPath,
-  getProjectSkillsDir,
   getWorkDir,
   loadProjectMcpServers,
   loadProjectSkillsMetadata,
-  readProjectContext,
 } from "@/lib/storage/project-store";
 
 export async function getEggentPiProjectConfig(projectId?: string | null) {
   const project = projectId ? await getProject(projectId) : null;
-  const scopeId = projectId ?? GLOBAL_PROJECT_ID;
-  const cwd = getWorkDir(scopeId);
-  const skills = await loadProjectSkillsMetadata(scopeId);
+  const cwd = projectId ? getWorkDir(projectId) : getWorkDir(null);
+  const skills = projectId ? await loadProjectSkillsMetadata(projectId) : [];
   const mcp = projectId ? await loadProjectMcpServers(projectId) : null;
-  const memoryFile = getProjectMemoryPath(scopeId);
-  const instructions = project?.instructions ?? await readProjectContext(scopeId);
+  const memoryFile = projectId ? path.join(cwd, "memory.md") : null;
 
   return {
     projectId: projectId || null,
     project,
     pi: {
       cwd,
-      contextFile: getProjectContextPath(scopeId),
-      instructions,
+      contextFile: projectId
+        ? path.join(cwd, "context.md")
+        : path.join(cwd, "EGGENT_GLOBAL_CONTEXT.md"),
+      instructions: project?.instructions || "",
       skills: skills.map((skill) => ({
         name: skill.name,
         description: skill.description,
@@ -36,9 +31,9 @@ export async function getEggentPiProjectConfig(projectId?: string | null) {
       mcpServers: mcp?.servers ?? [],
       memoryFile,
       files: {
-        context: getProjectContextPath(scopeId),
-        memory: getProjectMemoryPath(scopeId),
-        skills: getProjectSkillsDir(scopeId),
+        context: path.join(cwd, "context.md"),
+        memory: path.join(cwd, "memory.md"),
+        skills: path.join(cwd, "skills"),
         mcp: path.join(cwd, ".mcp.json"),
         model: path.join(cwd, "model.json"),
       },

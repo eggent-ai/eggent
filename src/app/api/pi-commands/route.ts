@@ -1,10 +1,7 @@
 import path from "path";
 import { NextRequest } from "next/server";
 import { createEggentPiSession } from "@/lib/pi/session";
-import {
-  GLOBAL_PROJECT_ID,
-  loadProjectSkillsMetadata,
-} from "@/lib/storage/project-store";
+import { loadProjectSkillsMetadata } from "@/lib/storage/project-store";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -23,8 +20,7 @@ export async function GET(req: NextRequest) {
   let session: Awaited<ReturnType<typeof createEggentPiSession>> | undefined;
   try {
     const projectParam = req.nextUrl.searchParams.get("projectId");
-    const projectId = projectParam && projectParam !== GLOBAL_PROJECT_ID ? projectParam : undefined;
-    const scopeId = projectId ?? GLOBAL_PROJECT_ID;
+    const projectId = projectParam && projectParam !== "none" ? projectParam : undefined;
     const currentPath = req.nextUrl.searchParams.get("currentPath") || undefined;
 
     session = await createEggentPiSession({
@@ -39,9 +35,11 @@ export async function GET(req: NextRequest) {
     // those are implementation details and should not appear as explicit UI
     // commands in Eggent.
     const projectSkillFilePaths = new Set(
-      (await loadProjectSkillsMetadata(scopeId)).map((skill) =>
-        path.resolve(skill.skillDir, "SKILL.md")
-      )
+      projectId
+        ? (await loadProjectSkillsMetadata(projectId)).map((skill) =>
+            path.resolve(skill.skillDir, "SKILL.md")
+          )
+        : []
     );
 
     const skills = session.resourceLoader.getSkills().skills
