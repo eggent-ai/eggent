@@ -14,7 +14,6 @@ import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import {
   Bot,
-  Check,
   FolderOpen,
   Loader2,
   Plus,
@@ -26,53 +25,9 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { useAppStore } from "@/store/app-store";
 import { useI18n } from "@/i18n/provider";
 
-type OnboardingStep = -1 | 0;
-
-interface AuthStatusResponse {
-  authenticated: boolean;
-  username: string | null;
-  mustChangeCredentials: boolean;
-}
-
 function ProjectsLoadingFallback() {
   const { t } = useI18n();
   return <div className="p-4 text-sm text-muted-foreground">{t("common.loading")}</div>;
-}
-
-function OnboardingStepIndicator({
-  step,
-  currentStep,
-  label,
-}: {
-  step: 0;
-  currentStep: OnboardingStep;
-  label: string;
-}) {
-  const completed = currentStep > step;
-  const active = currentStep === step;
-
-  return (
-    <div className="flex items-center gap-2">
-      <div
-        className={`flex size-6 shrink-0 items-center justify-center rounded-full text-xs font-semibold ${
-          completed
-            ? "bg-emerald-500 text-white"
-            : active
-              ? "bg-primary text-primary-foreground"
-              : "bg-muted text-muted-foreground"
-        }`}
-      >
-        {completed ? <Check className="size-3.5" /> : step}
-      </div>
-      <span
-        className={`text-xs ${
-          active ? "text-foreground font-medium" : "text-muted-foreground"
-        }`}
-      >
-        {label}
-      </span>
-    </div>
-  );
 }
 
 function ProjectsPageClient() {
@@ -81,18 +36,9 @@ function ProjectsPageClient() {
   const searchParams = useSearchParams();
   const { projects, setProjects, setActiveProjectId } = useAppStore();
 
-  const isOnboardingQuery = searchParams.get("onboarding") === "1";
   const shouldOpenCreate = searchParams.get("create") === "1";
 
   const [projectsLoading, setProjectsLoading] = useState(true);
-  const [authStatusLoading, setAuthStatusLoading] = useState(true);
-  const [mustChangeCredentials, setMustChangeCredentials] = useState(false);
-  const [credentialUsername, setCredentialUsername] = useState("");
-  const [credentialPassword, setCredentialPassword] = useState("");
-  const [credentialPasswordConfirm, setCredentialPasswordConfirm] = useState("");
-  const [credentialsSaving, setCredentialsSaving] = useState(false);
-  const [credentialsError, setCredentialsError] = useState<string | null>(null);
-  const [credentialsStatus, setCredentialsStatus] = useState<string | null>(null);
 
   const [showCreate, setShowCreate] = useState(false);
   const [creatingProject, setCreatingProject] = useState(false);
@@ -101,8 +47,6 @@ function ProjectsPageClient() {
   const [newDescription, setNewDescription] = useState("");
   const [newInstructions, setNewInstructions] = useState("");
 
-  const [onboardingStep, setOnboardingStep] = useState<OnboardingStep>(-1);
-  const forceCreateVisible = false;
   const isCreateOpen = showCreate;
 
   const loadProjects = useCallback(async () => {
@@ -122,79 +66,15 @@ function ProjectsPageClient() {
     }
   }, [setProjects]);
 
-  const loadAuthStatus = useCallback(async () => {
-    try {
-      setAuthStatusLoading(true);
-      const res = await fetch("/api/auth/status", { cache: "no-store" });
-      const data = (await res.json()) as Partial<AuthStatusResponse>;
-      if (!res.ok) {
-        throw new Error(t("projects.errors.loadAuth"));
-      }
-
-      const currentUsername =
-        typeof data.username === "string" ? data.username : "";
-      if (currentUsername) {
-        setCredentialUsername(currentUsername);
-      }
-      setMustChangeCredentials(Boolean(data.mustChangeCredentials));
-    } catch {
-      setMustChangeCredentials(false);
-    } finally {
-      setAuthStatusLoading(false);
-    }
-  }, []);
-
-
   useEffect(() => {
     void loadProjects();
   }, [loadProjects]);
 
   useEffect(() => {
-    void loadAuthStatus();
-  }, [loadAuthStatus]);
-
-  useEffect(() => {
-    if (forceCreateVisible) {
-      setShowCreate(true);
-      return;
-    }
     if (shouldOpenCreate) {
       setShowCreate(true);
     }
-  }, [forceCreateVisible, shouldOpenCreate]);
-
-  useEffect(() => {
-    if (onboardingStep === 0) {
-      setShowCreate(false);
-    }
-  }, [onboardingStep]);
-
-  useEffect(() => {
-    if (authStatusLoading || projectsLoading) return;
-
-    if (mustChangeCredentials) {
-      if (onboardingStep !== 0) {
-        setOnboardingStep(0);
-      }
-      return;
-    }
-
-    if (isOnboardingQuery) {
-      router.replace("/dashboard/settings");
-      return;
-    }
-
-    if (onboardingStep !== -1) {
-      setOnboardingStep(-1);
-    }
-  }, [
-    authStatusLoading,
-    projectsLoading,
-    mustChangeCredentials,
-    onboardingStep,
-    isOnboardingQuery,
-    router,
-  ]);
+  }, [shouldOpenCreate]);
 
   async function handleCreate() {
     const trimmedName = newName.trim();
@@ -236,59 +116,6 @@ function ProjectsPageClient() {
     }
   }
 
-  async function handleUpdateCredentials() {
-    const username = credentialUsername.trim();
-    const password = credentialPassword.trim();
-    const passwordConfirm = credentialPasswordConfirm.trim();
-
-    if (!username) {
-      setCredentialsError(t("projects.errors.usernameRequired"));
-      return;
-    }
-    if (password.length < 8) {
-      setCredentialsError(t("projects.errors.passwordMin"));
-      return;
-    }
-    if (password !== passwordConfirm) {
-      setCredentialsError(t("projects.errors.passwordMismatch"));
-      return;
-    }
-
-    try {
-      setCredentialsSaving(true);
-      setCredentialsError(null);
-      setCredentialsStatus(null);
-
-      const res = await fetch("/api/auth/credentials", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username, password }),
-      });
-
-      const payload = (await res.json().catch(() => null)) as
-        | { error?: string; success?: boolean }
-        | null;
-      if (!res.ok) {
-        throw new Error(payload?.error || t("projects.errors.updateCredentials"));
-      }
-
-      setMustChangeCredentials(false);
-      setCredentialsStatus(t("projects.credentialsUpdated"));
-      setCredentialPassword("");
-      setCredentialPasswordConfirm("");
-
-      setOnboardingStep(-1);
-      router.push("/dashboard/settings");
-      router.refresh();
-    } catch (error) {
-      setCredentialsError(
-        error instanceof Error ? error.message : t("projects.errors.updateCredentials")
-      );
-    } finally {
-      setCredentialsSaving(false);
-    }
-  }
-
   async function handleDelete(id: string) {
     if (!confirm(t("projects.deleteConfirm"))) return;
     await fetch(`/api/projects/${id}`, { method: "DELETE" });
@@ -312,14 +139,7 @@ function ProjectsPageClient() {
                     {t("projects.description")}
                   </p>
                 </div>
-                <Button
-                  onClick={() => {
-                    if (forceCreateVisible || onboardingStep === 0) return;
-                    setShowCreate(!showCreate);
-                  }}
-                  className="gap-2"
-                  disabled={forceCreateVisible || onboardingStep === 0}
-                >
+                <Button onClick={() => setShowCreate(!showCreate)} className="gap-2">
                   {showCreate ? (
                     <>
                       <X className="size-4" />
@@ -333,96 +153,6 @@ function ProjectsPageClient() {
                   )}
                 </Button>
               </div>
-
-              {onboardingStep >= 0 && (
-                <section className="rounded-lg border bg-card p-4 space-y-4">
-                  <div className="space-y-2">
-                    <h3 className="font-medium">{t("projects.onboarding.title")}</h3>
-                    <div className="flex flex-wrap gap-4">
-                      <OnboardingStepIndicator
-                        step={0}
-                        currentStep={onboardingStep}
-                        label={t("projects.onboarding.credentials")}
-                      />
-                      <div className="text-xs text-muted-foreground">{t("projects.onboarding.nextModel")}</div>
-                    </div>
-                  </div>
-
-                  {onboardingStep === 0 && (
-                    <div className="rounded-lg border p-4 space-y-4">
-                      <div className="space-y-1">
-                        <h4 className="font-medium">{t("projects.onboarding.replaceLogin")}</h4>
-                        <p className="text-sm text-muted-foreground">
-                          {t("projects.onboarding.replaceLoginDescription")}
-                        </p>
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label htmlFor="credential-username">{t("projects.username")}</Label>
-                        <Input
-                          id="credential-username"
-                          value={credentialUsername}
-                          onChange={(event) => setCredentialUsername(event.target.value)}
-                          placeholder="admin"
-                          autoComplete="username"
-                        />
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label htmlFor="credential-password">{t("projects.newPassword")}</Label>
-                        <Input
-                          id="credential-password"
-                          type="password"
-                          value={credentialPassword}
-                          onChange={(event) => setCredentialPassword(event.target.value)}
-                          placeholder={t("projects.passwordMinPlaceholder")}
-                          autoComplete="new-password"
-                        />
-                      </div>
-
-                      <div className="space-y-2">
-                        <Label htmlFor="credential-password-confirm">
-                          {t("projects.confirmPassword")}
-                        </Label>
-                        <Input
-                          id="credential-password-confirm"
-                          type="password"
-                          value={credentialPasswordConfirm}
-                          onChange={(event) =>
-                            setCredentialPasswordConfirm(event.target.value)
-                          }
-                          placeholder={t("projects.repeatPasswordPlaceholder")}
-                          autoComplete="new-password"
-                        />
-                      </div>
-
-                      {credentialsError ? (
-                        <Alert variant="destructive">
-                          <AlertDescription>{credentialsError}</AlertDescription>
-                        </Alert>
-                      ) : null}
-                      {credentialsStatus ? <Badge variant="secondary">{credentialsStatus}</Badge> : null}
-
-                      <div className="flex items-center gap-2">
-                        <Button
-                          onClick={handleUpdateCredentials}
-                          disabled={credentialsSaving || authStatusLoading}
-                          className="gap-2"
-                        >
-                          {credentialsSaving ? (
-                            <>
-                              <Loader2 className="size-4 animate-spin" />
-                              {t("common.saving")}
-                            </>
-                          ) : (
-                            t("projects.saveAndOpenSettings")
-                          )}
-                        </Button>
-                      </div>
-                    </div>
-                  )}
-                </section>
-              )}
 
               {isCreateOpen && (
                 <div className="border rounded-lg p-4 bg-card space-y-4">
@@ -480,11 +210,9 @@ function ProjectsPageClient() {
                         t("projects.createTitle")
                       )}
                     </Button>
-                    {!forceCreateVisible && (
-                      <Button variant="ghost" onClick={() => setShowCreate(false)}>
-                        {t("common.close")}
-                      </Button>
-                    )}
+                    <Button variant="ghost" onClick={() => setShowCreate(false)}>
+                      {t("common.close")}
+                    </Button>
                   </div>
                 </div>
               )}

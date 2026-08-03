@@ -50,7 +50,7 @@ function LoginPageClient() {
       }
 
       if (payload?.mustChangeCredentials) {
-        router.replace("/dashboard/projects?onboarding=1&credentials=1");
+        router.replace("/dashboard/onboarding");
         router.refresh();
         return;
       }

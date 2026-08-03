@@ -43,11 +43,10 @@ function buildLoginRedirect(req: NextRequest): NextResponse {
   return NextResponse.redirect(loginUrl);
 }
 
+const ONBOARDING_PATH = "/dashboard/onboarding";
+
 function buildCredentialsOnboardingRedirect(req: NextRequest): NextResponse {
-  const url = new URL("/dashboard/projects", req.url);
-  url.searchParams.set("onboarding", "1");
-  url.searchParams.set("credentials", "1");
-  return NextResponse.redirect(url);
+  return NextResponse.redirect(new URL(ONBOARDING_PATH, req.url));
 }
 
 export async function middleware(req: NextRequest) {
@@ -81,20 +80,14 @@ export async function middleware(req: NextRequest) {
     return buildLoginRedirect(req);
   }
 
-  if (
-    session.mustChangeCredentials &&
-    pathname.startsWith("/dashboard") &&
-    pathname !== "/dashboard/projects"
-  ) {
+  // Until the default login is replaced there is exactly one page to be on.
+  if (session.mustChangeCredentials && pathname.startsWith("/dashboard") && pathname !== ONBOARDING_PATH) {
     return buildCredentialsOnboardingRedirect(req);
   }
 
-  if (
-    session.mustChangeCredentials &&
-    pathname === "/dashboard/projects" &&
-    req.nextUrl.searchParams.get("credentials") !== "1"
-  ) {
-    return buildCredentialsOnboardingRedirect(req);
+  // And once it is replaced, that page has nothing left to do.
+  if (!session.mustChangeCredentials && pathname === ONBOARDING_PATH) {
+    return NextResponse.redirect(new URL("/dashboard/settings", req.url));
   }
 
   return NextResponse.next();
