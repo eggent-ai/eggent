@@ -995,6 +995,7 @@ export async function processTelegramUpdate(
                         replyToMessageId: messageId ?? null,
                     },
                 },
+                telegramVia: "workspace-bot",
             });
 
             stopProgressNotifier();

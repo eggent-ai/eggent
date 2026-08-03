@@ -17,6 +17,11 @@ import { startPipelineRunInBackground } from "@/lib/pipelines/runner";
 import { managePiSchedules } from "@/lib/pi/schedule-host";
 import { formatUsageMeter, getUsageSnapshot, isUsageProviderConfigured } from "@/lib/usage/usage-provider";
 import {
+  resolveTelegramDestination,
+  sendTelegramDocument,
+  sendTelegramText,
+} from "@/lib/telegram/outbound";
+import {
   createProject,
   createSkill,
   deleteProjectMcpServer,
@@ -31,7 +36,8 @@ const TELEGRAM_SEND_FILE_MAX_BYTES = 45 * 1024 * 1024;
 const IMAGE_REFERENCE_MAX_BYTES = 20 * 1024 * 1024;
 
 interface TelegramRuntimeData {
-  botToken: string;
+  /** Absent when the chat runs through a bot this workspace does not own. */
+  botToken?: string;
   chatId: string | number;
 }
 
@@ -49,8 +55,8 @@ function getTelegramRuntimeData(toolRuntimeData?: Record<string, unknown>): Tele
   const botToken = typeof record.botToken === "string" ? record.botToken.trim() : "";
   const chatIdRaw = record.chatId;
   const chatId = typeof chatIdRaw === "string" || typeof chatIdRaw === "number" ? chatIdRaw : null;
-  if (!botToken || chatId === null) return null;
-  return { botToken, chatId };
+  if (chatId === null) return null;
+  return { botToken: botToken || undefined, chatId };
 }
 
 function resolveLocalFilePath(options: { cwd?: string }, rawPath: string): string {
@@ -968,6 +974,33 @@ export async function createEggentPiTools(options: {
   // times a warm one. One list keeps both on the same warm prefix, and a run
   // with no Telegram channel simply says so when the tool is called.
   const telegramRuntime = getTelegramRuntimeData(options.toolRuntimeData);
+  // Where this run can reach the user. A run answering a Telegram message has
+  // its chat; anything else falls back to what the workspace remembers, so a
+  // schedule or a web turn can still deliver.
+  const telegramDestination = () => resolveTelegramDestination(
+    telegramRuntime ? { chatId: telegramRuntime.chatId, botToken: telegramRuntime.botToken } : null
+  );
+  const noDestinationResult = () => textResult(JSON.stringify({
+    success: false,
+    error: "This workspace has no Telegram chat to send to.",
+    note: "Tell the user to connect a bot in Settings -> Messengers, or to write to the bot once so the workspace learns where to reply.",
+  }, null, 2));
+
+  tools.push(defineTool({
+      name: "telegram_send_message",
+      label: "Send Telegram Message",
+      description: "Send a plain text message to this workspace's Telegram chat. Use it when the user asks to be written to, notified, reminded, or sent a result in Telegram - including from a scheduled or background run. Do not write the text into a file and send the file instead: that is what this tool exists to avoid.",
+      parameters: Type.Object({
+        text: Type.String({ description: "Message text. Plain text; keep it short enough for a chat message." }),
+      }),
+      execute: async (_toolCallId, params) => {
+        const destination = await telegramDestination();
+        if (!destination) return noDestinationResult();
+        const result = await sendTelegramText(destination, params.text);
+        return textResult(JSON.stringify(result, null, 2), { via: result.via });
+      },
+  }));
+
   tools.push(defineTool({
       name: "telegram_send_file",
       label: "Send File to Telegram",
@@ -977,13 +1010,8 @@ export async function createEggentPiTools(options: {
         caption: Type.Optional(Type.String({ description: "Optional caption to include with the file." })),
       }),
       execute: async (_toolCallId, params) => {
-        if (!telegramRuntime) {
-          return textResult(JSON.stringify({
-            success: false,
-            error: "This run is not attached to a Telegram chat, so there is nowhere to send the file.",
-            note: "Tell the user the file is on disk and give its path. Offer Telegram only if they connect a bot.",
-          }, null, 2));
-        }
+        const destination = await telegramDestination();
+        if (!destination) return noDestinationResult();
         try {
           const resolvedPath = resolveOutgoingTelegramFilePath(options, params.file_path);
           const stat = await fs.stat(resolvedPath);
@@ -994,30 +1022,17 @@ export async function createEggentPiTools(options: {
             return textResult(JSON.stringify({ success: false, error: `File is too large (${stat.size} bytes). Max allowed is ${TELEGRAM_SEND_FILE_MAX_BYTES} bytes.` }, null, 2));
           }
 
-          const fileBuffer = await fs.readFile(resolvedPath);
-          const form = new FormData();
-          form.append("chat_id", String(telegramRuntime.chatId));
-          form.append("document", new Blob([fileBuffer]), path.basename(resolvedPath));
-          const trimmedCaption = params.caption?.trim();
-          if (trimmedCaption) form.append("caption", trimmedCaption);
-
-          const response = await fetch(`https://api.telegram.org/bot${telegramRuntime.botToken}/sendDocument`, {
-            method: "POST",
-            body: form,
+          const result = await sendTelegramDocument(destination, {
+            buffer: await fs.readFile(resolvedPath),
+            name: path.basename(resolvedPath),
+            caption: params.caption,
           });
-          const payload = await response.json().catch(() => null) as { ok?: boolean; description?: string; result?: { document?: { file_id?: string; file_name?: string; file_size?: number } } } | null;
-          if (!response.ok || !payload?.ok) {
-            return textResult(JSON.stringify({ success: false, error: `Telegram sendDocument failed (${response.status})${payload?.description ? `: ${payload.description}` : ""}` }, null, 2));
-          }
-
           return textResult(JSON.stringify({
-            success: true,
-            message: "File sent to Telegram successfully.",
+            ...result,
             path: resolvedPath,
-            name: payload.result?.document?.file_name || path.basename(resolvedPath),
-            size: payload.result?.document?.file_size ?? stat.size,
-            telegramFileId: payload.result?.document?.file_id ?? null,
-          }, null, 2));
+            name: path.basename(resolvedPath),
+            size: stat.size,
+          }, null, 2), { via: result.via });
         } catch (error) {
           return textResult(JSON.stringify({ success: false, error: error instanceof Error ? error.message : "Failed to send file to Telegram." }, null, 2));
         }

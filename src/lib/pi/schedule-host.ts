@@ -4,6 +4,7 @@ import type { AgentSession } from "@earendil-works/pi-coding-agent";
 import { getChat, saveChat } from "@/lib/storage/chat-store";
 import { getAllProjects, getWorkDir } from "@/lib/storage/project-store";
 import type { ChatMessage } from "@/lib/types";
+import { resolveTelegramDestination, sendTelegramText } from "@/lib/telegram/outbound";
 
 type ScheduleJobRecord = {
   id?: string;
@@ -156,6 +157,34 @@ async function persistScheduledTurn(chatId: string, assistantText: string, tools
 
   chat.updatedAt = now;
   await saveChat(chat);
+
+  await deliverScheduledTurnToTelegram(assistantText);
+}
+
+/**
+ * Push the result of a scheduled run to Telegram, when this workspace has a
+ * chat to push to.
+ *
+ * The delivery deliberately does not depend on the agent calling a tool. A
+ * scheduled job runs as a subagent with its own tool list, which is why every
+ * "write to me at 07:00" ever asked for here produced the same answer: the task
+ * fired, and then reported that it had nothing to send with. The host knows
+ * both the result and the destination, so it does the sending itself.
+ */
+async function deliverScheduledTurnToTelegram(assistantText: string): Promise<void> {
+  const text = assistantText.trim();
+  if (!text) return;
+
+  try {
+    const destination = await resolveTelegramDestination(null);
+    if (!destination) return;
+    const result = await sendTelegramText(destination, text);
+    if (!result.success) {
+      console.warn("Scheduled Telegram delivery failed:", result.error);
+    }
+  } catch (error) {
+    console.warn("Scheduled Telegram delivery failed:", error);
+  }
 }
 
 function subscribeForScheduledOutput(session: AgentSession, chatId: string): () => void {

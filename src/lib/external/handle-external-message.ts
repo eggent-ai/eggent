@@ -12,6 +12,10 @@ import {
 import { getServerTranslator } from "@/i18n/server";
 import type { MessageKey } from "@/i18n/messages";
 import type { ChatMessage } from "@/lib/types";
+import {
+  rememberTelegramDestinationFromRuntime,
+  type TelegramDestinationKind,
+} from "@/lib/telegram/outbound";
 
 export interface HandleExternalMessageInput {
   sessionId: string;
@@ -23,6 +27,8 @@ export interface HandleExternalMessageInput {
   runtimeData?: Record<string, unknown>;
   toolRuntimeData?: Record<string, unknown>;
   publicMode?: boolean;
+  /** Who owns the bot this message arrived through. Defaults to the relay. */
+  telegramVia?: TelegramDestinationKind;
 }
 
 export interface HandleExternalMediaMessageInput extends HandleExternalMessageInput {
@@ -335,6 +341,15 @@ export async function handleExternalMessage(
     beforeCount,
     runtimeData,
   } = await resolveExternalMessageRunContext(input);
+
+  // Remember where this came from, so a schedule or a later background run can
+  // still reach the user once this request is over. A message forwarded by the
+  // deployment's bot has to go back out through the relay, because its token
+  // does not belong to this workspace.
+  await rememberTelegramDestinationFromRuntime(
+    input.toolRuntimeData,
+    input.telegramVia ?? "relay"
+  );
 
   const reply = await runPiAgentText({
     chatId: resolvedChatId,
