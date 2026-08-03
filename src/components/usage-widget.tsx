@@ -18,6 +18,11 @@ interface UsageMeter {
 interface UsageSnapshot {
   plan?: { label: string; endsAt?: string };
   meters: UsageMeter[];
+  /**
+   * Where this plan is managed. Supplied by the provider, like everything else
+   * here — core does not know what lives at the other end of it.
+   */
+  manage?: { url: string; label?: string };
   notice?: {
     level: "info" | "warning" | "critical";
     title: string;
@@ -106,16 +111,20 @@ export function UsageWidget() {
   const visibleMeters = snapshot.meters.filter((meter) => meter.visibility !== "agentOnly");
   if (!visibleMeters.length && !snapshot.plan && !snapshot.notice) return null;
 
-  return (
-    <div className="mx-2 mb-2 rounded-lg border bg-sidebar-accent/40 p-3 space-y-2 text-xs">
+  const manageUrl = snapshot.manage?.url;
+  const manageLabel = snapshot.manage?.label || t("usage.openAction");
+
+  const summary = (
+    <>
       {snapshot.plan ? (
         <div className="flex items-baseline justify-between gap-2">
           <span className="font-medium">{snapshot.plan.label}</span>
-          {snapshot.plan.endsAt ? (
-            <span className="text-muted-foreground">
-              {new Date(snapshot.plan.endsAt).toLocaleDateString()}
-            </span>
-          ) : null}
+          <span className="flex items-baseline gap-1 text-muted-foreground">
+            {snapshot.plan.endsAt ? (
+              <span>{new Date(snapshot.plan.endsAt).toLocaleDateString()}</span>
+            ) : null}
+            {manageUrl ? <ExternalLink className="size-3 shrink-0 self-center" /> : null}
+          </span>
         </div>
       ) : null}
 
@@ -138,10 +147,33 @@ export function UsageWidget() {
           </div>
         );
       })}
+    </>
+  );
+
+  return (
+    <div className="mx-2 mb-2 rounded-lg border bg-sidebar-accent/40 text-xs">
+      {/*
+        The plan and its meters are the card; the notice below keeps its own
+        link, so the two never nest.
+      */}
+      {manageUrl ? (
+        <a
+          href={manageUrl}
+          target="_blank"
+          rel="noreferrer noopener"
+          aria-label={manageLabel}
+          title={manageLabel}
+          className="block space-y-2 rounded-lg p-3 transition-colors hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          {summary}
+        </a>
+      ) : (
+        <div className="space-y-2 p-3">{summary}</div>
+      )}
 
       {snapshot.notice ? (
         <div
-          className={`rounded-md border p-2 space-y-1 ${
+          className={`mx-3 mb-3 space-y-1 rounded-md border p-2 ${
             snapshot.notice.level === "critical"
               ? "border-destructive/50 text-destructive"
               : snapshot.notice.level === "warning"

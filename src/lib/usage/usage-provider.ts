@@ -42,6 +42,11 @@ export interface UsageNotice {
 export interface UsageSnapshot {
   plan?: { label: string; endsAt?: string };
   meters: UsageMeter[];
+  /**
+   * Where this plan is managed. When present the sidebar renders the whole card
+   * as a link to it; core does not know or care what is on the other side.
+   */
+  manage?: { url: string; label?: string };
   notice?: UsageNotice;
   /**
    * Guidance written by the provider for the agent rather than for the UI, e.g.
@@ -126,6 +131,17 @@ function parseMeter(raw: unknown): UsageMeter | null {
   };
 }
 
+function parseManage(raw: unknown): UsageSnapshot["manage"] {
+  if (!raw || typeof raw !== "object") return undefined;
+  const record = raw as Record<string, unknown>;
+  const url = typeof record.url === "string" ? record.url.trim() : "";
+  // Same rule as notice links: http(s) only, so a provider cannot inject a
+  // javascript: URL into a card the user is invited to click.
+  if (!/^https?:\/\//i.test(url)) return undefined;
+  const label = typeof record.label === "string" ? record.label.trim() : "";
+  return { url, label: label || undefined };
+}
+
 function parseNotice(raw: unknown): UsageNotice | undefined {
   if (!raw || typeof raw !== "object") return undefined;
   const record = raw as Record<string, unknown>;
@@ -162,6 +178,7 @@ export function parseUsageSnapshot(raw: unknown): UsageSnapshot | null {
     }
   }
 
+  const manage = parseManage(record.manage);
   const notice = parseNotice(record.notice);
   const agentNote = typeof record.agentNote === "string" ? record.agentNote.trim() || undefined : undefined;
   if (!meters.length && !plan && !notice && !agentNote) return null;
@@ -169,6 +186,7 @@ export function parseUsageSnapshot(raw: unknown): UsageSnapshot | null {
   return {
     plan,
     meters,
+    manage,
     notice,
     agentNote,
     refreshAfterSec: asFiniteNumber(record.refreshAfterSec) ?? undefined,
