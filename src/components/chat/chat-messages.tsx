@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { MessageBubble } from "./message-bubble";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Input } from "@/components/ui/input";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { ArrowRight, Bot, CheckCircle2, ExternalLink, FolderOpen, Loader2, MessageCircle, Sparkle, Sparkles, TriangleAlert } from "lucide-react";
 import type { UIMessage } from "ai";
@@ -11,7 +12,7 @@ import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n/provider";
 import type { MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/utils";
-import type { PiPendingInteraction } from "@/lib/pi/interaction-types";
+import { DEFER_INTERACTION_ANSWER, type PiPendingInteraction } from "@/lib/pi/interaction-types";
 
 export interface QuickSkillAction {
   name: string;
@@ -162,6 +163,110 @@ function interactionKindLabelKey(kind: PiPendingInteraction["kind"]): MessageKey
   }
 }
 
+/**
+ * The card the agent asks a question through.
+ *
+ * It used to show a heading and a generic line telling the user to type into
+ * the chat box below; the question itself never arrived, because the bridge it
+ * came through carries only a title, and for a typed answer the example sat in
+ * the chat placeholder where it read as decoration. Everything now lives in the
+ * card: the question, an example, the choices, and an input for typing.
+ *
+ * Every question also offers a way to hand the decision back. A person who does
+ * not know the answer should never have to guess or abandon the flow, and
+ * relying on the model to remember that option meant it was often missing.
+ */
+function InteractionCard({
+  interaction,
+  onRespond,
+}: {
+  interaction: PiPendingInteraction;
+  onRespond: (value: string | boolean | null, cancel?: boolean) => void;
+}) {
+  const { t } = useI18n();
+  const [draft, setDraft] = useState("");
+  const acceptsText = interaction.kind === "text" || interaction.kind === "secret" || interaction.kind === "terminal_input";
+  const question = interaction.message?.trim() || interaction.title;
+  const heading = interaction.message?.trim() && interaction.title !== interaction.message ? interaction.title : null;
+
+  return (
+    <div className="flex min-w-0 flex-1 flex-col gap-3 rounded-2xl border bg-card p-4 shadow-sm">
+      <div className="flex flex-wrap items-center gap-2">
+        <Badge variant="secondary">{t(interactionKindLabelKey(interaction.kind))}</Badge>
+        {heading ? <span className="text-sm text-muted-foreground">{heading}</span> : null}
+      </div>
+
+      <p className="whitespace-pre-wrap text-base font-medium leading-6">{question}</p>
+
+      {interaction.options?.length ? (
+        <div className="flex flex-wrap gap-2">
+          {interaction.options.map((option) => (
+            <Button key={option} type="button" variant="outline" size="sm" onClick={() => onRespond(option)}>
+              {option}
+            </Button>
+          ))}
+        </div>
+      ) : null}
+
+      {interaction.kind === "confirm" ? (
+        <div className="flex flex-wrap gap-2">
+          <Button type="button" size="sm" onClick={() => onRespond(true)}>
+            {t("chat.yes")}
+          </Button>
+          <Button type="button" variant="outline" size="sm" onClick={() => onRespond(false)}>
+            {t("chat.no")}
+          </Button>
+        </div>
+      ) : null}
+
+      {acceptsText ? (
+        <form
+          className="flex flex-col gap-2 sm:flex-row"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const value = draft.trim();
+            if (!value) return;
+            setDraft("");
+            onRespond(value);
+          }}
+        >
+          <Input
+            value={draft}
+            onChange={(event) => setDraft(event.target.value)}
+            placeholder={interaction.placeholder || t("chat.interaction.answerPlaceholder")}
+            type={interaction.kind === "secret" ? "password" : "text"}
+            autoFocus
+          />
+          <Button type="submit" size="sm" disabled={!draft.trim()} className="sm:w-auto">
+            {t("chat.interaction.send")}
+          </Button>
+        </form>
+      ) : null}
+
+      <div className="flex flex-wrap items-center gap-2">
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="text-muted-foreground"
+          onClick={() => onRespond(DEFER_INTERACTION_ANSWER)}
+        >
+          {t("chat.interaction.decideForMe")}
+        </Button>
+        <Button
+          type="button"
+          variant="ghost"
+          size="sm"
+          className="text-muted-foreground"
+          onClick={() => onRespond(null, true)}
+        >
+          {t("chat.interaction.skip")}
+        </Button>
+      </div>
+    </div>
+  );
+}
+
 export function ChatMessages({ messages, isLoading, errorMessage, compactionStatus, actionNotice, pendingInteraction, onRespondToInteraction, quickSkills = [], onLaunchSkill, launchingSkill, pendingSkill, projects = [], onConfirmSkillScope, onCancelSkillScope }: ChatMessagesProps) {
   const { t } = useI18n();
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -296,50 +401,10 @@ export function ChatMessages({ messages, isLoading, errorMessage, compactionStat
             <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
               <Loader2 className="size-4 animate-spin" />
             </div>
-            <div className="flex min-w-0 flex-1 flex-col gap-3 rounded-2xl border bg-card p-4 shadow-sm">
-              <div className="flex flex-wrap items-center gap-2">
-                <Badge variant="secondary">{t(interactionKindLabelKey(pendingInteraction.kind))}</Badge>
-                <span className="text-sm font-medium">{t("chat.waitingForInput")}</span>
-              </div>
-              <div className="flex flex-col gap-1">
-                <p className="text-sm font-medium">{pendingInteraction.title}</p>
-                {pendingInteraction.message ? (
-                  <p className="whitespace-pre-wrap text-sm text-muted-foreground">{pendingInteraction.message}</p>
-                ) : null}
-              </div>
-              {pendingInteraction.kind === "select" && pendingInteraction.options?.length ? (
-                <div className="flex flex-wrap gap-2">
-                  {pendingInteraction.options.map((option) => (
-                    <Button
-                      key={option}
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() => onRespondToInteraction?.(option)}
-                    >
-                      {option}
-                    </Button>
-                  ))}
-                </div>
-              ) : null}
-              {pendingInteraction.kind === "confirm" ? (
-                <div className="flex flex-wrap gap-2">
-                  <Button type="button" size="sm" onClick={() => onRespondToInteraction?.(true)}>
-                    {t("chat.yes")}
-                  </Button>
-                  <Button type="button" variant="outline" size="sm" onClick={() => onRespondToInteraction?.(false)}>
-                    {t("chat.no")}
-                  </Button>
-                </div>
-              ) : null}
-              <p className="text-xs text-muted-foreground">
-                {pendingInteraction.kind === "select"
-                  ? t("chat.selectHelp")
-                  : pendingInteraction.kind === "confirm"
-                    ? t("chat.confirmHelp")
-                    : t("chat.inputHelp")}
-              </p>
-            </div>
+            <InteractionCard
+              interaction={pendingInteraction}
+              onRespond={(value, cancel) => onRespondToInteraction?.(value, cancel)}
+            />
           </div>
         ) : null}
 

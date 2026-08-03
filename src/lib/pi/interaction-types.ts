@@ -27,3 +27,11 @@ export interface PiInteractionResponse {
   value?: string | boolean | null;
   cancel?: boolean;
 }
+
+/**
+ * Sent when the user presses "decide for me".
+ *
+ * A marker rather than a phrase, so the answer reads identically to the model
+ * whatever language the button was labelled in.
+ */
+export const DEFER_INTERACTION_ANSWER = "__eggent_decide_for_me__";

@@ -16,6 +16,8 @@ import { getPipelineDefinitions, upsertPipelineDefinition } from "@/lib/pipeline
 import { startPipelineRunInBackground } from "@/lib/pipelines/runner";
 import { managePiSchedules } from "@/lib/pi/schedule-host";
 import { formatUsageMeter, getUsageSnapshot, isUsageProviderConfigured } from "@/lib/usage/usage-provider";
+import { createPendingInteraction } from "@/lib/pi/pending-interactions";
+import { DEFER_INTERACTION_ANSWER, type PiPendingInteraction } from "@/lib/pi/interaction-types";
 import {
   resolveTelegramDestination,
   sendTelegramDocument,
@@ -206,6 +208,10 @@ export async function createEggentPiTools(options: {
   onMcpConfigChanged?: (details: { projectId: string; serverId: string; action?: string; filePath?: string }) => void;
   /** Whether this run can actually deliver a question to a human and get an answer back. */
   interactive?: boolean;
+  /** Needed to raise an interaction card and stream it back to the chat. */
+  runId?: string;
+  abortSignal?: AbortSignal;
+  onPiInteraction?: (interaction: PiPendingInteraction) => void;
 } = {}): Promise<{ tools: ToolDefinition[]; cleanup: () => Promise<void> }> {
   // Memory, skills and MCP belong to whichever workspace is running, and the
   // orchestrator is one of them.
@@ -217,7 +223,7 @@ export async function createEggentPiTools(options: {
       name: "eggent_ask_user",
       label: "Ask The User",
       description:
-        "Ask the user one question and wait for the answer, rendered as a card with buttons or an input field instead of plain chat text. Use for setup choices, confirmations before a destructive or expensive step, and any point where a skill or workflow needs a decision. Prefer choice over free_text: a person who cannot answer a typed question can still press a button. Always offer a choice that lets the user defer to you (for example \"choose for me\") so the flow never dead-ends on someone who does not know the answer. Ask one question at a time; do not use this to interview the user through a long questionnaire.",
+        "Ask the user one question and wait for the answer, rendered as a card with buttons and an input field instead of plain chat text. Use for setup choices, confirmations before a destructive or expensive step, and any point where a skill or workflow needs a decision. ALWAYS pass `options` - two to four of them - even when the answer is free text: they render as one-tap answers, and a question with nothing to tap is the one people abandon. Write the question so it stands on its own, and put a concrete example in `placeholder`. The card adds \"decide for me\" and \"skip\" itself, so do not spend an option on those. Ask one question at a time; do not use this to interview the user through a long questionnaire.",
       parameters: Type.Object({
         question: Type.String({ description: "The question, in the user's language. Keep it to one sentence." }),
         kind: Type.Optional(
@@ -260,19 +266,45 @@ export async function createEggentPiTools(options: {
           );
         }
 
+        if (kind === "choice" && choices.length < 2) {
+          return textResult(
+            JSON.stringify({ success: false, error: "kind=choice needs at least 2 options" }, null, 2)
+          );
+        }
+
         try {
-          let answer: string | boolean | undefined;
-          if (kind === "confirm") {
-            answer = await ctx.ui.confirm(title, question);
-          } else if (kind === "choice") {
-            if (choices.length < 2) {
-              return textResult(
-                JSON.stringify({ success: false, error: "kind=choice needs at least 2 options" }, null, 2)
-              );
-            }
-            answer = await ctx.ui.select(title, choices);
-          } else {
-            answer = await ctx.ui.input(title, params.placeholder?.trim() || question);
+          // Built here rather than through ctx.ui, whose select() and input()
+          // take only a title: the question itself was being dropped, leaving a
+          // card with a heading and no question in it, and for a typed answer
+          // the only trace of what was asked was the chat input placeholder.
+          const answer = await createPendingInteraction({
+            runId: options.runId ?? crypto.randomUUID(),
+            kind: kind === "confirm" ? "confirm" : kind === "choice" ? "select" : "text",
+            title,
+            message: title === question ? undefined : question,
+            placeholder: params.placeholder?.trim() || undefined,
+            options: choices.length > 0 ? choices : undefined,
+            signal: options.abortSignal,
+            onUpdate: options.onPiInteraction,
+          });
+
+          // The card always offers a way to hand the decision back, so a person
+          // who does not know the answer is never stuck. It arrives as a marker
+          // rather than as text, because the answer has to read the same to the
+          // model in every language.
+          if (answer === DEFER_INTERACTION_ANSWER) {
+            return textResult(
+              JSON.stringify(
+                {
+                  success: true,
+                  deferred: true,
+                  note: "The user asked you to decide. Take the sensible default, say in one line what you chose, and keep going.",
+                },
+                null,
+                2
+              ),
+              { kind }
+            );
           }
 
           if (answer === undefined) {

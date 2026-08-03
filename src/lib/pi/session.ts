@@ -512,6 +512,9 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
         memorySubdir,
         toolRuntimeData: options.toolRuntimeData,
         onMcpConfigChanged: queueMcpRuntimeReload,
+        runId: options.runId,
+        abortSignal: options.abortSignal,
+        onPiInteraction: options.onPiInteraction,
         // A UI context is registered for every run, but only a run that streams
         // interactions back has someone able to answer them. Telegram and the
         // external API do not, so asking there would block until timeout.
