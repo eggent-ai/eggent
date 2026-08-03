@@ -3,7 +3,15 @@ import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent
 import fs from "fs/promises";
 import path from "path";
 import type { McpServerConfig } from "@/lib/types";
-import { getImageGenerationState, getPiAuthPath, resolveImageBackend } from "@/lib/pi/config-store";
+import {
+  getImageGenerationState,
+  getPiAuthPath,
+  getPiModelsState,
+  getPiSettingsState,
+  resolveImageBackend,
+  switchToModelProvider,
+  upsertCustomModelProvider,
+} from "@/lib/pi/config-store";
 import { getPipelineDefinitions, upsertPipelineDefinition } from "@/lib/pipelines/store";
 import { startPipelineRunInBackground } from "@/lib/pipelines/runner";
 import { managePiSchedules } from "@/lib/pi/schedule-host";
@@ -288,6 +296,72 @@ export async function createEggentPiTools(options: {
               2
             )
           );
+        }
+      },
+    }),
+    defineTool({
+      name: "eggent_manage_models",
+      label: "Manage Eggent Models And Providers",
+      description:
+        "Inspect this workspace's model setup and connect a provider that is not in the built-in list. Any OpenAI-compatible endpoint works: pass its base URL and model ids and Eggent writes them into the workspace models.json. Use this whenever the user names a provider, an endpoint or a local model server and asks how to connect it - do not tell them it must be done by hand, and do not ask them to edit files or set environment variables. Adding a provider does not change which model answers; that is action=use_provider. Never repeat an API key back to the user or write it into any file yourself.",
+      parameters: Type.Object({
+        action: Type.Union([
+          Type.Literal("status"),
+          Type.Literal("add_provider"),
+          Type.Literal("use_provider"),
+        ], {
+          description: "status = current model and configured providers, add_provider = register/replace a custom provider, use_provider = make an already connected provider the default.",
+        }),
+        provider_id: Type.Optional(Type.String({ description: "Short id, lowercase, e.g. \"wormsoft\" or \"local-llama\"." })),
+        base_url: Type.Optional(Type.String({ description: "Endpoint base URL including /v1 when the provider uses it, for add_provider." })),
+        models: Type.Optional(Type.Array(Type.String(), { description: "Model ids exactly as the provider names them, for add_provider." })),
+        api: Type.Optional(Type.String({ description: "Streaming API. Defaults to openai-completions, which fits almost every OpenAI-compatible endpoint." })),
+        api_key: Type.Optional(Type.String({ description: "Provider API key. Optional: when omitted, the provider is registered without a key and the user can paste it in Settings instead of sending it through chat." })),
+        model: Type.Optional(Type.String({ description: "Model id to make default, for use_provider." })),
+      }),
+      execute: async (_toolCallId, params) => {
+        try {
+          if (params.action === "status") {
+            const [settings, models] = await Promise.all([getPiSettingsState(), getPiModelsState()]);
+            return textResult(JSON.stringify({ settings, models }, null, 2));
+          }
+
+          if (params.action === "add_provider") {
+            if (!params.provider_id || !params.base_url || !params.models?.length) {
+              return textResult("provider_id, base_url and models are required to add a provider.");
+            }
+            const result = await upsertCustomModelProvider({
+              id: params.provider_id,
+              baseUrl: params.base_url,
+              models: params.models,
+              api: params.api,
+              apiKey: params.api_key,
+            });
+            return textResult(
+              JSON.stringify({
+                success: true,
+                ...result,
+                next: result.hasKey
+                  ? "The provider is connected. Call use_provider to make it answer, or leave the current model in place."
+                  : "The provider is registered without a key. It now appears in Settings under the model picker, where the user pastes the API key - that keeps the key out of the chat. After that, use_provider can select it.",
+                settingsHint: "Settings -> Models and login",
+              }, null, 2)
+            );
+          }
+
+          if (!params.provider_id || !params.model) {
+            return textResult("provider_id and model are required to switch the default model.");
+          }
+          const state = await switchToModelProvider(params.provider_id, params.model, options.cwd);
+          return textResult(
+            JSON.stringify({
+              success: true,
+              settings: state,
+              note: "The change applies from the next message: this run already started on the previous model.",
+            }, null, 2)
+          );
+        } catch (error) {
+          return textResult(error instanceof Error ? error.message : "Failed to update the model configuration.");
         }
       },
     }),

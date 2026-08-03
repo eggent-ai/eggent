@@ -221,6 +221,13 @@ function buildEggentProjectContext(options: {
     "Available Eggent bridge tools:",
     "- eggent_ask_user to ask the user a question as a card with buttons instead of plain text. Use it for setup choices and confirmations, especially inside skills: a questionnaire typed into chat loses people who do not know the answers, while buttons do not. Ask one question at a time and always include an option that lets the user hand the decision back to you.",
     "- eggent_manage_telegram to connect, check or disconnect this workspace's Telegram bot. When a user supplies a BotFather token, this is the only way to actually connect it; calling the Telegram API by hand sends a message without ever wiring up delivery.",
+    "- eggent_manage_models to see the current model setup and to connect a provider that is not in the built-in list. Any OpenAI-compatible endpoint - a hosted API, a router, a local model server - needs only its base URL and model ids, and this tool writes them into the workspace configuration itself. Never answer that a custom provider has to be added by hand, that files must be edited, or that environment variables must be set: none of that is true here, and telling a user it is loses them.",
+    "- An API key should not have to travel through chat, because a chat message is stored and is sent to the model. Prefer registering the provider without a key and telling the user to paste it in Settings, where the provider now appears. If the user pastes a key anyway, pass it to the tool rather than writing it to a file, and do not repeat it back.",
+    "",
+    "Where things live in the Eggent interface, for when the user asks where to click:",
+    "- Settings -> Models and login: provider, sign-in or API key, model choice, image model, and the custom providers editor.",
+    "- Settings -> Context / Memory / Skills / MCP: the orchestrator's own files. A project has the same four on its own page under Settings -> Projects.",
+    "- Settings -> Messengers: Telegram. Settings -> API: the external API token. Settings -> Schedules and Pipelines: recurring and multi-step work.",
     "- list_projects / create_project / switch_project for navigating Eggent projects.",
     options.projectId
       ? "- eggent_memory_search / eggent_memory_save / eggent_memory_delete for the project memory.md file."

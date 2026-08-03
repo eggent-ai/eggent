@@ -385,6 +385,125 @@ export async function writePiModelsJson(content: string): Promise<string> {
   return normalized;
 }
 
+/** Streaming APIs the runtime can speak, from the provider docs. */
+const SUPPORTED_PROVIDER_APIS = new Set([
+  "openai-completions",
+  "openai-responses",
+  "azure-openai-responses",
+  "openai-codex-responses",
+  "anthropic-messages",
+  "mistral-conversations",
+  "google-generative-ai",
+  "google-vertex",
+  "bedrock-converse-stream",
+]);
+
+const PROVIDER_ID_REGEX = /^[a-z0-9][a-z0-9._-]{0,63}$/;
+
+/**
+ * Add or replace one custom provider in models.json, keeping the rest of the
+ * file intact.
+ *
+ * Adding a provider is preparation, not a switch: it changes nothing about
+ * which model answers, so it is allowed while the workspace is still on the
+ * included model. Use switchToModelProvider to actually move onto it.
+ *
+ * The API key never goes into models.json. Credentials belong in auth.json,
+ * which is written 0600 and is where the runtime looks them up by provider id.
+ */
+export async function upsertCustomModelProvider(params: {
+  id: string;
+  baseUrl: string;
+  models: string[];
+  api?: string;
+  apiKey?: string;
+  env?: Record<string, string>;
+}): Promise<{ provider: string; models: string[]; hasKey: boolean; api: string }> {
+  if (isManagedAiEnforced()) {
+    throw new Error(
+      `Model selection is managed for this workspace. To use your own provider, run Eggent self-hosted: ${selfHostedDocsUrl()}`
+    );
+  }
+
+  const id = params.id.trim().toLowerCase();
+  if (!PROVIDER_ID_REGEX.test(id)) {
+    throw new Error(
+      "Provider id may contain only lowercase letters, numbers, dots, underscores and hyphens, and must start with a letter or number."
+    );
+  }
+  const managedProviderId = await getManagedProviderId();
+  if (id === "eggent-ai" || (managedProviderId && id === managedProviderId)) {
+    throw new Error(`"${id}" is the included provider and cannot be redefined here.`);
+  }
+
+  const baseUrl = params.baseUrl.trim().replace(/\/+$/, "");
+  if (!/^https?:\/\//i.test(baseUrl)) {
+    throw new Error("baseUrl must start with http:// or https://.");
+  }
+
+  const api = (params.api?.trim() || "openai-completions").toLowerCase();
+  if (!SUPPORTED_PROVIDER_APIS.has(api)) {
+    throw new Error(`Unsupported api "${api}". Supported: ${[...SUPPORTED_PROVIDER_APIS].join(", ")}.`);
+  }
+
+  const models = params.models.map((model) => model.trim()).filter(Boolean);
+  if (models.length === 0) {
+    throw new Error("At least one model id is required.");
+  }
+
+  const parsed = readJsonRecord(await readPiModelsJson());
+  const providers = parsed.providers && typeof parsed.providers === "object" && !Array.isArray(parsed.providers)
+    ? { ...(parsed.providers as Record<string, unknown>) }
+    : {};
+  providers[id] = { baseUrl, api, models: models.map((model) => ({ id: model })) };
+
+  const filePath = getPiModelsPath();
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, `${JSON.stringify({ ...parsed, providers }, null, 2)}\n`, "utf-8");
+
+  const apiKey = params.apiKey?.trim();
+  if (apiKey) {
+    const auth = await readAuthJson();
+    auth[id] = params.env ? { type: "api_key", key: apiKey, env: params.env } : { type: "api_key", key: apiKey };
+    await writeAuthJson(auth);
+  }
+
+  return { provider: id, models, hasKey: Boolean(apiKey), api };
+}
+
+/**
+ * Move the workspace onto a provider it already has a credential for.
+ *
+ * Leaving the included model unlocks the choice but blanks the default, so a
+ * switch that then fails validation would leave the workspace with no model at
+ * all. The lock is therefore restored when the selection does not go through.
+ */
+export async function switchToModelProvider(
+  provider: string,
+  model: string,
+  cwd = process.cwd()
+): Promise<Awaited<ReturnType<typeof getPiSettingsState>>> {
+  if (isManagedAiEnforced()) {
+    throw new Error(
+      `Model selection is managed for this workspace. To use your own model, run Eggent self-hosted: ${selfHostedDocsUrl()}`
+    );
+  }
+
+  const wasLocked = (await getEggentAiModelLockState(cwd)).locked;
+  if (wasLocked) {
+    await disableEggentAiModelLock(cwd);
+  }
+
+  try {
+    return await updatePiModelDefaults({ provider, model }, cwd);
+  } catch (error) {
+    if (wasLocked) {
+      await enableEggentAiModelLock(cwd).catch(() => undefined);
+    }
+    throw error;
+  }
+}
+
 export function getPiSettingsManager(cwd = process.cwd()): SettingsManager {
   const SettingsManager = getPiSdkExport<{ create?: (cwd: string, agentDir?: string) => SettingsManager }>("SettingsManager");
   if (typeof SettingsManager.create !== "function") {
