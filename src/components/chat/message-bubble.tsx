@@ -208,6 +208,25 @@ function MarkdownContent({ content }: { content: string }) {
             />
           );
         },
+        a({ href, children, ...props }) {
+          const external = /^https?:\/\//i.test(href || "");
+          return (
+            <a
+              {...props}
+              href={href}
+              // Nothing marked links as links: they inherited body colour and
+              // the theme has no accent to borrow. Weight and an underline do
+              // the job in both themes. Long URLs wrap instead of overflowing
+              // the bubble.
+              className="break-words font-medium text-foreground underline decoration-foreground/40 underline-offset-2 transition-colors hover:decoration-foreground"
+              // Anything off-site opens beside the chat, so following a link
+              // never costs the conversation.
+              {...(external ? { target: "_blank", rel: "noopener noreferrer" } : {})}
+            >
+              {children}
+            </a>
+          );
+        },
         ul({ children, ...props }) {
           return (
             <ul className="my-2 list-disc pl-6 space-y-1" {...props}>
