@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
+import { defineTool, type AgentSession, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import fs from "fs/promises";
 import path from "path";
 import type { McpServerConfig } from "@/lib/types";
@@ -208,6 +208,8 @@ export async function createEggentPiTools(options: {
   memorySubdir?: string;
   toolRuntimeData?: Record<string, unknown>;
   onMcpConfigChanged?: (details: { projectId: string; serverId: string; action?: string; filePath?: string }) => void;
+  /** The session is assigned after tools are constructed and is available by execution time. */
+  getAgentSession?: () => AgentSession | null;
   /** Whether this run can actually deliver a question to a human and get an answer back. */
   interactive?: boolean;
   /** Needed to raise an interaction card and stream it back to the chat. */
@@ -669,16 +671,21 @@ export async function createEggentPiTools(options: {
     defineTool({
       name: "eggent_manage_schedules",
       label: "Manage Pi Scheduled Tasks",
-      description: "List or clear pi-subagents scheduled tasks. Use this when the user asks to show, delete, cancel, clear, remove, or убери/удали/отмени запланированные задачи. Do not use Agent.schedule for schedule-management requests.",
+      description: "List, update, or clear pi-subagents scheduled tasks. Use this for existing schedule-management requests, including show/delete/cancel/change/move/reschedule and убери/удали/отмени/измени/поменяй/перенеси. To update, list first if the id is unknown, then pass the exact job_id and a valid pi-subagents schedule. Never edit .pi/subagent-schedules files with edit, write, or bash.",
       parameters: Type.Object({
-        action: Type.Union([Type.Literal("list"), Type.Literal("clear")], { description: "Use list to show scheduled tasks, clear to remove/cancel scheduled tasks." }),
-        scope: Type.Optional(Type.Union([Type.Literal("current"), Type.Literal("all")], { description: "current = current project/session cwd; all = orchestrator and all projects. Defaults to current." })),
+        action: Type.Union([Type.Literal("list"), Type.Literal("update"), Type.Literal("clear")], { description: "list = inspect tasks, update = change one existing task and re-arm its live scheduler, clear = remove/cancel tasks in scope." }),
+        scope: Type.Optional(Type.Union([Type.Literal("current"), Type.Literal("all")], { description: "current = current workspace cwd; all = orchestrator and all projects. Use all when the task may belong to another chat or project. Defaults to current." })),
+        job_id: Type.Optional(Type.String({ description: "Exact scheduled job id returned by list. Required for update." })),
+        schedule: Type.Optional(Type.String({ description: "New schedule for update: 6-field cron, interval such as 5m/1h, relative one-shot such as +10m, or future ISO timestamp." })),
       }),
       execute: async (_toolCallId, params) => {
         const result = await managePiSchedules({
           action: params.action,
           scope: params.scope || "current",
           cwd: options.cwd,
+          jobId: params.job_id,
+          schedule: params.schedule,
+          currentSession: options.getAgentSession?.(),
         });
         return textResult(JSON.stringify(result, null, 2), result);
       },

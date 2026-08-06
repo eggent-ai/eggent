@@ -5,14 +5,24 @@ import { getChat, saveChat } from "@/lib/storage/chat-store";
 import { getAllProjects, getWorkDir } from "@/lib/storage/project-store";
 import type { ChatMessage } from "@/lib/types";
 import { resolveTelegramDestination, sendTelegramText } from "@/lib/telegram/outbound";
+import { detectSchedule, withScheduleExecutionDirective } from "@/lib/pi/schedule-policy";
 
 type ScheduleJobRecord = {
   id?: string;
   name?: string;
   description?: string;
   schedule?: string;
-  scheduleType?: string;
+  scheduleType?: "cron" | "once" | "interval" | string;
+  intervalMs?: number;
+  subagent_type?: string;
+  prompt?: string;
+  model?: string;
+  thinking?: string;
+  max_turns?: number;
+  isolated?: boolean;
+  isolation?: string;
   enabled?: boolean;
+  createdAt?: string;
   nextRun?: string;
   lastRun?: string;
   lastStatus?: string;
@@ -46,11 +56,86 @@ type RetainedSession = {
 };
 
 const retained = new Map<string, RetainedSession>();
+const pendingScheduleReloads = new WeakSet<AgentSession>();
 const POLL_MS = 5_000;
 const EMPTY_GRACE_MS = 10 * 60_000;
+const SCHEDULE_LOCK_RETRY_MS = 50;
+const SCHEDULE_LOCK_MAX_RETRIES = 100;
 
 function keyFor(chatId: string) {
   return chatId;
+}
+
+function wait(ms: number) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function isProcessRunning(pid: number): boolean {
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function acquireScheduleLock(lockPath: string): Promise<() => Promise<void>> {
+  for (let attempt = 0; attempt < SCHEDULE_LOCK_MAX_RETRIES; attempt += 1) {
+    try {
+      const handle = await fs.open(lockPath, "wx");
+      try {
+        await handle.writeFile(String(process.pid), "utf-8");
+      } finally {
+        await handle.close();
+      }
+      return async () => {
+        await fs.unlink(lockPath).catch(() => undefined);
+      };
+    } catch (error) {
+      const code = error && typeof error === "object" && "code" in error
+        ? String((error as { code?: unknown }).code)
+        : "";
+      if (code !== "EEXIST") throw error;
+
+      try {
+        const pid = Number.parseInt(await fs.readFile(lockPath, "utf-8"), 10);
+        if (pid > 0 && !isProcessRunning(pid)) {
+          await fs.unlink(lockPath).catch(() => undefined);
+          continue;
+        }
+      } catch {
+        await fs.unlink(lockPath).catch(() => undefined);
+        continue;
+      }
+
+      await wait(SCHEDULE_LOCK_RETRY_MS);
+    }
+  }
+
+  throw new Error(`Failed to acquire schedule lock: ${lockPath}`);
+}
+
+async function writeScheduleStoreAtomic(filePath: string, data: ScheduleStoreFile) {
+  const tempPath = `${filePath}.tmp`;
+  await fs.writeFile(tempPath, JSON.stringify(data, null, 2), "utf-8");
+  await fs.rename(tempPath, filePath);
+}
+
+async function mutateScheduleStore<T>(
+  filePath: string,
+  mutate: (data: ScheduleStoreFile) => { changed: boolean; result: T }
+): Promise<T> {
+  const release = await acquireScheduleLock(`${filePath}.lock`);
+  try {
+    const data = JSON.parse(await fs.readFile(filePath, "utf-8")) as ScheduleStoreFile;
+    const outcome = mutate(data);
+    if (outcome.changed) {
+      await writeScheduleStoreAtomic(filePath, data);
+    }
+    return outcome.result;
+  } finally {
+    await release();
+  }
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -102,6 +187,27 @@ function scheduleStorePath(session: AgentSession): string {
 
 function scheduleStoreDir(cwd: string): string {
   return path.join(cwd, ".pi", "subagent-schedules");
+}
+
+export async function normalizePiScheduleStore(session: AgentSession): Promise<boolean> {
+  const filePath = scheduleStorePath(session);
+  try {
+    await fs.access(filePath);
+  } catch {
+    return false;
+  }
+
+  return mutateScheduleStore(filePath, (data) => {
+    let changed = false;
+    for (const job of data.jobs ?? []) {
+      if (!job.prompt) continue;
+      const normalized = withScheduleExecutionDirective(job.prompt);
+      if (normalized === job.prompt) continue;
+      job.prompt = normalized;
+      changed = true;
+    }
+    return { changed, result: changed };
+  });
 }
 
 async function hasEnabledSchedules(session: AgentSession): Promise<boolean> {
@@ -303,6 +409,12 @@ export async function retainPiScheduleSession(options: {
   projectId?: string | null;
   session: AgentSession;
 }): Promise<boolean> {
+  const promptsNormalized = await normalizePiScheduleStore(options.session);
+  const reloadRequested = pendingScheduleReloads.delete(options.session);
+  if (promptsNormalized || reloadRequested) {
+    await options.session.reload();
+  }
+
   if (!(await hasEnabledSchedules(options.session))) return false;
 
   const key = keyFor(options.chatId);
@@ -422,13 +534,45 @@ function disposeRetainedForCwds(cwds: string[]) {
   }
 }
 
+function isScheduleSession(session: AgentSession, cwd: string, sessionId: string): boolean {
+  return session.sessionId === sessionId
+    && path.resolve(session.sessionManager.getCwd()) === path.resolve(cwd);
+}
+
+function findLiveScheduleSession(options: {
+  cwd: string;
+  sessionId: string;
+  currentSession?: AgentSession | null;
+}): AgentSession | null {
+  if (options.currentSession && isScheduleSession(options.currentSession, options.cwd, options.sessionId)) {
+    return options.currentSession;
+  }
+  for (const entry of retained.values()) {
+    if (isScheduleSession(entry.session, options.cwd, options.sessionId)) return entry.session;
+  }
+  return null;
+}
+
 export async function managePiSchedules(options: {
-  action: "list" | "clear";
+  action: "list" | "clear" | "update";
   cwd?: string;
   scope?: "current" | "all";
+  jobId?: string;
+  schedule?: string;
+  currentSession?: AgentSession | null;
 }) {
   const contexts = await scheduleContexts({ cwd: options.cwd, scope: options.scope });
-  const schedules: Array<ScheduleJobRecord & { projectId: string | null; projectName: string; sessionId: string }> = [];
+  const schedules: Array<ScheduleJobRecord & {
+    projectId: string | null;
+    projectName: string;
+    sessionId: string;
+    live: boolean;
+  }> = [];
+  const locations: Array<{
+    context: Awaited<ReturnType<typeof scheduleContexts>>[number];
+    store: Awaited<ReturnType<typeof readScheduleStores>>[number];
+    job: ScheduleJobRecord;
+  }> = [];
   let removed = 0;
 
   for (const context of contexts) {
@@ -436,23 +580,123 @@ export async function managePiSchedules(options: {
     for (const store of stores) {
       const jobs = store.data.jobs ?? [];
       for (const job of jobs) {
+        const live = Boolean(findLiveScheduleSession({
+          cwd: context.cwd,
+          sessionId: store.sessionId,
+          currentSession: options.currentSession,
+        }));
         schedules.push({
           ...job,
           projectId: context.projectId,
           projectName: context.projectName,
           sessionId: store.sessionId,
+          live,
         });
+        locations.push({ context, store, job });
       }
 
       if (options.action === "clear" && jobs.length > 0) {
-        removed += jobs.length;
-        await fs.writeFile(store.filePath, JSON.stringify({ version: store.data.version ?? 1, jobs: [] }, null, 2), "utf-8");
+        removed += await mutateScheduleStore(store.filePath, (data) => {
+          const count = data.jobs?.length ?? 0;
+          data.jobs = [];
+          return { changed: count > 0, result: count };
+        });
       }
     }
   }
 
   if (options.action === "clear" && removed > 0) {
     disposeRetainedForCwds(contexts.map((context) => context.cwd));
+  }
+
+  if (options.action === "update") {
+    const jobId = options.jobId?.trim();
+    if (!jobId) throw new Error("job_id is required when action=update");
+    if (!options.schedule?.trim()) throw new Error("schedule is required when action=update");
+
+    const matches = locations.filter((location) => location.job.id === jobId);
+    if (matches.length === 0) {
+      return {
+        action: options.action,
+        scope: options.scope ?? "current",
+        updated: false,
+        rearmed: false,
+        error: `Scheduled job ${jobId} was not found in this scope. List schedules with scope=all and use the exact job id.`,
+      };
+    }
+    if (matches.length > 1) {
+      return {
+        action: options.action,
+        scope: options.scope ?? "current",
+        updated: false,
+        rearmed: false,
+        error: `Scheduled job id ${jobId} is ambiguous across ${matches.length} stores.`,
+      };
+    }
+
+    const target = matches[0];
+    const targetSession = findLiveScheduleSession({
+      cwd: target.context.cwd,
+      sessionId: target.store.sessionId,
+      currentSession: options.currentSession,
+    });
+    if (!targetSession) {
+      return {
+        action: options.action,
+        scope: options.scope ?? "current",
+        updated: false,
+        rearmed: false,
+        error: `Scheduled job ${jobId} is stored but its scheduler session is not live. Open its original chat before updating it.`,
+      };
+    }
+
+    const detected = detectSchedule(options.schedule);
+    const updatedJob = await mutateScheduleStore(target.store.filePath, (data) => {
+      const job = (data.jobs ?? []).find((candidate) => candidate.id === jobId);
+      if (!job) throw new Error(`Scheduled job ${jobId} disappeared while it was being updated`);
+      job.schedule = detected.schedule;
+      job.scheduleType = detected.scheduleType;
+      if (detected.intervalMs) job.intervalMs = detected.intervalMs;
+      else delete job.intervalMs;
+      if (detected.nextRun) job.nextRun = detected.nextRun;
+      else delete job.nextRun;
+      if (job.prompt) job.prompt = withScheduleExecutionDirective(job.prompt);
+      return { changed: true, result: { ...job } };
+    });
+
+    if (targetSession === options.currentSession) {
+      pendingScheduleReloads.add(targetSession);
+      return {
+        action: options.action,
+        scope: options.scope ?? "current",
+        updated: true,
+        rearmed: "after_current_turn",
+        nextRun: detected.nextRun,
+        job: updatedJob,
+      };
+    }
+
+    try {
+      await targetSession.reload();
+      return {
+        action: options.action,
+        scope: options.scope ?? "current",
+        updated: true,
+        rearmed: true,
+        nextRun: detected.nextRun,
+        job: updatedJob,
+      };
+    } catch (error) {
+      return {
+        action: options.action,
+        scope: options.scope ?? "current",
+        updated: true,
+        rearmed: false,
+        nextRun: detected.nextRun,
+        job: updatedJob,
+        error: error instanceof Error ? error.message : String(error),
+      };
+    }
   }
 
   return {

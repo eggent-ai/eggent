@@ -10,6 +10,8 @@ import {
 import { createEggentPiTools } from "@/lib/pi/eggent-tools";
 import { createEggentPiExtensionUIContext } from "@/lib/pi/interaction-ui-context";
 import { createEggentInteractiveBashTool } from "@/lib/pi/interactive-bash-tool";
+import { normalizePiScheduleStore } from "@/lib/pi/schedule-host";
+import { eggentSchedulePolicyExtension } from "@/lib/pi/schedule-policy";
 import type { PiSessionOptions } from "@/lib/pi/types";
 import { getChatFiles } from "@/lib/storage/chat-files-store";
 import type { ChatFile, ProjectSkillMetadata } from "@/lib/types";
@@ -244,7 +246,7 @@ function buildEggentProjectContext(options: {
     "- If an MCP server fails with `browser can not be opened`, `federation id authentication`, `Connection closed` immediately after start, or an equivalent, stop retrying at once. Do not install vendor CLIs, inspect binaries, or hunt for client ids. Tell the user the server needs a login that cannot happen in this environment and offer the three real options: the same server over HTTP transport, a token supplied through `env`, or running Eggent self-hosted where a browser is available.",
     "- Use pi-web-access tools (web_search, fetch_content, get_search_content) for internet access when available.",
     "- When installing project skills with the `skills` CLI from a non-interactive web run, pass `-y`/`--yes` (for example `npx skills add owner/repo -y`) to avoid terminal selection prompts that cannot be reliably controlled from chat.",
-    "- eggent_manage_schedules for listing or clearing pi-subagents scheduled tasks. Do not use Agent.schedule to manage existing schedules.",
+    "- eggent_manage_schedules for listing, updating, or clearing existing pi-subagents scheduled tasks. Never edit .pi/subagent-schedules files with edit, write, or bash, and do not use Agent.schedule to manage an existing task.",
     "- eggent_generate_image for image generation/editing/restyling requests. Use reference_image_paths from uploaded chat files when the user asks to edit or use an attached picture. Images are configured separately from the text model: the included Eggent AI model covers both, while a workspace on its own provider needs its own image provider and model chosen in Settings. When the tool reports that no image backend is available, say so in one line and offer the two real options - pick an image provider and model in Settings, or switch back to Eggent AI, which turns text and images on together. Never claim an image was produced when it was not.",
     options.usageToolAvailable
       ? "- eggent_usage_status for any question about balance, remaining credits/tokens, quota, limits, plan or trial. Call it and answer with the real numbers; never guess and never tell the user this information is unavailable to you."
@@ -450,6 +452,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
   const resourceLoader = new DefaultResourceLoader({
     cwd,
     agentDir,
+    extensionFactories: [eggentSchedulePolicyExtension],
     additionalSkillPaths: projectSkillPaths,
     noExtensions: corePiToolsOnly,
     noSkills: corePiToolsOnly,
@@ -512,6 +515,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
         memorySubdir,
         toolRuntimeData: options.toolRuntimeData,
         onMcpConfigChanged: queueMcpRuntimeReload,
+        getAgentSession: () => sessionRef,
         runId: options.runId,
         abortSignal: options.abortSignal,
         onPiInteraction: options.onPiInteraction,
@@ -546,6 +550,9 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     sessionManager: createSessionManager(options, cwd),
   });
   sessionRef = session;
+  // Legacy schedules may predate the execution-only policy. Normalize them
+  // before session_start lets pi-subagents read and arm the store.
+  await normalizePiScheduleStore(session);
 
   // SDK sessions do not emit extension lifecycle events until bindExtensions()
   // is called. Eggent has no TUI, but extensions such as pi-mcp-adapter and

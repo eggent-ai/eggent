@@ -377,9 +377,12 @@ function hasScheduleManagementIntent(text: string): boolean {
     /\b(scheduled|schedule|schedules|reminders?|jobs?)\b/.test(normalized) ||
     /(запланирован|расписани|напоминани|задач)/i.test(text);
   const managementVerb =
-    /\b(cancel|delete|remove|clear|list|show|what|which)\b/.test(normalized) ||
-    /(убери|удали|отмени|очисти|покажи|выведи|какие|список)/i.test(text);
-  return mentionsSchedules && managementVerb;
+    /\b(cancel|delete|remove|clear|list|show|what|which|update|change|move|reschedule|edit)\b/.test(normalized) ||
+    /(убери|удали|отмени|очисти|покажи|выведи|какие|список|измени|поменяй|перенеси|сдвинь|обнови)/i.test(text);
+  const changesScheduledTime =
+    (/\b(update|change|move|reschedule)\b/.test(normalized) || /(измени|поменяй|перенеси|сдвинь|обнови)/i.test(text))
+    && /\b\d{1,2}(?::|\s)\d{2}\b/.test(text);
+  return (mentionsSchedules && managementVerb) || changesScheduledTime;
 }
 
 function hasScheduleIntent(text: string): boolean {
@@ -458,9 +461,10 @@ function preparePromptForRuntime(text: string): string {
     return [
       "Eggent schedule-management directive:",
       "- This user request asks to inspect or modify existing scheduled tasks.",
-      "- Do not create a new scheduled Agent for this request.",
-      "- Use eggent_manage_schedules with action=\"list\" or action=\"clear\".",
-      "- For requests like 'убери все запланированные задачи', call eggent_manage_schedules with action=\"clear\" and scope=\"all\" unless the user explicitly says current project only.",
+      "- Do not create a new scheduled Agent for this request and never edit .pi/subagent-schedules files directly.",
+      "- Use eggent_manage_schedules with action=\"list\", action=\"update\", or action=\"clear\".",
+      "- To change a task, list with scope=\"all\", wait for the result, then call update with the exact job_id and new schedule.",
+      "- For requests like 'убери все запланированные задачи', call clear with scope=\"all\" unless the user explicitly says current project only.",
       "",
       "User request:",
       text,
@@ -473,7 +477,7 @@ function preparePromptForRuntime(text: string): string {
     "- This user request asks for delayed/scheduled execution.",
     "- Do not emulate scheduling with bash, sleep, shell loops, at, or OS cron.",
     "- Use pi-subagents by calling the Agent tool with its schedule parameter (for example schedule=\"+30s\" or a 6-field cron expression).",
-    "- The scheduled Agent prompt should contain the actual work to perform at fire time.",
+    "- The scheduled Agent prompt should contain only the actual work to perform at fire time, not instructions to create or modify a schedule.",
     "",
     "User request:",
     text,
