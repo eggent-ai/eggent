@@ -706,3 +706,78 @@ export async function managePiSchedules(options: {
     schedules: options.action === "list" ? schedules : [],
   };
 }
+
+/**
+ * Bring stored schedules back after a restart.
+ *
+ * A scheduled job is armed by pi-subagents inside a live session and dies with
+ * it, so until this ran, every deploy, every sleep/wake and every crash quietly
+ * ended every schedule on the machine while the store kept saying `enabled`.
+ * Nothing read those files again, because a store is only opened by a session
+ * carrying the same id.
+ *
+ * So at boot we open exactly those sessions again: one per store that still has
+ * work in it, with the chat id the store is named after, which is what makes
+ * pi-subagents arm it on session_start.
+ */
+export async function restorePiSchedules(): Promise<{ armed: number; expired: number; failed: number }> {
+  const { createEggentPiSession } = await import("@/lib/pi/session");
+  const contexts = await scheduleContexts({ scope: "all" });
+  let armed = 0;
+  let expired = 0;
+  let failed = 0;
+
+  for (const context of contexts) {
+    for (const store of await readScheduleStores(context.cwd)) {
+      // A one-shot whose moment passed while the machine was down must not fire
+      // on the way up: arming it would deliver yesterday's reminder at boot, and
+      // a burst of them at once. Drop those first, then arm what is still ahead.
+      const dropped = await mutateScheduleStore(store.filePath, (data) => {
+        const before = data.jobs?.length ?? 0;
+        data.jobs = (data.jobs ?? []).filter((job) => {
+          if (job.scheduleType !== "once") return true;
+          const at = Date.parse(String(job.schedule));
+          return !Number.isFinite(at) || at > Date.now();
+        });
+        const removedCount = before - data.jobs.length;
+        return { changed: removedCount > 0, result: removedCount };
+      }).catch(() => 0);
+      expired += dropped;
+
+      const jobs = (await readScheduleStores(context.cwd))
+        .find((entry) => entry.sessionId === store.sessionId)?.data.jobs ?? [];
+      if (!jobs.some((job) => job.enabled !== false)) continue;
+      if (retained.has(keyFor(store.sessionId))) continue;
+
+      try {
+        const session = await createEggentPiSession({
+          chatId: store.sessionId,
+          projectId: context.projectId ?? undefined,
+          cwd: context.cwd,
+        });
+        const kept = await retainPiScheduleSession({
+          chatId: store.sessionId,
+          projectId: context.projectId,
+          session,
+        });
+        if (kept) {
+          armed += 1;
+        } else {
+          session.dispose();
+          failed += 1;
+        }
+      } catch (error) {
+        failed += 1;
+        console.warn(
+          `[Schedules] Could not restore ${store.sessionId} in ${context.projectName}:`,
+          error instanceof Error ? error.message : error
+        );
+      }
+    }
+  }
+
+  if (armed || expired || failed) {
+    console.log(`[Schedules] Restored ${armed} scheduled job store(s); dropped ${expired} expired one-shot(s); ${failed} failed.`);
+  }
+  return { armed, expired, failed };
+}
