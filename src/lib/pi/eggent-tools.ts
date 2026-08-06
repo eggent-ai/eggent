@@ -19,8 +19,10 @@ import { formatUsageMeter, getUsageSnapshot, isUsageProviderConfigured } from "@
 import { createPendingInteraction } from "@/lib/pi/pending-interactions";
 import { DEFER_INTERACTION_ANSWER, type PiPendingInteraction } from "@/lib/pi/interaction-types";
 import {
+  looksLikePhoto,
   resolveTelegramDestination,
   sendTelegramDocument,
+  sendTelegramPhoto,
   sendTelegramText,
 } from "@/lib/telegram/outbound";
 import {
@@ -1009,25 +1011,39 @@ export async function createEggentPiTools(options: {
   // Where this run can reach the user. A run answering a Telegram message has
   // its chat; anything else falls back to what the workspace remembers, so a
   // schedule or a web turn can still deliver.
-  const telegramDestination = () => resolveTelegramDestination(
-    telegramRuntime ? { chatId: telegramRuntime.chatId, botToken: telegramRuntime.botToken } : null
+  const telegramDestination = (chat?: string) => resolveTelegramDestination(
+    telegramRuntime ? { chatId: telegramRuntime.chatId, botToken: telegramRuntime.botToken } : null,
+    chat ? { chat } : {}
   );
-  const noDestinationResult = () => textResult(JSON.stringify({
-    success: false,
-    error: "This workspace has no Telegram chat to send to.",
-    note: "Tell the user to connect a bot in Settings -> Messengers, or to write to the bot once so the workspace learns where to reply.",
-  }, null, 2));
+  // Naming a chat fails for its own reasons, and "no chat to send to" would send
+  // the user off connecting a bot they already have.
+  const noDestinationResult = (chat?: string) => textResult(JSON.stringify(
+    chat
+      ? {
+          success: false,
+          error: `Cannot publish to ${chat} from this workspace.`,
+          note: "Publishing to a named chat needs this workspace's own bot, connected in Settings -> Messengers, and that bot must be an administrator there. Give the channel as @name, a t.me link, or its numeric id.",
+        }
+      : {
+          success: false,
+          error: "This workspace has no Telegram chat to send to.",
+          note: "Tell the user to connect a bot in Settings -> Messengers, or to write to the bot once so the workspace learns where to reply.",
+        },
+    null,
+    2
+  ));
 
   tools.push(defineTool({
       name: "telegram_send_message",
       label: "Send Telegram Message",
-      description: "Send a plain text message to this workspace's Telegram chat. Use it when the user asks to be written to, notified, reminded, or sent a result in Telegram - including from a scheduled or background run. Do not write the text into a file and send the file instead: that is what this tool exists to avoid.",
+      description: "Send a plain text message to Telegram. Without `chat` it goes to this workspace's own chat: use that when the user asks to be written to, notified, reminded, or sent a result - including from a scheduled or background run. Pass `chat` to publish somewhere else, such as a channel the bot administers. Do not write the text into a file and send the file instead: that is what this tool exists to avoid.",
       parameters: Type.Object({
         text: Type.String({ description: "Message text. Plain text; keep it short enough for a chat message." }),
+        chat: Type.Optional(Type.String({ description: "Where to publish, when it is not this workspace's own chat: @channelname, a t.me link, or the numeric id. The workspace's own bot must be an administrator there." })),
       }),
       execute: async (_toolCallId, params) => {
-        const destination = await telegramDestination();
-        if (!destination) return noDestinationResult();
+        const destination = await telegramDestination(params.chat);
+        if (!destination) return noDestinationResult(params.chat);
         const result = await sendTelegramText(destination, params.text);
         return textResult(JSON.stringify(result, null, 2), { via: result.via });
       },
@@ -1036,14 +1052,16 @@ export async function createEggentPiTools(options: {
   tools.push(defineTool({
       name: "telegram_send_file",
       label: "Send File to Telegram",
-      description: "Send a local file to the current Telegram chat as a document. Use this when the user asks to send, return, export, download, or share a file in Telegram.",
+      description: "Send a local file to Telegram. Images go as pictures with the caption under them, which is what a post looks like; everything else goes as a document. Pass `chat` to publish somewhere other than this workspace's own chat, such as a channel the bot administers. Set `as_file` only when the user explicitly wants an image delivered as a downloadable file.",
       parameters: Type.Object({
         file_path: Type.String({ description: "Absolute path to the file, or path relative to the current project cwd." }),
-        caption: Type.Optional(Type.String({ description: "Optional caption to include with the file." })),
+        caption: Type.Optional(Type.String({ description: "Optional caption. For an image this becomes the post text under the picture." })),
+        chat: Type.Optional(Type.String({ description: "Where to publish, when it is not this workspace's own chat: @channelname, a t.me link, or the numeric id. The workspace's own bot must be an administrator there." })),
+        as_file: Type.Optional(Type.Boolean({ description: "Send an image as a document instead of a picture. Only when the user asked for the original file." })),
       }),
       execute: async (_toolCallId, params) => {
-        const destination = await telegramDestination();
-        if (!destination) return noDestinationResult();
+        const destination = await telegramDestination(params.chat);
+        if (!destination) return noDestinationResult(params.chat);
         try {
           const resolvedPath = resolveOutgoingTelegramFilePath(options, params.file_path);
           const stat = await fs.stat(resolvedPath);
@@ -1054,16 +1072,18 @@ export async function createEggentPiTools(options: {
             return textResult(JSON.stringify({ success: false, error: `File is too large (${stat.size} bytes). Max allowed is ${TELEGRAM_SEND_FILE_MAX_BYTES} bytes.` }, null, 2));
           }
 
-          const result = await sendTelegramDocument(destination, {
-            buffer: await fs.readFile(resolvedPath),
-            name: path.basename(resolvedPath),
-            caption: params.caption,
-          });
+          const name = path.basename(resolvedPath);
+          const asPhoto = !params.as_file && looksLikePhoto(name);
+          const payload = { buffer: await fs.readFile(resolvedPath), name, caption: params.caption };
+          const result = asPhoto
+            ? await sendTelegramPhoto(destination, payload)
+            : await sendTelegramDocument(destination, payload);
           return textResult(JSON.stringify({
             ...result,
             path: resolvedPath,
-            name: path.basename(resolvedPath),
+            name,
             size: stat.size,
+            sentAs: asPhoto ? "photo" : "document",
           }, null, 2), { via: result.via });
         } catch (error) {
           return textResult(JSON.stringify({ success: false, error: error instanceof Error ? error.message : "Failed to send file to Telegram." }, null, 2));

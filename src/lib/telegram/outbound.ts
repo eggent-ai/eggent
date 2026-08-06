@@ -101,14 +101,87 @@ export async function rememberTelegramDestination(input: {
 }
 
 /**
+ * Turn what a person pasted into something the Bot API accepts.
+ *
+ * People hand over `@name`, a `t.me/...` link, or the bare number a client
+ * shows for a channel. Only the first two are unambiguous.
+ */
+export function normalizeChatTarget(raw: string): string | null {
+  const value = raw.trim();
+  if (!value) return null;
+  const link = /^(?:https?:\/\/)?t\.me\/(?:c\/(\d+)(?:\/.*)?|([A-Za-z][\w]{3,}))\/?$/.exec(value);
+  if (link) return link[1] ? link[1] : `@${link[2]}`;
+  if (/^@[A-Za-z][\w]{3,}$/.test(value)) return value;
+  if (/^-?\d+$/.test(value)) return value;
+  if (/^[A-Za-z][\w]{3,}$/.test(value)) return `@${value}`;
+  return null;
+}
+
+/**
+ * Forms of a chat id worth trying, in order.
+ *
+ * A channel id copied from a `t.me/c/<id>` link, or from a client that shows
+ * the bare number, needs the `-100` prefix the Bot API expects. User ids are
+ * the same shape, so the prefixed form is only ever tried after Telegram has
+ * refused the plain one.
+ */
+function chatIdCandidates(chatId: string | number): string[] {
+  const raw = String(chatId).trim();
+  if (/^\d{9,}$/.test(raw)) return [raw, `-100${raw}`];
+  return [raw];
+}
+
+function isChatNotFound(description?: string): boolean {
+  return /chat not found|chat_id is empty|peer_id_invalid/i.test(description || "");
+}
+
+type BotApiOutcome = { ok: boolean; status: number; description?: string };
+
+/**
+ * Call one Bot API method, retrying the alternate channel-id form once if the
+ * first attempt is refused for not existing.
+ */
+async function callBotApi(
+  token: string,
+  method: string,
+  chatId: string | number,
+  build: (chat: string) => { body: BodyInit; headers?: Record<string, string> }
+): Promise<BotApiOutcome> {
+  let last: BotApiOutcome = { ok: false, status: 0 };
+  for (const candidate of chatIdCandidates(chatId)) {
+    const { body, headers } = build(candidate);
+    const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, { method: "POST", headers, body });
+    const payload = (await response.json().catch(() => null)) as { ok?: boolean; description?: string } | null;
+    if (response.ok && payload?.ok) return { ok: true, status: response.status };
+    last = { ok: false, status: response.status, description: payload?.description };
+    if (!isChatNotFound(payload?.description)) break;
+  }
+  return last;
+}
+
+/**
  * Where an outgoing message should go right now.
  *
  * `runDestination` is the chat of the message being answered, when the caller
  * has one. Everything else falls back to what the workspace remembers.
+ *
+ * `chat` names a different destination outright - a channel the bot administers,
+ * or another chat. It needs this workspace's own bot: the deployment relay only
+ * delivers to chats already bound to the workspace, by design.
  */
 export async function resolveTelegramDestination(
-  runDestination?: { chatId: string | number; botToken?: string; replyToMessageId?: number | null } | null
+  runDestination?: { chatId: string | number; botToken?: string; replyToMessageId?: number | null } | null,
+  options: { chat?: string } = {}
 ): Promise<TelegramDestination | null> {
+  const explicit = options.chat ? normalizeChatTarget(options.chat) : null;
+  if (options.chat && !explicit) return null;
+  if (explicit) {
+    const config = await getTelegramIntegrationRuntimeConfig().catch(() => null);
+    if (!config?.botToken) return null;
+    // No reply id: the target is a different chat from the one being answered.
+    return { kind: "workspace-bot", chatId: explicit, botToken: config.botToken };
+  }
+
   if (runDestination && runDestination.chatId !== undefined && runDestination.chatId !== null) {
     return {
       kind: "run",
@@ -166,21 +239,19 @@ export async function sendTelegramText(
 
   try {
     if (destination.botToken) {
-      const response = await fetch(`https://api.telegram.org/bot${destination.botToken}/sendMessage`, {
-        method: "POST",
+      const outcome = await callBotApi(destination.botToken, "sendMessage", destination.chatId, (chat) => ({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          chat_id: destination.chatId,
+          chat_id: chat,
           text: trimmed,
           ...(destination.replyToMessageId ? { reply_to_message_id: destination.replyToMessageId } : {}),
         }),
-      });
-      const payload = await response.json().catch(() => null) as { ok?: boolean; description?: string } | null;
-      if (!response.ok || !payload?.ok) {
+      }));
+      if (!outcome.ok) {
         return {
           success: false,
           via: destination.kind,
-          error: `Telegram sendMessage failed (${response.status})${payload?.description ? `: ${payload.description}` : ""}`,
+          error: `Telegram sendMessage failed (${outcome.status})${outcome.description ? `: ${outcome.description}` : ""}`,
         };
       }
       return { success: true, via: destination.kind };
@@ -207,20 +278,18 @@ export async function sendTelegramDocument(
 ): Promise<TelegramSendResult> {
   try {
     if (destination.botToken) {
-      const form = new FormData();
-      form.append("chat_id", String(destination.chatId));
-      form.append("document", new Blob([new Uint8Array(file.buffer)]), file.name);
-      if (file.caption?.trim()) form.append("caption", file.caption.trim());
-      const response = await fetch(`https://api.telegram.org/bot${destination.botToken}/sendDocument`, {
-        method: "POST",
-        body: form,
+      const outcome = await callBotApi(destination.botToken, "sendDocument", destination.chatId, (chat) => {
+        const form = new FormData();
+        form.append("chat_id", chat);
+        form.append("document", new Blob([new Uint8Array(file.buffer)]), file.name);
+        if (file.caption?.trim()) form.append("caption", file.caption.trim());
+        return { body: form };
       });
-      const payload = await response.json().catch(() => null) as { ok?: boolean; description?: string } | null;
-      if (!response.ok || !payload?.ok) {
+      if (!outcome.ok) {
         return {
           success: false,
           via: destination.kind,
-          error: `Telegram sendDocument failed (${response.status})${payload?.description ? `: ${payload.description}` : ""}`,
+          error: `Telegram sendDocument failed (${outcome.status})${outcome.description ? `: ${outcome.description}` : ""}`,
         };
       }
       return { success: true, via: destination.kind };
@@ -249,6 +318,53 @@ export async function sendTelegramDocument(
       success: false,
       via: destination.kind,
       error: error instanceof Error ? error.message : "Failed to send the file to Telegram.",
+    };
+  }
+}
+
+/** Image extensions Telegram will show inline rather than as an attachment. */
+const PHOTO_EXTENSIONS = new Set([".jpg", ".jpeg", ".png", ".webp", ".gif", ".bmp"]);
+
+export function looksLikePhoto(fileName: string): boolean {
+  return PHOTO_EXTENSIONS.has(path.extname(fileName).toLowerCase());
+}
+
+/**
+ * Send an image as a picture rather than as an attachment.
+ *
+ * A post is a picture with a caption; a document is a paperclip. Only
+ * `sendDocument` existed, so every generated image arrived as a file to
+ * download - which is what people reported as "the image came as a file again".
+ *
+ * The deployment relay carries documents only, so a workspace delivering
+ * through the relay falls back to that rather than failing.
+ */
+export async function sendTelegramPhoto(
+  destination: TelegramDestination,
+  file: { buffer: Buffer; name: string; caption?: string }
+): Promise<TelegramSendResult> {
+  if (!destination.botToken) return sendTelegramDocument(destination, file);
+  try {
+    const outcome = await callBotApi(destination.botToken, "sendPhoto", destination.chatId, (chat) => {
+      const form = new FormData();
+      form.append("chat_id", chat);
+      form.append("photo", new Blob([new Uint8Array(file.buffer)]), file.name);
+      if (file.caption?.trim()) form.append("caption", file.caption.trim());
+      return { body: form };
+    });
+    if (!outcome.ok) {
+      return {
+        success: false,
+        via: destination.kind,
+        error: `Telegram sendPhoto failed (${outcome.status})${outcome.description ? `: ${outcome.description}` : ""}`,
+      };
+    }
+    return { success: true, via: destination.kind };
+  } catch (error) {
+    return {
+      success: false,
+      via: destination.kind,
+      error: error instanceof Error ? error.message : "Failed to send the photo to Telegram.",
     };
   }
 }
