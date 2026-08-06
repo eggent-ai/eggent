@@ -530,6 +530,28 @@ export async function saveTelegramIntegrationFromPublicInput(input: {
   });
 }
 
+/**
+ * Add Telegram user ids to the allow-list, keeping the ones already there.
+ *
+ * `saveTelegramIntegrationFromPublicInput` replaces the whole list, which is
+ * right for the settings form that shows every entry, and wrong for anything
+ * granting access to one more person: the agent handing out access mid-chat
+ * only knows the id in front of it and would drop everyone else.
+ */
+export async function allowTelegramUserIds(
+  userIds: readonly (string | number)[]
+): Promise<{ allowedUserIds: string[]; added: string[] }> {
+  const requested = mergeAllowedUserIds(userIds.map((value) => String(value)));
+  const current = await getTelegramIntegrationStoredSettings();
+  const added = requested.filter((userId) => !current.allowedUserIds.includes(userId));
+  if (added.length === 0) {
+    return { allowedUserIds: current.allowedUserIds, added };
+  }
+  const allowedUserIds = mergeAllowedUserIds(current.allowedUserIds, requested);
+  await saveTelegramIntegrationStoredSettings({ allowedUserIds });
+  return { allowedUserIds, added };
+}
+
 export function generateTelegramAccessCode(): string {
   return `EG-${randomBytes(5).toString("hex").toUpperCase()}`;
 }

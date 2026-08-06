@@ -411,11 +411,21 @@ export async function createEggentPiTools(options: {
       name: "eggent_manage_telegram",
       label: "Manage Telegram Bot",
       description:
-        "Connect, inspect or disconnect the Telegram bot of this workspace. Use this whenever the user gives a bot token from BotFather or asks to hook the workspace up to Telegram. Sending a message with curl does NOT connect a bot: only this tool registers the token so incoming messages reach the workspace. Never repeat the token back to the user or write it into files.",
+        "Connect, inspect or disconnect the Telegram bot of this workspace, and grant people access to it. Use this whenever the user gives a bot token from BotFather or asks to hook the workspace up to Telegram. Sending a message with curl does NOT connect a bot: only this tool registers the token so incoming messages reach the workspace. When a freshly connected bot answers the user with \"activate access with a code\", finish the job here with allow_user or access_code instead of sending them to the settings screen. Never repeat the token back to the user or write it into files.",
       parameters: Type.Object({
-        action: Type.Union([Type.Literal("status"), Type.Literal("connect"), Type.Literal("disconnect")], {
-          description: "status = report the current connection, connect = register a bot, disconnect = remove it.",
-        }),
+        action: Type.Union(
+          [
+            Type.Literal("status"),
+            Type.Literal("connect"),
+            Type.Literal("disconnect"),
+            Type.Literal("allow_user"),
+            Type.Literal("access_code"),
+          ],
+          {
+            description:
+              "status = report the current connection, connect = register a bot, disconnect = remove it, allow_user = let a Telegram account talk to this workspace, access_code = issue a one-time code the user sends to the bot themselves.",
+          }
+        ),
         bot_token: Type.Optional(
           Type.String({
             description: "BotFather token, for action=connect. Omit to re-apply the token already stored.",
@@ -424,6 +434,12 @@ export async function createEggentPiTools(options: {
         mode: Type.Optional(
           Type.Union([Type.Literal("polling"), Type.Literal("webhook")], {
             description: "Delivery mode. Defaults to polling, which works without a public URL.",
+          })
+        ),
+        user_id: Type.Optional(
+          Type.String({
+            description:
+              "Numeric Telegram user id, for action=allow_user. Omit to allow the account this run is talking to, which is the usual case.",
           })
         ),
       }),
@@ -456,6 +472,60 @@ export async function createEggentPiTools(options: {
             const result = await disconnectTelegramBot(t);
             return textResult(
               JSON.stringify({ success: true, disconnected: true, ...result }, null, 2)
+            );
+          }
+
+          // A bot with an empty allow-list answers every message with "activate
+          // access with a code", and the person on the other side has no idea
+          // where that code lives. Both ways out of it are here: grant the id
+          // this run already knows, or hand over a code they redeem themselves.
+          if (params.action === "allow_user") {
+            const { allowTelegramUserIds } = await import("@/lib/storage/telegram-integration-store");
+            const runtime = getTelegramRuntimeData(options.toolRuntimeData);
+            const userId = params.user_id?.trim() || (runtime ? String(runtime.chatId) : "");
+            if (!userId) {
+              return textResult(
+                JSON.stringify(
+                  {
+                    success: false,
+                    error: "No Telegram user id to allow.",
+                    note: "This run is not answering a Telegram message, so there is no id to infer. Ask the user for their numeric Telegram id, or use action=access_code and let them redeem it in the bot.",
+                  },
+                  null,
+                  2
+                )
+              );
+            }
+            const { allowedUserIds, added } = await allowTelegramUserIds([userId]);
+            return textResult(
+              JSON.stringify(
+                {
+                  success: true,
+                  userId,
+                  alreadyAllowed: added.length === 0,
+                  allowedUserIds,
+                  note: "Access is granted. Tell the user to write to the bot - no code needed. Do not send them to the settings screen for this.",
+                },
+                null,
+                2
+              )
+            );
+          }
+
+          if (params.action === "access_code") {
+            const { createTelegramAccessCode } = await import("@/lib/storage/telegram-integration-store");
+            const code = await createTelegramAccessCode();
+            return textResult(
+              JSON.stringify(
+                {
+                  success: true,
+                  code: code.code,
+                  expiresAt: code.expiresAt,
+                  note: "Give the user this code and tell them to send `/code <code>` to their own bot in Telegram - not here, and not into the settings screen. It works once and then expires.",
+                },
+                null,
+                2
+              )
             );
           }
 
