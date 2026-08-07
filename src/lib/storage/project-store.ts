@@ -1758,7 +1758,22 @@ export async function getProjectFiles(
   try {
     const entries = await fs.readdir(targetDir, { withFileTypes: true });
     const files = [];
-    const HIDDEN_NAMES = new Set([".meta", ".venv", "venv", "cron.json", PROJECT_METADATA_FILENAME]);
+    const HIDDEN_NAMES = new Set([
+      ".meta",
+      ".venv",
+      "venv",
+      "cron.json",
+      PROJECT_METADATA_FILENAME,
+      // File-sync bookkeeping, when this folder is synced to someone's computer.
+      // `.stfolder` is the marker the sync tool refuses to work without, and it
+      // will not recreate one it finds missing - deleting it from here silently
+      // stops the folder syncing. `.stignore` is generated, and `.stversions`
+      // holds superseded copies that are restored from the sync page, not by
+      // digging through them.
+      ".stfolder",
+      ".stignore",
+      ".stversions",
+    ]);
 
     for (const entry of entries) {
       if (HIDDEN_NAMES.has(entry.name)) continue; // hide internal metadata and virtualenvs
