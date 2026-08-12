@@ -5,6 +5,7 @@ import * as PiSdk from "@earendil-works/pi-coding-agent";
 import type { ModelRegistry, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { PiRuntimeStats } from "@/lib/pi/types";
 import { getWorkDir, loadProjectModelSettings } from "@/lib/storage/project-store";
+import { isLocalOnlyBaseUrl, probeModelProvider, type ProviderProbe } from "@/lib/pi/provider-probe";
 
 type StoredCredentialInfo = { providerId: string; type: string };
 type StoredCredentialRecord = { type: string; key?: string; env?: Record<string, string> };
@@ -411,6 +412,39 @@ const PROVIDER_ID_REGEX = /^[a-z0-9][a-z0-9._-]{0,63}$/;
  * The API key never goes into models.json. Credentials belong in auth.json,
  * which is written 0600 and is where the runtime looks them up by provider id.
  */
+/**
+ * Ask the workspace's current provider why it is answering with nothing.
+ *
+ * Returns null when there is nothing to say — no provider selected, or the
+ * provider answered normally and the emptiness came from somewhere else.
+ */
+export async function diagnoseCurrentProvider(): Promise<
+  (ProviderProbe & { provider: string; model?: string; localOnly: boolean }) | null
+> {
+  try {
+    const settings = await getPiSettingsState();
+    const provider = settings.defaultProvider?.trim();
+    if (!provider) return null;
+    const model = settings.defaultModel?.trim() || undefined;
+    const baseUrl = await providerBaseUrl(provider);
+    if (!baseUrl) return null;
+
+    const localOnly = isLocalOnlyBaseUrl(baseUrl);
+    if (localOnly) {
+      return { ok: false, reason: "unreachable", provider, model, localOnly: true };
+    }
+
+    const auth = await readAuthJson().catch((): Record<string, StoredCredentialRecord> => ({}));
+    const stored = auth[provider] as { key?: unknown } | undefined;
+    const apiKey = typeof stored?.key === "string" ? stored.key : undefined;
+
+    const probe = await probeModelProvider({ baseUrl, apiKey, model });
+    return { ...probe, provider, model, localOnly: false };
+  } catch {
+    return null;
+  }
+}
+
 export async function upsertCustomModelProvider(params: {
   id: string;
   baseUrl: string;
@@ -418,7 +452,14 @@ export async function upsertCustomModelProvider(params: {
   api?: string;
   apiKey?: string;
   env?: Record<string, string>;
-}): Promise<{ provider: string; models: string[]; hasKey: boolean; api: string }> {
+}): Promise<{
+  provider: string;
+  models: string[];
+  hasKey: boolean;
+  api: string;
+  localOnly: boolean;
+  check: ProviderProbe;
+}> {
   if (isManagedAiEnforced()) {
     throw new Error(
       `Model selection is managed for this workspace. To use your own provider, run Eggent self-hosted: ${selfHostedDocsUrl()}`
@@ -462,13 +503,26 @@ export async function upsertCustomModelProvider(params: {
   await fs.writeFile(filePath, `${JSON.stringify({ ...parsed, providers }, null, 2)}\n`, "utf-8");
 
   const apiKey = params.apiKey?.trim();
+  const auth = await readAuthJson().catch((): Record<string, StoredCredentialRecord> => ({}));
   if (apiKey) {
-    const auth = await readAuthJson();
     auth[id] = params.env ? { type: "api_key", key: apiKey, env: params.env } : { type: "api_key", key: apiKey };
     await writeAuthJson(auth);
   }
 
-  return { provider: id, models, hasKey: Boolean(apiKey), api };
+  // hasKey answers "can this provider authenticate", not "did this call carry a
+  // key". Reporting the argument meant re-registering a provider to check on it
+  // came back as "registered without a key" while the key sat in auth.json, and
+  // the agent went looking for a problem that was not there.
+  const stored = auth[id] as { key?: unknown } | undefined;
+  const hasKey = Boolean(apiKey) || Boolean(typeof stored?.key === "string" && stored.key.trim());
+
+  const effectiveKey = apiKey || (typeof stored?.key === "string" ? stored.key : undefined);
+  const localOnly = isLocalOnlyBaseUrl(baseUrl);
+  const check = localOnly
+    ? ({ ok: false, reason: "not_checked" } as ProviderProbe)
+    : await probeModelProvider({ baseUrl, apiKey: effectiveKey, model: models[0] });
+
+  return { provider: id, models, hasKey, api, localOnly, check };
 }
 
 /**

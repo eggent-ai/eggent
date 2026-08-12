@@ -379,13 +379,25 @@ export async function createEggentPiTools(options: {
               api: params.api,
               apiKey: params.api_key,
             });
+            // Say now whether this provider can actually answer. Switching to
+            // one that cannot leaves the workspace with no working model at
+            // all, and the person discovers it one empty reply at a time.
+            const next = result.localOnly
+              ? "Registered, but this address only exists on the machine Eggent runs on. If Eggent runs on a server rather than on the user's own computer, their local model cannot be reached and this provider will never answer. Tell them that before they switch, and offer a provider reachable over the internet instead."
+              : result.check.reason === "unreachable"
+                ? "Registered, but the endpoint did not respond. Check the base URL with the user before switching - a provider that cannot be reached will answer every message with nothing."
+                : result.check.reason === "unauthorized"
+                  ? "Registered, but the provider rejected the key. Ask the user to check it in Settings -> Models and login before switching."
+                  : result.check.reason === "model_missing"
+                    ? `Registered, but the provider does not list this model id. It offers: ${(result.check.models || []).join(", ") || "nothing readable"}. Confirm the right id with the user before switching.`
+                    : result.hasKey
+                      ? "The provider answered and has a key. Call use_provider to make it answer, or leave the current model in place."
+                      : "The provider is registered without a key. It now appears in Settings under the model picker, where the user pastes the API key - that keeps the key out of the chat. After that, use_provider can select it.";
             return textResult(
               JSON.stringify({
                 success: true,
                 ...result,
-                next: result.hasKey
-                  ? "The provider is connected. Call use_provider to make it answer, or leave the current model in place."
-                  : "The provider is registered without a key. It now appears in Settings under the model picker, where the user pastes the API key - that keeps the key out of the chat. After that, use_provider can select it.",
+                next,
                 settingsHint: "Settings -> Models and login",
               }, null, 2)
             );

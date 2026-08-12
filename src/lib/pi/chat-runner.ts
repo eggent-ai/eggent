@@ -1,7 +1,7 @@
 import { createUIMessageStream } from "ai";
 import type { UIMessage } from "ai";
 import { createEggentPiSession } from "@/lib/pi/session";
-import { getPiModelsState } from "@/lib/pi/config-store";
+import { diagnoseCurrentProvider, getPiModelsState, managedCredentialRecoverable } from "@/lib/pi/config-store";
 import { getServerTranslator } from "@/i18n/server";
 import { cancelPendingInteractionsForRun } from "@/lib/pi/pending-interactions";
 import { retainPiMcpOAuthSession, retainPiScheduleSession, takeRetainedPiScheduleSession } from "@/lib/pi/schedule-host";
@@ -351,24 +351,67 @@ function isEmptyZeroTokenTurn(
  * workspace - something we can verify rather than guess at. Blaming the
  * provider for it sent at least one user to disconnect and re-add providers
  * until they had none left, so name the real cause when we know it.
+ *
+ * When settings alone cannot explain it, ask the provider: its own model list
+ * separates a dead address from a rejected key from a model id it does not
+ * have. The generic "maybe rate limits, maybe quota, maybe the key" is the last
+ * resort, not the first answer, because it leaves people to try all three.
+ *
+ * Every one of these leaves the workspace unable to answer at all, so each ends
+ * with the way back to the included model when this workspace still has it.
  */
 async function emptyTurnError(): Promise<Error> {
   const t = await getServerTranslator();
+
+  const withFallback = async (message: string): Promise<Error> => {
+    try {
+      if (await managedCredentialRecoverable()) {
+        return new Error(`${message} ${t("chat.errors.returnToIncluded")}`);
+      }
+    } catch {
+      // The hint is a courtesy; never let it replace the real message.
+    }
+    return new Error(message);
+  };
+
   try {
     const state = await getPiModelsState();
     const provider = state.settings?.defaultProvider?.trim();
     if (!provider) {
-      return new Error(t("chat.errors.noModelSelected"));
+      return await withFallback(t("chat.errors.noModelSelected"));
     }
+    const name = state.providers?.find((item) => item.id === provider)?.name || provider;
+
     const connected = (state.availableModels ?? []).some((model) => model.provider === provider);
     if (!connected) {
-      const name = state.providers?.find((item) => item.id === provider)?.name || provider;
-      return new Error(t("chat.errors.providerNoCredential", { provider: name }));
+      return await withFallback(t("chat.errors.providerNoCredential", { provider: name }));
+    }
+
+    const probe = await diagnoseCurrentProvider();
+    if (probe && !probe.ok) {
+      if (probe.localOnly) {
+        return await withFallback(t("chat.errors.providerLocalOnly", { provider: name }));
+      }
+      if (probe.reason === "unreachable") {
+        return await withFallback(t("chat.errors.providerUnreachable", { provider: name }));
+      }
+      if (probe.reason === "unauthorized") {
+        return await withFallback(t("chat.errors.providerRejectedKey", { provider: name }));
+      }
+      if (probe.reason === "model_missing") {
+        return await withFallback(
+          t("chat.errors.providerModelMissing", {
+            provider: name,
+            model: probe.model || "",
+            models: (probe.models || []).slice(0, 8).join(", "),
+          })
+        );
+      }
     }
   } catch {
     // Fall through to the generic message rather than hiding the original failure.
   }
-  return new Error(t("chat.errors.emptyResponse"));
+  return await withFallback(t("chat.errors.emptyResponse"));
 }
 
 function hasScheduleManagementIntent(text: string): boolean {
