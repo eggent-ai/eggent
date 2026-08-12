@@ -80,12 +80,36 @@ export function UsageWidget() {
 
   useEffect(() => {
     let cancelled = false;
+    let timer: ReturnType<typeof setInterval> | null = null;
+
+    const stopPolling = () => {
+      if (timer !== null) {
+        clearInterval(timer);
+        timer = null;
+      }
+    };
 
     const load = async () => {
       try {
         const response = await fetch("/api/usage");
         if (response.status === 404) {
+          // No usage provider is configured and none will appear while this
+          // page is open, so there is nothing left to ask for.
           if (!cancelled) setUnavailable(true);
+          stopPolling();
+          return;
+        }
+        if (response.status === 401) {
+          // The session is gone. Polling on regardless leaves a tab that looks
+          // alive answering 401 for hours while the person wonders why nothing
+          // works, so follow the same redirect the middleware performs on any
+          // page request.
+          stopPolling();
+          if (!cancelled) {
+            const next = `${window.location.pathname}${window.location.search}`;
+            const target = next && next !== "/" ? `/login?next=${encodeURIComponent(next)}` : "/login";
+            window.location.replace(target);
+          }
           return;
         }
         if (!response.ok) return;
@@ -97,10 +121,10 @@ export function UsageWidget() {
     };
 
     void load();
-    const timer = setInterval(load, POLL_INTERVAL_MS);
+    timer = setInterval(load, POLL_INTERVAL_MS);
     return () => {
       cancelled = true;
-      clearInterval(timer);
+      stopPolling();
     };
   }, []);
 

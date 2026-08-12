@@ -122,6 +122,11 @@ interface LoginJobState {
 
 const thinkingLevels = ["off", "minimal", "low", "medium", "high", "xhigh"];
 
+/** How long to wait for a provider login before treating it as abandoned. */
+const OAUTH_POLL_TIMEOUT_MS = 10 * 60 * 1000;
+/** Consecutive failed polls tolerated before giving up on the login. */
+const OAUTH_POLL_MAX_FAILURES = 5;
+
 export default function SettingsPage() {
   const { setLocalePreference, t } = useI18n();
   const [settings, setSettings] = useState<AppSettings | null>(null);
@@ -174,20 +179,55 @@ export default function SettingsPage() {
 
   useEffect(() => {
     if (!oauthJobId || oauthJobStatus !== "running") return;
-    const timer = window.setInterval(async () => {
-      const res = await fetch(`/api/pi/auth/login?id=${encodeURIComponent(oauthJobId)}`, { cache: "no-store" });
-      const json = await res.json().catch(() => null) as LoginJobState | { error?: string } | null;
-      if (!res.ok || !json || ("error" in json && !("status" in json))) {
-        setPiError(json?.error || t("settings.errors.pollProviderLogin"));
+
+    // This runs once a second, so every way out of "running" has to stop it.
+    // Reporting an error and carrying on left the tab polling for as long as it
+    // stayed open — one workspace sent 950 of these in a day — and a provider
+    // login the person abandoned halfway never resolves at all.
+    const startedAt = Date.now();
+    let failures = 0;
+    let timer: number | null = null;
+
+    const stop = () => {
+      if (timer !== null) {
+        window.clearInterval(timer);
+        timer = null;
+      }
+    };
+
+    const giveUp = (message?: string) => {
+      stop();
+      setPiError(message || t("settings.errors.pollProviderLogin"));
+    };
+
+    timer = window.setInterval(async () => {
+      if (Date.now() - startedAt > OAUTH_POLL_TIMEOUT_MS) {
+        giveUp();
         return;
       }
-      const next = json as LoginJobState;
-      setOauthJob(next);
-      if (next.status !== "running") {
-        await loadPiState();
+      try {
+        const res = await fetch(`/api/pi/auth/login?id=${encodeURIComponent(oauthJobId)}`, { cache: "no-store" });
+        const json = await res.json().catch(() => null) as LoginJobState | { error?: string } | null;
+        if (!res.ok || !json || ("error" in json && !("status" in json))) {
+          failures += 1;
+          // A single blip mid-login is not worth losing the flow over.
+          if (failures >= OAUTH_POLL_MAX_FAILURES) giveUp(json?.error);
+          return;
+        }
+        failures = 0;
+        const next = json as LoginJobState;
+        setOauthJob(next);
+        if (next.status !== "running") {
+          stop();
+          await loadPiState();
+        }
+      } catch {
+        failures += 1;
+        if (failures >= OAUTH_POLL_MAX_FAILURES) giveUp();
       }
     }, 1000);
-    return () => window.clearInterval(timer);
+
+    return stop;
   }, [oauthJobId, oauthJobStatus]);
 
   const darkMode = settings?.general.darkMode ?? false;
