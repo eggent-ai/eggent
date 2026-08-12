@@ -75,4 +75,15 @@ fi
 
 node /app/scripts/ensure-pi-packages.mjs
 
-exec npm run start
+# Node closes an idle keep-alive connection after 5 seconds by default, while a
+# reverse proxy in front keeps reusing it for far longer. When the two land on
+# the same moment the proxy sends a request into a socket Node is closing, and
+# the caller gets a 502 with nothing in the application log — the request never
+# arrived. In a workspace this hits the first message after the page loads,
+# because that is the one preceded by a few seconds of typing: the send fails
+# red, and the same message works on the retry.
+#
+# The rule is that whoever sits in front must close first, so the server side
+# has to outlive it. Kept under Node's own 60s headers timeout so nothing else
+# starts closing sockets instead.
+exec npm run start -- --keepAliveTimeout "${EGGENT_KEEP_ALIVE_TIMEOUT_MS:-30000}"
