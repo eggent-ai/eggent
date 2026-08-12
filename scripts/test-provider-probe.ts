@@ -6,7 +6,7 @@
  * endpoint is alive just as well as a 200, which is the whole point.
  */
 import assert from "node:assert/strict";
-import { isLocalOnlyBaseUrl, probeModelProvider } from "../src/lib/pi/provider-probe.ts";
+import { canProbeProviderApi, isLocalOnlyBaseUrl, probeModelProvider } from "../src/lib/pi/provider-probe.ts";
 
 let failed = 0;
 let ran = 0;
@@ -53,6 +53,26 @@ for (const url of [
 await check("мусор вместо URL не считается локальным", () =>
   assert.equal(isLocalOnlyBaseUrl("not a url"), false)
 );
+
+console.log("\ncanProbeProviderApi — проверяем только тот диалект, который умеем:");
+for (const api of ["openai-completions", "openai-responses", "azure-openai-responses", "OPENAI-COMPLETIONS"]) {
+  await check(`проверяем: ${api}`, () => assert.equal(canProbeProviderApi(api), true));
+}
+await check("пустое значение считаем openai-совместимым (умолчание add_provider)", () =>
+  assert.equal(canProbeProviderApi(undefined), true)
+);
+// These authenticate differently; probing them the OpenAI way would report a
+// rejected key for a key that is fine.
+for (const api of [
+  "anthropic-messages",
+  "google-generative-ai",
+  "google-vertex",
+  "bedrock-converse-stream",
+  "mistral-conversations",
+  "openai-codex-responses",
+]) {
+  await check(`НЕ проверяем: ${api}`, () => assert.equal(canProbeProviderApi(api), false));
+}
 
 console.log("\nprobeModelProvider — классификация (нужна сеть):");
 await check("не-URL -> not_checked, без сетевого вызова", async () => {

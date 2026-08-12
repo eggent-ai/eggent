@@ -52,6 +52,23 @@ export function isLocalOnlyBaseUrl(baseUrl: string): boolean {
 }
 
 /**
+ * Provider APIs this check understands.
+ *
+ * The probe speaks one dialect: GET {baseUrl}/models with a bearer token. That
+ * covers the OpenAI-compatible endpoints, which is what a custom provider
+ * almost always is, and nothing else. Anthropic authenticates with x-api-key,
+ * Google puts the key in the query string, Vertex and Bedrock use cloud
+ * credentials entirely — probing those the OpenAI way returns 401 for a key
+ * that is perfectly good, and a confidently wrong diagnosis is worse than the
+ * vague one it replaced. Anything not listed here is left unchecked.
+ */
+const PROBEABLE_APIS = new Set(["openai-completions", "openai-responses", "azure-openai-responses"]);
+
+export function canProbeProviderApi(api?: string): boolean {
+  return PROBEABLE_APIS.has((api || "openai-completions").trim().toLowerCase());
+}
+
+/**
  * One call to the provider's own model list, classified.
  *
  * A 401 proves the endpoint is alive as surely as a 200 does, which is what

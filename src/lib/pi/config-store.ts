@@ -5,7 +5,7 @@ import * as PiSdk from "@earendil-works/pi-coding-agent";
 import type { ModelRegistry, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { PiRuntimeStats } from "@/lib/pi/types";
 import { getWorkDir, loadProjectModelSettings } from "@/lib/storage/project-store";
-import { isLocalOnlyBaseUrl, probeModelProvider, type ProviderProbe } from "@/lib/pi/provider-probe";
+import { canProbeProviderApi, isLocalOnlyBaseUrl, probeModelProvider, type ProviderProbe } from "@/lib/pi/provider-probe";
 
 type StoredCredentialInfo = { providerId: string; type: string };
 type StoredCredentialRecord = { type: string; key?: string; env?: Record<string, string> };
@@ -193,6 +193,28 @@ async function providerBaseUrl(providerId: string): Promise<string> {
     // Falls through to "no base url", which is reported as not configured.
   }
   return "";
+}
+
+/** Which API dialect a provider speaks, models.json override first. */
+async function providerApi(providerId: string): Promise<string | undefined> {
+  const models = readJsonRecord(await readPiModelsJson().catch(() => "{}"));
+  const providersValue = models.providers;
+  const providers = providersValue && typeof providersValue === "object" && !Array.isArray(providersValue)
+    ? providersValue as Record<string, unknown>
+    : {};
+  const override = providers[providerId];
+  if (override && typeof override === "object" && !Array.isArray(override)) {
+    const api = (override as Record<string, unknown>).api;
+    if (typeof api === "string" && api.trim()) return api.trim().toLowerCase();
+  }
+  try {
+    const runtime = await getPiModelRuntime();
+    const provider = runtime.getProviders().find((item) => item.id === providerId) as { api?: unknown } | undefined;
+    if (typeof provider?.api === "string" && provider.api.trim()) return provider.api.trim().toLowerCase();
+  } catch {
+    // Unknown dialect means "do not probe", which is the safe answer.
+  }
+  return undefined;
 }
 
 /**
@@ -434,6 +456,13 @@ export async function diagnoseCurrentProvider(): Promise<
       return { ok: false, reason: "unreachable", provider, model, localOnly: true };
     }
 
+    // Only ask providers that speak the dialect the probe knows. Guessing at an
+    // Anthropic or Vertex endpoint the OpenAI way answers 401 for a key that is
+    // fine, and naming the wrong cause is worse than admitting we do not know.
+    if (!canProbeProviderApi(await providerApi(provider))) {
+      return { ok: false, reason: "not_checked", provider, model, localOnly: false };
+    }
+
     const auth = await readAuthJson().catch((): Record<string, StoredCredentialRecord> => ({}));
     const stored = auth[provider] as { key?: unknown } | undefined;
     const apiKey = typeof stored?.key === "string" ? stored.key : undefined;
@@ -518,7 +547,7 @@ export async function upsertCustomModelProvider(params: {
 
   const effectiveKey = apiKey || (typeof stored?.key === "string" ? stored.key : undefined);
   const localOnly = isLocalOnlyBaseUrl(baseUrl);
-  const check = localOnly
+  const check = localOnly || !canProbeProviderApi(api)
     ? ({ ok: false, reason: "not_checked" } as ProviderProbe)
     : await probeModelProvider({ baseUrl, apiKey: effectiveKey, model: models[0] });
 
