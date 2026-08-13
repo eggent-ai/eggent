@@ -233,6 +233,7 @@ const enMessages = {
   "projects.credentialsUpdated": "Credentials updated.",
 
   "files.previewTitle": "File Preview",
+  "files.open": "Open",
   "files.defaultTitle": "File",
   "files.noFileSelected": "No file selected.",
   "files.loadFailed": "Failed to load file",

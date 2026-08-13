@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { Download, FileText, ImageIcon, Loader2, Save } from "lucide-react";
+import { Download, ExternalLink, FileText, ImageIcon, Loader2, Save } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { AppSidebar } from "@/components/app-sidebar";
@@ -49,6 +49,16 @@ export default function GenericFileEditorPage() {
     const params = new URLSearchParams({ project: projectId, path: filePath });
     return `/api/files/download?${params.toString()}`;
   }, [projectId, filePath]);
+
+  // A built page could only be downloaded as an unnamed binary, so the one
+  // thing its author wanted — to look at it — was the one thing they could not
+  // do here. Opening is served sandboxed, in its own tab.
+  const openHref = useMemo(() => {
+    const params = new URLSearchParams({ project: projectId, path: filePath, inline: "1" });
+    return `/api/files/download?${params.toString()}`;
+  }, [projectId, filePath]);
+
+  const isOpenable = /\.(html?|pdf|svg|png|jpe?g|gif|webp)$/i.test(filePath);
 
   useEffect(() => {
     let cancelled = false;
@@ -143,6 +153,14 @@ export default function GenericFileEditorPage() {
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
+                    {isOpenable ? (
+                      <Button variant="outline" asChild className="gap-2">
+                        <a href={openHref} target="_blank" rel="noopener noreferrer">
+                          <ExternalLink className="size-4" />
+                          {t("files.open")}
+                        </a>
+                      </Button>
+                    ) : null}
                     <Button variant="outline" asChild className="gap-2">
                       <a href={downloadHref} download={title}>
                         <Download className="size-4" />
