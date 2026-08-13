@@ -27,7 +27,31 @@ import {
   readProjectContext,
 } from "@/lib/storage/project-store";
 import { deploymentContext, ensureWebSearchWorkflow, fallbackRuntimeModel, getEggentAiModelLockState, getManagedProviderId, getPiModelRegistry, getPiModelRuntime, getPiSettingsManager } from "@/lib/pi/config-store";
-import { isUsageProviderConfigured } from "@/lib/usage/usage-provider";
+import { getUsageSnapshot, isUsageProviderConfigured } from "@/lib/usage/usage-provider";
+
+/**
+ * How much of the included balance is spent, as a level.
+ *
+ * Read from the snapshot the sidebar already polls, so this costs nothing on a
+ * warm cache and degrades to "say nothing" when no provider is configured or
+ * the provider is unreachable. A meter the provider marked agentOnly still
+ * counts: a workspace on its own model is not spending this balance, and the
+ * provider hides the meter for exactly that reason.
+ */
+async function currentBudgetLevel(): Promise<"ok" | "half" | "low"> {
+  try {
+    if (!isUsageProviderConfigured()) return "ok";
+    const snapshot = await getUsageSnapshot();
+    const meter = snapshot?.meters?.find((item) => item.id === "ai" && item.visibility !== "agentOnly");
+    if (!meter || !(meter.limit > 0)) return "ok";
+    const ratio = meter.used / meter.limit;
+    if (ratio >= 0.75) return "low";
+    if (ratio >= 0.5) return "half";
+    return "ok";
+  } catch {
+    return "ok";
+  }
+}
 import { getServerTranslator } from "@/i18n/server";
 
 const EGGENT_CONTEXT_FILE_CANDIDATES = [
@@ -177,6 +201,12 @@ function buildEggentProjectContext(options: {
   selfHostedUrl?: string;
   usageToolAvailable?: boolean;
   deploymentContext?: string;
+  /**
+   * How much of the included balance is gone, as a level rather than a figure.
+   * See the note where it is rendered: a live number here would invalidate the
+   * prompt cache on every turn.
+   */
+  budgetLevel?: "ok" | "half" | "low";
 }): string {
   // Ordering here is load-bearing, not cosmetic.
   //
@@ -261,6 +291,21 @@ function buildEggentProjectContext(options: {
   const thisWorkspace: string[] = [
     "",
     "## This workspace",
+    // The balance warning only ever reached people who opened the web sidebar,
+    // or who thought to ask. Someone working over Telegram spent an entire
+    // trial across four hours and learned about the limit from the message that
+    // stopped them mid-task. The level goes here so the agent can say it once,
+    // unprompted, in whatever surface the person is actually using.
+    //
+    // Deliberately a level and not a figure: this sits in the cached prefix
+    // tail, so a line carrying "€1.23 left" would change on every single turn
+    // and cost more in cache misses than the warning is worth. It changes at
+    // most twice in a workspace's life.
+    options.budgetLevel === "half"
+      ? "Budget: about half of the included Eggent AI balance is used. Nothing to do yet. Mention it once, in passing, only if it fits what you are already saying."
+      : options.budgetLevel === "low"
+        ? "Budget: the included Eggent AI balance is running low. Say so once, plainly, at the end of your next reply — before a task stops halfway is the only useful time to hear it. Do not repeat it every turn, and do not let it interrupt the work."
+        : "",
     options.projectId ? `Project id: ${options.projectId}` : "Project id: orchestrator",
     options.projectName ? `Project name: ${options.projectName}` : "",
     options.projectDescription ? `Project description: ${options.projectDescription}` : "",
@@ -447,6 +492,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     selfHostedUrl: modelLock.selfHostedUrl,
     usageToolAvailable: isUsageProviderConfigured(),
     deploymentContext: deploymentContext(),
+    budgetLevel: await currentBudgetLevel(),
   });
   const explicitContextFiles = loadEggentContextFiles(cwd, agentDir);
 
