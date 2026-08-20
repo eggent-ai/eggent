@@ -247,10 +247,14 @@ async function resolveTelegramProjectContext(params: {
         session.activeProjectId = explicitProjectId;
     } else if (session.activeProjectId && projectById.has(session.activeProjectId)) {
         resolvedProjectId = session.activeProjectId;
-    } else if (projects.length > 0) {
-        resolvedProjectId = projects[0].id;
-        session.activeProjectId = projects[0].id;
     } else {
+        // No project asked for and none remembered, so the session stays in the
+        // workspace scope. This used to fall through to projects[0] and persist
+        // it, which made a session's project depend on which path the message
+        // took: plain text resolved one way and an attachment - or /start - the
+        // other. Sending a photo could silently bind the session to whichever
+        // project happened to sort first, and that choice then stuck for every
+        // message after it. Reported as #20 by @nimph977.
         session.activeProjectId = null;
     }
 
