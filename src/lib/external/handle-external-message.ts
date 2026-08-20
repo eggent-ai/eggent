@@ -84,6 +84,26 @@ export class ExternalMessageError extends Error {
   }
 }
 
+function unwrapToolResultPayload(value: unknown): unknown {
+  if (value === null || value === undefined) return undefined;
+  if (typeof value !== "object" || Array.isArray(value)) return value;
+  const record = value as Record<string, unknown>;
+  if (record.success !== undefined || record.action !== undefined) return value;
+  if (Array.isArray(record.content)) {
+    const texts: string[] = [];
+    for (const part of record.content) {
+      if (part && typeof part === "object" && !Array.isArray(part)) {
+        const partRecord = part as Record<string, unknown>;
+        if (partRecord.type === "text" && typeof partRecord.text === "string") {
+          texts.push(partRecord.text);
+        }
+      }
+    }
+    return texts.length > 0 ? texts.join("\n") : undefined;
+  }
+  return value;
+}
+
 function parseSwitchProjectSignal(
   message: ChatMessage
 ): SwitchProjectSignal | null {
@@ -91,7 +111,7 @@ function parseSwitchProjectSignal(
     return null;
   }
 
-  let parsed: unknown = message.toolResult ?? message.content;
+  let parsed: unknown = unwrapToolResultPayload(message.toolResult) ?? message.content;
   if (typeof parsed === "string") {
     const trimmed = parsed.trim();
     if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
@@ -131,7 +151,7 @@ function parseCreateProjectSignal(
     return null;
   }
 
-  let parsed: unknown = message.toolResult ?? message.content;
+  let parsed: unknown = unwrapToolResultPayload(message.toolResult) ?? message.content;
   if (typeof parsed === "string") {
     const trimmed = parsed.trim();
     if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) {
