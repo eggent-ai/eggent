@@ -96,6 +96,8 @@ const enMessages = {
   "settings.customProvidersTitle": "Custom providers and models",
   "settings.customProvidersDescription": "Add a custom provider here, save models.json, and it will appear in the provider list above.",
   "settings.saveModelsJson": "Save models.json",
+  "settings.managedRepaired": "The included model was missing from models.json and has been added back. Providers you added yourself were left as they were.",
+  "settings.managedRepairedFromBroken": "models.json could not be read, so it was kept as {path} and written again with the included model.",
   "settings.auth.title": "Dashboard authentication",
   "settings.auth.username": "Username",
   "settings.auth.newPassword": "New password",

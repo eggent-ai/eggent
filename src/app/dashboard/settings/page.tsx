@@ -137,6 +137,7 @@ export default function SettingsPage() {
   const [saved, setSaved] = useState(false);
   const [piLoading, setPiLoading] = useState(true);
   const [piError, setPiError] = useState<string | null>(null);
+  const [piNotice, setPiNotice] = useState<string | null>(null);
   const [apiKey, setApiKey] = useState("");
   const [returningToManaged, setReturningToManaged] = useState(false);
   const [apiKeyEnv, setApiKeyEnv] = useState("");
@@ -372,10 +373,20 @@ export default function SettingsPage() {
     try {
       setReturningToManaged(true);
       setPiError(null);
+      setPiNotice(null);
       const res = await fetch("/api/pi/auth/eggent", { method: "POST" });
       const json = await res.json().catch(() => null);
       if (!res.ok) throw new Error(json?.error || t("settings.errors.returnToManaged"));
       setPiState(json);
+      // Say so when the included model had to be written back into models.json:
+      // the user is looking at that file in the editor below, and a silent
+      // rewrite of what they are editing is worse than a sentence about it.
+      const repair = json?.repair as { repaired?: boolean; backupPath?: string } | undefined;
+      if (repair?.backupPath) {
+        setPiNotice(t("settings.managedRepairedFromBroken", { path: repair.backupPath }));
+      } else if (repair?.repaired) {
+        setPiNotice(t("settings.managedRepaired"));
+      }
       await loadPiState();
     } catch (error) {
       setPiError(error instanceof Error ? error.message : t("settings.errors.returnToManaged"));
@@ -621,6 +632,11 @@ export default function SettingsPage() {
                 {piError ? (
                   <Alert variant="destructive">
                     <AlertDescription>{piError}</AlertDescription>
+                  </Alert>
+                ) : null}
+                {piNotice ? (
+                  <Alert>
+                    <AlertDescription>{piNotice}</AlertDescription>
                   </Alert>
                 ) : null}
 

@@ -1,16 +1,17 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getEggentAiModelLockState, getPiModelsState, readPiModelsJson, writePiModelsJson } from "@/lib/pi/config-store";
+import { getPiModelsState, readPiModelsJson, writePiModelsJson } from "@/lib/pi/config-store";
 
 export async function GET(req: NextRequest) {
   try {
     const raw = req.nextUrl.searchParams.get("raw") === "1";
     if (raw) {
-      const lock = await getEggentAiModelLockState();
-      return NextResponse.json({
-        content: lock.locked
-          ? `${JSON.stringify({ providers: { "eggent-ai": { name: lock.label, models: [{ id: lock.label, name: lock.label, input: ["text", "image"], contextWindow: 272000, maxTokens: 128000 }] } } }, null, 2)}\n`
-          : await readPiModelsJson(),
-      });
+      // Always the file on disk, including while the workspace is on the
+      // included model. This used to answer with a fabricated document that had
+      // neither baseUrl nor api, and the settings screen feeds the same box
+      // back into PUT - so one round trip through the editor replaced the real
+      // provider with a stub that could not serve anything. Writes are refused
+      // under the lock anyway, so showing the file exposes nothing new.
+      return NextResponse.json({ content: await readPiModelsJson() });
     }
     return NextResponse.json(await getPiModelsState());
   } catch (error) {

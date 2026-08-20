@@ -1,0 +1,162 @@
+/**
+ * Reproduces the workspace that held a valid gateway token and no model to run
+ * it on, and checks that coming back to the included model repairs it.
+ *
+ * Run with Node 22:
+ *   node --experimental-strip-types --import ./scripts/alias-loader-register.mjs \
+ *        scripts/test-managed-provider-repair.ts
+ *
+ * The fault: models.json is editable from the settings screen, the included
+ * model's entry was only ever written at provisioning, and nothing put it back.
+ * A real workspace lost it on 2026-08-20 and every chat answered "no model is
+ * selected" while the settings screen showed the included model as connected.
+ */
+import assert from "node:assert/strict";
+import fs from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+
+const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "eggent-repair-"));
+const agentDir = path.join(workDir, "pi-agent");
+await fs.mkdir(agentDir, { recursive: true });
+
+// Set before the module loads: the agent dir is read at import time.
+process.env.PI_CODING_AGENT_DIR = agentDir;
+process.env.EGGENT_USAGE_API_URL = "https://cloud.example.test/api/instances/demo/usage";
+process.env.EGGENT_AI_MODEL_LOCKED = "1";
+process.env.EGGENT_AI_MODEL_LABEL = "Eggent AI";
+delete process.env.EGGENT_MANAGED_AI_ENFORCED;
+delete process.env.EGGENT_AI_MODEL_BASE_URL;
+
+const { enableEggentAiModelLock, getEggentAiModelLockState } = await import("../src/lib/pi/config-store.ts");
+
+let failed = 0;
+let ran = 0;
+
+async function check(name: string, fn: () => void | Promise<void>): Promise<void> {
+  ran += 1;
+  try {
+    await fn();
+    console.log(`  ok    ${name}`);
+  } catch (error) {
+    failed += 1;
+    console.log(`  FAIL  ${name}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+const OWN_PROVIDER = {
+  name: "My proxy",
+  baseUrl: "https://proxy.example.test/v1",
+  api: "openai-completions",
+  models: [{ id: "some-model" }],
+};
+
+async function seed(models: unknown): Promise<void> {
+  await fs.writeFile(
+    path.join(agentDir, "auth.json"),
+    JSON.stringify({
+      "eggent-ai": { type: "api_key", key: "eggw_test_token_not_a_real_credential" },
+      "my-proxy": { type: "api_key", key: "sk-test-not-a-real-credential" },
+    }, null, 2),
+    { mode: 0o600 }
+  );
+  await fs.writeFile(
+    path.join(agentDir, "models.json"),
+    typeof models === "string" ? models : JSON.stringify(models, null, 2),
+    "utf-8"
+  );
+  await fs.rm(path.join(agentDir, "settings.json"), { force: true });
+  await fs.rm(path.join(agentDir, "eggent-ai-lock.json"), { force: true });
+}
+
+async function readModels(): Promise<Record<string, any>> {
+  return JSON.parse(await fs.readFile(path.join(agentDir, "models.json"), "utf-8"));
+}
+
+async function readSettings(): Promise<Record<string, any>> {
+  return JSON.parse(await fs.readFile(path.join(agentDir, "settings.json"), "utf-8"));
+}
+
+console.log("Возврат на включённую модель чинит потерянную запись:");
+
+await check("запись eggent-ai восстановлена с baseUrl и моделью", async () => {
+  await seed({ providers: { "my-proxy": OWN_PROVIDER } });
+  const repair = await enableEggentAiModelLock(workDir);
+  assert.equal(repair.repaired, true);
+  assert.equal(repair.backupPath, undefined);
+  const entry = (await readModels()).providers["eggent-ai"];
+  assert.equal(entry.baseUrl, "https://cloud.example.test/v1");
+  assert.equal(entry.api, "openai-completions");
+  assert.equal(entry.models[0].id, "eggent-ai");
+});
+
+await check("чужой провайдер пережил починку без изменений", async () => {
+  assert.deepEqual((await readModels()).providers["my-proxy"], OWN_PROVIDER);
+});
+
+await check("в settings.json попал id модели, а не id провайдера", async () => {
+  const settings = await readSettings();
+  assert.equal(settings.defaultProvider, "eggent-ai");
+  assert.equal(settings.defaultModel, "eggent-ai");
+});
+
+await check("после починки воркспейс снова на замке", async () => {
+  assert.equal((await getEggentAiModelLockState(workDir)).locked, true);
+});
+
+await check("пустой models.json - тот самый случай - тоже чинится", async () => {
+  await seed({ providers: {} });
+  const repair = await enableEggentAiModelLock(workDir);
+  assert.equal(repair.repaired, true);
+  assert.ok((await readModels()).providers["eggent-ai"].baseUrl);
+});
+
+await check("заглушка без baseUrl перезаписывается целиком", async () => {
+  await seed({ providers: { "eggent-ai": { name: "Eggent AI", models: [{ id: "eggent-ai" }] } } });
+  const repair = await enableEggentAiModelLock(workDir);
+  assert.equal(repair.repaired, true);
+  assert.equal((await readModels()).providers["eggent-ai"].baseUrl, "https://cloud.example.test/v1");
+});
+
+await check("целую запись не переписываем", async () => {
+  const repair = await enableEggentAiModelLock(workDir);
+  assert.equal(repair.repaired, false);
+});
+
+await check("нечитаемый models.json сохраняется рядом, а не затирается", async () => {
+  await seed("{ это не JSON");
+  const repair = await enableEggentAiModelLock(workDir);
+  assert.equal(repair.repaired, true);
+  assert.ok(repair.backupPath, "путь к сохранённой копии не назван");
+  assert.equal(await fs.readFile(repair.backupPath!, "utf-8"), "{ это не JSON");
+  assert.ok((await readModels()).providers["eggent-ai"].baseUrl);
+});
+
+await check("явный EGGENT_AI_MODEL_BASE_URL важнее выведенного", async () => {
+  process.env.EGGENT_AI_MODEL_BASE_URL = "https://gateway.example.test/v1/";
+  try {
+    await seed({ providers: {} });
+    await enableEggentAiModelLock(workDir);
+    assert.equal((await readModels()).providers["eggent-ai"].baseUrl, "https://gateway.example.test/v1");
+  } finally {
+    delete process.env.EGGENT_AI_MODEL_BASE_URL;
+  }
+});
+
+await check("без адреса шлюза чиним не вслепую, а с ошибкой", async () => {
+  const usage = process.env.EGGENT_USAGE_API_URL;
+  delete process.env.EGGENT_USAGE_API_URL;
+  try {
+    await seed({ providers: { "my-proxy": OWN_PROVIDER } });
+    await assert.rejects(() => enableEggentAiModelLock(workDir));
+    // Nothing was touched: the workspace is exactly as it was found.
+    assert.deepEqual(Object.keys((await readModels()).providers), ["my-proxy"]);
+  } finally {
+    process.env.EGGENT_USAGE_API_URL = usage;
+  }
+});
+
+await fs.rm(workDir, { recursive: true, force: true });
+
+console.log(`\n${ran - failed}/${ran} прошло`);
+process.exit(failed === 0 ? 0 : 1);

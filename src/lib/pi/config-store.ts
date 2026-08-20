@@ -719,6 +719,99 @@ async function restoreManagedCredential(): Promise<string | null> {
   return "eggent-ai";
 }
 
+/** The included model as it is described to the runtime. */
+export const MANAGED_MODEL_CONTEXT_WINDOW = 272000;
+export const MANAGED_MODEL_MAX_TOKENS = 128000;
+
+/**
+ * Where the included model is served from, for rebuilding its models.json entry.
+ *
+ * A managed deployment can state it outright. Failing that it is derived from
+ * the usage endpoint, which every managed workspace already carries and which
+ * sits on the same host as the gateway - so the repair below works on
+ * workspaces provisioned before the explicit variable existed, without waiting
+ * for a new .env to reach all of them.
+ */
+function managedProviderBaseUrl(): string | null {
+  const explicit = process.env.EGGENT_AI_MODEL_BASE_URL?.trim();
+  if (explicit) return explicit.replace(/\/+$/, "");
+  const usage = process.env.EGGENT_USAGE_API_URL?.trim();
+  if (!usage) return null;
+  try {
+    return `${new URL(usage).origin}/v1`;
+  } catch {
+    return null;
+  }
+}
+
+export interface ManagedProviderRepair {
+  /** True when the included model had to be written back into models.json. */
+  repaired: boolean;
+  /** Set when the previous models.json could not be parsed and was set aside. */
+  backupPath?: string;
+}
+
+/**
+ * Put the included model back into models.json when its entry is gone or broken.
+ *
+ * The entry is written once at provisioning into a file the settings screen
+ * lets people edit and replace wholesale. Losing it leaves a workspace holding
+ * a valid gateway token and no model to run it on, and nothing inside the
+ * workspace could put it back: the settings screen showed the included model as
+ * connected while every chat answered "no model is selected".
+ *
+ * Only this one key is rewritten. Providers the user connected themselves are
+ * carried across untouched, credentials are not touched at all, and a
+ * models.json that does not parse is set aside rather than merged into nothing,
+ * so nobody's own configuration is lost to the repair.
+ */
+async function restoreManagedProviderEntry(providerId: string): Promise<ManagedProviderRepair> {
+  const baseUrl = managedProviderBaseUrl();
+  if (!baseUrl) {
+    throw new Error("This deployment does not say where the included model is served from.");
+  }
+  const api = process.env.EGGENT_AI_MODEL_API?.trim().toLowerCase() || "openai-completions";
+  const label = eggentAiModelLabel();
+  const entry = {
+    name: label,
+    baseUrl,
+    api,
+    models: [{
+      id: providerId,
+      name: label,
+      input: ["text", "image"],
+      contextWindow: MANAGED_MODEL_CONTEXT_WINDOW,
+      maxTokens: MANAGED_MODEL_MAX_TOKENS,
+    }],
+  };
+
+  const raw = await readPiModelsJson();
+  let parsed: Record<string, unknown> = {};
+  let backupPath: string | undefined;
+  try {
+    parsed = readJsonRecord(raw);
+  } catch {
+    // Hand-edited into invalid JSON. There is nothing to merge with, so keep the
+    // file instead of overwriting it and say where it went.
+    backupPath = `${getPiModelsPath()}.broken-${new Date().toISOString().replace(/[:.]/g, "-")}`;
+    await fs.writeFile(backupPath, raw, "utf-8").catch(() => undefined);
+  }
+
+  const providersValue = parsed.providers;
+  const providers = providersValue && typeof providersValue === "object" && !Array.isArray(providersValue)
+    ? { ...(providersValue as Record<string, unknown>) }
+    : {};
+  const current = providers[providerId];
+  const alreadyCorrect = !backupPath && JSON.stringify(current) === JSON.stringify(entry);
+  if (alreadyCorrect) return { repaired: false };
+
+  providers[providerId] = entry;
+  const filePath = getPiModelsPath();
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, `${JSON.stringify({ ...parsed, providers }, null, 2)}\n`, "utf-8");
+  return { repaired: true, backupPath };
+}
+
 /**
  * The provider backed by the managed gateway credential, identified by its
  * `eggw_` token prefix. Returns null when no managed credential is present.
@@ -774,12 +867,16 @@ export async function disableEggentAiModelLock(cwd = process.cwd()): Promise<voi
  * on disk, and the settings screen offered an empty API-key box for a
  * credential the workspace already had.
  */
-export async function enableEggentAiModelLock(cwd = process.cwd()): Promise<void> {
+export async function enableEggentAiModelLock(cwd = process.cwd()): Promise<ManagedProviderRepair> {
   const managedProvider = (await getManagedProviderId()) || (await restoreManagedCredential());
   if (!managedProvider) {
     throw new Error("This workspace has no Eggent AI credential to switch back to.");
   }
-  await removeEggentAiLockOverride();
+  // Coming back needs both halves of the included model: the credential, put
+  // back above, and its description in models.json, put back here. Repairing
+  // before anything is changed means a repair that cannot run leaves the
+  // workspace exactly as it was.
+  const repair = await restoreManagedProviderEntry(managedProvider);
 
   // The model id, never the display label: settings.json is matched against the
   // registry by exact id, and a label that matches nothing silently falls back
@@ -788,11 +885,19 @@ export async function enableEggentAiModelLock(cwd = process.cwd()): Promise<void
   const modelRegistry = await getPiModelRegistry(modelRuntime);
   await modelRegistry.refresh();
   const managedModel = modelRegistry.getAll().find((model) => model.provider === managedProvider);
+  // Never fall back to the provider id here. Writing it into defaultModel is
+  // what turned a lost models.json entry into a workspace that reported the
+  // included model as selected and then had nothing to answer with.
+  if (!managedModel) {
+    throw new Error("The included model could not be restored for this workspace.");
+  }
 
+  await removeEggentAiLockOverride();
   const settingsManager = getPiSettingsManager(cwd);
   settingsManager.setDefaultProvider(managedProvider);
-  settingsManager.setDefaultModel(managedModel?.id || managedProvider);
+  settingsManager.setDefaultModel(managedModel.id);
   await settingsManager.flush();
+  return repair;
 }
 
 export async function getPiSettingsState(cwd = process.cwd()) {

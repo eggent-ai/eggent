@@ -9,6 +9,7 @@
     "lint": "eslint",
     "test:schedules": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/test-schedule-policy.mjs",
     "test:provider-probe": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/test-provider-probe.ts",
+    "test:managed-provider": "EGGENT_TEST_STUBS=lib/storage/project-store node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-managed-provider-repair.ts",
     "setup:one": "bash ./scripts/install.sh",
     "setup:local": "bash ./scripts/install-local.sh",
     "setup:docker": "bash ./scripts/install-docker.sh"
