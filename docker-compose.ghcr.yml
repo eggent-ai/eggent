@@ -1,0 +1,47 @@
+# Runs the published image instead of building one.
+#
+# Copy this file on its own - into Portainer, onto a VPS, anywhere - and it
+# needs nothing from the repository except a data directory beside it:
+#
+#   docker compose -f docker-compose.ghcr.yml up -d
+#
+# docker-compose.yml is the same service built from source, for development.
+name: eggent
+
+services:
+  app:
+    image: ghcr.io/eggent-ai/eggent:${EGGENT_VERSION:-latest}
+    pull_policy: always
+    restart: unless-stopped
+    init: true
+    env_file:
+      - path: .env
+        required: false
+    environment:
+      NODE_ENV: production
+      NEXT_TELEMETRY_DISABLED: "1"
+      HOSTNAME: 0.0.0.0
+      PORT: "3000"
+      TMPDIR: ${APP_TMP_DIR:-/app/data/tmp}
+      PLAYWRIGHT_BROWSERS_PATH: ${PLAYWRIGHT_BROWSERS_PATH:-/app/data/ms-playwright}
+      npm_config_cache: ${NPM_CONFIG_CACHE:-/app/data/npm-cache}
+      XDG_CACHE_HOME: ${XDG_CACHE_HOME:-/app/data/.cache}
+      PI_CODING_AGENT_DIR: ${PI_CODING_AGENT_DIR:-/app/data/pi-agent}
+    # Bound to localhost on purpose. Put a reverse proxy in front for anything
+    # reachable from outside, or set APP_BIND_HOST=0.0.0.0 knowingly.
+    ports:
+      - "${APP_BIND_HOST:-127.0.0.1}:${APP_PORT:-3000}:3000"
+    volumes:
+      - ./data:/app/data
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "node",
+          "-e",
+          "fetch('http://127.0.0.1:3000/api/health').then((r)=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))",
+        ]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
