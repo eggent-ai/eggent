@@ -75,6 +75,25 @@ fi
 
 node /app/scripts/ensure-pi-packages.mjs
 
+# Route outbound traffic through an egress proxy when the deployment asks for
+# one. Node's global fetch ignores HTTP_PROXY/HTTPS_PROXY/NO_PROXY unless it is
+# told to read them, so a deployment behind a mandatory proxy - a corporate
+# network, or a region where a provider's endpoint is not reachable directly -
+# had no way to make provider calls, Telegram polling or the web tools work at
+# all. Enabled only when one of the standard variables is set, so nothing
+# changes for anyone who does not need it. Reported as #21 by @nimph977.
+if [ -n "${HTTPS_PROXY:-${https_proxy:-}}" ] || [ -n "${HTTP_PROXY:-${http_proxy:-}}" ] || [ -n "${ALL_PROXY:-${all_proxy:-}}" ]; then
+  # Asked for, rather than assumed: an older runtime refuses to start on an
+  # unknown flag, and a workspace that will not boot is worse than one that
+  # ignores a proxy setting.
+  if node --use-env-proxy -e "" >/dev/null 2>&1; then
+    export NODE_OPTIONS="${NODE_OPTIONS:+$NODE_OPTIONS }--use-env-proxy"
+    echo "[eggent] outbound proxy enabled from the environment (NO_PROXY is honoured)"
+  else
+    echo "[eggent] proxy variables are set but this Node build cannot use them; upgrade to Node 22.23 or newer" >&2
+  fi
+fi
+
 # Node closes an idle keep-alive connection after 5 seconds by default, while a
 # reverse proxy in front keeps reusing it for far longer. When the two land on
 # the same moment the proxy sends a request into a socket Node is closing, and

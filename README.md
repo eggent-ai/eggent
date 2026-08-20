@@ -121,7 +121,21 @@ npm run setup:local
 
 ## Docker / VPS Deploy
 
-### Run with Docker Compose
+### Run the published image
+
+Nothing to clone and nothing to build. Take `docker-compose.ghcr.yml` on its
+own - paste it into Portainer, or drop it on a VPS - and start it:
+
+```bash
+curl -O https://raw.githubusercontent.com/eggent-ai/eggent/main/docker-compose.ghcr.yml
+docker compose -f docker-compose.ghcr.yml up -d
+```
+
+Images are published to `ghcr.io/eggent-ai/eggent` on every release. Pin one
+with `EGGENT_VERSION` in `.env` (for example `EGGENT_VERSION=0.2.0`) rather than
+tracking `latest`.
+
+### Build from source
 
 ```bash
 git clone https://github.com/eggent-ai/eggent.git
@@ -689,6 +703,8 @@ See `.env.example` for the full list.
 | `EGGENT_STT_AUTO_DOWNLOAD_MODEL` | `1` | Download missing ggml model on first use. |
 | `EGGENT_STT_KEEP_AUDIO` | `0` | Keep temporary normalized audio/transcript files. |
 | `PI_CODING_AGENT_DIR` | Docker: `/app/data/pi-agent` | Runtime config directory. |
+| `EGGENT_VERSION` | `latest` | Image tag used by `docker-compose.ghcr.yml`. |
+| `HTTPS_PROXY` / `HTTP_PROXY` | unset | Send outbound traffic through an egress proxy. `NO_PROXY` is honoured. Needs Node 22.23 or newer. |
 | `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, `GOOGLE_API_KEY`, `OPENROUTER_API_KEY` | unset | Optional provider fallback keys. |
 
 ---
