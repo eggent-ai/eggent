@@ -291,16 +291,16 @@ function buildEggentProjectContext(options: {
   const thisWorkspace: string[] = [
     "",
     "## This workspace",
-    // The balance warning only ever reached people who opened the web sidebar,
-    // or who thought to ask. Someone working over Telegram spent an entire
-    // trial across four hours and learned about the limit from the message that
-    // stopped them mid-task. The level goes here so the agent can say it once,
-    // unprompted, in whatever surface the person is actually using.
+    // The budget warning only ever reached people who opened the web sidebar,
+    // or who thought to ask. Someone working over Telegram worked four hours
+    // straight and learned about the limit from the message that stopped them
+    // mid-task. The level goes here so the agent can say it once, unprompted,
+    // in whatever surface the person is actually using.
     //
-    // Deliberately a level and not a figure: this sits in the cached prefix
-    // tail, so a line carrying "€1.23 left" would change on every single turn
-    // and cost more in cache misses than the warning is worth. It changes at
-    // most twice in a workspace's life.
+    // Deliberately a level and not an exact figure: this sits in the cached
+    // prefix tail, so a line carrying a running total would change on every
+    // single turn and cost more in cache misses than the warning is worth. A
+    // level changes at most twice in a workspace's life.
     options.budgetLevel === "half"
       ? "Budget: about half of the included Eggent AI balance is used. Nothing to do yet. Mention it once, in passing, only if it fits what you are already saying."
       : options.budgetLevel === "low"

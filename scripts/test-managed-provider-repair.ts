@@ -7,9 +7,10 @@
  *        scripts/test-managed-provider-repair.ts
  *
  * The fault: models.json is editable from the settings screen, the included
- * model's entry was only ever written at provisioning, and nothing put it back.
- * A real workspace lost it on 2026-08-20 and every chat answered "no model is
- * selected" while the settings screen showed the included model as connected.
+ * model's entry was only ever written when the workspace was created, and
+ * nothing put it back. Losing it left every chat answering "no model is
+ * selected" while the settings screen still showed the included model as
+ * connected.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs/promises";
@@ -77,9 +78,9 @@ async function readSettings(): Promise<Record<string, any>> {
   return JSON.parse(await fs.readFile(path.join(agentDir, "settings.json"), "utf-8"));
 }
 
-console.log("Возврат на включённую модель чинит потерянную запись:");
+console.log("Coming back to the included model repairs its lost entry:");
 
-await check("запись eggent-ai восстановлена с baseUrl и моделью", async () => {
+await check("the eggent-ai entry comes back with a baseUrl and a model", async () => {
   await seed({ providers: { "my-proxy": OWN_PROVIDER } });
   const repair = await enableEggentAiModelLock(workDir);
   assert.equal(repair.repaired, true);
@@ -90,49 +91,49 @@ await check("запись eggent-ai восстановлена с baseUrl и м�
   assert.equal(entry.models[0].id, "eggent-ai");
 });
 
-await check("чужой провайдер пережил починку без изменений", async () => {
+await check("the user's own provider survived the repair untouched", async () => {
   assert.deepEqual((await readModels()).providers["my-proxy"], OWN_PROVIDER);
 });
 
-await check("в settings.json попал id модели, а не id провайдера", async () => {
+await check("settings.json holds the model id, not the provider id", async () => {
   const settings = await readSettings();
   assert.equal(settings.defaultProvider, "eggent-ai");
   assert.equal(settings.defaultModel, "eggent-ai");
 });
 
-await check("после починки воркспейс снова на замке", async () => {
+await check("the workspace is back on the included model afterwards", async () => {
   assert.equal((await getEggentAiModelLockState(workDir)).locked, true);
 });
 
-await check("пустой models.json - тот самый случай - тоже чинится", async () => {
+await check("an emptied models.json - the case that happened - repairs too", async () => {
   await seed({ providers: {} });
   const repair = await enableEggentAiModelLock(workDir);
   assert.equal(repair.repaired, true);
   assert.ok((await readModels()).providers["eggent-ai"].baseUrl);
 });
 
-await check("заглушка без baseUrl перезаписывается целиком", async () => {
+await check("a stub with no baseUrl is rewritten wholesale", async () => {
   await seed({ providers: { "eggent-ai": { name: "Eggent AI", models: [{ id: "eggent-ai" }] } } });
   const repair = await enableEggentAiModelLock(workDir);
   assert.equal(repair.repaired, true);
   assert.equal((await readModels()).providers["eggent-ai"].baseUrl, "https://cloud.example.test/v1");
 });
 
-await check("целую запись не переписываем", async () => {
+await check("an intact entry is left alone", async () => {
   const repair = await enableEggentAiModelLock(workDir);
   assert.equal(repair.repaired, false);
 });
 
-await check("нечитаемый models.json сохраняется рядом, а не затирается", async () => {
-  await seed("{ это не JSON");
+await check("an unreadable models.json is set aside, not overwritten", async () => {
+  await seed("{ this is not JSON");
   const repair = await enableEggentAiModelLock(workDir);
   assert.equal(repair.repaired, true);
-  assert.ok(repair.backupPath, "путь к сохранённой копии не назван");
-  assert.equal(await fs.readFile(repair.backupPath!, "utf-8"), "{ это не JSON");
+  assert.ok(repair.backupPath, "the path of the kept copy was not reported");
+  assert.equal(await fs.readFile(repair.backupPath!, "utf-8"), "{ this is not JSON");
   assert.ok((await readModels()).providers["eggent-ai"].baseUrl);
 });
 
-await check("явный EGGENT_AI_MODEL_BASE_URL важнее выведенного", async () => {
+await check("an explicit EGGENT_AI_MODEL_BASE_URL wins over the derived one", async () => {
   process.env.EGGENT_AI_MODEL_BASE_URL = "https://gateway.example.test/v1/";
   try {
     await seed({ providers: {} });
@@ -143,7 +144,7 @@ await check("явный EGGENT_AI_MODEL_BASE_URL важнее выведенно
   }
 });
 
-await check("без адреса шлюза чиним не вслепую, а с ошибкой", async () => {
+await check("with no gateway address it fails loudly instead of guessing", async () => {
   const usage = process.env.EGGENT_USAGE_API_URL;
   delete process.env.EGGENT_USAGE_API_URL;
   try {
@@ -158,5 +159,5 @@ await check("без адреса шлюза чиним не вслепую, а �
 
 await fs.rm(workDir, { recursive: true, force: true });
 
-console.log(`\n${ran - failed}/${ran} прошло`);
+console.log(`\n${ran - failed}/${ran} passed`);
 process.exit(failed === 0 ? 0 : 1);

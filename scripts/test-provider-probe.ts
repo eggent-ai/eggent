@@ -2,14 +2,23 @@
  * Checks the provider diagnosis that gates what a failing workspace is told.
  *
  * Run with Node 22: node --experimental-strip-types scripts/test-provider-probe.ts
- * The network cases use public endpoints and no credentials — a 401 proves the
- * endpoint is alive just as well as a 200, which is the whole point.
+ *
+ * Everything that can be decided without a network runs by default. The three
+ * cases that need a live OpenAI-compatible endpoint are opt-in, because a test
+ * suite should not depend on somebody else's uptime:
+ *
+ *   EGGENT_PROBE_TEST_BASE_URL=https://your-provider.example/v1 \
+ *     node --experimental-strip-types scripts/test-provider-probe.ts
+ *
+ * No credential is needed for them. A 401 proves the endpoint is alive just as
+ * well as a 200, which is the whole point of the probe.
  */
 import assert from "node:assert/strict";
 import { canProbeProviderApi, isLocalOnlyBaseUrl, probeModelProvider } from "../src/lib/pi/provider-probe.ts";
 
 let failed = 0;
 let ran = 0;
+let skipped = 0;
 
 async function check(name: string, fn: () => void | Promise<void>): Promise<void> {
   ran += 1;
@@ -22,7 +31,7 @@ async function check(name: string, fn: () => void | Promise<void>): Promise<void
   }
 }
 
-console.log("isLocalOnlyBaseUrl — адреса, которые из облака недостижимы:");
+console.log("isLocalOnlyBaseUrl - addresses a hosted workspace cannot reach:");
 for (const url of [
   "http://127.0.0.1:1234",
   "http://127.0.0.1:1234/v1",
@@ -35,30 +44,30 @@ for (const url of [
   "http://0.0.0.0:1234",
   "http://[::1]:1234",
 ]) {
-  await check(`локальный: ${url}`, () => assert.equal(isLocalOnlyBaseUrl(url), true));
+  await check(`local: ${url}`, () => assert.equal(isLocalOnlyBaseUrl(url), true));
 }
 
-console.log("\nisLocalOnlyBaseUrl — обычные адреса не должны попадать под правило:");
+console.log("\nisLocalOnlyBaseUrl - ordinary addresses must not match:");
 for (const url of [
-  "https://api.deepseek.com/v1",
-  "https://api.baza-ai.org/v1",
-  "https://openrouter.ai/api/v1",
-  "https://api.proxyapi.ru/openai/v1",
+  "https://api.example.com/v1",
+  "https://models.example.org/openai/v1",
+  // Just outside the private ranges, where an off-by-one would show up.
   "http://172.32.0.1:1234",
   "http://11.0.0.1:1234",
+  // Starts with "localhost" but is not it.
   "https://localhost.example.com/v1",
 ]) {
-  await check(`внешний: ${url}`, () => assert.equal(isLocalOnlyBaseUrl(url), false));
+  await check(`remote: ${url}`, () => assert.equal(isLocalOnlyBaseUrl(url), false));
 }
-await check("мусор вместо URL не считается локальным", () =>
+await check("nonsense instead of a URL is not local", () =>
   assert.equal(isLocalOnlyBaseUrl("not a url"), false)
 );
 
-console.log("\ncanProbeProviderApi — проверяем только тот диалект, который умеем:");
+console.log("\ncanProbeProviderApi - only the dialect the probe speaks:");
 for (const api of ["openai-completions", "openai-responses", "azure-openai-responses", "OPENAI-COMPLETIONS"]) {
-  await check(`проверяем: ${api}`, () => assert.equal(canProbeProviderApi(api), true));
+  await check(`probe: ${api}`, () => assert.equal(canProbeProviderApi(api), true));
 }
-await check("пустое значение считаем openai-совместимым (умолчание add_provider)", () =>
+await check("an unset dialect counts as OpenAI-compatible (the add_provider default)", () =>
   assert.equal(canProbeProviderApi(undefined), true)
 );
 // These authenticate differently; probing them the OpenAI way would report a
@@ -71,55 +80,72 @@ for (const api of [
   "mistral-conversations",
   "openai-codex-responses",
 ]) {
-  await check(`НЕ проверяем: ${api}`, () => assert.equal(canProbeProviderApi(api), false));
+  await check(`do not probe: ${api}`, () => assert.equal(canProbeProviderApi(api), false));
 }
 
-console.log("\nprobeModelProvider — классификация (нужна сеть):");
-await check("не-URL -> not_checked, без сетевого вызова", async () => {
+console.log("\nprobeModelProvider - classification:");
+await check("not a URL -> not_checked, with no network call", async () => {
   const r = await probeModelProvider({ baseUrl: "ftp://example.com" });
   assert.equal(r.reason, "not_checked");
 });
-await check("несуществующий хост -> unreachable", async () => {
+await check("host that does not resolve -> unreachable", async () => {
   const r = await probeModelProvider({ baseUrl: "https://nonexistent.invalid/v1", timeoutMs: 6000 });
   assert.equal(r.reason, "unreachable");
   assert.equal(r.ok, false);
 });
-await check("закрытый локальный порт -> unreachable", async () => {
+await check("closed local port -> unreachable", async () => {
   const r = await probeModelProvider({ baseUrl: "http://127.0.0.1:59999/v1", timeoutMs: 4000 });
   assert.equal(r.reason, "unreachable");
 });
-await check("живой провайдер без ключа -> unauthorized", async () => {
-  const r = await probeModelProvider({ baseUrl: "https://api.deepseek.com/v1", timeoutMs: 10000 });
-  assert.equal(r.reason, "unauthorized");
-  assert.ok(r.status === 401 || r.status === 403, `status=${r.status}`);
-});
-await check("открытый каталог -> ok со списком моделей", async () => {
-  const r = await probeModelProvider({ baseUrl: "https://openrouter.ai/api/v1", timeoutMs: 15000 });
-  assert.equal(r.ok, true);
-  assert.equal(r.reason, "ok");
-  assert.ok((r.models || []).length > 0, "ожидался непустой список моделей");
-});
-await check("несуществующая модель у живого провайдера -> model_missing", async () => {
-  const r = await probeModelProvider({
-    baseUrl: "https://openrouter.ai/api/v1",
-    model: "no-such-model-xyz-000",
-    timeoutMs: 15000,
+
+const liveBaseUrl = process.env.EGGENT_PROBE_TEST_BASE_URL?.trim();
+if (!liveBaseUrl) {
+  skipped = 3;
+  console.log("  skip  live endpoint cases (set EGGENT_PROBE_TEST_BASE_URL to run them)");
+} else {
+  await check("a live provider with no key -> unauthorized or a catalogue", async () => {
+    const r = await probeModelProvider({ baseUrl: liveBaseUrl, timeoutMs: 15000 });
+    // Both answers prove the endpoint itself is alive, which is what the probe
+    // exists to establish. Which one comes back depends on whether that
+    // provider lists its models to anonymous callers.
+    assert.ok(
+      r.reason === "unauthorized" || r.reason === "ok",
+      `expected unauthorized or ok, got ${r.reason} (status=${r.status})`
+    );
   });
-  assert.equal(r.reason, "model_missing");
-  assert.ok((r.models || []).length > 0, "в ответе должен быть список того, что есть");
-});
-await check("существующая модель у живого провайдера -> ok", async () => {
-  const list = await probeModelProvider({ baseUrl: "https://openrouter.ai/api/v1", timeoutMs: 15000 });
-  const first = (list.models || [])[0];
-  assert.ok(first, "нужна хотя бы одна модель из каталога");
-  const r = await probeModelProvider({ baseUrl: "https://openrouter.ai/api/v1", model: first, timeoutMs: 15000 });
-  assert.equal(r.ok, true);
-  assert.equal(r.reason, "ok");
-});
+  await check("a model the provider does not have -> model_missing", async () => {
+    const r = await probeModelProvider({
+      baseUrl: liveBaseUrl,
+      model: "no-such-model-xyz-000",
+      timeoutMs: 15000,
+    });
+    // A provider that hides its catalogue cannot tell a missing model from a
+    // rejected key, and saying "unauthorized" there is the honest answer.
+    assert.ok(
+      r.reason === "model_missing" || r.reason === "unauthorized",
+      `expected model_missing or unauthorized, got ${r.reason}`
+    );
+    if (r.reason === "model_missing") {
+      assert.ok((r.models || []).length > 0, "a missing model must come with the list of what exists");
+    }
+  });
+  await check("a model the provider does have -> ok", async () => {
+    const list = await probeModelProvider({ baseUrl: liveBaseUrl, timeoutMs: 15000 });
+    if (list.reason !== "ok") {
+      console.log(`        (catalogue not public at ${liveBaseUrl}, nothing to name)`);
+      return;
+    }
+    const first = (list.models || [])[0];
+    assert.ok(first, "an ok catalogue must list at least one model");
+    const r = await probeModelProvider({ baseUrl: liveBaseUrl, model: first, timeoutMs: 15000 });
+    assert.equal(r.ok, true);
+    assert.equal(r.reason, "ok");
+  });
+}
 
 console.log(
   failed === 0
-    ? `\nвсе ${ran} проверок пройдены`
-    : `\nпровалено ${failed} из ${ran}`
+    ? `\nall ${ran} checks passed${skipped ? `, ${skipped} skipped` : ""}`
+    : `\n${failed} of ${ran} failed`
 );
 process.exit(failed === 0 ? 0 : 1);

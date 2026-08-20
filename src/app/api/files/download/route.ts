@@ -64,7 +64,7 @@ export async function GET(req: NextRequest) {
 
     // Opening a result rather than filing it away. Everything here downloaded
     // as an unnamed binary, so a finished page could not be looked at: someone
-    // who asked for a link to their site spent half a trial being sent invented
+    // who asked for a link to their site spent an afternoon being sent invented
     // URLs and third-party hosts while the built page sat in the project.
     if (req.nextUrl.searchParams.get("inline") === "1") {
       return new Response(content, {
