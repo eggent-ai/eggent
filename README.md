@@ -132,7 +132,7 @@ docker compose -f docker-compose.ghcr.yml up -d
 ```
 
 Images are published to `ghcr.io/eggent-ai/eggent` on every release. Pin one
-with `EGGENT_VERSION` in `.env` (for example `EGGENT_VERSION=0.2.0`) rather than
+with `EGGENT_VERSION` in `.env` (for example `EGGENT_VERSION=0.2.1`) rather than
 tracking `latest`.
 
 ### Build from source
