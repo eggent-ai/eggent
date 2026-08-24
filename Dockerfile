@@ -46,11 +46,15 @@ RUN mkdir -p "${TMPDIR}" "${PLAYWRIGHT_BROWSERS_PATH}" "${npm_config_cache}" "${
 RUN apt-get update \
   && apt-get install -y --no-install-recommends \
     bash \
+    binutils \
     ca-certificates \
     curl \
+    dnsutils \
     ffmpeg \
+    file \
     git \
     jq \
+    make \
     libgomp1 \
     libasound2 \
     libatk1.0-0 \
@@ -68,14 +72,46 @@ RUN apt-get update \
     libxfixes3 \
     libxkbcommon0 \
     libxrandr2 \
+    poppler-utils \
+    procps \
     python3 \
     python3-requests \
     python3-venv \
     sudo \
     ripgrep \
+    unzip \
+    wget \
+    xxd \
+    zip \
   && python3 -m venv --system-site-packages "${PYTHON_VENV}" \
   && "${PYTHON_VENV}/bin/python3" -m pip --version \
   && rm -rf /var/lib/apt/lists/*
+
+# The document toolbelt.
+#
+# Without it the agent reaches for the obvious library, gets ModuleNotFoundError
+# and spends the user's tokens installing it by hand - once per container, since
+# a runtime `pip install` is lost on the next recreate. Measured across the
+# fleet, the misses were PIL, openpyxl, PyPDF2, oletools, bs4, python-pptx and
+# pandas, in that order, and they landed on the people who came here to work
+# with spreadsheets and scanned PDFs.
+#
+# --no-cache-dir is not optional: pip's cache would otherwise settle into this
+# layer and roughly double what the install costs.
+RUN "${PYTHON_VENV}/bin/pip" install --no-cache-dir \
+    Pillow \
+    PyPDF2 \
+    beautifulsoup4 \
+    chardet \
+    dnspython \
+    lxml \
+    oletools \
+    openpyxl \
+    pandas \
+    pdfplumber \
+    pypdf \
+    python-docx \
+    python-pptx
 
 RUN echo "node ALL=(root) NOPASSWD: ALL" > /etc/sudoers.d/eggent-node \
   && chmod 440 /etc/sudoers.d/eggent-node

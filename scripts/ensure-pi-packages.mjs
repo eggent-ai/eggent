@@ -3,10 +3,17 @@ import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
 
+// EGGENT_PI_PACKAGES replaces this list rather than extending it, so anything
+// set there must repeat every entry it still wants.
 const DEFAULT_PACKAGES = [
   "npm:pi-web-access",
   "npm:pi-mcp-adapter",
   "npm:@tintinweb/pi-subagents",
+  // Spreadsheets. Reads and edits .xlsx/.xlsm through a pure-JS OOXML backend,
+  // so it needs neither Excel nor LibreOffice. It declares node>=24 and npm
+  // warns about it; the source uses nothing newer than Node 18, and reading a
+  // real workbook on our Node 22 was verified before this was added.
+  "npm:@firstpick/pi-extension-workbook",
 ];
 
 const MAX_ATTEMPTS = Number(process.env.EGGENT_PI_PACKAGE_INSTALL_ATTEMPTS || 3) || 3;
