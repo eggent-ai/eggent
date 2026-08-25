@@ -13,7 +13,8 @@
     "setup:one": "bash ./scripts/install.sh",
     "setup:local": "bash ./scripts/install-local.sh",
     "setup:docker": "bash ./scripts/install-docker.sh",
-    "test:default-model": "EGGENT_TEST_STUBS=lib/storage/project-store node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-default-model-selection.ts"
+    "test:default-model": "EGGENT_TEST_STUBS=lib/storage/project-store node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-default-model-selection.ts",
+    "test:skill-launch": "EGGENT_TEST_STUBS=lib/storage/project-store node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-skill-launch-scope.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.37",

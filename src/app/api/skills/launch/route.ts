@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
 import { launchBundledSkill } from "@/lib/storage/bundled-skills-store";
-import { GLOBAL_PROJECT_ID } from "@/lib/storage/project-store";
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null) as {
@@ -8,11 +7,13 @@ export async function POST(req: NextRequest) {
     projectId?: unknown;
   } | null;
   const skillName = typeof body?.skillName === "string" ? body.skillName.trim() : "";
-  // No target means the orchestrator: that is where a workspace with no
-  // projects starts, and where a skill stays available in every chat.
+  // Left out on purpose from a quick-start card: the skill then decides its own
+  // home - its own project for a piece of work, the orchestrator for the skills
+  // that describe the workspace itself. A caller that already knows the target,
+  // like a project's skills screen, passes it and that wins.
   const projectId = typeof body?.projectId === "string" && body.projectId.trim()
     ? body.projectId.trim()
-    : GLOBAL_PROJECT_ID;
+    : undefined;
 
   if (!skillName) {
     return NextResponse.json({ error: "skillName is required" }, { status: 400 });

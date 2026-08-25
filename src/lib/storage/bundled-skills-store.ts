@@ -1,14 +1,29 @@
 import fs from "fs/promises";
 import path from "path";
 import {
+  createProject,
   getProject,
   getProjectSkillsDir,
+  GLOBAL_PROJECT_ID,
   isOrchestratorScope,
   validateSkillName,
 } from "@/lib/storage/project-store";
 
 const SKILL_FILE_NAME = "SKILL.md";
 const BUNDLED_SKILLS_DIR = path.join(process.cwd(), "bundled-skills");
+
+/**
+ * Skills that belong to the workspace itself rather than to one line of work.
+ *
+ * `about-you` writes who the user is into the orchestrator's own context.md,
+ * which every chat reads. Putting it in a project would hide the answers from
+ * every chat outside that project, which is the opposite of what it is for.
+ */
+const ORCHESTRATOR_SCOPED_SKILLS = new Set(["about-you"]);
+
+export function isOrchestratorScopedSkill(skillName: string): boolean {
+  return ORCHESTRATOR_SCOPED_SKILLS.has(skillName.trim().toLowerCase());
+}
 
 /** Where a card falls back to when a skill carries no card copy of its own. */
 const DEFAULT_CARD_ORDER = 100;
@@ -233,9 +248,31 @@ export async function installBundledSkill(
  * project is opened. A skill already present in the target is reused rather
  * than treated as an error - relaunching it is a normal thing to do.
  */
+/** A project id derived from a skill name, free of collisions with existing ones. */
+async function uniqueProjectId(baseId: string): Promise<string> {
+  const normalized = baseId.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "skill";
+  let candidate = normalized;
+  for (let i = 2; await getProject(candidate); i += 1) {
+    candidate = `${normalized}-${i}`;
+  }
+  return candidate;
+}
+
+/**
+ * Start a bundled skill from a quick-start card.
+ *
+ * A card is an offer to begin a piece of work, so tapping one gives that work
+ * its own project and installs the skill there - no question about where it
+ * should live, because at that point the user has nothing to base the answer
+ * on. Only the skills that describe the workspace itself stay in the
+ * orchestrator; see ORCHESTRATOR_SCOPED_SKILLS.
+ *
+ * An explicit `projectId` still wins: that is the path used from a project's
+ * own skills screen, where the target is already chosen.
+ */
 export async function launchBundledSkill(
   skillName: string,
-  projectId: string
+  projectId?: string
 ): Promise<
   | { success: true; skill: BundledSkill; projectId: string | null; initialMessage: string }
   | { success: false; error: string; code: number }
@@ -251,11 +288,30 @@ export async function launchBundledSkill(
     return { success: false, error: "Bundled skill not found", code: 404 };
   }
 
-  if (!isOrchestratorScope(projectId) && !(await getProject(projectId))) {
-    return { success: false, error: "Project not found", code: 404 };
+  const requestedScope = projectId?.trim();
+  let targetScope: string;
+
+  if (requestedScope) {
+    if (!isOrchestratorScope(requestedScope) && !(await getProject(requestedScope))) {
+      return { success: false, error: "Project not found", code: 404 };
+    }
+    targetScope = requestedScope;
+  } else if (isOrchestratorScopedSkill(normalizedName)) {
+    targetScope = GLOBAL_PROJECT_ID;
+  } else {
+    // The card names the work in the user's own language; the id stays derived
+    // from the skill so it is predictable on disk.
+    const created = await createProject({
+      id: await uniqueProjectId(normalizedName),
+      name: skill.title || normalizedName,
+      description: skill.summary || skill.description,
+      instructions: `# ${skill.title || normalizedName}\n\n`,
+      memoryMode: "global",
+    });
+    targetScope = created.id;
   }
 
-  const installed = await installBundledSkill(projectId, normalizedName);
+  const installed = await installBundledSkill(targetScope, normalizedName);
   if (!installed.success && installed.code !== 409) {
     return { success: false, error: installed.error, code: installed.code };
   }
@@ -263,7 +319,7 @@ export async function launchBundledSkill(
   return {
     success: true,
     skill,
-    projectId: isOrchestratorScope(projectId) ? null : projectId,
+    projectId: isOrchestratorScope(targetScope) ? null : targetScope,
     initialMessage: `/skill:${normalizedName}`,
   };
 }

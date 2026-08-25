@@ -4,8 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { MessageBubble } from "./message-bubble";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { ArrowRight, Bot, CheckCircle2, ExternalLink, FolderOpen, Loader2, MessageCircle, Sparkle, Sparkles, TriangleAlert } from "lucide-react";
+import { ArrowRight, CheckCircle2, ExternalLink, Loader2, MessageCircle, Sparkle, Sparkles, TriangleAlert } from "lucide-react";
 import type { UIMessage } from "ai";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -46,102 +45,6 @@ interface ChatMessagesProps {
   quickSkills?: QuickSkillAction[];
   onLaunchSkill?: (skillName: string) => void;
   launchingSkill?: string | null;
-  /** Set while the user is choosing which workspace a skill goes into. */
-  pendingSkill?: QuickSkillAction | null;
-  projects?: Array<{ id: string; name: string }>;
-  onConfirmSkillScope?: (projectId: string | null) => void;
-  onCancelSkillScope?: () => void;
-}
-
-function SkillScopeChooser({
-  skill,
-  projects,
-  busy,
-  onConfirm,
-  onCancel,
-}: {
-  skill: QuickSkillAction;
-  projects: Array<{ id: string; name: string }>;
-  busy: boolean;
-  onConfirm: (projectId: string | null) => void;
-  onCancel: () => void;
-}) {
-  const { t } = useI18n();
-  const [scope, setScope] = useState<"orchestrator" | "project">("orchestrator");
-  const [projectId, setProjectId] = useState(projects[0]?.id ?? "");
-
-  const options = [
-    {
-      key: "orchestrator" as const,
-      icon: Bot,
-      title: t("chat.skillScope.orchestrator"),
-      hint: t("chat.skillScope.orchestratorHint"),
-    },
-    {
-      key: "project" as const,
-      icon: FolderOpen,
-      title: t("chat.skillScope.project"),
-      hint: t("chat.skillScope.projectHint"),
-    },
-  ];
-
-  return (
-    <div className="mt-8 rounded-2xl border bg-card p-5 text-left shadow-sm">
-      <h3 className="text-sm font-semibold">
-        {t("chat.skillScope.title", { skill: skill.title || skill.name })}
-      </h3>
-      <div className="mt-4 grid gap-3 sm:grid-cols-2">
-        {options.map(({ key, icon: Icon, title, hint }) => (
-          <button
-            key={key}
-            type="button"
-            onClick={() => setScope(key)}
-            aria-pressed={scope === key}
-            className={cn(
-              "flex flex-col rounded-xl border p-3 text-left transition",
-              scope === key ? "border-primary bg-primary/5" : "hover:border-primary/40 hover:bg-muted/40"
-            )}
-          >
-            <span className="flex items-center gap-2 text-sm font-medium">
-              <Icon className="size-4 text-primary" />
-              {title}
-            </span>
-            <span className="mt-1 text-xs leading-5 text-muted-foreground">{hint}</span>
-          </button>
-        ))}
-      </div>
-
-      {scope === "project" ? (
-        <div className="mt-3">
-          <Select value={projectId} onValueChange={setProjectId}>
-            <SelectTrigger className="w-full sm:w-80">
-              <SelectValue placeholder={t("chat.skillScope.selectProject")} />
-            </SelectTrigger>
-            <SelectContent>
-              {projects.map((project) => (
-                <SelectItem key={project.id} value={project.id}>
-                  {project.name}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-        </div>
-      ) : null}
-
-      <div className="mt-4 flex flex-wrap items-center gap-2">
-        <Button
-          onClick={() => onConfirm(scope === "project" ? projectId || null : null)}
-          disabled={busy || (scope === "project" && !projectId)}
-        >
-          {busy ? <Loader2 className="size-4 animate-spin" /> : null}
-          {t("chat.skillScope.confirm")}
-        </Button>
-        <Button variant="ghost" onClick={onCancel} disabled={busy}>
-          {t("common.cancel")}
-        </Button>
-      </div>
-    </div>
-  );
 }
 
 function interactionKindLabelKey(kind: PiPendingInteraction["kind"]): MessageKey {
@@ -267,7 +170,7 @@ function InteractionCard({
   );
 }
 
-export function ChatMessages({ messages, isLoading, errorMessage, compactionStatus, actionNotice, pendingInteraction, onRespondToInteraction, quickSkills = [], onLaunchSkill, launchingSkill, pendingSkill, projects = [], onConfirmSkillScope, onCancelSkillScope }: ChatMessagesProps) {
+export function ChatMessages({ messages, isLoading, errorMessage, compactionStatus, actionNotice, pendingInteraction, onRespondToInteraction, quickSkills = [], onLaunchSkill, launchingSkill }: ChatMessagesProps) {
   const { t } = useI18n();
   const scrollRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -317,15 +220,7 @@ export function ChatMessages({ messages, isLoading, errorMessage, compactionStat
             own model-facing name and description, and the first one is the
             onboarding skill - so it leads, visually and in the order.
           */}
-          {pendingSkill && onConfirmSkillScope && onCancelSkillScope ? (
-            <SkillScopeChooser
-              skill={pendingSkill}
-              projects={projects}
-              busy={Boolean(launchingSkill)}
-              onConfirm={onConfirmSkillScope}
-              onCancel={onCancelSkillScope}
-            />
-          ) : quickSkills.length > 0 ? (
+          {quickSkills.length > 0 ? (
             <div className="mt-8">
               <div className="flex items-baseline justify-between gap-3">
                 <h3 className="text-sm font-semibold">{t("chat.quickStartTitle")}</h3>
