@@ -4,6 +4,7 @@ This directory contains release summaries and publish-ready notes.
 
 | Version | Name | Date | Notes |
 | --- | --- | --- | --- |
+| `0.2.2` | Document Toolbelt and Project Routing | 2026-08-25 | [Full snapshot](./0.2.2-document-toolbelt-and-project-routing.md), [GitHub body](./github-v0.2.2.md) |
 | `0.2.1` | Published Image and Model Recovery | 2026-08-20 | [Full snapshot](./0.2.1-published-image-and-model-recovery.md), [GitHub body](./github-v0.2.1.md) |
 | `0.2.0` | Pi Runtime Workspace | 2026-07-22 | [Full snapshot](./0.2.0-pi-runtime-workspace.md), [GitHub body](./github-v0.2.0.md) |
 | `0.1.6` | Telegram Long Polling | 2026-04-30 | [Full snapshot](./0.1.6-telegram-long-polling.md), [GitHub body](./github-v0.1.6.md) |
