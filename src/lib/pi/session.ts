@@ -306,6 +306,17 @@ function buildEggentProjectContext(options: {
       : options.budgetLevel === "low"
         ? "Budget: the included Eggent AI balance is running low. Say so once, plainly, at the end of your next reply — before a task stops halfway is the only useful time to hear it. Do not repeat it every turn, and do not let it interrupt the work."
         : "",
+    // Without this the model dates "yesterday" from its training data. Asked
+    // what the weather was yesterday it offered to check 27 March while the
+    // workspace clock said 25 August, and it had no reason to suspect itself:
+    // "yesterday", "last week" and "by the end of the month" are ordinary words
+    // in work about reports, schedules and contracts.
+    //
+    // The date and nothing finer, for the same reason the budget above is a
+    // level and not a figure: this sits in the cached prefix tail. A clock time
+    // would change on every turn and pay for a cache rebuild each time, while
+    // the date changes once a day and is what relative words actually need.
+    `Today: ${new Date().toISOString().slice(0, 10)} (UTC). Count "yesterday", "last week" and any other relative date from this, not from memory. Run \`date\` if you need the time of day.`,
     options.projectId ? `Project id: ${options.projectId}` : "Project id: orchestrator",
     options.projectName ? `Project name: ${options.projectName}` : "",
     options.projectDescription ? `Project description: ${options.projectDescription}` : "",
