@@ -344,6 +344,21 @@ function sanitizeExternalFileName(value: string): string {
   return safe || `telegram-file-${Date.now()}`;
 }
 
+/**
+ * True when this message is the Telegram exit-project button, not typed prose.
+ *
+ * Matched on the label's fixed part so renaming a project cannot orphan the
+ * button. Only for messages arriving through a bot: the same words sent to the
+ * external API by a program should still reach the agent.
+ */
+async function isExitProjectMessage(message: string, via: string | undefined): Promise<boolean> {
+  if (!via) return false;
+  const t = await getServerTranslator();
+  const prefix = t("telegram.bot.exitProject", { project: "" }).trim();
+  if (!prefix) return false;
+  return message.trim().toLowerCase().startsWith(prefix.toLowerCase());
+}
+
 export async function handleExternalMessage(
   input: HandleExternalMessageInput
 ): Promise<ExternalMessageResult> {
@@ -361,6 +376,31 @@ export async function handleExternalMessage(
     beforeCount,
     runtimeData,
   } = await resolveExternalMessageRunContext(input);
+
+  // Leaving a project is a state change in the interface, so it is answered
+  // here rather than by running the model: it should be instant, it should not
+  // cost a turn, and it should not depend on the model choosing to call the
+  // tool. Handled at this level so both the workspace's own bot and the
+  // deployment's shared one behave the same way.
+  if (await isExitProjectMessage(message, input.telegramVia)) {
+    session.activeProjectId = null;
+    session.updatedAt = new Date().toISOString();
+    await saveExternalSession(session);
+    const t = await getServerTranslator();
+    return {
+      success: true,
+      sessionId: session.id,
+      reply: t("telegram.bot.leftProject"),
+      context: {
+        activeProjectId: null,
+        activeProjectName: null,
+        activeChatId: resolvedChatId,
+        currentPath: "",
+      },
+      switchedProject: { toProjectId: null, toProjectName: null },
+      createdProject: null,
+    };
+  }
 
   // Remember where this came from, so a schedule or a later background run can
   // still reach the user once this request is over. A message forwarded by the

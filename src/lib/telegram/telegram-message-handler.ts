@@ -543,25 +543,6 @@ function truncateProjectLabel(name: string): string {
     return trimmed.length <= 24 ? trimmed : `${trimmed.slice(0, 23)}…`;
 }
 
-/**
- * True when this message is the exit button rather than something the user typed.
- *
- * Matched on the label's fixed part, not the whole string: a project renamed
- * after the keyboard was drawn would otherwise leave a button that no longer
- * matches anything. The name is ignored because there is only one place to go.
- *
- * A person typing the same words by hand means the same thing, so a collision
- * here is not a misfire - it is the feature.
- */
-function isExitProjectButton(
-    text: string,
-    t: (key: MessageKey, values?: MessageValues) => string
-): boolean {
-    const prefix = t("telegram.bot.exitProject", { project: "" }).trim();
-    if (!prefix) return false;
-    return text.trim().toLowerCase().startsWith(prefix.toLowerCase());
-}
-
 async function callTelegramSendMessage(params: {
     botToken: string;
     chatId: number | string;
@@ -923,29 +904,6 @@ export async function processTelegramUpdate(
                 projectKeyboard(resolvedProject.projectName, t)
             );
             return { ok: true, command };
-        }
-
-        // The exit button comes back as an ordinary message, so it is answered
-        // here rather than by the model: a state change in the interface should
-        // not cost a turn, and should not depend on the model deciding to call
-        // the tool. If this ever fails to match, the text still reads as a plain
-        // instruction and the agent will most likely do it anyway.
-        if (isExitProjectButton(text, t)) {
-            const resolved = await resolveTelegramProjectContext({ sessionId });
-            resolved.session.activeProjectId = null;
-            await saveExternalSession({
-                ...resolved.session,
-                updatedAt: new Date().toISOString(),
-            });
-            await sendTelegramMessage(
-                botToken,
-                chatId,
-                t("telegram.bot.leftProject"),
-                messageId,
-                t,
-                projectKeyboard(null, t)
-            );
-            return { ok: true };
         }
 
         if (command === "/new") {
