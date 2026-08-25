@@ -28,7 +28,7 @@ import {
 import { getAllProjects } from "@/lib/storage/project-store";
 import { transcribeAudioFile } from "@/lib/speech/transcriber";
 import { getServerTranslator } from "@/i18n/server";
-import type { MessageKey } from "@/i18n/messages";
+import type { MessageKey, MessageValues } from "@/i18n/messages";
 import crypto from "node:crypto";
 
 // Leave headroom under Telegram's hard 4096 limit: HTML escaping expands the payload
@@ -509,12 +509,66 @@ export function splitTelegramMarkdown(text: string): string[] {
     return chunks;
 }
 
+/**
+ * Which project this chat is in, shown under the input field.
+ *
+ * Two messages after switching, the project is off the top of the screen and
+ * the only way to find out was to ask - so the answer sits where it cannot
+ * scroll away. In the workspace scope there is no button at all: the common
+ * case stays uncluttered, and the button's presence is itself the signal.
+ *
+ * Derived from the session on every send rather than toggled when the project
+ * changes. A keyboard set by an event drifts the moment anything else moves the
+ * session - a container recreate, a project deleted while the user was inside
+ * it, a switch made from the web UI - and a stale indicator is worse than none.
+ * Computing it each time costs nothing: it rides on a request already going out.
+ */
+function projectKeyboard(
+    projectName: string | null | undefined,
+    t: (key: MessageKey, values?: MessageValues) => string
+): Record<string, unknown> {
+    if (!projectName) return { remove_keyboard: true };
+    const label = t("telegram.bot.exitProject", { project: truncateProjectLabel(projectName) });
+    return {
+        keyboard: [[{ text: label }]],
+        is_persistent: true,
+        resize_keyboard: true,
+        one_time_keyboard: false,
+    };
+}
+
+/** Long names wrap onto a second line on a phone and push the input field down. */
+function truncateProjectLabel(name: string): string {
+    const trimmed = name.trim();
+    return trimmed.length <= 24 ? trimmed : `${trimmed.slice(0, 23)}…`;
+}
+
+/**
+ * True when this message is the exit button rather than something the user typed.
+ *
+ * Matched on the label's fixed part, not the whole string: a project renamed
+ * after the keyboard was drawn would otherwise leave a button that no longer
+ * matches anything. The name is ignored because there is only one place to go.
+ *
+ * A person typing the same words by hand means the same thing, so a collision
+ * here is not a misfire - it is the feature.
+ */
+function isExitProjectButton(
+    text: string,
+    t: (key: MessageKey, values?: MessageValues) => string
+): boolean {
+    const prefix = t("telegram.bot.exitProject", { project: "" }).trim();
+    if (!prefix) return false;
+    return text.trim().toLowerCase().startsWith(prefix.toLowerCase());
+}
+
 async function callTelegramSendMessage(params: {
     botToken: string;
     chatId: number | string;
     text: string;
     parseMode: "HTML" | null;
     replyToMessageId?: number;
+    replyMarkup?: Record<string, unknown>;
 }): Promise<{ ok: boolean; status: number; description?: string }> {
     const response = await fetch(`https://api.telegram.org/bot${params.botToken}/sendMessage`, {
         method: "POST",
@@ -528,6 +582,7 @@ async function callTelegramSendMessage(params: {
             ...(typeof params.replyToMessageId === "number"
                 ? { reply_to_message_id: params.replyToMessageId }
                 : {}),
+            ...(params.replyMarkup ? { reply_markup: params.replyMarkup } : {}),
         }),
     });
 
@@ -667,16 +722,21 @@ export async function sendTelegramMessage(
     chatId: number | string,
     text: string,
     replyToMessageId?: number,
-    t?: (key: MessageKey) => string
+    t?: (key: MessageKey) => string,
+    // Rides on the last chunk only: Telegram keeps the most recent keyboard, so
+    // repeating it on every piece of a long answer would redraw it needlessly.
+    replyMarkup?: Record<string, unknown>
 ): Promise<void> {
     const normalized = normalizeOutgoingText(text, t || ((key) => key));
     const chunks = splitTelegramMarkdown(normalized);
     if (!chunks.length) return;
 
     let isFirstChunk = true;
-    for (const chunk of chunks) {
+    for (let index = 0; index < chunks.length; index += 1) {
+        const chunk = chunks[index];
         const replyTo = isFirstChunk ? replyToMessageId : undefined;
         isFirstChunk = false;
+        const markup = index === chunks.length - 1 ? replyMarkup : undefined;
 
         const rendered = await callTelegramSendMessage({
             botToken,
@@ -684,6 +744,7 @@ export async function sendTelegramMessage(
             text: markdownToTelegramHtml(chunk),
             parseMode: "HTML",
             replyToMessageId: replyTo,
+            replyMarkup: markup,
         });
         if (rendered.ok) continue;
 
@@ -698,6 +759,7 @@ export async function sendTelegramMessage(
             text: chunk,
             parseMode: null,
             replyToMessageId: replyTo,
+            replyMarkup: markup,
         });
         if (!plain.ok) {
             throw new Error(
@@ -855,9 +917,35 @@ export async function processTelegramUpdate(
                     name: resolvedProject.projectName,
                 }),
                 messageId,
-                t
+                t,
+                // /start is also how someone gets the indicator back after
+                // hiding the keyboard, so it is redrawn from the session here.
+                projectKeyboard(resolvedProject.projectName, t)
             );
             return { ok: true, command };
+        }
+
+        // The exit button comes back as an ordinary message, so it is answered
+        // here rather than by the model: a state change in the interface should
+        // not cost a turn, and should not depend on the model deciding to call
+        // the tool. If this ever fails to match, the text still reads as a plain
+        // instruction and the agent will most likely do it anyway.
+        if (isExitProjectButton(text, t)) {
+            const resolved = await resolveTelegramProjectContext({ sessionId });
+            resolved.session.activeProjectId = null;
+            await saveExternalSession({
+                ...resolved.session,
+                updatedAt: new Date().toISOString(),
+            });
+            await sendTelegramMessage(
+                botToken,
+                chatId,
+                t("telegram.bot.leftProject"),
+                messageId,
+                t,
+                projectKeyboard(null, t)
+            );
+            return { ok: true };
         }
 
         if (command === "/new") {
@@ -1003,7 +1091,14 @@ export async function processTelegramUpdate(
             });
 
             stopProgressNotifier();
-            await sendTelegramMessage(botToken, chatId, result.reply, messageId, t);
+            await sendTelegramMessage(
+                botToken,
+                chatId,
+                result.reply,
+                messageId,
+                t,
+                projectKeyboard(result.context.activeProjectName, t)
+            );
             return { ok: true };
         } catch (error) {
             stopProgressNotifier();

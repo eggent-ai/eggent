@@ -765,6 +765,12 @@ const enMessages = {
   "telegram.bot.sendCode": "Send the code with /code <code> or /start <code>.",
   "telegram.bot.yourUserId": "Your user_id: {userId}",
   "telegram.bot.newChat": "Started a new conversation. Context is cleared for the next message.",
+
+  // The label under the input field while a chat is inside a project. It is
+  // both the indicator and the way out, so it reads as the action; the words
+  // before the name are matched when the button comes back as a message.
+  "telegram.bot.exitProject": "Leave project {project}",
+  "telegram.bot.leftProject": "Left the project. You are back in the workspace.",
   "telegram.bot.transcribingVoice": "🎙 Transcribing voice locally…",
   "telegram.bot.voiceTranscriptionFailed": "Failed to transcribe voice: {error}",
   "telegram.bot.voiceComment": "Voice comment: {text}",
