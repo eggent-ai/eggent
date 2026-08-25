@@ -109,6 +109,7 @@ RUN "${PYTHON_VENV}/bin/pip" install --no-cache-dir \
     openpyxl \
     pandas \
     pdfplumber \
+    psycopg2-binary \
     pypdf \
     python-docx \
     python-pptx

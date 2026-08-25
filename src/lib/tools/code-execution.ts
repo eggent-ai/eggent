@@ -436,7 +436,17 @@ function prepareExecution(params: {
   return {
     runtime: "terminal",
     command: shell,
-    args: ["-lc", wrapped],
+    // Not a login shell. A login shell re-reads /etc/profile, which on Debian
+    // assigns PATH outright rather than adding to it - so the interpreter the
+    // image ships, and every package installed into it, disappeared the moment
+    // the command ran. buildTerminalEnv already merges the login shell's own
+    // PATH into the environment, which is the part that was worth having, and
+    // passing it to a plain -c keeps both.
+    //
+    // It also made the two shells disagree: the runtime's own bash tool spawns
+    // with -c and saw the packages, this one did not, and the same import
+    // failed in one tool and worked in the other.
+    args: ["-c", wrapped],
     cwd: terminalState.cwd || params.cwd,
     env: buildTerminalEnv(shell),
     commandPreview: previewText(params.code),
