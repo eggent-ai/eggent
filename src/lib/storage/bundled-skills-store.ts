@@ -3,11 +3,14 @@ import path from "path";
 import {
   createProject,
   getProject,
+  getProjectContextPath,
   getProjectSkillsDir,
   GLOBAL_PROJECT_ID,
   isOrchestratorScope,
   validateSkillName,
 } from "@/lib/storage/project-store";
+import { translate } from "@/i18n/messages";
+import type { SupportedLocale } from "@/i18n/locales";
 
 const SKILL_FILE_NAME = "SKILL.md";
 const BUNDLED_SKILLS_DIR = path.join(process.cwd(), "bundled-skills");
@@ -15,11 +18,13 @@ const BUNDLED_SKILLS_DIR = path.join(process.cwd(), "bundled-skills");
 /**
  * Skills that belong to the workspace itself rather than to one line of work.
  *
- * `about-you` writes who the user is into the orchestrator's own context.md,
- * which every chat reads. Putting it in a project would hide the answers from
- * every chat outside that project, which is the opposite of what it is for.
+ * Both write into the orchestrator's own context.md, which every chat reads:
+ * `about-you` puts who the user is there, and `business-system` reads that
+ * block back and adds the routing table that sends later chats to the right
+ * file. In a project of their own, neither would be visible from anywhere
+ * else - which is the opposite of what they are for.
  */
-const ORCHESTRATOR_SCOPED_SKILLS = new Set(["about-you"]);
+const ORCHESTRATOR_SCOPED_SKILLS = new Set(["about-you", "business-system"]);
 
 export function isOrchestratorScopedSkill(skillName: string): boolean {
   return ORCHESTRATOR_SCOPED_SKILLS.has(skillName.trim().toLowerCase());
@@ -248,6 +253,63 @@ export async function installBundledSkill(
  * project is opened. A skill already present in the target is reused rather
  * than treated as an error - relaunching it is a normal thing to do.
  */
+/**
+ * Tell the orchestrator that a project now exists and what it is for.
+ *
+ * The orchestrator's context.md is read at the start of every chat, so this is
+ * a routing table and nothing else - one row per project, saying where the work
+ * lives, never what is in it. Without it the user has to remember which project
+ * to open; with it they can keep talking in the orchestrator and the agent
+ * switches on its own when a message belongs somewhere else.
+ *
+ * The same reason keeps it short: every line here is re-sent and re-billed on
+ * every message in the workspace.
+ */
+async function noteProjectInOrchestratorContext(params: {
+  projectId: string;
+  title: string;
+  summary: string;
+  locale: SupportedLocale;
+}): Promise<void> {
+  const t = (key: Parameters<typeof translate>[1]) => translate(params.locale, key);
+  const heading = t("skills.projectRouting.heading");
+  const contextPath = getProjectContextPath(GLOBAL_PROJECT_ID);
+  const existing = await fs.readFile(contextPath, "utf-8").catch(() => "");
+
+  const row = `| ${params.title} | \`${params.projectId}\` | ${params.summary} |`;
+  // A project id appears once. Re-running a card that made a second project
+  // adds a second row; refreshing the same one replaces it in place.
+  if (existing.includes(`\`${params.projectId}\``)) return;
+
+  const headingLine = `## ${heading}`;
+  if (existing.includes(headingLine)) {
+    const lines = existing.split("\n");
+    const start = lines.findIndex((line) => line.trim() === headingLine);
+    let end = start + 1;
+    while (end < lines.length && !lines[end].startsWith("## ")) end += 1;
+    // Append after the last table row of the section, not after its blank tail.
+    let insertAt = end;
+    while (insertAt > start && !lines[insertAt - 1].trim().startsWith("|")) insertAt -= 1;
+    lines.splice(insertAt, 0, row);
+    await fs.writeFile(contextPath, lines.join("\n"), "utf-8");
+    return;
+  }
+
+  const section = [
+    "",
+    headingLine,
+    "",
+    t("skills.projectRouting.intro"),
+    "",
+    `| ${t("skills.projectRouting.columnProject")} | ${t("skills.projectRouting.columnId")} | ${t("skills.projectRouting.columnWhat")} |`,
+    "|---|---|---|",
+    row,
+    "",
+  ].join("\n");
+  await fs.mkdir(path.dirname(contextPath), { recursive: true });
+  await fs.writeFile(contextPath, `${existing.trimEnd()}\n${section}`, "utf-8");
+}
+
 /** A project id derived from a skill name, free of collisions with existing ones. */
 async function uniqueProjectId(baseId: string): Promise<string> {
   const normalized = baseId.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "") || "skill";
@@ -272,7 +334,8 @@ async function uniqueProjectId(baseId: string): Promise<string> {
  */
 export async function launchBundledSkill(
   skillName: string,
-  projectId?: string
+  projectId?: string,
+  locale: SupportedLocale = "en"
 ): Promise<
   | { success: true; skill: BundledSkill; projectId: string | null; initialMessage: string }
   | { success: false; error: string; code: number }
@@ -283,7 +346,7 @@ export async function launchBundledSkill(
     return { success: false, error: validationError, code: 400 };
   }
 
-  const skill = (await listBundledSkills()).find((item) => item.name === normalizedName);
+  const skill = (await listBundledSkills(locale)).find((item) => item.name === normalizedName);
   if (!skill) {
     return { success: false, error: "Bundled skill not found", code: 404 };
   }
@@ -309,6 +372,16 @@ export async function launchBundledSkill(
       memoryMode: "global",
     });
     targetScope = created.id;
+    // A project the orchestrator does not know about is a project the user has
+    // to remember to open. Failing to write the note must not fail the launch.
+    await noteProjectInOrchestratorContext({
+      projectId: created.id,
+      title: created.name,
+      summary: skill.summary || skill.description,
+      locale,
+    }).catch((error) => {
+      console.error("Failed to note the new project in the orchestrator context:", error);
+    });
   }
 
   const installed = await installBundledSkill(targetScope, normalizedName);

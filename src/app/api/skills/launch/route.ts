@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { launchBundledSkill } from "@/lib/storage/bundled-skills-store";
+import { getServerLocale } from "@/i18n/server";
 
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null) as {
@@ -19,7 +20,10 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "skillName is required" }, { status: 400 });
   }
 
-  const result = await launchBundledSkill(skillName, projectId);
+  // Card copy and the routing note are written in the workspace's language,
+  // which only the request knows.
+  const locale = await getServerLocale(req.headers.get("accept-language"));
+  const result = await launchBundledSkill(skillName, projectId, locale);
   if (!result.success) {
     return NextResponse.json({ error: result.error }, { status: result.code });
   }

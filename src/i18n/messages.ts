@@ -22,6 +22,15 @@ const enMessages = {
   "settings.saved": "Saved",
   "settings.models.title": "Models and login",
   "settings.models.description": "Configure provider logins, API keys, model defaults, and custom model providers for Eggent.",
+
+  // Written into the orchestrator's context.md when a quick-start card gives a
+  // skill its own project. It is read on every message in the workspace, so it
+  // stays a routing table: where the work lives, never what is in it.
+  "skills.projectRouting.heading": "Projects in this workspace",
+  "skills.projectRouting.intro": "Each row is a separate project with its own files and memory. When a message belongs to one of them, switch to that project and work there; otherwise stay here.",
+  "skills.projectRouting.columnProject": "Project",
+  "skills.projectRouting.columnId": "Id",
+  "skills.projectRouting.columnWhat": "What it is for",
   "settings.models.keySavedSwitched": "Key saved. This workspace now answers on {model}.",
   "settings.models.keySavedNoModel": "Key saved, but {provider} did not offer a model to switch to, so this workspace still answers on the model it used before. Pick a model below once the provider lists one.",
   "settings.models.keySavedStillOnIncluded": "Key saved, but this workspace is still set to the included model and keeps spending its credits. Switch to your own model below to start using this key.",

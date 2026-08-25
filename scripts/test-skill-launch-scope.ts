@@ -40,6 +40,7 @@ async function writeBundledSkill(name: string, title: string): Promise<void> {
 }
 
 await writeBundledSkill("about-you", "Tell me about yourself");
+await writeBundledSkill("business-system", "Business AI system");
 await writeBundledSkill("iishenka-rag", "RAG over your files");
 
 const { launchBundledSkill, isOrchestratorScopedSkill } = await import("../src/lib/storage/bundled-skills-store.ts");
@@ -61,10 +62,18 @@ async function check(name: string, fn: () => void | Promise<void>): Promise<void
 
 console.log("bundled skill launch scope");
 
-await check("about-you is workspace-scoped, every other skill is not", () => {
+await check("about-you and business-system are workspace-scoped, other skills are not", () => {
   assert.equal(isOrchestratorScopedSkill("about-you"), true);
   assert.equal(isOrchestratorScopedSkill("About-You"), true);
+  assert.equal(isOrchestratorScopedSkill("business-system"), true);
   assert.equal(isOrchestratorScopedSkill("iishenka-rag"), false);
+});
+
+const businessSystem = await launchBundledSkill("business-system");
+await check("business-system stays in the orchestrator too", async () => {
+  assert.equal(businessSystem.success, true);
+  assert.equal(businessSystem.success && businessSystem.projectId, null);
+  assert.equal((await listProjects()).length, 0);
 });
 
 const aboutYou = await launchBundledSkill("about-you");
@@ -87,6 +96,21 @@ await check("the project is named after the card, and its id after the skill", a
   assert.equal(project?.name, "RAG over your files");
 });
 
+const orchestratorContext = async (): Promise<string> =>
+  fs.readFile(path.join(workDir, "data", "projects", "context.md"), "utf-8").catch(() => "");
+
+await check("the orchestrator is told the project exists and what it is for", async () => {
+  const context = await orchestratorContext();
+  assert.match(context, /## Projects in this workspace/);
+  assert.match(context, /RAG over your files/);
+  assert.match(context, /`iishenka-rag`/);
+  assert.match(context, /Short card copy/);
+});
+await check("a workspace-scoped skill adds no routing row", async () => {
+  const context = await orchestratorContext();
+  assert.ok(!context.includes("Tell me about yourself"), "about-you should not be routed to");
+});
+
 // Launching the same card twice must not collide on the project id.
 const ragAgain = await launchBundledSkill("iishenka-rag");
 await check("launching the same card again makes a second project rather than failing", async () => {
@@ -96,11 +120,21 @@ await check("launching the same card again makes a second project rather than fa
 });
 
 // The skills screen inside a project still targets that project explicitly.
+await check("the second project gets its own row under the same heading", async () => {
+  const context = await orchestratorContext();
+  assert.equal((context.match(/## Projects in this workspace/g) || []).length, 1, "one heading only");
+  assert.match(context, /`iishenka-rag-2`/);
+});
+
 const explicit = await launchBundledSkill("iishenka-rag", "iishenka-rag");
 await check("an explicit target still wins over the automatic one", async () => {
   assert.equal(explicit.success, true);
   assert.equal(explicit.success && explicit.projectId, "iishenka-rag");
   assert.equal((await listProjects()).length, 2, "no extra project should appear");
+});
+await check("and it does not add a duplicate routing row", async () => {
+  const context = await orchestratorContext();
+  assert.equal((context.match(/`iishenka-rag`/g) || []).length, 1);
 });
 
 const missing = await launchBundledSkill("iishenka-rag", "no-such-project");

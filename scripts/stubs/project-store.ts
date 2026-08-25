@@ -39,7 +39,13 @@ export function isOrchestratorScope(projectId: string | null | undefined): boole
 }
 
 export function getWorkDir(projectId: string | null): string {
-  return projectId ? path.join(projectsDir(), projectId) : process.cwd();
+  return isOrchestratorScope(projectId) ? projectsDir() : path.join(projectsDir(), projectId as string);
+}
+
+export const PROJECT_CONTEXT_FILENAME = "context.md";
+
+export function getProjectContextPath(projectId: string): string {
+  return path.join(getWorkDir(projectId), PROJECT_CONTEXT_FILENAME);
 }
 
 export function getProjectSkillsDir(projectId: string): string {
