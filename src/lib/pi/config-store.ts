@@ -650,6 +650,18 @@ export interface EggentAiModelLockState {
   selfHostedUrl?: string;
 }
 
+/** What became of an attempt to point the workspace at a provider's model. */
+export interface DefaultModelSelection {
+  /** False means the workspace still answers on whatever it answered on before. */
+  switched: boolean;
+  /** The provider asked for, or the one selected when switched is true. */
+  provider?: string;
+  /** The model now in effect. Only set when switched is true. */
+  model?: string;
+  /** Why nothing was selected. Absent when switched is true. */
+  reason?: "model_locked" | "no_available_model";
+}
+
 export async function getEggentAiModelLockState(cwd = process.cwd()): Promise<EggentAiModelLockState> {
   const label = eggentAiModelLabel();
 
@@ -970,9 +982,25 @@ export async function updatePiModelDefaults(options: {
   return getPiSettingsState(cwd);
 }
 
-export async function setPiDefaultToFirstAvailableModel(provider?: string, cwd = process.cwd()) {
+/**
+ * Make a provider's first usable model the workspace default, and say whether
+ * that actually happened.
+ *
+ * Both ways of failing used to return the current settings unchanged, and every
+ * caller answered 200 with them, so a key that saved but never took effect was
+ * indistinguishable from one that did. The workspace kept answering on the
+ * included model and kept spending its credits while its owner believed he had
+ * moved to his own - two hours and a whole trial balance, in the case that
+ * brought this to light.
+ */
+export async function setPiDefaultToFirstAvailableModel(
+  provider?: string,
+  cwd = process.cwd()
+): Promise<DefaultModelSelection> {
+  const preferredProvider = provider?.trim() || undefined;
+
   if ((await getEggentAiModelLockState(cwd)).locked) {
-    return getPiSettingsState(cwd);
+    return { switched: false, provider: preferredProvider, reason: "model_locked" };
   }
 
   const modelRuntime = await getPiModelRuntime();
@@ -980,19 +1008,18 @@ export async function setPiDefaultToFirstAvailableModel(provider?: string, cwd =
   await modelRegistry.refresh();
 
   const available = modelRegistry.getAvailable();
-  const preferredProvider = provider?.trim();
   const selected = preferredProvider
     ? available.find((model) => model.provider === preferredProvider)
     : available[0];
 
   if (!selected) {
-    return getPiSettingsState(cwd);
+    return { switched: false, provider: preferredProvider, reason: "no_available_model" };
   }
 
   const settingsManager = getPiSettingsManager(cwd);
   settingsManager.setDefaultModelAndProvider(selected.provider, selected.id);
   await settingsManager.flush();
-  return getPiSettingsState(cwd);
+  return { switched: true, provider: selected.provider, model: selected.id };
 }
 
 export async function getResolvedPiRuntimeModel(projectId?: string | null): Promise<PiRuntimeStats> {

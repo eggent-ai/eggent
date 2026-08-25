@@ -16,7 +16,36 @@ import { Check, ExternalLink, KeyRound, Loader2, LogOut, Moon, PlugZap, Save, Sh
 import { updateSettingsByPath } from "@/lib/settings/update-settings-path";
 import { LOCALE_OPTIONS, normalizeLocalePreference, type LocalePreference } from "@/i18n/locales";
 import { useI18n } from "@/i18n/provider";
+import type { MessageKey, MessageValues } from "@/i18n/messages";
 import type { AppSettings } from "@/lib/types";
+
+interface ModelSelectionResult {
+  switched: boolean;
+  provider?: string;
+  model?: string;
+  reason?: "model_locked" | "no_available_model";
+}
+
+/**
+ * What to tell someone whose key was accepted.
+ *
+ * Saving a key and answering with it are separate steps. When the second one
+ * does not happen the workspace carries on with the model it had, so silence
+ * would read as success and the next hour of work bills to the old model.
+ */
+function modelSelectionNotice(
+  selection: ModelSelectionResult | undefined,
+  providerId: string,
+  t: (key: MessageKey, values?: MessageValues) => string
+): string | null {
+  if (!selection) return null;
+  if (selection.switched) {
+    return t("settings.models.keySavedSwitched", { model: selection.model || "" });
+  }
+  return selection.reason === "model_locked"
+    ? t("settings.models.keySavedStillOnIncluded")
+    : t("settings.models.keySavedNoModel", { provider: providerId });
+}
 
 interface PiProviderState {
   id: string;
@@ -109,7 +138,7 @@ type LoginEvent =
   | { id: string; type: "progress"; message: string }
   | { id: string; type: "prompt"; promptId: string; message: string; placeholder?: string; allowEmpty?: boolean; manualCode?: boolean }
   | { id: string; type: "select"; promptId: string; message: string; options: Array<{ id: string; label: string }> }
-  | { id: string; type: "completed" }
+  | { id: string; type: "completed"; modelSelection?: ModelSelectionResult }
   | { id: string; type: "error"; message: string };
 
 interface LoginJobState {
@@ -220,6 +249,11 @@ export default function SettingsPage() {
         setOauthJob(next);
         if (next.status !== "running") {
           stop();
+          // A finished sign-in does not mean the workspace moved onto it.
+          const completed = next.events.find((event) => event.type === "completed");
+          if (completed?.type === "completed") {
+            setPiNotice(modelSelectionNotice(completed.modelSelection, next.provider, t));
+          }
           await loadPiState();
         }
       } catch {
@@ -335,6 +369,11 @@ export default function SettingsPage() {
       setApiKey("");
       setApiKeyEnv("");
       setPiState(json);
+      // Saving the key and moving onto it are two steps, and the second one can
+      // fail on its own. Silence here is what let a workspace keep answering on
+      // the included model, and spending its credits, after its owner thought
+      // he had switched away.
+      setPiNotice(modelSelectionNotice(json?.modelSelection, providerId, t));
       await loadPiState();
     } catch (error) {
       setPiError(error instanceof Error ? error.message : t("settings.errors.saveProviderKey"));

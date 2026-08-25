@@ -1,6 +1,6 @@
 import { randomUUID } from "crypto";
 import { NextRequest, NextResponse } from "next/server";
-import { getEggentAiModelLockState, getPiModelRuntime, getPiModelsState, setPiDefaultToFirstAvailableModel } from "@/lib/pi/config-store";
+import { getEggentAiModelLockState, getPiModelRuntime, getPiModelsState, setPiDefaultToFirstAvailableModel, type DefaultModelSelection } from "@/lib/pi/config-store";
 
 type LoginEvent =
   | { id: string; type: "auth_url"; url: string; instructions?: string; createdAt: number }
@@ -8,7 +8,7 @@ type LoginEvent =
   | { id: string; type: "progress"; message: string; createdAt: number }
   | { id: string; type: "prompt"; promptId: string; message: string; placeholder?: string; allowEmpty?: boolean; manualCode?: boolean; createdAt: number }
   | { id: string; type: "select"; promptId: string; message: string; options: Array<{ id: string; label: string }>; createdAt: number }
-  | { id: string; type: "completed"; state: unknown; createdAt: number }
+  | { id: string; type: "completed"; state: unknown; modelSelection?: DefaultModelSelection; createdAt: number }
   | { id: string; type: "error"; message: string; createdAt: number };
 
 type AuthPromptLike =
@@ -166,9 +166,10 @@ export async function POST(req: NextRequest) {
         notify: (event) => handleAuthNotify(job, event as AuthEventLike),
         signal: job.controller.signal,
       });
-      await setPiDefaultToFirstAvailableModel(provider);
+      const modelSelection = await setPiDefaultToFirstAvailableModel(provider);
       job.status = "completed";
-      pushEvent(job, { type: "completed", state: await getPiModelsState() });
+      // Signing in is not the same as running on it: report which happened.
+      pushEvent(job, { type: "completed", state: await getPiModelsState(), modelSelection });
     } catch (error) {
       if (job.controller.signal.aborted) {
         job.status = "cancelled";

@@ -32,8 +32,10 @@ export async function POST(req: NextRequest) {
   }
 
   await setPiApiKeyCredential(provider, apiKey, env);
-  await setPiDefaultToFirstAvailableModel(provider);
-  return NextResponse.json(await getPiModelsState());
+  // The key is saved either way, so this is not an error status - but the
+  // caller has to be able to tell that the workspace did not move onto it.
+  const modelSelection = await setPiDefaultToFirstAvailableModel(provider);
+  return NextResponse.json({ ...(await getPiModelsState()), modelSelection });
 }
 
 export async function DELETE(req: NextRequest) {
@@ -65,8 +67,11 @@ export async function DELETE(req: NextRequest) {
       { status: 400 }
     );
   }
-  if (settings.defaultProvider === provider) {
-    await setPiDefaultToFirstAvailableModel();
-  }
-  return NextResponse.json(await getPiModelsState());
+  // Removing the credential the workspace was answering on leaves it with no
+  // model unless something else can take over. Say so rather than returning a
+  // state that looks configured.
+  const modelSelection = settings.defaultProvider === provider
+    ? await setPiDefaultToFirstAvailableModel()
+    : undefined;
+  return NextResponse.json({ ...(await getPiModelsState()), ...(modelSelection ? { modelSelection } : {}) });
 }
