@@ -84,8 +84,8 @@ async function readSettings(): Promise<{ defaultProvider?: string; defaultModel?
 
 console.log("default model selection");
 
-// The case that cost a customer his trial balance: the key is on disk, but the
-// provider offers nothing the runtime can run, so nothing is selected.
+// The case that made this worth fixing: the key is on disk, but the provider
+// offers nothing the runtime can run, so nothing is selected.
 await seed({});
 const noModel = await setPiDefaultToFirstAvailableModel("proxy", workDir);
 await check("a provider with no usable model reports that it did not switch", () => {

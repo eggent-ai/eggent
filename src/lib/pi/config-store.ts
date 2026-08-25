@@ -989,9 +989,8 @@ export async function updatePiModelDefaults(options: {
  * Both ways of failing used to return the current settings unchanged, and every
  * caller answered 200 with them, so a key that saved but never took effect was
  * indistinguishable from one that did. The workspace kept answering on the
- * included model and kept spending its credits while its owner believed he had
- * moved to his own - two hours and a whole trial balance, in the case that
- * brought this to light.
+ * included model, and kept billing to it, while its owner believed he had moved
+ * to his own - for two hours, in the case that brought this to light.
  */
 export async function setPiDefaultToFirstAvailableModel(
   provider?: string,
