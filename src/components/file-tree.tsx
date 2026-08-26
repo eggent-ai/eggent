@@ -463,7 +463,7 @@ function TreeNode({
         <span className="truncate">{name}</span>
         </button>
         {type === "file" && (
-        <div className="absolute right-1 top-1/2 hidden -translate-y-1/2 items-center gap-0.5 rounded-sm bg-background/80 group-hover/tree-node:flex">
+        <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 rounded-sm bg-background/80 opacity-0 transition-opacity group-hover/tree-node:opacity-100 group-focus-within/tree-node:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100">
           <a
             href={downloadHref}
             download={name}
@@ -489,7 +489,7 @@ function TreeNode({
         </div>
         )}
         {type === "directory" && (
-        <div className="absolute right-1 top-1/2 hidden -translate-y-1/2 items-center gap-0.5 rounded-sm bg-background/80 group-hover/tree-node:flex">
+        <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 rounded-sm bg-background/80 opacity-0 transition-opacity group-hover/tree-node:opacity-100 group-focus-within/tree-node:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100">
           <button
             type="button"
             onClick={(event) => {
@@ -695,7 +695,7 @@ export function FileTree({ projectId }: FileTreeProps) {
           <FolderOpen className="size-3.5 shrink-0 text-info" />
           <span className="truncate font-medium">/</span>
         </button>
-        <div className="absolute right-1 top-1/2 hidden -translate-y-1/2 items-center gap-0.5 rounded-sm bg-background/80 group-hover/root:flex">
+        <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 rounded-sm bg-background/80 opacity-0 transition-opacity group-hover/root:opacity-100 group-focus-within/root:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100">
           <button
             type="button"
             onClick={(event) => {

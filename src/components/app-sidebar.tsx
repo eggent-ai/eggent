@@ -277,7 +277,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 </SidebarMenuButton>
                 <SidebarMenuAction
                   onClick={(e) => handleDeleteChat(chat.id, e)}
-                  className="opacity-0 group-hover/menu-item:opacity-100"
+                  className="md:opacity-0 transition-opacity group-hover/menu-item:opacity-100 group-focus-within/menu-item:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100"
                 >
                   <Trash2 className="size-3.5" />
                 </SidebarMenuAction>

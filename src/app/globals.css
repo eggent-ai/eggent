@@ -173,22 +173,33 @@
   [role="button"]:has(> svg:only-child) {
     min-width: 44px;
   }
-}
 
-/* A control that only exists on hover cannot be reached by touch at all, and a
-   keyboard user cannot see where they are. Both were true of every delete
-   action in the file tree and the chat list. */
-@media (pointer: coarse) {
-  .group:hover .opacity-0,
-  .group .opacity-0 {
-    opacity: 1;
+  /* The first version of this rule named button, [role=button], a[data-slot]
+     and summary - which skipped the settings tabs, because they are plain
+     links, and the dark-mode control, because it is a bare checkbox measuring
+     13x13. Both are things a finger has to hit. */
+  nav a,
+  a[href],
+  input[type="checkbox"],
+  input[type="radio"],
+  select {
+    min-height: 44px;
+  }
+  input[type="checkbox"],
+  input[type="radio"] {
+    min-width: 24px;
+    width: 24px;
+    height: 24px;
   }
 }
-.opacity-0:focus-visible,
-.group:focus-within .opacity-0 {
-  opacity: 1;
-}
 
+/* Hover-gated row actions are handled at the component, not here.
+   The rules that used to live in this spot targeted a bare `.group` and
+   `.opacity-0`; the file tree hides with `display` under `group/tree-node` and
+   the chat list uses `group/menu-item`, so they matched neither - while
+   shadcn's Sidebar root does carry a bare `group`, which made
+   `.group:focus-within .opacity-0` reveal every delete button in the list at
+   once. A comment claiming a fix is worse than no fix. */
 /* Motion thesis, for an interface people configure rather than watch.
    ------------------------------------------------------------------
    This surface is Operate: motion here explains feedback, state and
