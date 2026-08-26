@@ -9,10 +9,27 @@ const DEFAULT_PACKAGES = [
   "npm:pi-web-access",
   "npm:pi-mcp-adapter",
   "npm:@tintinweb/pi-subagents",
-  // Spreadsheets. Reads and edits .xlsx/.xlsm through a pure-JS OOXML backend,
-  // so it needs neither Excel nor LibreOffice. It declares node>=24 and npm
-  // warns about it; the source uses nothing newer than Node 18, and reading a
-  // real workbook on our Node 22 was verified before this was added.
+];
+
+// Packages that were shipped by default and are not any more. Dropping an entry
+// from DEFAULT_PACKAGES only stops new workspaces from getting it: this script
+// adds and never removes, so a workspace that already persisted the source in
+// its settings keeps loading the extension forever. Listing it here withdraws
+// it on the next start instead.
+//
+// The workbook extension is here because its tool schemas are not free to
+// carry. Every tool's schema is sent on every single turn, and workbook_edit
+// alone measured 35 940 characters of the 71 281 in a request - half the
+// payload before the user had typed anything - because its operations
+// parameter is a 34 480-character union of every spreadsheet operation. The
+// six workbook_* tools plus the skill the extension injects came to 44 936
+// characters, and the cheapest observed request roughly doubled the day they
+// arrived. Observed calls to any of them: none.
+//
+// Reading and editing xlsx/xlsm is still a real gap. It has to come back
+// through something whose schema is not paid for on every turn by everyone
+// who never opens a spreadsheet.
+const RETIRED_PACKAGES = [
   "npm:@firstpick/pi-extension-workbook",
 ];
 
@@ -200,6 +217,32 @@ async function ensureOnce({ agentDir, packages, DefaultPackageManager, SettingsM
     await packageManager.installAndPersist(source, { local: false });
     configuredSources.push(source);
     changed = true;
+  }
+
+  // Withdraw anything retired. Only the settings entry is removed: without it pi
+  // does not load the extension and its tools stop being sent to the model,
+  // which is the whole point. The files under npm/node_modules are left alone
+  // deliberately - they cost half a megabyte, and removing package trees while
+  // another workspace may be installing into the same shape is how the
+  // ENOTEMPTY failures of the signup burst happened.
+  //
+  // A source that is also in the requested list is left in place, so setting
+  // EGGENT_PI_PACKAGES to ask for one back still works.
+  const retiredNow = RETIRED_PACKAGES.filter(
+    (retired) => !packages.some((wanted) => packageManager.packageSourcesMatch(wanted, retired, "user"))
+  );
+  if (retiredNow.length > 0) {
+    const kept = (Array.isArray(globalSettings?.packages) ? globalSettings.packages : []).filter((entry) => {
+      const source = typeof entry === "string" ? entry : entry?.source;
+      if (typeof source !== "string") return true;
+      return !retiredNow.some((retired) => packageManager.packageSourcesMatch(source, retired, "user"));
+    });
+    const configuredCount = Array.isArray(globalSettings?.packages) ? globalSettings.packages.length : 0;
+    if (kept.length !== configuredCount) {
+      settingsManager.setPackages(kept);
+      changed = true;
+      console.log(`Withdrew retired pi package(s): ${retiredNow.join(", ")}`);
+    }
   }
 
   if (changed) {
