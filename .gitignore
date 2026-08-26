@@ -10,6 +10,9 @@
 /coverage
 CLAUDE.md
 
+# local agent context and skills
+/.claude/
+
 # next.js
 /.next/
 /out/
