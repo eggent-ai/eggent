@@ -36,7 +36,7 @@ function StepIndicator({
           transition-all duration-300 shrink-0
           ${
             completed
-              ? "bg-emerald-500 text-white shadow-md shadow-emerald-500/30"
+              ? "bg-success text-success-foreground shadow-md shadow-success/30"
               : active
                 ? "bg-primary text-primary-foreground shadow-md shadow-primary/30 ring-2 ring-primary/20"
                 : "bg-muted text-muted-foreground"
@@ -50,7 +50,7 @@ function StepIndicator({
           active
             ? "text-foreground font-medium"
             : completed
-              ? "text-emerald-600 dark:text-emerald-400"
+              ? "text-success"
               : "text-muted-foreground"
         }`}
       >
@@ -90,7 +90,7 @@ function ModelSelect({
             w-full rounded-md border bg-background px-3 py-2 text-sm appearance-none pr-8
             transition-all duration-200
             ${disabled ? "opacity-50 cursor-not-allowed" : ""}
-            ${error ? "border-red-400 dark:border-red-500" : ""}
+            ${error ? "border-destructive/50" : ""}
           `}
         >
           <option value="">
@@ -111,7 +111,7 @@ function ModelSelect({
         </div>
       </div>
       {error && (
-        <div className="flex items-center gap-1.5 text-xs text-red-500">
+        <div className="flex items-center gap-1.5 text-xs text-destructive">
           <AlertCircle className="size-3" />
           {error}
         </div>
@@ -480,7 +480,7 @@ export function ChatModelWizard({
         )}
 
         {isCliProvider && (
-          <div className="rounded-lg border border-amber-300 bg-amber-50 px-3 py-2 text-xs text-amber-800 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300">
+          <div className="rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning">
             {t("modelWizard.cliTokens")}
           </div>
         )}
@@ -502,13 +502,13 @@ export function ChatModelWizard({
         )}
 
         {provider === "ollama" && selectedAuthMethod === "api_key" && (
-          <div className="flex items-center gap-2 text-sm text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/30 rounded-lg px-3 py-2">
+          <div className="flex items-center gap-2 text-sm text-success bg-success/10 rounded-lg px-3 py-2">
             <Check className="size-4" />
             {t("modelWizard.ollamaNoKey")}
           </div>
         )}
         {provider === "custom" && selectedAuthMethod === "api_key" && !apiKey.trim() && (
-          <div className="flex items-center gap-2 text-sm text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/30 rounded-lg px-3 py-2">
+          <div className="flex items-center gap-2 text-sm text-success bg-success/10 rounded-lg px-3 py-2">
             <Check className="size-4" />
             {t("modelWizard.customNoKey")}
           </div>
@@ -518,8 +518,8 @@ export function ChatModelWizard({
           <div
             className={`rounded-lg border px-3 py-2 text-sm ${
               connectionStatus.connected
-                ? "border-emerald-300 bg-emerald-50 text-emerald-700 dark:border-emerald-900 dark:bg-emerald-950/30 dark:text-emerald-300"
-                : "border-amber-300 bg-amber-50 text-amber-700 dark:border-amber-900 dark:bg-amber-950/30 dark:text-amber-300"
+                ? "border-success/30 bg-success/10 text-success"
+                : "border-warning/30 bg-warning/10 text-warning"
             }`}
           >
             <p>{connectionStatus.message}</p>
@@ -530,7 +530,7 @@ export function ChatModelWizard({
         )}
 
         {connectionError && (
-          <div className="flex items-center gap-1.5 text-xs text-red-500">
+          <div className="flex items-center gap-1.5 text-xs text-destructive">
             <AlertCircle className="size-3" />
             {connectionError}
           </div>
@@ -763,7 +763,7 @@ export function EmbeddingsModelWizard({
       </div>
 
       {hasProvider && !requiresApiKey && provider === "ollama" && (
-        <div className="flex items-center gap-2 text-sm text-emerald-600 dark:text-emerald-400 bg-emerald-50 dark:bg-emerald-950/30 rounded-lg px-3 py-2">
+        <div className="flex items-center gap-2 text-sm text-success bg-success/10 rounded-lg px-3 py-2">
           <Check className="size-4" />
           {t("modelWizard.ollamaNoKey")}
         </div>

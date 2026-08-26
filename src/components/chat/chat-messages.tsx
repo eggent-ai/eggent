@@ -324,10 +324,10 @@ export function ChatMessages({ messages, isLoading, errorMessage, compactionStat
 
         {actionNotice ? (
           <div className="flex gap-3 py-3">
-            <div className={`flex size-8 shrink-0 items-center justify-center rounded-full ${actionNotice.level === "critical" ? "bg-destructive/10 text-destructive" : "bg-amber-500/10 text-amber-600"}`}>
+            <div className={`flex size-8 shrink-0 items-center justify-center rounded-full ${actionNotice.level === "critical" ? "bg-destructive/10 text-destructive" : "bg-warning/10 text-warning"}`}>
               <TriangleAlert className="size-4" />
             </div>
-            <div className={`flex-1 rounded-lg border p-3 space-y-2 ${actionNotice.level === "critical" ? "border-destructive/40" : "border-amber-500/40"}`}>
+            <div className={`flex-1 rounded-lg border p-3 space-y-2 ${actionNotice.level === "critical" ? "border-destructive/40" : "border-warning/40"}`}>
               {actionNotice.title ? <div className="text-sm font-medium">{actionNotice.title}</div> : null}
               {actionNotice.body ? (
                 <p className="text-sm text-muted-foreground whitespace-pre-wrap">{actionNotice.body}</p>

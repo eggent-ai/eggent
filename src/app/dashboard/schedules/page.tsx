@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { CalendarClock, Loader2, RefreshCw } from "lucide-react";
+import { CalendarClock, Clock, Loader2, RefreshCw, Trash2 } from "lucide-react";
 import { AppSidebar } from "@/components/app-sidebar";
 import { SiteHeader } from "@/components/site-header";
 import { SettingsNavigation } from "@/components/settings-navigation";
@@ -50,6 +50,7 @@ export default function PiSchedulesPage() {
   const { t } = useI18n();
   const [schedules, setSchedules] = useState<PiSchedule[]>([]);
   const [loading, setLoading] = useState(true);
+  const [busyId, setBusyId] = useState<string | null>(null);
 
   const load = async () => {
     setLoading(true);
@@ -59,6 +60,23 @@ export default function PiSchedulesPage() {
       setSchedules(Array.isArray(data.schedules) ? data.schedules : []);
     } finally {
       setLoading(false);
+    }
+  };
+
+  const change = async (job: PiSchedule, action: "delete" | "retime", schedule?: string) => {
+    setBusyId(job.id);
+    try {
+      const response = await fetch("/api/pi-schedules", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ action, jobId: job.id, schedule }),
+      });
+      if (!response.ok) throw new Error(t("schedules.changeFailed"));
+      await load();
+    } catch {
+      window.alert(t("schedules.changeFailed"));
+    } finally {
+      setBusyId(null);
     }
   };
 
@@ -120,6 +138,18 @@ export default function PiSchedulesPage() {
                         {t("schedules.emptyDescription")}
                       </EmptyDescription>
                     </EmptyHeader>
+                    <Button
+                      className="h-11 gap-2"
+                      onClick={() => {
+                        // A schedule belongs to a live session, so it is made in
+                        // chat. The empty state can still hand the person the
+                        // sentence instead of describing the tool that does it.
+                        window.location.href = `/dashboard?prompt=${encodeURIComponent(t("schedules.emptyPrompt"))}`;
+                      }}
+                    >
+                      <CalendarClock className="size-4" />
+                      {t("schedules.emptyAction")}
+                    </Button>
                   </Empty>
                 ) : (
                   <div className="overflow-x-auto">
@@ -132,6 +162,7 @@ export default function PiSchedulesPage() {
                           <th className="px-4 py-3 font-medium">{t("schedules.table.nextRun")}</th>
                           <th className="px-4 py-3 font-medium">{t("schedules.table.lastRun")}</th>
                           <th className="px-4 py-3 font-medium">{t("schedules.table.status")}</th>
+                          <th className="px-4 py-3 font-medium"><span className="sr-only">{t("schedules.rowActions", { name: "" })}</span></th>
                         </tr>
                       </thead>
                       <tbody className="divide-y">
@@ -163,6 +194,37 @@ export default function PiSchedulesPage() {
                               <Badge variant={statusVariant(job)}>
                                 {job.enabled ? job.lastStatus || t("schedules.status.scheduled") : t("schedules.status.disabled")}
                               </Badge>
+                            </td>
+                            <td className="px-4 py-3 align-top">
+                              <div className="flex items-center justify-end gap-1">
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="size-11 p-0"
+                                  aria-label={t("schedules.retime")}
+                                  title={t("schedules.retime")}
+                                  disabled={busyId === job.id}
+                                  onClick={() => {
+                                    const next = window.prompt(t("schedules.retimePrompt", { name: job.name || job.id }), job.schedule || "");
+                                    if (next && next.trim() && next.trim() !== job.schedule) change(job, "retime", next.trim());
+                                  }}
+                                >
+                                  <Clock className="size-4" />
+                                </Button>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  className="size-11 p-0 text-muted-foreground hover:text-destructive"
+                                  aria-label={t("schedules.delete")}
+                                  title={t("schedules.delete")}
+                                  disabled={busyId === job.id}
+                                  onClick={() => {
+                                    if (window.confirm(t("schedules.deleteConfirm", { name: job.name || job.id }))) change(job, "delete");
+                                  }}
+                                >
+                                  {busyId === job.id ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+                                </Button>
+                              </div>
                             </td>
                           </tr>
                         ))}

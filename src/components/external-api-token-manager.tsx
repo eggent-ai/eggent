@@ -102,7 +102,7 @@ export function ExternalApiTokenManager() {
       </p>
 
       {status?.source === "env" && (
-        <p className="text-xs text-amber-600">
+        <p className="text-xs text-warning">
           {t("externalApiToken.envDetected")}
         </p>
       )}
@@ -170,7 +170,7 @@ export function ExternalApiTokenManager() {
         </div>
       )}
 
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {error && <p className="text-sm text-destructive">{error}</p>}
     </div>
   );
 }

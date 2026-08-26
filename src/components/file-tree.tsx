@@ -456,7 +456,7 @@ function TreeNode({
           className={cn(
             "size-3.5 shrink-0",
             type === "directory"
-              ? "text-blue-500"
+              ? "text-info"
               : "text-muted-foreground"
           )}
         />
@@ -692,7 +692,7 @@ export function FileTree({ projectId }: FileTreeProps) {
             currentPath === "" && "bg-accent text-accent-foreground font-medium"
           )}
         >
-          <FolderOpen className="size-3.5 shrink-0 text-blue-500" />
+          <FolderOpen className="size-3.5 shrink-0 text-info" />
           <span className="truncate font-medium">/</span>
         </button>
         <div className="absolute right-1 top-1/2 hidden -translate-y-1/2 items-center gap-0.5 rounded-sm bg-background/80 group-hover/root:flex">

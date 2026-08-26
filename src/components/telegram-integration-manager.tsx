@@ -530,12 +530,12 @@ export function TelegramIntegrationManager() {
                 <div className="mt-1 flex items-center gap-2 text-sm">
                   {effectiveMode === "webhook" ? (
                     <>
-                      <Globe className="size-4 text-blue-500" />
+                      <Globe className="size-4 text-info" />
                       <span>{t("telegram.mode.webhook")}</span>
                     </>
                   ) : (
                     <>
-                      <Radio className="size-4 text-green-500" />
+                      <Radio className="size-4 text-success" />
                       <span>{t("telegram.mode.polling")}</span>
                     </>
                   )}
@@ -653,10 +653,10 @@ export function TelegramIntegrationManager() {
                     <div className="flex items-center gap-2">
                       {t("telegram.status")} 
                       {pollingStatus.polling.isRunning ? (
-                        <span className="flex items-center gap-1 text-green-600">
+                        <span className="flex items-center gap-1 text-success">
                           <span className="relative flex h-2 w-2">
-                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-green-400 opacity-75"></span>
-                            <span className="relative inline-flex rounded-full h-2 w-2 bg-green-500"></span>
+                            <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-success opacity-75"></span>
+                            <span className="relative inline-flex rounded-full h-2 w-2 bg-success"></span>
                           </span>
                           {t("telegram.running")}
                         </span>
@@ -800,8 +800,8 @@ export function TelegramIntegrationManager() {
         </div>
       </section>
 
-      {success && <p className="text-sm text-emerald-600">{success}</p>}
-      {error && <p className="text-sm text-red-600">{error}</p>}
+      {success && <p className="text-sm text-success">{success}</p>}
+      {error && <p className="text-sm text-destructive">{error}</p>}
     </div>
   );
 }

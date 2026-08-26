@@ -5,6 +5,27 @@ type MessageDictionary = Record<string, string>;
 const enMessages = {
   "app.tagline": "Agent Terminal",
 
+  "login.title": "Sign in",
+  "login.username": "Username",
+  "login.password": "Password",
+  "login.submit": "Sign in",
+  "login.submitting": "Signing in…",
+  "login.failed": "That username and password did not match. Check both and try again.",
+  "login.sessionExpired": "Your session expired. Sign in to continue.",
+  "login.showPassword": "Show",
+  "login.hidePassword": "Hide",
+  "login.noReset": "There is no password reset here. On a self-hosted workspace it is changed on the server; on a hosted one, support can help.",
+
+  "schedules.emptyAction": "Ask for one in chat",
+  "schedules.emptyPrompt": "Set up a recurring task for me: what should run, and when.",
+  "schedules.rowActions": "Actions for {name}",
+  "schedules.delete": "Delete",
+  "schedules.deleting": "Deleting…",
+  "schedules.deleteConfirm": "Delete the scheduled task \"{name}\"? It stops firing immediately.",
+  "schedules.retime": "Change time",
+  "schedules.retimePrompt": "New schedule for \"{name}\" (cron, for example 0 9 * * *):",
+  "schedules.changeFailed": "Could not change that schedule.",
+
   "nav.newChat": "New Chat",
   "nav.project": "Project",
   "nav.orchestrator": "Orchestrator",

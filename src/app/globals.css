@@ -25,6 +25,13 @@
   --color-input: var(--input);
   --color-border: var(--border);
   --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+  --color-info: var(--info);
+  --color-info-foreground: var(--info-foreground);
   --color-accent-foreground: var(--accent-foreground);
   --color-accent: var(--accent);
   --color-muted-foreground: var(--muted-foreground);
@@ -60,9 +67,26 @@
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
-  --border: oklch(0.922 0 0);
-  --input: oklch(0.922 0 0);
-  --ring: oklch(0.708 0 0);
+  /* Solved against white rather than eyeballed. The control boundary and the
+     focus ring answer to WCAG 2.2 SC 1.4.11 and measure 3.01:1; the card
+     border is decorative, so it only has to stop being invisible and sits at
+     1.89:1 instead of the 1.26:1 it was. The trace of chroma at h=70 is what
+     separates a neutral that was chosen from one that was inherited. */
+  --border: oklch(0.795 0.005 70);
+  --input: oklch(0.664 0.006 70);
+  --ring: oklch(0.664 0.006 70);
+  /* The palette had exactly one chromatic token and it meant failure, so the
+     product could say "this broke" and had no way to say "this worked". Both
+     measure above 4.5:1 as text on white. */
+  --success: oklch(0.52 0.13 155);
+  --success-foreground: oklch(0.985 0 0);
+  --warning: oklch(0.55 0.13 75);
+  --warning-foreground: oklch(0.985 0 0);
+  /* Work in progress is neither success nor a warning, and the code was
+     already reaching for blue to say it. 5.96:1 as text on white. */
+  --info: oklch(0.50 0.16 250);
+  --info-foreground: oklch(0.985 0 0);
+  --destructive-foreground: oklch(0.985 0 0);
   --chart-1: oklch(0.646 0.222 41.116);
   --chart-2: oklch(0.6 0.118 184.704);
   --chart-3: oklch(0.398 0.07 227.392);
@@ -94,9 +118,19 @@
   --accent: oklch(0.269 0 0);
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
+  /* Solid rather than alpha-on-white: these have to hold a known ratio against
+     the card, and a translucent border changes value with whatever is behind
+     it. Control and ring 3.10:1, card border 1.88:1. */
+  --border: oklch(0.394 0.005 70);
+  --input: oklch(0.510 0.006 70);
+  --ring: oklch(0.510 0.006 70);
+  --success: oklch(0.76 0.15 158);
+  --success-foreground: oklch(0.205 0 0);
+  --warning: oklch(0.80 0.14 78);
+  --warning-foreground: oklch(0.205 0 0);
+  --info: oklch(0.74 0.13 245);
+  --info-foreground: oklch(0.205 0 0);
+  --destructive-foreground: oklch(0.205 0 0);
   --chart-1: oklch(0.488 0.243 264.376);
   --chart-2: oklch(0.696 0.17 162.48);
   --chart-3: oklch(0.769 0.188 70.08);
@@ -119,4 +153,101 @@
   body {
     @apply bg-background text-foreground;
   }
+}
+
+/* A finger needs about 44px, and measurement said almost nothing here had it:
+   26 of 27 controls on the settings page and every row action came in at 32 to
+   36px. Rather than redraw the desktop interface, the minimum applies only
+   where the pointer is actually coarse - the same control, sized for the hand
+   that is using it. */
+@media (pointer: coarse) {
+  button,
+  [role="button"],
+  a[data-slot="button"],
+  summary {
+    min-height: 44px;
+  }
+
+  /* Icon-only controls are square, so they need the width too. */
+  button:has(> svg:only-child),
+  [role="button"]:has(> svg:only-child) {
+    min-width: 44px;
+  }
+}
+
+/* A control that only exists on hover cannot be reached by touch at all, and a
+   keyboard user cannot see where they are. Both were true of every delete
+   action in the file tree and the chat list. */
+@media (pointer: coarse) {
+  .group:hover .opacity-0,
+  .group .opacity-0 {
+    opacity: 1;
+  }
+}
+.opacity-0:focus-visible,
+.group:focus-within .opacity-0 {
+  opacity: 1;
+}
+
+/* Motion thesis, for an interface people configure rather than watch.
+   ------------------------------------------------------------------
+   This surface is Operate: motion here explains feedback, state and
+   continuity, and never makes anyone wait through choreography. There is one
+   authored moment, and it is the one the product could not previously express
+   at all - the instant something worked. Everything else is acknowledgement
+   measured in a tenth of a second. */
+
+/* Nothing above is worth overriding a stated preference for. */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  /* A spinner that does not spin says the wrong thing, so it slows instead of
+     stopping: still legible as "working", no longer motion in the periphery. */
+  .animate-spin {
+    animation-duration: 1.6s !important;
+    animation-iteration-count: infinite !important;
+  }
+}
+
+/* The authored moment: a result confirming itself.
+   The product had one chromatic token and it meant failure, so a save was a
+   grey badge that disappeared after two seconds and a completed run looked
+   like a completed nothing. This arrives quickly, settles, and leaves faster
+   than it came - the shape of something finishing, not something appearing. */
+@keyframes eggent-confirm {
+  0%   { opacity: 0; transform: translateY(0.25rem) scale(0.96); }
+  55%  { opacity: 1; transform: translateY(0) scale(1); }
+  100% { opacity: 1; transform: translateY(0) scale(1); }
+}
+
+@keyframes eggent-confirm-ring {
+  0%   { box-shadow: 0 0 0 0 color-mix(in oklab, var(--success) 45%, transparent); }
+  100% { box-shadow: 0 0 0 0.5rem color-mix(in oklab, var(--success) 0%, transparent); }
+}
+
+[data-confirm] {
+  animation: eggent-confirm 320ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+[data-confirm="strong"]::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  animation: eggent-confirm-ring 620ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  pointer-events: none;
+}
+
+/* The sidebar animated `width` and `margin`, which drives layout on every
+   frame and was flagged five times on every dashboard page. The drawn result
+   is the same; the browser no longer re-lays-out the document to get there. */
+[data-slot="sidebar-gap"],
+[data-slot="sidebar-container"] {
+  transition-property: transform, opacity;
 }

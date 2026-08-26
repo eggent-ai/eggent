@@ -12,6 +12,13 @@ CLAUDE.md
 
 # local agent context and skills
 /.claude/
+/.pi/
+/.impeccable/
+
+# local scratch that has no business in the repo
+/Group 195.svg
+/iishenka-setup.zip
+/image.png
 
 # next.js
 /.next/

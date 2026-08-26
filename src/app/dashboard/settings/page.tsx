@@ -329,7 +329,7 @@ export default function SettingsPage() {
       if (!savedModel) return;
     }
     setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+    setTimeout(() => setSaved(false), 2600);
   }
 
   function updateSettings(path: string, value: unknown) {
@@ -654,7 +654,12 @@ export default function SettingsPage() {
                   <h2 className="text-2xl font-semibold">{t("settings.title")}</h2>
                   <p className="text-sm text-muted-foreground">{t("settings.description")}</p>
                 </div>
-                <Button onClick={handleSaveSettings} className="gap-2">
+                <Button
+                  onClick={handleSaveSettings}
+                  className={`relative gap-2 ${saved ? "bg-success text-success-foreground hover:bg-success/90" : ""}`}
+                  data-confirm={saved ? "strong" : undefined}
+                  key={saved ? "saved" : "idle"}
+                >
                   {saved ? <Check className="size-4" /> : <Save className="size-4" />}
                   {saved ? t("settings.saved") : t("settings.save")}
                 </Button>
@@ -759,8 +764,8 @@ export default function SettingsPage() {
                   {defaultProviderSelection ? (
                     <div className="space-y-3 border-t pt-4">
                       {selectedProviderConnected ? (
-                        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-emerald-600/30 bg-emerald-600/5 px-3 py-2">
-                          <span className="text-sm text-emerald-700 dark:text-emerald-400">
+                        <div className="flex flex-wrap items-center justify-between gap-3 rounded-md border border-success/30 bg-success/5 px-3 py-2">
+                          <span className="text-sm text-success">
                             {t("settings.providerConnectedBadge", { provider: selectedProviderName })}
                           </span>
                           {selectedProviderState?.stored ? (
@@ -817,7 +822,7 @@ export default function SettingsPage() {
                         if (event.type === "progress") return <p key={event.id} className="text-muted-foreground">{event.message}</p>;
                         if (event.type === "select" && oauthJob.status === "running" && !answeredPrompts[event.promptId]) return <div key={event.id} className="space-y-2"><p className="font-medium">{event.message}</p><div className="flex flex-wrap gap-2">{event.options.map((option) => <Button key={option.id} size="sm" variant="outline" onClick={() => answerLoginPrompt(event.promptId, option.id)}>{option.label}</Button>)}</div></div>;
                         if (event.type === "prompt" && oauthJob.status === "running" && !answeredPrompts[event.promptId]) return <div key={event.id} className="space-y-2"><Label>{event.message}</Label><div className="grid gap-2 md:grid-cols-[1fr_auto]"><Input value={promptInputs[event.promptId] || ""} placeholder={event.placeholder || ""} onChange={(inputEvent) => setPromptInputs((prev) => ({ ...prev, [event.promptId]: inputEvent.target.value }))} /><Button onClick={() => answerLoginPrompt(event.promptId, promptInputs[event.promptId] || "")} disabled={!event.allowEmpty && !promptInputs[event.promptId]?.trim()}>{t("settings.send")}</Button></div></div>;
-                        if (event.type === "completed") return <p key={event.id} className="text-emerald-600">{t("settings.loginCompleted")}</p>;
+                        if (event.type === "completed") return <p key={event.id} className="text-success">{t("settings.loginCompleted")}</p>;
                         if (event.type === "error") return <p key={event.id} className="text-destructive">{event.message}</p>;
                         return null;
                       })}
@@ -830,7 +835,7 @@ export default function SettingsPage() {
                     <div className="flex flex-wrap items-center justify-between gap-2">
                       <Label className="text-xs text-muted-foreground">{t("settings.chooseModelLabel")}</Label>
                       {modelSelectionDirty ? (
-                        <Badge variant="outline" className="border-amber-500/40 text-amber-700 dark:text-amber-400">
+                        <Badge variant="outline" className="border-warning/40 text-warning">
                           {t("settings.unsavedModel")}
                         </Badge>
                       ) : null}

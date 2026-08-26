@@ -14,9 +14,9 @@ import type { PipelineRun } from "@/lib/pipelines/types";
 import { useI18n } from "@/i18n/provider";
 
 function statusClass(status: string) {
-  if (status === "completed") return "bg-emerald-500/10 text-emerald-700 dark:text-emerald-300";
+  if (status === "completed") return "bg-success/10 text-success";
   if (status === "failed") return "bg-destructive/10 text-destructive";
-  if (status === "running") return "bg-blue-500/10 text-blue-700 dark:text-blue-300";
+  if (status === "running") return "bg-info/10 text-info";
   return "bg-muted text-muted-foreground";
 }
 

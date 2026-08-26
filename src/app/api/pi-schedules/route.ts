@@ -2,6 +2,7 @@ import { NextResponse } from "next/server";
 import fs from "fs/promises";
 import path from "path";
 import { getAllProjects, getWorkDir } from "@/lib/storage/project-store";
+import { managePiSchedules } from "@/lib/pi/schedule-host";
 
 export const dynamic = "force-dynamic";
 
@@ -73,4 +74,44 @@ export async function GET() {
   });
 
   return NextResponse.json({ schedules });
+}
+
+
+/**
+ * Delete a job, or move it to a different time.
+ *
+ * Both go through `managePiSchedules`, never through the store file. The store
+ * is owned by a live pi session: writing it directly changes the persisted time
+ * while the armed cron keeps firing on the old one, which is the exact fault
+ * `schedule-policy.ts` exists to block for the agent's own tools. Creating a
+ * job is deliberately absent - a schedule is a subagent belonging to a session,
+ * so it is made in chat and only managed here.
+ */
+export async function POST(request: Request) {
+  const body = (await request.json().catch(() => null)) as
+    | { action?: string; jobId?: string; schedule?: string }
+    | null;
+  const action = body?.action;
+  const jobId = body?.jobId?.trim();
+
+  if (!jobId) {
+    return NextResponse.json({ error: "jobId is required" }, { status: 400 });
+  }
+
+  try {
+    if (action === "delete") {
+      const result = await managePiSchedules({ action: "clear", scope: "all", jobId });
+      return NextResponse.json(result);
+    }
+    if (action === "retime") {
+      const schedule = body?.schedule?.trim();
+      if (!schedule) return NextResponse.json({ error: "schedule is required" }, { status: 400 });
+      const result = await managePiSchedules({ action: "update", scope: "all", jobId, schedule });
+      return NextResponse.json(result);
+    }
+    return NextResponse.json({ error: "Unknown action" }, { status: 400 });
+  } catch (error) {
+    console.error("[pi-schedules]", error);
+    return NextResponse.json({ error: "Could not change the schedule" }, { status: 500 });
+  }
 }

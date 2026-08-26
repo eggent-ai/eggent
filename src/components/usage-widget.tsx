@@ -62,7 +62,7 @@ function formatAmount(meter: UsageMeter, value: number): string {
 function barColor(state: UsageMeter["state"], ratio: number): string {
   const level = state ?? (ratio >= 1 ? "exhausted" : ratio >= 0.8 ? "critical" : ratio >= 0.5 ? "warning" : "ok");
   if (level === "exhausted" || level === "critical") return "bg-destructive";
-  if (level === "warning") return "bg-amber-500";
+  if (level === "warning") return "bg-warning";
   return "bg-primary";
 }
 
@@ -201,7 +201,7 @@ export function UsageWidget() {
             snapshot.notice.level === "critical"
               ? "border-destructive/50 text-destructive"
               : snapshot.notice.level === "warning"
-                ? "border-amber-500/50"
+                ? "border-warning/50"
                 : "border-border"
           }`}
         >
