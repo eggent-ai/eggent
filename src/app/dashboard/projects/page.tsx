@@ -1,6 +1,6 @@
 "use client";
 
-import { Suspense, useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { AppSidebar } from "@/components/app-sidebar";
 import { SiteHeader } from "@/components/site-header";
 import { SettingsNavigation } from "@/components/settings-navigation";
@@ -24,11 +24,6 @@ import { OrchestratorFilesNavigation } from "@/components/orchestrator-files-nav
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAppStore } from "@/store/app-store";
 import { useI18n } from "@/i18n/provider";
-
-function ProjectsLoadingFallback() {
-  const { t } = useI18n();
-  return <div className="p-4 text-sm text-muted-foreground">{t("common.loading")}</div>;
-}
 
 function ProjectsPageClient() {
   const { t } = useI18n();
@@ -289,9 +284,5 @@ function ProjectsPageClient() {
 }
 
 export default function ProjectsPage() {
-  return (
-    <Suspense fallback={<ProjectsLoadingFallback />}>
-      <ProjectsPageClient />
-    </Suspense>
-  );
+  return <ProjectsPageClient />;
 }
