@@ -9,6 +9,7 @@ import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
+import { SkeletonList } from "@/components/ui/skeleton-list";
 import { useI18n } from "@/i18n/provider";
 
 type PiSchedule = {
@@ -125,10 +126,7 @@ export default function PiSchedulesPage() {
                 </div>
 
                 {loading ? (
-                  <div className="py-12 text-center text-muted-foreground flex items-center justify-center gap-2">
-                    <Loader2 className="size-4 animate-spin" />
-                    {t("schedules.loading")}
-                  </div>
+                  <SkeletonList rows={4} className="p-4" />
                 ) : schedules.length === 0 ? (
                   <Empty>
                     <EmptyHeader>

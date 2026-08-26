@@ -22,6 +22,7 @@ import {
   SheetHeader,
   SheetTitle,
 } from "@/components/ui/sheet";
+import { SkeletonList } from "@/components/ui/skeleton-list";
 import { useI18n } from "@/i18n/provider";
 
 interface BundledSkillItem {
@@ -298,10 +299,7 @@ export default function SkillsPage() {
                   )}
                 </div>
                 {installedSkillsLoading ? (
-                  <div className="py-10 text-center text-muted-foreground flex items-center justify-center gap-2">
-                    <Loader2 className="size-4 animate-spin" />
-                    {t("skills.loadingInstalled")}
-                  </div>
+                  <SkeletonList rows={3} className="p-4" />
                 ) : !selectedProjectId ? (
                   <Empty>
                     <EmptyHeader>
@@ -357,10 +355,7 @@ export default function SkillsPage() {
                 </p>
               </div>
               {bundledSkillsLoading ? (
-                <div className="py-14 text-center text-muted-foreground flex items-center justify-center gap-2">
-                  <Loader2 className="size-4 animate-spin" />
-                  {t("skills.loadingBundled")}
-                </div>
+                <SkeletonList rows={4} className="p-4" />
               ) : filteredBundledSkills.length === 0 ? (
                 <Empty className="border">
                   <EmptyHeader>

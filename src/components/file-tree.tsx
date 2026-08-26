@@ -18,6 +18,7 @@ import {
 } from "lucide-react";
 import { useAppStore } from "@/store/app-store";
 import { ORCHESTRATOR_SCOPE_ID } from "@/lib/orchestrator-scope";
+import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { useBackgroundSync } from "@/hooks/use-background-sync";
 
@@ -533,12 +534,14 @@ function TreeNode({
       {type === "directory" && expanded && (
         <div>
           {loading && (
-            <span
-              className="text-[10px] text-muted-foreground block"
+            <div
+              className="space-y-1 py-1"
               style={{ paddingLeft: `${(depth + 1) * 12 + 4}px` }}
+              aria-hidden="true"
             >
-              Loading...
-            </span>
+              <Skeleton className="h-3 w-24" />
+              <Skeleton className="h-3 w-16" />
+            </div>
           )}
           {children?.map((child) => (
             <TreeNode
@@ -724,9 +727,11 @@ export function FileTree({ projectId }: FileTreeProps) {
       </div>
 
       {rootEntries === null ? (
-        <span className="text-[10px] text-muted-foreground block pl-4 py-1">
-          Loading...
-        </span>
+        <div className="space-y-1 py-1 pl-4" aria-hidden="true">
+          <Skeleton className="h-3 w-28" />
+          <Skeleton className="h-3 w-20" />
+          <Skeleton className="h-3 w-24" />
+        </div>
       ) : rootEntries.length === 0 ? (
         <span className="text-[10px] text-muted-foreground block pl-4 py-1">
           No files

@@ -88,7 +88,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
     if (!visibleTextContent) return null;
 
     return (
-      <div className="flex items-start gap-3 py-2">
+      <div className="flex items-start gap-3 py-2" data-message-role="user">
         <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-secondary text-secondary-foreground">
           <User className="size-4" />
         </div>
@@ -172,7 +172,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
   if (!renderedParts.some(Boolean)) return null;
 
   return (
-    <div className="flex items-start gap-3 py-2">
+    <div className="flex items-start gap-3 py-2" data-message-role="assistant">
       <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background">
         <Bot className="size-4" />
       </div>

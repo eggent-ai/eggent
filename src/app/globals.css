@@ -273,3 +273,54 @@
 .composer-status * {
   font-size: 0.75rem;
 }
+
+/* ---------------------------------------------------------------------------
+   Light motion, for a surface people work in.
+   Three jobs only: say a page arrived, say a message landed, and answer a
+   press. Nothing loops, nothing blocks, nothing exceeds 380ms, and everything
+   here is already switched off above under prefers-reduced-motion.
+   --------------------------------------------------------------------------- */
+
+@keyframes eggent-page-in {
+  from { opacity: 0; transform: translateY(6px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* The page's own root, which React remounts on every route change. Short
+   enough that it reads as the page settling rather than as a transition the
+   reader has to sit through. */
+[data-slot="sidebar-inset"] > div {
+  animation: eggent-page-in 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes eggent-message-in {
+  from { opacity: 0; transform: translateY(10px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* A turn arriving. The agent's answer is the thing this product exists to
+   deliver, and until now it appeared the way a table row appears. */
+[data-message-role] {
+  animation: eggent-message-in 300ms cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+/* Feedback lives at a tenth of a second: fast enough to feel like the control
+   responding rather than the interface thinking. */
+button,
+[role="button"],
+a[data-slot="button"] {
+  transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease,
+              box-shadow 120ms ease, transform 120ms cubic-bezier(0.16, 1, 0.3, 1);
+}
+button:active:not(:disabled),
+[role="button"]:active,
+a[data-slot="button"]:active {
+  transform: scale(0.975);
+}
+
+/* Rows in the sidebar and lists: the surface answers the pointer without
+   moving, because a list that shifts under the cursor is harder to hit. */
+[data-sidebar="menu-button"],
+[data-slot="sidebar-menu-button"] {
+  transition: background-color 120ms ease, color 120ms ease;
+}
