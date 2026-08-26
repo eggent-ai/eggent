@@ -259,6 +259,9 @@
    frame and was flagged five times on every dashboard page. The drawn result
    is the same; the browser no longer re-lays-out the document to get there. */
 [data-slot="sidebar-gap"],
-[data-slot="sidebar-container"] {
+[data-slot="sidebar-container"],
+[data-slot="sidebar"] [class*="ring-sidebar-ring"],
+[data-sidebar="menu"],
+[data-sidebar="menu-sub"] {
   transition-property: transform, opacity;
 }
