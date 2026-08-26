@@ -177,6 +177,8 @@ docker compose up -d --build --force-recreate
 
 For production, prefer Caddy/Nginx/Traefik with HTTPS and keep `APP_BIND_HOST=127.0.0.1`.
 
+A reverse proxy also caps request bodies, and its cap is usually smaller than Eggent's: nginx allows 1 MB by default, so file uploads larger than that fail with `413` before they reach the app. Raise it to match `EGGENT_MAX_UPLOAD_MB` (`client_max_body_size 100m;` in nginx, `request_body { max_size 100MB }` in Caddy).
+
 ---
 
 ## Core Concepts
@@ -471,6 +473,7 @@ curl -X POST http://localhost:3000/api/chat/files \
 GET  /api/files
 GET  /api/files/content
 GET  /api/files/download
+GET  /api/files/upload
 POST /api/files/upload
 ```
 
@@ -482,6 +485,22 @@ curl -X POST http://localhost:3000/api/files/upload \
   -F "path=." \
   -F "files=@./notes.md"
 ```
+
+`conflict` decides what happens when the name is already taken: `skip` (the
+default) leaves the existing file alone and reports the name back, `overwrite`
+replaces it, and `rename` writes `notes (1).md` beside it.
+
+```bash
+curl -X POST http://localhost:3000/api/files/upload \
+  -F "project=<project-id>" \
+  -F "path=." \
+  -F "conflict=rename" \
+  -F "files=@./notes.md"
+```
+
+Requests larger than `EGGENT_MAX_UPLOAD_MB` are rejected with `413` before the
+body is read. `GET /api/files/upload` returns the limit in bytes, or `null` when
+it is disabled, so a client can refuse an oversized file before sending it.
 
 ### Pipelines
 
@@ -631,6 +650,10 @@ Eggent context can come from:
 
 Pasted images are stored as chat files and passed to the agent with file type and absolute path metadata.
 
+Files already on your machine go into a project workspace from the file tree in
+the sidebar: the upload button on a folder opens a file picker, and files or
+whole folders can also be dropped onto it.
+
 ---
 
 ## MCP, Skills, and Models
@@ -698,6 +721,7 @@ See `.env.example` for the full list.
 | `TELEGRAM_BOT_TOKEN` | unset | Telegram bot token. |
 | `TELEGRAM_WEBHOOK_SECRET` | unset | Optional Telegram webhook secret. |
 | `TELEGRAM_DEFAULT_PROJECT_ID` | unset | Default project for Telegram. |
+| `EGGENT_MAX_UPLOAD_MB` | `100` | Largest file upload request accepted, in megabytes. `0` disables the limit. |
 | `EGGENT_STT_ENABLED` | `1` | Enable local speech transcription. |
 | `EGGENT_STT_MODEL` | `base` | whisper.cpp ggml model name: `tiny`, `base`, `small`, `medium`. |
 | `EGGENT_STT_AUTO_DOWNLOAD_MODEL` | `1` | Download missing ggml model on first use. |
