@@ -1,4 +1,26 @@
 @import "tailwindcss";
+
+/* Motion curves.
+
+   These were a literal repeated fourteen times across this file and the cloud
+   theme, which is one edit away from fourteen curves that almost match. They
+   live in @theme rather than :root on purpose: Tailwind ships its own
+   --ease-out and --ease-in-out, and declaring ours in :root would have
+   shadowed those - every ease-out utility in the app would silently resolve to
+   a different curve than the one its name promises. Overriding the theme value
+   instead means there is one definition and the utility and the hand-written
+   rule cannot drift apart.
+
+   The built-in values are too weak for deliberate motion: Tailwind's ease-out
+   is cubic-bezier(0, 0, 0.2, 1), which over 200ms is barely distinguishable
+   from linear. --ease-out for anything entering or leaving, --ease-in-out for
+   something already on screen moving from one place to another, --ease-drawer
+   for a panel sliding in from an edge. */
+@theme {
+  --ease-out: cubic-bezier(0.23, 1, 0.32, 1);
+  --ease-in-out: cubic-bezier(0.77, 0, 0.175, 1);
+  --ease-drawer: cubic-bezier(0.32, 0.72, 0, 1);
+}
 @import "tw-animate-css";
 
 @custom-variant dark (&:is(.dark *));
@@ -208,15 +230,28 @@
    at all - the instant something worked. Everything else is acknowledgement
    measured in a tenth of a second. */
 
-/* Nothing above is worth overriding a stated preference for. */
+/* Nothing above is worth overriding a stated preference for.
+
+   Reduced motion means fewer and gentler, not none. The previous version of
+   this block set every transition to 0.01ms, which also switched off the
+   colour and shadow changes that carry no movement at all - a hover that does
+   not fade, a focus ring that snaps on, a disabled button that changes state
+   with no acknowledgement. That reads as a broken interface rather than a calm
+   one. Keyframes still collapse to their end state, and anything that would
+   move or scale now simply arrives there, because transform is no longer in
+   the transitioned set. What stays is the part that explains state without
+   travelling. */
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,
   *::after {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important;
     scroll-behavior: auto !important;
+    transition-property: background-color, border-color, color, box-shadow,
+                         opacity, fill, stroke !important;
+    transition-duration: 120ms !important;
+    transition-timing-function: ease !important;
   }
   /* A spinner that does not spin says the wrong thing, so it slows instead of
      stopping: still legible as "working", no longer motion in the periphery. */
@@ -232,9 +267,8 @@
    like a completed nothing. This arrives quickly, settles, and leaves faster
    than it came - the shape of something finishing, not something appearing. */
 @keyframes eggent-confirm {
-  0%   { opacity: 0; transform: translateY(0.25rem) scale(0.96); }
-  55%  { opacity: 1; transform: translateY(0) scale(1); }
-  100% { opacity: 1; transform: translateY(0) scale(1); }
+  from { opacity: 0; transform: translateY(0.25rem) scale(0.96); }
+  to   { opacity: 1; transform: translateY(0) scale(1); }
 }
 
 @keyframes eggent-confirm-ring {
@@ -243,7 +277,7 @@
 }
 
 [data-confirm] {
-  animation: eggent-confirm 320ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: eggent-confirm 180ms var(--ease-out) both;
 }
 
 [data-confirm="strong"]::after {
@@ -251,19 +285,43 @@
   position: absolute;
   inset: 0;
   border-radius: inherit;
-  animation: eggent-confirm-ring 620ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: eggent-confirm-ring 620ms var(--ease-out) both;
   pointer-events: none;
 }
 
-/* The sidebar animated `width` and `margin`, which drives layout on every
-   frame and was flagged five times on every dashboard page. The drawn result
-   is the same; the browser no longer re-lays-out the document to get there. */
+/* The sidebar collapse does not animate, deliberately.
+
+   It is bound to Cmd/Ctrl+B and used many times a day, which is the one case
+   where the answer is no motion at all - the same reason Raycast opens with no
+   transition. It also could not have animated cleanly: collapsing works by
+   changing `width` on the gap and the container, there is no transform that
+   reserves layout space, and 200ms of full-document relayout on every
+   dashboard page is what got this flagged in the first place.
+
+   An earlier pass here set `transition-property: transform, opacity` and
+   recorded that the drawn result was unchanged. It was not: nothing about this
+   collapse is a transform, so that silently switched the animation off rather
+   than making it cheap. The outcome was right and the reasoning was wrong, so
+   it is stated properly now and the two elements it missed are covered.
+
+   The rail keeps a colour transition. It is a drag handle that tints on hover,
+   which is acknowledgement and moves nothing; its `transition-all` was the
+   defect, not the fact that it transitioned. */
 [data-slot="sidebar-gap"],
 [data-slot="sidebar-container"],
-[data-slot="sidebar"] [class*="ring-sidebar-ring"],
+[data-slot="sidebar-group-label"],
 [data-sidebar="menu"],
 [data-sidebar="menu-sub"] {
-  transition-property: transform, opacity;
+  transition-property: none;
+}
+
+[data-slot="sidebar-rail"] {
+  transition-property: background-color;
+  transition-duration: 120ms;
+  transition-timing-function: ease;
+}
+[data-slot="sidebar-rail"]::after {
+  transition: background-color 120ms ease;
 }
 
 /* The one place in the dashboard that fell below 12px: the model and usage
@@ -290,7 +348,7 @@
    enough that it reads as the page settling rather than as a transition the
    reader has to sit through. */
 [data-slot="sidebar-inset"] > div {
-  animation: eggent-page-in 260ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: eggent-page-in 260ms var(--ease-out) both;
 }
 
 @keyframes eggent-message-in {
@@ -301,7 +359,7 @@
 /* A turn arriving. The agent's answer is the thing this product exists to
    deliver, and until now it appeared the way a table row appears. */
 [data-message-role] {
-  animation: eggent-message-in 300ms cubic-bezier(0.16, 1, 0.3, 1) both;
+  animation: eggent-message-in 300ms var(--ease-out) both;
 }
 
 /* Feedback lives at a tenth of a second: fast enough to feel like the control
@@ -310,7 +368,7 @@ button,
 [role="button"],
 a[data-slot="button"] {
   transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease,
-              box-shadow 120ms ease, transform 120ms cubic-bezier(0.16, 1, 0.3, 1);
+              box-shadow 120ms ease, transform 120ms var(--ease-out);
 }
 button:active:not(:disabled),
 [role="button"]:active,
@@ -323,4 +381,25 @@ a[data-slot="button"]:active {
 [data-sidebar="menu-button"],
 [data-slot="sidebar-menu-button"] {
   transition: background-color 120ms ease, color 120ms ease;
+}
+
+/* Radix overlays animate through tw-animate, which defaults to the built-in
+   `ease` over 150ms. The duration is right for this tier; the curve is the
+   weak one. Handing them the same token the rest of the app uses is what stops
+   a dropdown from feeling like it belongs to a different product than the
+   button that opened it. Exits take the same curve on purpose - a panel should
+   leave the way it arrived, and `ease-in` on an exit delays the frame the user
+   is actually looking at. */
+[data-slot="dropdown-menu-content"],
+[data-slot="dropdown-menu-sub-content"],
+[data-slot="select-content"],
+[data-slot="tooltip-content"] {
+  --tw-ease: var(--ease-out);
+}
+
+/* A sheet slides in from an edge, which is the one case with a curve of its
+   own: the iOS drawer easing, at the 500ms the component already asks for. */
+[data-slot="sheet-content"],
+[data-slot="sheet-overlay"] {
+  --tw-ease: var(--ease-drawer);
 }
