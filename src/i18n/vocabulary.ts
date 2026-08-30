@@ -171,13 +171,13 @@ export function alternation(words: readonly string[]): string {
  * A pattern that matches any of these words where a word can begin.
  *
  * `\b` is defined on `[A-Za-z0-9_]`, so it does not see the edge of a word in
- * any alphabet but the Latin one - `\bзадач\b` matches nothing, ever. That is
+ * any alphabet but the Latin one, where such a pattern matches nothing ever. That is
  * not a detail to remember at each call site, so it is decided here: an entry
  * written in ASCII is bounded on both sides, and an entry that is not is
  * matched wherever it appears.
  *
  * Matching a non-ASCII entry loosely is also what its authors intend. Those
- * entries are stems - the whole point of writing `останов` rather than three
+ * entries are stems - the whole point of writing a stem rather than three
  * conjugations is to catch the endings a speaker picks without thinking.
  */
 export function wordPattern(words: readonly string[]): string {
