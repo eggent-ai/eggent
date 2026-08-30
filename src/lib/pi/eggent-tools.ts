@@ -1,3 +1,4 @@
+import { localisedExamples, SCHEDULE_MANAGEMENT_EXAMPLES, USAGE_QUESTION_EXAMPLES } from "@/i18n/vocabulary";
 import { Type } from "typebox";
 import { defineTool, type AgentSession, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import fs from "fs/promises";
@@ -753,7 +754,7 @@ export async function createEggentPiTools(options: {
     defineTool({
       name: "eggent_manage_schedules",
       label: "Manage Pi Scheduled Tasks",
-      description: "List, update, or clear pi-subagents scheduled tasks. Use this for existing schedule-management requests, including show/delete/cancel/change/move/reschedule and убери/удали/отмени/измени/поменяй/перенеси. To update, list first if the id is unknown, then pass the exact job_id with a new schedule, new prompt, or both - what a task does can be changed as well as when it runs. Never edit .pi/subagent-schedules files with edit, write, or bash.",
+      description: `List, update, or clear pi-subagents scheduled tasks. Use this for existing schedule-management requests, including show/delete/cancel/change/move/reschedule${localisedExamples(SCHEDULE_MANAGEMENT_EXAMPLES)}. To update, list first if the id is unknown, then pass the exact job_id with a new schedule, new prompt, or both - what a task does can be changed as well as when it runs. Never edit .pi/subagent-schedules files with edit, write, or bash.`,
       parameters: Type.Object({
         action: Type.Union([Type.Literal("list"), Type.Literal("update"), Type.Literal("clear")], { description: "list = inspect tasks, update = change one existing task and re-arm its live scheduler, clear = remove/cancel tasks in scope." }),
         scope: Type.Optional(Type.Union([Type.Literal("current"), Type.Literal("all")], { description: "current = current workspace cwd; all = orchestrator and all projects. Use all when the task may belong to another chat or project. Defaults to current." })),
@@ -778,7 +779,7 @@ export async function createEggentPiTools(options: {
       ? [defineTool({
         name: "eggent_usage_status",
         label: "Check Workspace Usage",
-        description: "Report how much of this workspace's quota is used and how much is left, plus the current plan. Use this whenever the user asks about their balance, remaining credits or tokens, limits, quota, plan, trial, or how much they have left (\"сколько осталось\", \"какой у меня баланс\", \"сколько токенов\", \"я платный?\"). Always call this instead of guessing or saying the information is unavailable.",
+        description: `Report how much of this workspace's quota is used and how much is left, plus the current plan. Use this whenever the user asks about their balance, remaining credits or tokens, limits, quota, plan, or how much they have left${localisedExamples(USAGE_QUESTION_EXAMPLES)}. Always call this instead of guessing or saying the information is unavailable.`,
         parameters: Type.Object({}),
         execute: async () => {
           const snapshot = await getUsageSnapshot();

@@ -7,11 +7,11 @@
     "build": "next build --no-lint",
     "start": "next start",
     "lint": "eslint",
-    "test:schedule-tools": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/test-schedule-tool-policy.ts",
+    "test:schedule-tools": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-schedule-tool-policy.ts",
     "test:schedule-update": "EGGENT_TEST_STUBS=lib/storage/project-store node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-schedule-update.ts",
     "test:schedules": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/test-schedule-policy.mjs",
-    "test:active-runs": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/test-active-runs.ts",
-    "test:provider-failure": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/test-provider-failure.ts",
+    "test:active-runs": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-active-runs.ts",
+    "test:provider-failure": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-provider-failure.ts",
     "test:provider-probe": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/test-provider-probe.ts",
     "test:managed-provider": "EGGENT_TEST_STUBS=lib/storage/project-store node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-managed-provider-repair.ts",
     "setup:one": "bash ./scripts/install.sh",
@@ -19,7 +19,7 @@
     "setup:docker": "bash ./scripts/install-docker.sh",
     "test:default-model": "EGGENT_TEST_STUBS=lib/storage/project-store node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-default-model-selection.ts",
     "test:skill-refresh": "EGGENT_TEST_STUBS=lib/storage/project-store node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-skill-refresh.ts",
-    "test:session-chat": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/test-session-chat.ts",
+    "test:session-chat": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-session-chat.ts",
     "test:skill-launch": "EGGENT_TEST_STUBS=lib/storage/project-store node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-skill-launch-scope.ts"
   },
   "dependencies": {

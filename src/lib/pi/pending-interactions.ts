@@ -1,4 +1,5 @@
 import type { PiInteractionResponse, PiPendingInteraction } from "@/lib/pi/interaction-types";
+import { AFFIRMATIVES, alternation } from "@/i18n/vocabulary";
 
 interface PendingInteractionEntry {
   interaction: PiPendingInteraction;
@@ -121,7 +122,7 @@ export function respondToPendingInteraction(
   let value: string | boolean | undefined;
   if (entry.interaction.kind === "confirm") {
     if (typeof response.value === "string") {
-      value = /^(true|yes|y|ok|да|д|ага)$/i.test(response.value.trim());
+      value = new RegExp(`^(?:${alternation(AFFIRMATIVES)})$`, "i").test(response.value.trim());
     } else {
       value = response.value === true;
     }

@@ -8,6 +8,7 @@ import type {
   RawPipelineStepDefinition,
 } from "@/lib/pipelines/types";
 import { publishUiSyncEvent } from "@/lib/realtime/event-bus";
+import { SLUG_EXTRA_CHARACTERS } from "@/i18n/vocabulary";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const PIPELINES_FILE = path.join(DATA_DIR, "pipelines", "main", "defs.json");
@@ -17,7 +18,7 @@ function slugify(value: string): string {
   const slug = value
     .toLowerCase()
     .trim()
-    .replace(/[^a-z0-9а-яё]+/gi, "-")
+    .replace(new RegExp(`[^a-z0-9${SLUG_EXTRA_CHARACTERS}]+`, "gi"), "-")
     .replace(/^-+|-+$/g, "");
   return slug || crypto.randomUUID();
 }

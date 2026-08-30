@@ -1,3 +1,4 @@
+import { alternation, PROMPT_HANDOFF_PHRASES } from "@/i18n/vocabulary";
 import {
   streamText,
   generateText,
@@ -782,7 +783,7 @@ function shouldAutoContinueAssistant(
   }
 
   // Common abrupt cutoff pattern from prompt-generation turns.
-  if (/(?:here is (?:the )?prompt|вот (?:твой )?(?:промпт|prompt))[:：]?\s*$/i.test(trimmed)) {
+  if (new RegExp(`(?:${alternation(PROMPT_HANDOFF_PHRASES)})[:：]?\\s*$`, "i").test(trimmed)) {
     return true;
   }
 

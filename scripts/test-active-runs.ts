@@ -20,6 +20,14 @@ import {
   isStopRequest,
   registerActiveRun,
 } from "../src/lib/pi/active-runs.ts";
+import { SUPPORTED_LOCALES } from "../src/i18n/locales.ts";
+
+/**
+ * A build understands the languages it ships in and no others, so the Russian
+ * half of these expectations flips with the locale set. Asserting it either way
+ * is what proves the vocabulary move did not quietly drop a language.
+ */
+const shipsRussian = (SUPPORTED_LOCALES as readonly string[]).includes("ru");
 
 let failed = 0;
 let ran = 0;
@@ -54,10 +62,15 @@ function fakeSession(isStreaming = true) {
 
 console.log("Active runs and stop requests\n");
 
-check("a bare stop, in either language, with or without punctuation", () => {
-  for (const phrase of ["стоп", "Стоп", "СТОП!", "стоп.", "хватит", "отмена", "прекрати", "остановись",
-                        "stop", "Stop.", "STOP!", "cancel", "abort", "wait", "enough", "stop it"]) {
+check("a bare stop, with or without punctuation", () => {
+  for (const phrase of ["stop", "Stop.", "STOP!", "cancel", "abort", "wait", "enough", "stop it"]) {
     assert.equal(isStopRequest(phrase), true, `should stop on: ${phrase}`);
+  }
+});
+
+check(`Russian is recognised only in a build that ships it (ru: ${shipsRussian})`, () => {
+  for (const phrase of ["стоп", "Стоп", "СТОП!", "стоп.", "хватит", "отмена", "прекрати", "остановись"]) {
+    assert.equal(isStopRequest(phrase), shipsRussian, `mismatch on: ${phrase}`);
   }
 });
 

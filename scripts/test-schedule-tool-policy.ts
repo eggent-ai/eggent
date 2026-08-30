@@ -13,6 +13,10 @@
  */
 import assert from "node:assert/strict";
 import { applySchedulingToolPolicy } from "../src/lib/pi/schedule-intent.ts";
+import { SUPPORTED_LOCALES } from "../src/i18n/locales.ts";
+
+/** The vocabulary a build ships decides which phrasings it can recognise. */
+const shipsRussian = (SUPPORTED_LOCALES as readonly string[]).includes("ru");
 
 const ALL = ["Agent", "bash", "read", "write", "eggent_manage_schedules", "telegram_send_message"];
 
@@ -48,7 +52,7 @@ console.log("Scheduling tool policy\n");
 
 check("a management turn withholds the tools that would edit the store by hand", () => {
   const s = makeSession();
-  applySchedulingToolPolicy(s, "покажи список запланированных задач");
+  applySchedulingToolPolicy(s, "show me the list of scheduled jobs");
   assert.ok(!s.active.includes("Agent"));
   assert.ok(!s.active.includes("bash"));
   assert.ok(s.active.includes("eggent_manage_schedules"));
@@ -56,26 +60,38 @@ check("a management turn withholds the tools that would edit the store by hand",
 
 check("a creating turn keeps Agent and withholds only bash", () => {
   const s = makeSession();
-  applySchedulingToolPolicy(s, "напомни мне завтра в 9 утра про задачу");
+  applySchedulingToolPolicy(s, "remind me tomorrow about the task");
   assert.ok(s.active.includes("Agent"), "Agent is what creates a schedule");
   assert.ok(!s.active.includes("bash"));
 });
 
 check("an ordinary turn gets everything back", () => {
   const s = makeSession();
-  applySchedulingToolPolicy(s, "покажи список запланированных задач");
-  applySchedulingToolPolicy(s, "сколько будет два плюс два");
+  applySchedulingToolPolicy(s, "show me the list of scheduled jobs");
+  applySchedulingToolPolicy(s, "what is two plus two");
   assert.deepEqual([...s.active].sort(), [...ALL].sort());
 });
 
-check("the real sequence that broke: list, then create", () => {
+check("the real sequence that broke: create, list, create again", () => {
+  const s = makeSession();
+  applySchedulingToolPolicy(s, "remind me every evening at 21:40 about the task");
+  assert.ok(s.active.includes("Agent"), "first creation");
+  applySchedulingToolPolicy(s, "show me the full list of jobs across all projects");
+  assert.ok(!s.active.includes("Agent"), "the list request withholds it for that turn");
+  applySchedulingToolPolicy(s, "one more one-off, in three minutes, remind me about the most important tasks");
+  assert.ok(s.active.includes("Agent"), "and the next creation must have it back");
+});
+
+check(`the same sequence in Russian, recognised only where it ships (ru: ${shipsRussian})`, () => {
+  // The words the user actually typed when this broke. A build without the
+  // Russian vocabulary reads them as ordinary text and withholds nothing.
   const s = makeSession();
   applySchedulingToolPolicy(s, "напомни мне каждый вечер в 21:40 про задачу");
-  assert.ok(s.active.includes("Agent"), "first creation");
+  assert.ok(s.active.includes("Agent"));
   applySchedulingToolPolicy(s, "И вообще у тебя есть задача про списанию во всех проектах, то есть там и полностью список.");
-  assert.ok(!s.active.includes("Agent"), "the list request withholds it for that turn");
+  assert.equal(s.active.includes("Agent"), !shipsRussian, "withheld only where the phrase is understood");
   applySchedulingToolPolicy(s, "Ещё одну разовую задачу. Через три минуты то же самое, напомни мне про самые важные задачи.");
-  assert.ok(s.active.includes("Agent"), "and the next creation must have it back");
+  assert.ok(s.active.includes("Agent"), "and it comes back either way");
 });
 
 check("a session that never had a tool does not gain one", () => {

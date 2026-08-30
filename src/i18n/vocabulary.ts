@@ -1,0 +1,164 @@
+/**
+ * Words the runtime matches user intent against.
+ *
+ * These are not messages — nobody reads them. They are the vocabulary by which
+ * code recognises "stop", "yes", or "show me the schedule" in what somebody
+ * typed, and they belong here for one reason: a build should understand the
+ * languages it ships in, and nothing else.
+ *
+ * Keeping them here is what lets the rest of the source stay identical across
+ * the localised branches. Every matcher composes its pattern from this file, so
+ * adding a language means editing this file and no other — which is the same
+ * rule the message dictionary follows.
+ *
+ * Two things to hold to when editing:
+ *
+ * - **Stems, not whole words, where a language inflects.** In a language whose
+ *   verbs take endings the speaker chooses without thinking, one stem catches
+ *   every form of a verb, while a list of whole words catches only the forms
+ *   somebody happened to think of.
+ * - **A false positive is worse than a miss.** Several of these decide whether
+ *   to abandon work in progress. Words that are ordinary in an ordinary
+ *   sentence do not belong here.
+ */
+
+/** Whole-message ways of saying "stop what you are doing". */
+export const STOP_PHRASES: readonly string[] = [
+  "stop",
+  "stop stop",
+  "stop it",
+  "stop please",
+  "halt",
+  "cancel",
+  "abort",
+  "wait",
+  "hold on",
+  "nevermind",
+  "never mind",
+  "enough",
+  "quit",
+];
+
+/** Verbs meaning "end this run", matched inside a sentence rather than alone. */
+export const INTERRUPT_VERBS: readonly string[] = [
+  "stop",
+  "terminate",
+  "kill",
+  "cancel",
+  "abort",
+  "end",
+];
+
+/** Stems of the same verbs, for the negated form ("do not stop"). */
+export const INTERRUPT_VERB_STEMS: readonly string[] = [
+  "stop",
+  "terminate",
+  "kill",
+  "cancel",
+  "abort",
+];
+
+/** Ways of saying "do not", for spotting a negated interrupt. */
+export const NEGATIONS: readonly string[] = ["do not", "don't", "dont"];
+
+/** Whole-message ways of agreeing. */
+export const AFFIRMATIVES: readonly string[] = ["true", "yes", "y", "ok"];
+
+/** How a turn that hands over a prompt tends to trail off. */
+export const PROMPT_HANDOFF_PHRASES: readonly string[] = [
+  "here is (?:the )?prompt",
+];
+
+/** Nouns that mean the user is talking about scheduled work. */
+export const SCHEDULE_NOUNS: readonly string[] = [
+  "scheduled",
+  "schedule",
+  "schedules",
+  "reminder",
+  "reminders",
+  "job",
+  "jobs",
+];
+
+/** Verbs that mean "inspect or change what is already scheduled". */
+export const SCHEDULE_MANAGEMENT_VERBS: readonly string[] = [
+  "cancel",
+  "delete",
+  "remove",
+  "clear",
+  "list",
+  "show",
+  "what",
+  "which",
+  "update",
+  "change",
+  "move",
+  "reschedule",
+  "edit",
+];
+
+/** The subset of the above that means "move it to another time". */
+export const SCHEDULE_RETIME_VERBS: readonly string[] = [
+  "update",
+  "change",
+  "move",
+  "reschedule",
+];
+
+/** Words that mean "do this later" rather than "do this now". */
+export const SCHEDULE_CREATION_PHRASES: readonly string[] = [
+  "tomorrow",
+  "tonight",
+  "daily",
+  "weekly",
+  "monthly",
+  "every\\s+\\w+",
+  "remind\\s+me",
+  "schedule",
+];
+
+/**
+ * Whole regex fragments for "in N minutes", where the unit inflects and a word
+ * list will not do. Empty when the build's language needs no fragment beyond
+ * the English one the matcher always carries.
+ */
+export const RELATIVE_DELAY_PATTERNS: readonly string[] = [];
+
+/**
+ * Extra characters a slug may keep beyond `a-z0-9`.
+ *
+ * A pipeline named in this build's language should still produce a readable
+ * slug rather than a row of dashes. Empty when the build has no alphabet of its
+ * own to preserve.
+ */
+export const SLUG_EXTRA_CHARACTERS = "";
+
+/**
+ * Phrasings worth showing the model in a tool description, so it recognises the
+ * same request written the way this build's users write it. Empty in a build
+ * whose users write the language the description is already in.
+ */
+export const SCHEDULE_MANAGEMENT_EXAMPLES: readonly string[] = [];
+export const USAGE_QUESTION_EXAMPLES: readonly string[] = [];
+
+/**
+ * Render example phrasings for a tool description, or nothing at all.
+ *
+ * A tool description is sent to the model on every turn, so a build whose users
+ * write the language the description is already in should not pay for a list of
+ * translations of it.
+ */
+export function localisedExamples(examples: readonly string[]): string {
+  if (examples.length === 0) return "";
+  return ` (for example ${examples.map((example) => `"${example}"`).join(", ")})`;
+}
+
+/** Join vocabulary into a regex alternation, ready to interpolate. */
+export function alternation(words: readonly string[]): string {
+  return words.join("|");
+}
+
+/** A parenthesised alternation, or null when this build has no such words. */
+export function optionalAlternation(words: readonly string[]): string | null {
+  return words.length > 0 ? `(?:${words.join("|")})` : null;
+}

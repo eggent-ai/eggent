@@ -1,9 +1,11 @@
+import { STOP_PHRASES } from "@/i18n/vocabulary";
+
 /**
  * Which chats have an agent working in them right now.
  *
  * Every surface used to start its own session and know nothing about the
  * others, so a chat could have two agents running at once with no way to reach
- * either. A user watching a long Telegram run typed "Стоп" into the web, a
+ * either. A user watching a long Telegram run typed "stop" into the web, a
  * second agent answered "stopped" — truthfully, about itself — and the first one
  * carried on working and writing for another two minutes. From where he sat the
  * stop button was simply broken, and he re-sent the whole task.
@@ -63,16 +65,11 @@ export function getActiveRun(chatId: string): ActiveRun | undefined {
  * Words that mean "stop", recognised without asking a model.
  *
  * Matched against the whole message, not searched inside it: "stop" alone is an
- * instruction, while "stop words in the index" is a task. Deliberately a short
- * closed list — a wrong guess here throws away work in progress, so the cost of
- * missing one phrasing is much lower than the cost of inventing one.
+ * instruction, while "stop words in the index" is a task. The list itself is
+ * vocabulary, so it lives with the other locale data — a build understands the
+ * languages it ships in.
  */
-const STOP_PHRASES = new Set([
-  "стоп", "стой", "стопе", "хватит", "отмена", "отмени", "прекрати", "прекратить",
-  "останови", "остановись", "стоп стоп", "не надо", "отставить",
-  "stop", "stop stop", "halt", "cancel", "abort", "wait", "hold on", "nevermind",
-  "never mind", "enough", "quit", "stop it", "stop please",
-]);
+const STOP_PHRASE_SET = new Set(STOP_PHRASES.map((phrase) => phrase.toLowerCase()));
 
 const MAX_STOP_MESSAGE_CHARS = 24;
 
@@ -83,7 +80,7 @@ export function isStopRequest(message: string): boolean {
     .replace(/\s+/g, " ")
     .trim();
   if (!normalized || normalized.length > MAX_STOP_MESSAGE_CHARS) return false;
-  return STOP_PHRASES.has(normalized);
+  return STOP_PHRASE_SET.has(normalized);
 }
 
 /** For tests and diagnostics only. */

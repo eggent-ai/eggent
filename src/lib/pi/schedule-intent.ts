@@ -5,30 +5,38 @@
  * no runtime, no workspace, no model. That is what makes it testable, and this
  * logic has already shipped one defect that only a test would have caught.
  */
+import {
+  alternation,
+  RELATIVE_DELAY_PATTERNS,
+  SCHEDULE_CREATION_PHRASES,
+  SCHEDULE_MANAGEMENT_VERBS,
+  SCHEDULE_NOUNS,
+  SCHEDULE_RETIME_VERBS,
+} from "@/i18n/vocabulary";
+
+const SCHEDULE_NOUN_RE = new RegExp(`\\b(?:${alternation(SCHEDULE_NOUNS)})\\b`, "i");
+const MANAGEMENT_VERB_RE = new RegExp(`\\b(?:${alternation(SCHEDULE_MANAGEMENT_VERBS)})\\b`, "i");
+const RETIME_VERB_RE = new RegExp(`\\b(?:${alternation(SCHEDULE_RETIME_VERBS)})\\b`, "i");
+const CLOCK_TIME_RE = /\b\d{1,2}(?::|\s)\d{2}\b/;
+
 export function hasScheduleManagementIntent(text: string): boolean {
-  const normalized = text.toLowerCase();
-  const mentionsSchedules =
-    /\b(scheduled|schedule|schedules|reminders?|jobs?)\b/.test(normalized) ||
-    /(запланирован|расписани|напоминани|задач)/i.test(text);
-  const managementVerb =
-    /\b(cancel|delete|remove|clear|list|show|what|which|update|change|move|reschedule|edit)\b/.test(normalized) ||
-    /(убери|удали|отмени|очисти|покажи|выведи|какие|список|измени|поменяй|перенеси|сдвинь|обнови)/i.test(text);
-  const changesScheduledTime =
-    (/\b(update|change|move|reschedule)\b/.test(normalized) || /(измени|поменяй|перенеси|сдвинь|обнови)/i.test(text))
-    && /\b\d{1,2}(?::|\s)\d{2}\b/.test(text);
+  const mentionsSchedules = SCHEDULE_NOUN_RE.test(text);
+  const managementVerb = MANAGEMENT_VERB_RE.test(text);
+  const changesScheduledTime = RETIME_VERB_RE.test(text) && CLOCK_TIME_RE.test(text);
   return (mentionsSchedules && managementVerb) || changesScheduledTime;
 }
 
+const CREATION_PHRASE_RE = new RegExp(`\\b(?:${alternation(SCHEDULE_CREATION_PHRASES)})\\b`, "i");
+const RELATIVE_DELAY_RE = new RegExp(
+  `\\b(?:in|after)\\s+\\d+\\s*(?:seconds?|secs?|minutes?|mins?|hours?|days?)\\b`
+  + (RELATIVE_DELAY_PATTERNS.length > 0 ? `|${alternation(RELATIVE_DELAY_PATTERNS)}` : ""),
+  "i"
+);
+const CLOCK_AT_RE = /\b(?:at)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b/i;
+
 export function hasScheduleIntent(text: string): boolean {
   if (hasScheduleManagementIntent(text)) return false;
-  const normalized = text.toLowerCase();
-  return (
-    /\b(in|after)\s+\d+\s*(seconds?|secs?|minutes?|mins?|hours?|days?)\b/.test(normalized) ||
-    /\b(tomorrow|tonight|daily|weekly|monthly|every\s+\w+|remind\s+me|schedule)\b/.test(normalized) ||
-    /\b(at)\s+\d{1,2}(:\d{2})?\s*(am|pm)?\b/.test(normalized) ||
-    /через\s+\d+\s*(секунд[уы]?|сек\.?|минут[уы]?|мин\.?|час(а|ов)?|дн(я|ей)?)/i.test(text) ||
-    /(завтра|послезавтра|сегодня\s+в|напомни|напомнить|по\s+расписанию|кажд(ый|ую|ое)|ежедневно|еженедельно)/i.test(text)
-  );
+  return RELATIVE_DELAY_RE.test(text) || CREATION_PHRASE_RE.test(text) || CLOCK_AT_RE.test(text);
 }
 
 /**

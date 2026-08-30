@@ -1,3 +1,4 @@
+import { alternation, INTERRUPT_VERB_STEMS, INTERRUPT_VERBS, NEGATIONS } from "@/i18n/vocabulary";
 import { tool } from "ai";
 import type { ToolSet } from "ai";
 import { z } from "zod";
@@ -62,10 +63,11 @@ function userExplicitlyRequestedProcessKill(context: AgentContext): boolean {
   const text = getCurrentUserMessageText(context);
   if (!text) return false;
 
-  const killIntent =
-    /\b(stop|terminate|kill|cancel|abort|end|прервать|прерви|остановить|останови|убить|убей|завершить|заверши|отменить|отмени)\b/i;
-  const negatedIntent =
-    /\b(do not|don't|dont|не)\b.{0,20}\b(stop|terminate|kill|cancel|abort|прерв|останов|убива|заверш|отмен)\b/i;
+  const killIntent = new RegExp(`\\b(?:${alternation(INTERRUPT_VERBS)})\\b`, "i");
+  const negatedIntent = new RegExp(
+    `\\b(?:${alternation(NEGATIONS)})\\b.{0,20}\\b(?:${alternation(INTERRUPT_VERB_STEMS)})`,
+    "i"
+  );
 
   if (negatedIntent.test(text)) {
     return false;
