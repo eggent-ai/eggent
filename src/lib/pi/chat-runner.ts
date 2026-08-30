@@ -5,6 +5,8 @@ import { diagnoseCurrentProvider, getPiModelsState, managedCredentialRecoverable
 import { getServerTranslator } from "@/i18n/server";
 import { cancelPendingInteractionsForRun } from "@/lib/pi/pending-interactions";
 import { retainPiMcpOAuthSession, retainPiScheduleSession, takeRetainedPiScheduleSession } from "@/lib/pi/schedule-host";
+import { clearActiveRun, getActiveRun, isStopRequest, registerActiveRun } from "@/lib/pi/active-runs";
+import { describeProviderFailure, type ProviderFailure } from "@/lib/pi/provider-failure";
 import type { PiChatRunOptions, PiRuntimeStats, PiToolRecord } from "@/lib/pi/types";
 import { getChat, saveChat } from "@/lib/storage/chat-store";
 import { clearUsageSnapshotCache } from "@/lib/usage/usage-provider";
@@ -360,7 +362,7 @@ function isEmptyZeroTokenTurn(
  * Every one of these leaves the workspace unable to answer at all, so each ends
  * with the way back to the included model when this workspace still has it.
  */
-async function emptyTurnError(): Promise<Error> {
+async function emptyTurnError(failure?: ProviderFailure | null): Promise<Error> {
   const t = await getServerTranslator();
 
   const withFallback = async (message: string): Promise<Error> => {
@@ -381,6 +383,22 @@ async function emptyTurnError(): Promise<Error> {
       return await withFallback(t("chat.errors.noModelSelected"));
     }
     const name = state.providers?.find((item) => item.id === provider)?.name || provider;
+
+    // The provider's own words outrank everything below. Settings checks and the
+    // probe exist to work out what went wrong when nothing said; when something
+    // did say, guessing over it is how "your key may be wrong" got shown to a
+    // user whose key was fine and whose service account had been disabled.
+    if (failure?.message) {
+      return await withFallback(
+        failure.status
+          ? t("chat.errors.providerRefusedWithStatus", {
+              provider: name,
+              status: String(failure.status),
+              details: failure.message,
+            })
+          : t("chat.errors.providerRefused", { provider: name, details: failure.message })
+      );
+    }
 
     const connected = (state.availableModels ?? []).some((model) => model.provider === provider);
     if (!connected) {
@@ -596,6 +614,50 @@ async function persistAssistantMessage(options: {
   await saveChat(chat);
 }
 
+/**
+ * What to do with a message that arrives while this chat already has an agent working.
+ *
+ * Starting a second agent was the old answer and it was the wrong one: neither
+ * could see the other, so a request to stop went to a fresh session that had
+ * nothing to stop, while the real run kept going. The runtime has both of the
+ * primitives needed here and we were using neither.
+ *
+ * - A stop is honoured immediately, because that is the whole point of saying it.
+ * - Anything else is steered into the running turn: it lands after the current
+ *   tool calls and before the next model call, which is where a correction is
+ *   still worth something. Queuing it until the end (followUp) would let the
+ *   agent finish doing the thing the user was trying to redirect.
+ *
+ * Returns null when there was no run to join, so the caller starts one normally.
+ */
+export async function joinActiveRun(
+  chatId: string,
+  message: string
+): Promise<"stopped" | "steered" | null> {
+  const active = getActiveRun(chatId);
+  if (!active) return null;
+
+  if (isStopRequest(message)) {
+    await active.session.abort().catch((error) => {
+      console.warn("Failed to abort the running turn:", error);
+    });
+    clearActiveRun(chatId, active.runId);
+    return "stopped";
+  }
+
+  // Extension commands cannot be steered - the runtime refuses them - and a
+  // slash command is a new instruction anyway, so let it start its own run.
+  if (message.trimStart().startsWith("/")) return null;
+
+  try {
+    await active.session.steer(message);
+    return "steered";
+  } catch (error) {
+    console.warn("Failed to steer the running turn, starting a new one:", error);
+    return null;
+  }
+}
+
 export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?: Record<string, unknown>; toolRuntimeData?: Record<string, unknown> }): Promise<string> {
   const userMessageId = crypto.randomUUID();
   const runId = options.runId ?? crypto.randomUUID();
@@ -619,6 +681,7 @@ export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?:
   let assistantText = "";
   let lastTurnUsage: PiRuntimeStats["lastTurn"] | undefined;
   let currentPromptUsage: PiRuntimeStats["lastTurn"] | undefined;
+  let providerFailure: ProviderFailure | null = null;
   const baselineUsage = getSessionTokenUsage(session);
   const tools = new Map<string, PiToolRecord>();
   const timelineParts: ChatMessagePart[] = [];
@@ -643,6 +706,12 @@ export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?:
         const usage = asUsage(message.usage);
         lastTurnUsage = usage ?? lastTurnUsage;
         currentPromptUsage = addUsage(currentPromptUsage, usage);
+        // A refusal arrives as a message like any other, carrying the reason.
+        // Keep the last one: a retried turn ends on whichever attempt stopped.
+        providerFailure =
+          message.stopReason === "error"
+            ? describeProviderFailure(message.errorMessage) ?? providerFailure
+            : null;
       }
       return;
     }
@@ -687,11 +756,14 @@ export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?:
 
   try {
     applySchedulingToolPolicy(session, prompt);
+    // Reachable while it runs, so a second message can stop it or be added to
+    // it instead of starting a rival agent in the same chat.
+    registerActiveRun(options.chatId, { session, runId, surface: "external" });
     await session.prompt(preparePromptForRuntime(prompt));
     currentPromptUsage = currentPromptUsage ?? subtractUsage(getSessionTokenUsage(session), baselineUsage);
     lastTurnUsage = lastTurnUsage ?? currentPromptUsage;
     if (isEmptyZeroTokenTurn(assistantText, tools.values(), currentPromptUsage)) {
-      throw await emptyTurnError();
+      throw await emptyTurnError(providerFailure);
     }
     await persistAssistantMessage({
       chatId: options.chatId,
@@ -702,6 +774,7 @@ export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?:
     });
     return assistantText;
   } finally {
+    clearActiveRun(options.chatId, runId);
     cancelPendingInteractionsForRun(runId);
     unsubscribe();
     const retained = await retainPiScheduleSession({
@@ -737,6 +810,24 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         writer.write(part);
       };
 
+      // The composer is disabled while this tab's own turn runs, so a message
+      // arriving here during one came from somewhere else - the same chat open
+      // in Telegram, or a second tab. Join that run rather than starting a
+      // rival agent in the same working directory.
+      const joined = await joinActiveRun(options.chatId, options.userMessage);
+      if (joined) {
+        const t = await getServerTranslator();
+        const textId = `pi-text-${crypto.randomUUID()}`;
+        writer.write({ type: "text-start", id: textId });
+        writer.write({
+          type: "text-delta",
+          id: textId,
+          delta: joined === "stopped" ? t("external.run.stopped") : t("external.run.steered"),
+        });
+        writer.write({ type: "text-end", id: textId });
+        return;
+      }
+
       const session = takeRetainedPiScheduleSession(options.chatId) ?? await createEggentPiSession({
         cwd: options.cwd,
         agentDir: options.agentDir,
@@ -759,6 +850,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
       let currentTextId: string | null = null;
       let lastTurnUsage: PiRuntimeStats["lastTurn"] | undefined;
       let currentPromptUsage: PiRuntimeStats["lastTurn"] | undefined;
+      let providerFailure: ProviderFailure | null = null;
       const baselineUsage = getSessionTokenUsage(session);
       const tools = new Map<string, PiToolRecord>();
       const timelineParts: ChatMessagePart[] = [];
@@ -849,6 +941,12 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
             const usage = asUsage(message.usage);
             lastTurnUsage = usage ?? lastTurnUsage;
             currentPromptUsage = addUsage(currentPromptUsage, usage);
+            // See the note on the other subscriber: the reason a turn produced
+            // nothing arrives here and is worth more than any guess about it.
+            providerFailure =
+              message.stopReason === "error"
+                ? describeProviderFailure(message.errorMessage) ?? providerFailure
+                : null;
             emitStats(buildPiRuntimeStats(session, currentPromptUsage, addUsage(baselineUsage, currentPromptUsage)));
           }
           return;
@@ -972,6 +1070,9 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         }
 
         applySchedulingToolPolicy(session, options.userMessage);
+        // See runPiAgentText: a run has to be reachable from the other surfaces
+        // for the whole time it is working.
+        registerActiveRun(options.chatId, { session, runId, surface: "web" });
         await session.prompt(preparePromptForRuntime(options.userMessage));
 
         if (aborted) {
@@ -983,7 +1084,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         currentPromptUsage = currentPromptUsage ?? subtractUsage(getSessionTokenUsage(session), baselineUsage);
         lastTurnUsage = lastTurnUsage ?? currentPromptUsage;
         if (isEmptyZeroTokenTurn(assistantText, tools.values(), currentPromptUsage)) {
-          throw await emptyTurnError();
+          throw await emptyTurnError(providerFailure);
         }
         const finalStats = buildPiRuntimeStats(session, currentPromptUsage, addUsage(baselineUsage, currentPromptUsage));
         emitStats(finalStats);
@@ -1035,6 +1136,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         persisted = true;
         throw error;
       } finally {
+        clearActiveRun(options.chatId, runId);
         options.abortSignal?.removeEventListener("abort", handleAbort);
         unsubscribe();
         if (aborted) {

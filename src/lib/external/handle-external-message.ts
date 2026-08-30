@@ -1,4 +1,4 @@
-import { runPiAgentText } from "@/lib/pi/chat-runner";
+import { joinActiveRun, runPiAgentText } from "@/lib/pi/chat-runner";
 import { createChat, getChat } from "@/lib/storage/chat-store";
 import { saveChatFile } from "@/lib/storage/chat-files-store";
 import { getAllProjects, getProject } from "@/lib/storage/project-store";
@@ -410,6 +410,27 @@ export async function handleExternalMessage(
     input.toolRuntimeData,
     input.telegramVia ?? "relay"
   );
+
+  // A message sent while this chat is already working belongs to that run, not
+  // to a second agent of its own. Over a messenger there is no stop button, so
+  // the word is the only way to reach a turn in progress.
+  const joined = await joinActiveRun(resolvedChatId, message);
+  if (joined) {
+    const t = await getServerTranslator();
+    return {
+      success: true,
+      sessionId: session.id,
+      reply: joined === "stopped" ? t("external.run.stopped") : t("external.run.steered"),
+      context: {
+        activeProjectId: resolvedProjectId || null,
+        activeProjectName: null,
+        activeChatId: resolvedChatId,
+        currentPath: currentPath || "",
+      },
+      switchedProject: { toProjectId: null, toProjectName: null },
+      createdProject: null,
+    };
+  }
 
   const reply = await runPiAgentText({
     chatId: resolvedChatId,

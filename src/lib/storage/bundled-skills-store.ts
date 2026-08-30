@@ -1,3 +1,4 @@
+import crypto from "crypto";
 import fs from "fs/promises";
 import path from "path";
 import {
@@ -14,6 +15,97 @@ import type { SupportedLocale } from "@/i18n/locales";
 
 const SKILL_FILE_NAME = "SKILL.md";
 const BUNDLED_SKILLS_DIR = path.join(process.cwd(), "bundled-skills");
+
+/**
+ * The list of SKILL.md checksums this skill has ever shipped with.
+ *
+ * Written next to the skill by whoever supplies the bundled set; absent for a
+ * skill that supplies none, in which case its installed copies are never
+ * touched. The file is data, not content: this module knows nothing about which
+ * skills exist or what they say.
+ */
+const VINTAGES_FILE_NAME = ".vintages";
+
+/** Files that describe the bundle rather than belonging to the skill. */
+const BUNDLE_METADATA_FILES = new Set([VINTAGES_FILE_NAME]);
+
+function checksum(contents: Buffer | string): string {
+  return crypto.createHash("md5").update(contents).digest("hex");
+}
+
+async function fileChecksum(filePath: string): Promise<string | null> {
+  try {
+    return checksum(await fs.readFile(filePath));
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Every checksum we have shipped for this skill, so an installed copy can be
+ * told apart from one the user has edited.
+ */
+async function readKnownVintages(sourceDir: string): Promise<Set<string>> {
+  try {
+    const raw = await fs.readFile(path.join(sourceDir, VINTAGES_FILE_NAME), "utf-8");
+    return new Set(
+      raw
+        .split("\n")
+        .map((line) => line.trim().toLowerCase())
+        .filter((line) => /^[0-9a-f]{32}$/.test(line))
+    );
+  } catch {
+    return new Set();
+  }
+}
+
+/**
+ * Bring an already-installed copy up to the shipped version, if it is still ours.
+ *
+ * An installed skill used to be frozen forever: install returned 409 and launch
+ * treated that as reuse, so every improvement reached new users only. Measured
+ * once: six distinct vintages of one skill across twenty-four copies, and the
+ * drift was entirely ours - not one user had edited a single copy.
+ *
+ * So the rule is provenance, not a date: refresh only a copy whose SKILL.md is
+ * byte-identical to a version we shipped. Anything else is the user's, and is
+ * left exactly as it is. Files the user added to the directory are kept either
+ * way; only files that exist in the source are written over.
+ */
+async function refreshInstalledSkill(
+  sourceDir: string,
+  targetDir: string
+): Promise<"current" | "refreshed" | "user-modified"> {
+  const sourceHash = await fileChecksum(path.join(sourceDir, SKILL_FILE_NAME));
+  const targetHash = await fileChecksum(path.join(targetDir, SKILL_FILE_NAME));
+  if (!sourceHash || !targetHash) return "user-modified";
+  if (sourceHash === targetHash) return "current";
+
+  const known = await readKnownVintages(sourceDir);
+  if (!known.has(targetHash)) return "user-modified";
+
+  await copySkillTree(sourceDir, targetDir);
+  return "refreshed";
+}
+
+/** Copy the source over the target, leaving anything extra in the target alone. */
+async function copySkillTree(sourceDir: string, targetDir: string): Promise<void> {
+  const entries = await fs.readdir(sourceDir, { withFileTypes: true });
+  for (const entry of entries) {
+    if (BUNDLE_METADATA_FILES.has(entry.name)) continue;
+    // Editor and archive leftovers travel with a copied directory and are not
+    // part of any skill.
+    if (entry.name.startsWith("._") || entry.name === ".DS_Store") continue;
+    const from = path.join(sourceDir, entry.name);
+    const to = path.join(targetDir, entry.name);
+    if (entry.isDirectory()) {
+      await fs.mkdir(to, { recursive: true });
+      await copySkillTree(from, to);
+    } else if (entry.isFile()) {
+      await fs.copyFile(from, to);
+    }
+  }
+}
 
 /**
  * Skills that belong to the workspace itself rather than to one line of work.
@@ -181,7 +273,7 @@ export async function installBundledSkill(
   skillName: string
 ): Promise<
   | { success: true; targetDir: string }
-  | { success: false; error: string; code: number }
+  | { success: false; error: string; code: number; refreshed?: boolean }
 > {
   const normalizedName = skillName.trim().toLowerCase();
   const validationError = validateSkillName(normalizedName);
@@ -217,21 +309,26 @@ export async function installBundledSkill(
   const targetDir = path.join(targetBaseDir, normalizedName);
 
   if (await dirExists(targetDir)) {
+    // Already here, so this is a reuse rather than an install - but an untouched
+    // copy is brought up to the shipped version first. See refreshInstalledSkill.
+    const outcome = await refreshInstalledSkill(sourceDir, targetDir).catch((error) => {
+      // A refresh that fails must never cost the user the skill they already have.
+      console.error(`Failed to refresh installed skill "${normalizedName}":`, error);
+      return "user-modified" as const;
+    });
     return {
       success: false,
       error: `Skill "${normalizedName}" is already installed in this workspace`,
       code: 409,
+      refreshed: outcome === "refreshed",
     };
   }
 
   await fs.mkdir(targetBaseDir, { recursive: true });
 
   try {
-    await fs.cp(sourceDir, targetDir, {
-      recursive: true,
-      force: false,
-      errorOnExist: true,
-    });
+    await fs.mkdir(targetDir, { recursive: true });
+    await copySkillTree(sourceDir, targetDir);
     return { success: true, targetDir };
   } catch {
     return {

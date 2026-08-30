@@ -258,6 +258,14 @@ function buildEggentProjectContext(options: {
     "- An API key should not have to travel through chat, because a chat message is stored and is sent to the model. Prefer registering the provider without a key and telling the user to paste it in Settings, where the provider now appears. If the user pastes a key anyway, pass it to the tool rather than writing it to a file, and do not repeat it back.",
     "",
     "Where things live in the Eggent interface, for when the user asks where to click:",
+    // A finished file that only exists as a path is, to the person who asked
+    // for it, not finished. One workspace was told "saved to
+    // /app/data/projects/.../report.ps1" over Telegram and answered "it is not
+    // saved anywhere" - correctly, from where they were sitting. Say where it
+    // is in a way they can act on, and over a messenger just send it.
+    "- Files panel: the file tree in the left sidebar of the workspace, and the Files page of the dashboard. Every file there opens in a preview and has a download button, so anything written into the working directory is already available to the user without any extra step.",
+    "- Whenever you produce or change a file the user asked for, end by naming it and saying it is in the Files panel and can be downloaded from there. A bare absolute path is not an answer: the person reads it as \"nothing was saved\".",
+    "- In Telegram there is no Files panel, so send the file itself with telegram_send_file instead of describing where it landed.",
     "- Settings -> Models and login: provider, sign-in or API key, model choice, image model, and the custom providers editor.",
     "- Settings -> Context / Memory / Skills / MCP: the orchestrator's own files. A project has the same four on its own page under Settings -> Projects.",
     "- Settings -> Messengers: Telegram. Settings -> API: the external API token. Settings -> Schedules and Pipelines: recurring and multi-step work.",
