@@ -125,6 +125,15 @@ export const SCHEDULE_CREATION_PHRASES: readonly string[] = [
 export const RELATIVE_DELAY_PATTERNS: readonly string[] = [];
 
 /**
+ * Titles a chat carries before its first message names it.
+ *
+ * Matched so the first thing somebody says can replace the placeholder. The
+ * placeholder itself is a translated string, so recognising it is vocabulary:
+ * a build has to know the untitled-chat name in each language it ships.
+ */
+export const DEFAULT_CHAT_TITLES: readonly string[] = ["New Chat", "New chat"];
+
+/**
  * Extra characters a slug may keep beyond `a-z0-9`.
  *
  * A pipeline named in this build's language should still produce a readable

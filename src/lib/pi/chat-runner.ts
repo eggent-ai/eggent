@@ -1,3 +1,4 @@
+import { DEFAULT_CHAT_TITLES } from "@/i18n/vocabulary";
 import { createUIMessageStream } from "ai";
 import type { UIMessage } from "ai";
 import { createEggentPiSession } from "@/lib/pi/session";
@@ -434,7 +435,7 @@ async function emptyTurnError(failure?: ProviderFailure | null): Promise<Error> 
 }
 
 function isDefaultChatTitle(title: string): boolean {
-  return ["New Chat", "New chat"].includes(title.trim());
+  return DEFAULT_CHAT_TITLES.includes(title.trim());
 }
 
 function titleFromFirstMessage(message: string): string {

@@ -1,4 +1,4 @@
-import { alternation, PROMPT_HANDOFF_PHRASES } from "@/i18n/vocabulary";
+import { alternation, DEFAULT_CHAT_TITLES, PROMPT_HANDOFF_PHRASES } from "@/i18n/vocabulary";
 import {
   streamText,
   generateText,
@@ -892,7 +892,7 @@ export async function runAgent(options: {
       chat.updatedAt = userMessageRecord.createdAt;
       const userMessageCount = chat.messages.filter((m) => m.role === "user").length;
       const defaultTitle = chat.title.trim();
-      if (userMessageCount === 1 && ["New Chat", "New chat"].includes(defaultTitle)) {
+      if (userMessageCount === 1 && DEFAULT_CHAT_TITLES.includes(defaultTitle)) {
         chat.title =
           options.userMessage.slice(0, 60) +
           (options.userMessage.length > 60 ? "..." : "");
