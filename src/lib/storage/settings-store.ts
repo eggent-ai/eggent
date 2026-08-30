@@ -1,6 +1,6 @@
 import fs from "fs/promises";
 import path from "path";
-import { AppSettings } from "@/lib/types";
+import type { AppSettings } from "@/lib/types";
 import {
   DEFAULT_AUTH_PASSWORD_HASH,
   DEFAULT_AUTH_USERNAME,

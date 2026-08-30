@@ -1,6 +1,6 @@
 import fs from "fs/promises";
 import path from "path";
-import { Chat, ChatListItem } from "@/lib/types";
+import type { Chat, ChatListItem } from "@/lib/types";
 import { publishUiSyncEvent } from "@/lib/realtime/event-bus";
 
 const DATA_DIR = path.join(process.cwd(), "data");

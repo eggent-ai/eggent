@@ -172,17 +172,10 @@ export interface ProjectSkillMetadata {
 
 // --- Memory ---
 
-export enum MemoryArea {
-  MAIN = "main",
-  FRAGMENTS = "fragments",
-  SOLUTIONS = "solutions",
-  INSTRUMENTS = "instruments",
-}
-
 export interface MemoryEntry {
   id: string;
   text: string;
-  area: MemoryArea;
+  area: "main" | "fragments" | "solutions" | "instruments";
   metadata: Record<string, unknown>;
   score?: number;
   createdAt: string;

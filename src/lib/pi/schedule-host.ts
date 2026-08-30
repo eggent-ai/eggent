@@ -559,6 +559,7 @@ export async function managePiSchedules(options: {
   scope?: "current" | "all";
   jobId?: string;
   schedule?: string;
+  prompt?: string;
   currentSession?: AgentSession | null;
 }) {
   const contexts = await scheduleContexts({ cwd: options.cwd, scope: options.scope });
@@ -612,7 +613,11 @@ export async function managePiSchedules(options: {
   if (options.action === "update") {
     const jobId = options.jobId?.trim();
     if (!jobId) throw new Error("job_id is required when action=update");
-    if (!options.schedule?.trim()) throw new Error("schedule is required when action=update");
+    const nextSchedule = options.schedule?.trim();
+    const nextPrompt = options.prompt?.trim();
+    if (!nextSchedule && !nextPrompt) {
+      throw new Error("action=update needs a new schedule, new prompt, or both");
+    }
 
     const matches = locations.filter((location) => location.job.id === jobId);
     if (matches.length === 0) {
@@ -650,16 +655,24 @@ export async function managePiSchedules(options: {
       };
     }
 
-    const detected = detectSchedule(options.schedule);
+    // Only re-read the timing when a new one was asked for: parsing the stored
+    // schedule again would turn a relative one-shot such as "+10m" into ten
+    // minutes from *now* on every text edit.
+    const detected = nextSchedule ? detectSchedule(nextSchedule) : null;
     const updatedJob = await mutateScheduleStore(target.store.filePath, (data) => {
       const job = (data.jobs ?? []).find((candidate) => candidate.id === jobId);
       if (!job) throw new Error(`Scheduled job ${jobId} disappeared while it was being updated`);
-      job.schedule = detected.schedule;
-      job.scheduleType = detected.scheduleType;
-      if (detected.intervalMs) job.intervalMs = detected.intervalMs;
-      else delete job.intervalMs;
-      if (detected.nextRun) job.nextRun = detected.nextRun;
-      else delete job.nextRun;
+      if (detected) {
+        job.schedule = detected.schedule;
+        job.scheduleType = detected.scheduleType;
+        if (detected.intervalMs) job.intervalMs = detected.intervalMs;
+        else delete job.intervalMs;
+        if (detected.nextRun) job.nextRun = detected.nextRun;
+        else delete job.nextRun;
+      }
+      if (nextPrompt) job.prompt = nextPrompt;
+      // Always re-applied, never stacked: the directive is what stops a fired
+      // job from re-creating itself instead of doing the work.
       if (job.prompt) job.prompt = withScheduleExecutionDirective(job.prompt);
       return { changed: true, result: { ...job } };
     });
@@ -671,7 +684,7 @@ export async function managePiSchedules(options: {
         scope: options.scope ?? "current",
         updated: true,
         rearmed: "after_current_turn",
-        nextRun: detected.nextRun,
+        nextRun: detected?.nextRun ?? updatedJob.nextRun,
         job: updatedJob,
       };
     }
@@ -683,7 +696,7 @@ export async function managePiSchedules(options: {
         scope: options.scope ?? "current",
         updated: true,
         rearmed: true,
-        nextRun: detected.nextRun,
+        nextRun: detected?.nextRun ?? updatedJob.nextRun,
         job: updatedJob,
       };
     } catch (error) {
@@ -692,7 +705,7 @@ export async function managePiSchedules(options: {
         scope: options.scope ?? "current",
         updated: true,
         rearmed: false,
-        nextRun: detected.nextRun,
+        nextRun: detected?.nextRun ?? updatedJob.nextRun,
         job: updatedJob,
         error: error instanceof Error ? error.message : String(error),
       };

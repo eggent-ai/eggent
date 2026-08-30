@@ -70,6 +70,11 @@ export async function getProject(projectId: string): Promise<StubProject | null>
   }
 }
 
+/** Schedule management walks every project to find a job by id. */
+export async function getAllProjects(): Promise<StubProject[]> {
+  return listProjects();
+}
+
 export async function listProjects(): Promise<StubProject[]> {
   const entries = await fs.readdir(projectsDir(), { withFileTypes: true }).catch(() => []);
   const projects: StubProject[] = [];
