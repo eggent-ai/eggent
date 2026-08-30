@@ -7,6 +7,8 @@ import {
   contextKey,
   getOrCreateExternalSession,
   saveExternalSession,
+  sessionChatId,
+  setSessionChatId,
   type ExternalSession,
 } from "@/lib/storage/external-session-store";
 import { getServerTranslator } from "@/i18n/server";
@@ -213,24 +215,27 @@ function chatBelongsToProject(
   return left === right;
 }
 
-async function ensureChatForProject(
+/**
+ * The chat this session is talking in, whichever project it is working in.
+ *
+ * A session used to hold one chat per project, so moving into a project moved
+ * the conversation with it and left the history behind. See ExternalSession.
+ */
+async function ensureSessionChat(
   session: ExternalSession,
   projectId: string | undefined,
   t: (key: MessageKey, values?: Record<string, string | number | boolean | null | undefined>) => string
 ): Promise<string> {
-  const key = contextKey(projectId);
-  const existingId = session.activeChats[key];
-  if (existingId) {
-    const existingChat = await getChat(existingId);
-    if (existingChat && chatBelongsToProject(existingChat.projectId, projectId)) {
-      return existingId;
-    }
+  const existingId = sessionChatId(session);
+  if (existingId && (await getChat(existingId))) {
+    setSessionChatId(session, existingId);
+    return existingId;
   }
 
   const newChatId = crypto.randomUUID();
   const title = t("api.external.sessionTitle", { sessionId: session.id });
   await createChat(newChatId, title, projectId);
-  session.activeChats[key] = newChatId;
+  setSessionChatId(session, newChatId);
   return newChatId;
 }
 
@@ -310,17 +315,9 @@ async function resolveExternalMessageRunContext(
     }
     resolvedChatId = explicitChatId;
   } else {
-    const sessionChatId = session.activeChats[contextId];
-    if (sessionChatId) {
-      const sessionChat = await getChat(sessionChatId);
-      if (sessionChat && chatBelongsToProject(sessionChat.projectId, resolvedProjectId)) {
-        resolvedChatId = sessionChatId;
-      } else {
-        resolvedChatId = await ensureChatForProject(session, resolvedProjectId, t);
-      }
-    } else {
-      resolvedChatId = await ensureChatForProject(session, resolvedProjectId, t);
-    }
+    // No project check: the session's chat is the conversation, and the project
+    // it happens to be filed under is not a reason to start a new one.
+    resolvedChatId = await ensureSessionChat(session, resolvedProjectId, t);
   }
 
   const beforeChat = await getChat(resolvedChatId);
@@ -482,7 +479,7 @@ export async function handleExternalMessage(
     session.currentPaths[switchedContextKey] = switchSignal.currentPath ?? "";
     activeCurrentPath = switchSignal.currentPath ?? "";
     const t = await getServerTranslator();
-    activeChatId = await ensureChatForProject(session, switchSignal.projectId ?? undefined, t);
+    activeChatId = await ensureSessionChat(session, switchSignal.projectId ?? undefined, t);
   } else if (createSignal && projectByIdAfter.has(createSignal.projectId)) {
     activeProjectId = createSignal.projectId;
     session.activeProjectId = createSignal.projectId;
@@ -490,17 +487,16 @@ export async function handleExternalMessage(
     session.currentPaths[createdContextKey] = "";
     activeCurrentPath = "";
     const t = await getServerTranslator();
-    activeChatId = await ensureChatForProject(session, createSignal.projectId, t);
+    activeChatId = await ensureSessionChat(session, createSignal.projectId, t);
   } else {
     if (resolvedProjectId) {
       session.activeProjectId = resolvedProjectId;
     }
     session.currentPaths[contextId] = currentPath;
-    session.activeChats[contextId] = resolvedChatId;
+    setSessionChatId(session, resolvedChatId);
   }
 
-  const activeContextKey = contextKey(activeProjectId ?? undefined);
-  session.activeChats[activeContextKey] = activeChatId;
+  setSessionChatId(session, activeChatId);
   session.updatedAt = new Date().toISOString();
   await saveExternalSession(session);
 
@@ -575,7 +571,7 @@ export async function handleExternalMediaMessage(
 
   const activeProjectId = context.resolvedProjectId ?? null;
   const activeContextKey = contextKey(context.resolvedProjectId);
-  context.session.activeChats[activeContextKey] = context.resolvedChatId;
+  setSessionChatId(context.session, context.resolvedChatId);
   context.session.currentPaths[activeContextKey] = context.currentPath;
   if (context.resolvedProjectId) context.session.activeProjectId = context.resolvedProjectId;
   context.session.updatedAt = new Date().toISOString();

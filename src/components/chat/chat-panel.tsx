@@ -651,7 +651,11 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
           setCurrentPath(result.currentPath ?? "");
           return;
         }
-        setActiveProjectId(nextProjectId);
+        // The agent moved to get the work done; the person did not ask to go
+        // anywhere. Keep them in the conversation they are having - the runtime
+        // resumes the session by chat id, so it carries into the new project
+        // intact, and only the project indicator follows the agent.
+        setActiveProjectId(nextProjectId, { keepActiveChat: true });
         setCurrentPath(result.currentPath ?? "");
       } finally {
         switchInFlightRef.current = false;

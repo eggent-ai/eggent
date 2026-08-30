@@ -24,6 +24,8 @@ import {
     type ExternalSession,
     getOrCreateExternalSession,
     saveExternalSession,
+    sessionChatId,
+    setSessionChatId,
 } from "@/lib/storage/external-session-store";
 import { getAllProjects } from "@/lib/storage/project-store";
 import { transcribeAudioFile } from "@/lib/speech/transcriber";
@@ -179,15 +181,6 @@ function getBotId(botToken: string): string {
     return botId.replace(/[^a-zA-Z0-9._:-]/g, "_").slice(0, 128) || "default";
 }
 
-function chatBelongsToProject(
-    chatProjectId: string | undefined,
-    projectId: string | undefined
-): boolean {
-    const left = chatProjectId ?? null;
-    const right = projectId ?? null;
-    return left === right;
-}
-
 async function ensureTelegramExternalChatContext(params: {
     sessionId: string;
     defaultProjectId?: string;
@@ -197,12 +190,13 @@ async function ensureTelegramExternalChatContext(params: {
         defaultProjectId: params.defaultProjectId,
     });
     const projectKey = contextKey(resolvedProjectId);
-    let resolvedChatId = session.activeChats[projectKey];
-    if (resolvedChatId) {
-        const existing = await getChat(resolvedChatId);
-        if (!existing || !chatBelongsToProject(existing.projectId, resolvedProjectId)) {
-            resolvedChatId = "";
-        }
+    // The conversation follows the person, not the project: whichever project
+    // the agent has moved into, this is still the same thread they are having.
+    // The chat keeps the project it was created under; only the runtime's
+    // working directory follows the switch.
+    let resolvedChatId = sessionChatId(session) ?? "";
+    if (resolvedChatId && !(await getChat(resolvedChatId))) {
+        resolvedChatId = "";
     }
 
     if (!resolvedChatId) {
@@ -214,7 +208,7 @@ async function ensureTelegramExternalChatContext(params: {
         );
     }
 
-    session.activeChats[projectKey] = resolvedChatId;
+    setSessionChatId(session, resolvedChatId);
     session.currentPaths[projectKey] = normalizeTelegramCurrentPath(
         session.currentPaths[projectKey]
     );
