@@ -167,7 +167,30 @@ export function alternation(words: readonly string[]): string {
   return words.join("|");
 }
 
-/** A parenthesised alternation, or null when this build has no such words. */
-export function optionalAlternation(words: readonly string[]): string | null {
-  return words.length > 0 ? `(?:${words.join("|")})` : null;
+/**
+ * A pattern that matches any of these words where a word can begin.
+ *
+ * `\b` is defined on `[A-Za-z0-9_]`, so it does not see the edge of a word in
+ * any alphabet but the Latin one - `\bзадач\b` matches nothing, ever. That is
+ * not a detail to remember at each call site, so it is decided here: an entry
+ * written in ASCII is bounded on both sides, and an entry that is not is
+ * matched wherever it appears.
+ *
+ * Matching a non-ASCII entry loosely is also what its authors intend. Those
+ * entries are stems - the whole point of writing `останов` rather than three
+ * conjugations is to catch the endings a speaker picks without thinking.
+ */
+export function wordPattern(words: readonly string[]): string {
+  const ascii = words.filter((word) => /^[\x20-\x7e]*$/.test(word));
+  const rest = words.filter((word) => !/^[\x20-\x7e]*$/.test(word));
+  const parts: string[] = [];
+  if (ascii.length > 0) parts.push(`\\b(?:${ascii.join("|")})\\b`);
+  if (rest.length > 0) parts.push(`(?:${rest.join("|")})`);
+  return parts.join("|");
+}
+
+/** The same, compiled, case-insensitive. Never matches when there are no words. */
+export function wordMatcher(words: readonly string[]): RegExp {
+  const pattern = wordPattern(words);
+  return pattern ? new RegExp(pattern, "i") : /(?!)/;
 }

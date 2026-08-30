@@ -7,6 +7,7 @@
  */
 import {
   alternation,
+  wordMatcher,
   RELATIVE_DELAY_PATTERNS,
   SCHEDULE_CREATION_PHRASES,
   SCHEDULE_MANAGEMENT_VERBS,
@@ -14,9 +15,9 @@ import {
   SCHEDULE_RETIME_VERBS,
 } from "@/i18n/vocabulary";
 
-const SCHEDULE_NOUN_RE = new RegExp(`\\b(?:${alternation(SCHEDULE_NOUNS)})\\b`, "i");
-const MANAGEMENT_VERB_RE = new RegExp(`\\b(?:${alternation(SCHEDULE_MANAGEMENT_VERBS)})\\b`, "i");
-const RETIME_VERB_RE = new RegExp(`\\b(?:${alternation(SCHEDULE_RETIME_VERBS)})\\b`, "i");
+const SCHEDULE_NOUN_RE = wordMatcher(SCHEDULE_NOUNS);
+const MANAGEMENT_VERB_RE = wordMatcher(SCHEDULE_MANAGEMENT_VERBS);
+const RETIME_VERB_RE = wordMatcher(SCHEDULE_RETIME_VERBS);
 const CLOCK_TIME_RE = /\b\d{1,2}(?::|\s)\d{2}\b/;
 
 export function hasScheduleManagementIntent(text: string): boolean {
@@ -26,7 +27,7 @@ export function hasScheduleManagementIntent(text: string): boolean {
   return (mentionsSchedules && managementVerb) || changesScheduledTime;
 }
 
-const CREATION_PHRASE_RE = new RegExp(`\\b(?:${alternation(SCHEDULE_CREATION_PHRASES)})\\b`, "i");
+const CREATION_PHRASE_RE = wordMatcher(SCHEDULE_CREATION_PHRASES);
 const RELATIVE_DELAY_RE = new RegExp(
   `\\b(?:in|after)\\s+\\d+\\s*(?:seconds?|secs?|minutes?|mins?|hours?|days?)\\b`
   + (RELATIVE_DELAY_PATTERNS.length > 0 ? `|${alternation(RELATIVE_DELAY_PATTERNS)}` : ""),
