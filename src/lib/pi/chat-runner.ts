@@ -747,6 +747,9 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
 
   return createUIMessageStream<UIMessage>({
     async execute({ writer }) {
+      // Resolved up front: the runtime's compaction events arrive on a
+      // synchronous listener, which cannot await a translator of its own.
+      const tCompaction = await getServerTranslator();
       await persistUserMessage(options, userMessageId);
 
       let aborted = options.abortSignal?.aborted === true;
@@ -913,7 +916,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
             data: {
               state: "running",
               reason,
-              message: reason === "manual" ? "Сжимаю историю чата…" : "Сжимаю контекст, чтобы продолжить без переполнения…",
+              message: reason === "manual" ? tCompaction("chat.compaction.runningManual") : tCompaction("chat.compaction.runningAuto"),
               timestamp: new Date().toISOString(),
             },
           });
@@ -939,8 +942,10 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
               tokensBefore,
               estimatedTokensAfter,
               message: state === "completed"
-                ? `Контекст сжат: было ${beforeText}, стало примерно ${afterText} токенов.`
-                : `Не удалось сжать контекст${errorMessage ? `: ${errorMessage}` : "."}`,
+                ? tCompaction("chat.compaction.done", { before: beforeText, after: afterText })
+                : errorMessage
+                  ? tCompaction("chat.compaction.failedWithReason", { details: errorMessage })
+                  : tCompaction("chat.compaction.failed"),
               timestamp: new Date().toISOString(),
             },
           });

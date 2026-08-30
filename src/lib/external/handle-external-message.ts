@@ -553,9 +553,10 @@ export async function handleExternalMediaMessage(
       savedName: saved.name,
       mimeType: input.file.mimeType,
     });
+    const tVoice = await getServerTranslator();
     effectiveMessage = [
-      incomingMessage ? `Комментарий к голосовому: ${incomingMessage}` : "",
-      `🎙 Голосовое сообщение:\n${transcript}`,
+      incomingMessage ? tVoice("chat.voice.comment", { text: incomingMessage }) : "",
+      tVoice("chat.voice.transcript", { text: transcript }),
     ].filter(Boolean).join("\n\n");
   }
 
