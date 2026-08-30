@@ -17,7 +17,7 @@ import {
     normalizeTelegramUserId,
     type TelegramIntegrationRuntimeConfig,
 } from "@/lib/storage/telegram-integration-store";
-import { deleteChatFile, saveChatFile } from "@/lib/storage/chat-files-store";
+import { saveChatFile } from "@/lib/storage/chat-files-store";
 import { createChat, getChat } from "@/lib/storage/chat-store";
 import {
     contextKey,
@@ -28,7 +28,7 @@ import {
     setSessionChatId,
 } from "@/lib/storage/external-session-store";
 import { getAllProjects } from "@/lib/storage/project-store";
-import { transcribeAudioFile } from "@/lib/speech/transcriber";
+import { transcribeVoiceNote } from "@/lib/speech/voice-note";
 import { getServerTranslator } from "@/i18n/server";
 import type { MessageKey, MessageValues } from "@/i18n/messages";
 import crypto from "node:crypto";
@@ -950,23 +950,16 @@ export async function processTelegramUpdate(
                     t
                 );
                 try {
-                    const transcription = await transcribeAudioFile({
+                    transcribedVoiceText = await transcribeVoiceNote({
+                        chatId: externalContext.chatId,
                         filePath: saved.path,
-                        filename: saved.name,
+                        savedName: saved.name,
                         mimeType:
                             typeof message?.voice?.mime_type === "string"
                                 ? message.voice.mime_type
                                 : "audio/ogg",
                     });
-                    transcribedVoiceText = transcription.transcript;
-
-                    // The recording has done its one job. Keeping it costs a row
-                    // in the chat's file list, and that list is rebuilt into the
-                    // prompt on every single turn - somebody who talks to Eggent
-                    // all day pays for a growing table of .oga paths they will
-                    // never open. The transcript is in the conversation; the
-                    // audio is not needed again.
-                    await deleteChatFile(externalContext.chatId, saved.name).catch(() => undefined);
+                    // The recording is gone with the transcript; nothing to report.
                     incomingSavedFile = null;
                 } catch (error) {
                     await sendTelegramMessage(

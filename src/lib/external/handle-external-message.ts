@@ -2,7 +2,7 @@ import { joinActiveRun, runPiAgentText } from "@/lib/pi/chat-runner";
 import { createChat, getChat } from "@/lib/storage/chat-store";
 import { saveChatFile } from "@/lib/storage/chat-files-store";
 import { getAllProjects, getProject } from "@/lib/storage/project-store";
-import { transcribeAudioFile } from "@/lib/speech/transcriber";
+import { transcribeVoiceNote } from "@/lib/speech/voice-note";
 import {
   contextKey,
   getOrCreateExternalSession,
@@ -547,14 +547,15 @@ export async function handleExternalMediaMessage(
   let effectiveMessage = incomingMessage;
 
   if (isVoice) {
-    const transcription = await transcribeAudioFile({
+    const transcript = await transcribeVoiceNote({
+      chatId: context.resolvedChatId,
       filePath: saved.path,
-      filename: saved.name,
+      savedName: saved.name,
       mimeType: input.file.mimeType,
     });
     effectiveMessage = [
       incomingMessage ? `Комментарий к голосовому: ${incomingMessage}` : "",
-      `🎙 Голосовое сообщение:\n${transcription.transcript}`,
+      `🎙 Голосовое сообщение:\n${transcript}`,
     ].filter(Boolean).join("\n\n");
   }
 
