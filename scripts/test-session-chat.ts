@@ -14,7 +14,12 @@
  * read has to pick one of them rather than start over.
  */
 import assert from "node:assert/strict";
-import { sessionChatId, setSessionChatId, type ExternalSession } from "../src/lib/storage/external-session-store.ts";
+import {
+  mayUseChatForProject,
+  sessionChatId,
+  setSessionChatId,
+  type ExternalSession,
+} from "../src/lib/storage/external-session-store.ts";
 
 let failed = 0;
 let ran = 0;
@@ -88,6 +93,36 @@ check("carrying over happens once, then the single chat wins", () => {
   setSessionChatId(s, sessionChatId(s)!);
   s.activeProjectId = null;
   assert.equal(sessionChatId(s), "chat-todo", "the legacy map must not pull it back");
+});
+
+check("the session's own chat may be used from any project", () => {
+  // The regression this exists to prevent: the messenger passes the session
+  // chat explicitly whenever a message carries an attachment, and a voice
+  // message is one, so speaking after the agent moved into a project was
+  // refused outright.
+  const s = session({ activeChatId: "chat-1", activeProjectId: "todo" });
+  assert.equal(
+    mayUseChatForProject({ session: s, chatId: "chat-1", chatProjectId: null, requestedProjectId: "todo" }),
+    true,
+    "the chat is filed under the orchestrator and the work is in a project - that is the normal case now"
+  );
+});
+
+check("some other chat still has to match the project it is used from", () => {
+  const s = session({ activeChatId: "chat-1" });
+  assert.equal(
+    mayUseChatForProject({ session: s, chatId: "chat-other", chatProjectId: "todo", requestedProjectId: null }),
+    false
+  );
+  assert.equal(
+    mayUseChatForProject({ session: s, chatId: "chat-other", chatProjectId: "todo", requestedProjectId: "todo" }),
+    true
+  );
+  assert.equal(
+    mayUseChatForProject({ session: s, chatId: "chat-other", chatProjectId: null, requestedProjectId: null }),
+    true,
+    "both in the orchestrator"
+  );
 });
 
 console.log(`\n${ran} checks, ${failed} failed`);

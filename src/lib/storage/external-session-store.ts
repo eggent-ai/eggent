@@ -61,6 +61,27 @@ export function setSessionChatId(session: ExternalSession, chatId: string): void
   session.activeChatId = chatId;
 }
 
+/**
+ * May this named chat be used while working in this project?
+ *
+ * A caller that names some other chat should be told when it does not belong to
+ * the project it asked to work in - that check exists to catch a mistake. But a
+ * session's *own* chat now spans projects by design, so the same comparison
+ * turned into a wall: the messenger passes the session chat explicitly whenever
+ * a message carries an attachment, a voice message is an attachment, and anyone
+ * speaking rather than typing was refused on the first thing they said after
+ * the agent moved into a project.
+ */
+export function mayUseChatForProject(params: {
+  session: ExternalSession;
+  chatId: string;
+  chatProjectId: string | null | undefined;
+  requestedProjectId: string | null | undefined;
+}): boolean {
+  if (params.chatId === sessionChatId(params.session)) return true;
+  return (params.chatProjectId ?? null) === (params.requestedProjectId ?? null);
+}
+
 function normalizeSessionId(sessionId: string): string {
   const value = sessionId.trim();
   if (!SESSION_ID_REGEX.test(value)) {

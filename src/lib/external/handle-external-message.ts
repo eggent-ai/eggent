@@ -7,6 +7,7 @@ import {
   contextKey,
   getOrCreateExternalSession,
   saveExternalSession,
+  mayUseChatForProject,
   sessionChatId,
   setSessionChatId,
   type ExternalSession,
@@ -206,15 +207,6 @@ function resolveProjectByIdOrName(
   return { project: null, ambiguous: false };
 }
 
-function chatBelongsToProject(
-  chatProjectId: string | undefined,
-  projectId: string | undefined
-): boolean {
-  const left = chatProjectId ?? null;
-  const right = projectId ?? null;
-  return left === right;
-}
-
 /**
  * The chat this session is talking in, whichever project it is working in.
  *
@@ -308,7 +300,14 @@ async function resolveExternalMessageRunContext(
     if (!explicitChat) {
       throw new ExternalMessageError(404, { error: t("api.error.chatNotFound", { chatId: explicitChatId }) });
     }
-    if (!chatBelongsToProject(explicitChat.projectId, resolvedProjectId)) {
+    if (
+      !mayUseChatForProject({
+        session,
+        chatId: explicitChatId,
+        chatProjectId: explicitChat.projectId,
+        requestedProjectId: resolvedProjectId,
+      })
+    ) {
       throw new ExternalMessageError(409, {
         error: t("api.error.chatProjectMismatch"),
       });
