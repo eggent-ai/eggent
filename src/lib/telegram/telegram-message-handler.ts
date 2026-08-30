@@ -17,7 +17,7 @@ import {
     normalizeTelegramUserId,
     type TelegramIntegrationRuntimeConfig,
 } from "@/lib/storage/telegram-integration-store";
-import { saveChatFile } from "@/lib/storage/chat-files-store";
+import { deleteChatFile, saveChatFile } from "@/lib/storage/chat-files-store";
 import { createChat, getChat } from "@/lib/storage/chat-store";
 import {
     contextKey,
@@ -965,6 +965,15 @@ export async function processTelegramUpdate(
                                 : "audio/ogg",
                     });
                     transcribedVoiceText = transcription.transcript;
+
+                    // The recording has done its one job. Keeping it costs a row
+                    // in the chat's file list, and that list is rebuilt into the
+                    // prompt on every single turn - somebody who talks to Eggent
+                    // all day pays for a growing table of .oga paths they will
+                    // never open. The transcript is in the conversation; the
+                    // audio is not needed again.
+                    await deleteChatFile(externalContext.chatId, saved.name).catch(() => undefined);
+                    incomingSavedFile = null;
                 } catch (error) {
                     await sendTelegramMessage(
                         botToken,
@@ -977,7 +986,7 @@ export async function processTelegramUpdate(
                         ok: true,
                         handledError: true,
                         fileSaved: true,
-                        file: incomingSavedFile,
+                        file: incomingSavedFile ?? undefined,
                     };
                 }
             }

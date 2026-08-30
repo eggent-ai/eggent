@@ -6,6 +6,7 @@ import { getServerTranslator } from "@/i18n/server";
 import { cancelPendingInteractionsForRun } from "@/lib/pi/pending-interactions";
 import { retainPiMcpOAuthSession, retainPiScheduleSession, takeRetainedPiScheduleSession } from "@/lib/pi/schedule-host";
 import { clearActiveRun, getActiveRun, isStopRequest, registerActiveRun } from "@/lib/pi/active-runs";
+import { applySchedulingToolPolicy, hasScheduleIntent, hasScheduleManagementIntent } from "@/lib/pi/schedule-intent";
 import { describeProviderFailure, type ProviderFailure } from "@/lib/pi/provider-failure";
 import type { PiChatRunOptions, PiRuntimeStats, PiToolRecord } from "@/lib/pi/types";
 import { getChat, saveChat } from "@/lib/storage/chat-store";
@@ -430,59 +431,6 @@ async function emptyTurnError(failure?: ProviderFailure | null): Promise<Error> 
     // Fall through to the generic message rather than hiding the original failure.
   }
   return await withFallback(t("chat.errors.emptyResponse"));
-}
-
-function hasScheduleManagementIntent(text: string): boolean {
-  const normalized = text.toLowerCase();
-  const mentionsSchedules =
-    /\b(scheduled|schedule|schedules|reminders?|jobs?)\b/.test(normalized) ||
-    /(запланирован|расписани|напоминани|задач)/i.test(text);
-  const managementVerb =
-    /\b(cancel|delete|remove|clear|list|show|what|which|update|change|move|reschedule|edit)\b/.test(normalized) ||
-    /(убери|удали|отмени|очисти|покажи|выведи|какие|список|измени|поменяй|перенеси|сдвинь|обнови)/i.test(text);
-  const changesScheduledTime =
-    (/\b(update|change|move|reschedule)\b/.test(normalized) || /(измени|поменяй|перенеси|сдвинь|обнови)/i.test(text))
-    && /\b\d{1,2}(?::|\s)\d{2}\b/.test(text);
-  return (mentionsSchedules && managementVerb) || changesScheduledTime;
-}
-
-function hasScheduleIntent(text: string): boolean {
-  if (hasScheduleManagementIntent(text)) return false;
-  const normalized = text.toLowerCase();
-  return (
-    /\b(in|after)\s+\d+\s*(seconds?|secs?|minutes?|mins?|hours?|days?)\b/.test(normalized) ||
-    /\b(tomorrow|tonight|daily|weekly|monthly|every\s+\w+|remind\s+me|schedule)\b/.test(normalized) ||
-    /\b(at)\s+\d{1,2}(:\d{2})?\s*(am|pm)?\b/.test(normalized) ||
-    /через\s+\d+\s*(секунд[уы]?|сек\.?|минут[уы]?|мин\.?|час(а|ов)?|дн(я|ей)?)/i.test(text) ||
-    /(завтра|послезавтра|сегодня\s+в|напомни|напомнить|по\s+расписанию|кажд(ый|ую|ое)|ежедневно|еженедельно)/i.test(text)
-  );
-}
-
-function applySchedulingToolPolicy(
-  session: {
-    getActiveToolNames: () => string[];
-    setActiveToolsByName: (toolNames: string[]) => void;
-    getToolDefinition?: (toolName: string) => unknown;
-  },
-  text: string
-) {
-  const activeTools = session.getActiveToolNames();
-  if (hasScheduleManagementIntent(text)) {
-    session.setActiveToolsByName(activeTools.filter((toolName) => toolName !== "Agent" && toolName !== "bash"));
-    return;
-  }
-  if (hasScheduleIntent(text)) {
-    if (activeTools.includes("bash")) {
-      session.setActiveToolsByName(activeTools.filter((toolName) => toolName !== "bash"));
-    }
-    return;
-  }
-
-  // If a retained scheduler session was previously used for a scheduling turn,
-  // restore bash for ordinary follow-up work.
-  if (!activeTools.includes("bash") && session.getToolDefinition?.("bash")) {
-    session.setActiveToolsByName([...activeTools, "bash"]);
-  }
 }
 
 function isDefaultChatTitle(title: string): boolean {
