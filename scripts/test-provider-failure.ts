@@ -64,6 +64,24 @@ check("keeps a flat {error:{message}} body", () => {
   assert.equal(result.message, "You exceeded your current quota.");
 });
 
+check("splits the status off a \"401: {…}\" body", () => {
+  // The exact shape a live provider refusal arrives in.
+  const result = describeProviderFailure(
+    '401: {"message":"Authentication Fails, Your api key: ****0000 is invalid","type":"authentication_error","param":null,"code":"invalid_request_error"}'
+  );
+  assert.ok(result);
+  assert.equal(result.status, 401);
+  assert.equal(result.message, "Authentication Fails, Your api key: ****0000 is invalid");
+  assert.ok(!result.message.includes("{"), "the body must not be shown as punctuation");
+});
+
+check("a status prefix with nothing after it is not a sentence", () => {
+  // Nothing to quote, so the caller falls through to probing the provider,
+  // which can still tell a dead address from a rejected key.
+  assert.equal(describeProviderFailure("503: "), null);
+  assert.equal(describeProviderFailure("500:"), null);
+});
+
 check("keeps a plain string that is not JSON at all", () => {
   const result = describeProviderFailure("upstream connect error or disconnect/reset before headers");
   assert.ok(result);

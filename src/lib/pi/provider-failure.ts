@@ -61,6 +61,18 @@ function deepestMessage(value: unknown, depth = 0): { message?: string; status?:
   if (typeof value === "string") {
     const trimmed = value.trim();
     if (!trimmed) return {};
+
+    // Runtimes commonly hand back "401: {…}" - the status, then the provider's
+    // body as a string. Without splitting it the whole JSON blob becomes the
+    // "sentence" and the user is shown a wall of punctuation.
+    const prefixed = /^(\d{3})\s*:\s*([\s\S]*)$/.exec(trimmed);
+    if (prefixed) {
+      const inner = deepestMessage(prefixed[2], depth + 1);
+      const status = Number(prefixed[1]);
+      if (inner.message) return { message: inner.message, status: inner.status ?? status };
+      return { status };
+    }
+
     try {
       // Parsed on any string, not only one that opens with a brace: a body of
       // "null" is otherwise handed on as the sentence, and the chat then tells
