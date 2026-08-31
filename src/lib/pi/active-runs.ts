@@ -27,16 +27,51 @@ interface ActiveRun {
   startedAt: number;
   /** Where the message that started this run came from, for the reply wording. */
   surface: "web" | "external";
+  /**
+   * How the run wants to be stopped, when it has an opinion.
+   *
+   * Aborting the session alone leaves the run believing it finished normally,
+   * and a turn stopped before it wrote anything then looks exactly like a turn
+   * the provider never answered - which is reported as a broken provider. A run
+   * that offers this hook winds itself down instead: partial output persisted,
+   * pending questions cancelled, nothing diagnosed that did not happen.
+   */
+  requestStop?: () => void;
 }
 
-const runs = new Map<string, ActiveRun>();
+/**
+ * One process per workspace - but not one module instance per process.
+ *
+ * A plain module-level map is not enough: routes are compiled separately, and a
+ * route that only reads this registry can be handed its own empty copy of it.
+ * Measured, not guessed at - on a cold server the stop endpoint saw `size = 0`
+ * while a turn was demonstrably running, and every stop it was asked for was
+ * answered "there is nothing running here". The event bus hangs off the global
+ * for the same reason.
+ */
+const RUNS_KEY = "__EGGENT_ACTIVE_RUNS__";
+
+function activeRuns(): Map<string, ActiveRun> {
+  const globalWithRuns = globalThis as typeof globalThis & {
+    [RUNS_KEY]?: Map<string, ActiveRun>;
+  };
+  if (!globalWithRuns[RUNS_KEY]) {
+    globalWithRuns[RUNS_KEY] = new Map<string, ActiveRun>();
+  }
+  return globalWithRuns[RUNS_KEY];
+}
 
 export function registerActiveRun(
   chatId: string,
-  run: { session: AbortableRun; runId: string; surface: ActiveRun["surface"] }
+  run: {
+    session: AbortableRun;
+    runId: string;
+    surface: ActiveRun["surface"];
+    requestStop?: () => void;
+  }
 ): void {
   if (!chatId) return;
-  runs.set(chatId, { ...run, startedAt: Date.now() });
+  activeRuns().set(chatId, { ...run, startedAt: Date.now() });
 }
 
 /**
@@ -46,11 +81,13 @@ export function registerActiveRun(
  * blind delete in the loser's `finally` would leave the live one unreachable.
  */
 export function clearActiveRun(chatId: string, runId: string): void {
+  const runs = activeRuns();
   const current = runs.get(chatId);
   if (current && current.runId === runId) runs.delete(chatId);
 }
 
 export function getActiveRun(chatId: string): ActiveRun | undefined {
+  const runs = activeRuns();
   const run = runs.get(chatId);
   if (!run) return undefined;
   // A session that has stopped streaming is finishing up; nothing to interrupt.
@@ -83,7 +120,30 @@ export function isStopRequest(message: string): boolean {
   return STOP_PHRASE_SET.has(normalized);
 }
 
+/**
+ * Stop whatever is working in this chat, on request.
+ *
+ * The stop button used to work by dropping the HTTP request, which is the same
+ * gesture as closing the tab - so the two could never be told apart, and the
+ * one that meant "I have seen enough" was indistinguishable from the one that
+ * meant "I will read it later". They are separate now, and this is the first.
+ */
+export async function stopActiveRun(chatId: string): Promise<boolean> {
+  const active = getActiveRun(chatId);
+  if (!active) return false;
+
+  if (active.requestStop) {
+    active.requestStop();
+  } else {
+    await active.session.abort().catch((error) => {
+      console.warn("Failed to stop the running turn:", error);
+    });
+    clearActiveRun(chatId, active.runId);
+  }
+  return true;
+}
+
 /** For tests and diagnostics only. */
 export function activeRunCount(): number {
-  return runs.size;
+  return activeRuns().size;
 }

@@ -19,6 +19,7 @@ import {
   getActiveRun,
   isStopRequest,
   registerActiveRun,
+  stopActiveRun,
 } from "../src/lib/pi/active-runs.ts";
 import { SUPPORTED_LOCALES } from "../src/i18n/locales.ts";
 
@@ -121,6 +122,56 @@ check("chats do not see each other's runs", () => {
 
 check("an unknown chat has no run", () => {
   assert.equal(getActiveRun("nobody"), undefined);
+});
+
+async function checkAsync(name: string, fn: () => Promise<void>): Promise<void> {
+  ran += 1;
+  try {
+    await fn();
+    console.log(`  ok    ${name}`);
+  } catch (error) {
+    failed += 1;
+    console.log(`  FAIL  ${name}: ${error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
+/**
+ * Stopping used to mean dropping the HTTP request, which is also what closing a
+ * tab does - so the two could not be told apart and only one of them meant stop.
+ * It is asked for explicitly now, and a run that knows how to wind itself down
+ * is asked to do that rather than having its session pulled from underneath: a
+ * turn stopped before it wrote anything otherwise looks exactly like a turn the
+ * provider never answered, and gets reported as a broken provider.
+ */
+await checkAsync("a run that knows how to stop itself is asked to", async () => {
+  const { session, calls } = fakeSession();
+  let requested = 0;
+  registerActiveRun("chat-e", {
+    session,
+    runId: "run-4",
+    surface: "web",
+    requestStop: () => {
+      requested += 1;
+    },
+  });
+
+  assert.equal(await stopActiveRun("chat-e"), true);
+  assert.equal(requested, 1);
+  assert.equal(calls.length, 0, "the session is not aborted behind the run's back");
+  clearActiveRun("chat-e", "run-4");
+});
+
+await checkAsync("a run with no opinion is aborted and dropped", async () => {
+  const { session, calls } = fakeSession();
+  registerActiveRun("chat-f", { session, runId: "run-5", surface: "external" });
+
+  assert.equal(await stopActiveRun("chat-f"), true);
+  assert.deepEqual(calls, ["abort"]);
+  assert.equal(getActiveRun("chat-f"), undefined);
+});
+
+await checkAsync("stopping a chat that is not working says so", async () => {
+  assert.equal(await stopActiveRun("nobody"), false);
 });
 
 console.log(`\n${ran} checks, ${failed} failed`);

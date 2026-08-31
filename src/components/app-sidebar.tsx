@@ -17,6 +17,7 @@ import {
 import { useAppStore } from "@/store/app-store";
 import { FileTree } from "@/components/file-tree";
 import { useBackgroundSync } from "@/hooks/use-background-sync";
+import { useActiveRuns } from "@/hooks/use-active-runs";
 import { useI18n } from "@/i18n/provider";
 
 import {
@@ -28,6 +29,7 @@ import {
   SidebarHeader,
   SidebarMenu,
   SidebarMenuAction,
+  SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
 } from "@/components/ui/sidebar";
@@ -56,6 +58,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     topics: ["chat", "projects", "global"],
     projectId: activeProjectId ?? null,
   });
+  const activeRuns = useActiveRuns();
 
   const isOnChatPage = pathname === "/dashboard";
 
@@ -275,6 +278,20 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 >
                   <span className="truncate">{chat.title}</span>
                 </SidebarMenuButton>
+                {/* The mark and the delete button share the right edge, so the
+                    mark gives it up on hover: the pointer is there to act on
+                    the row, and the state it was reporting is still one click
+                    away inside the chat. */}
+                {activeRuns.byChat.has(chat.id) ? (
+                  <SidebarMenuBadge className="top-1.5 transition-opacity group-hover/menu-item:opacity-0 group-focus-within/menu-item:opacity-0">
+                    <span
+                      data-eggent-live
+                      role="status"
+                      aria-label={t("nav.chatWorking")}
+                      className="bg-primary size-2 rounded-full"
+                    />
+                  </SidebarMenuBadge>
+                ) : null}
                 <SidebarMenuAction
                   onClick={(e) => handleDeleteChat(chat.id, e)}
                   className="md:opacity-0 transition-opacity group-hover/menu-item:opacity-100 group-focus-within/menu-item:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100"

@@ -7,6 +7,7 @@ import { getServerTranslator } from "@/i18n/server";
 import { cancelPendingInteractionsForRun } from "@/lib/pi/pending-interactions";
 import { retainPiMcpOAuthSession, retainPiScheduleSession, takeRetainedPiScheduleSession } from "@/lib/pi/schedule-host";
 import { clearActiveRun, getActiveRun, isStopRequest, registerActiveRun } from "@/lib/pi/active-runs";
+import { attachToLiveRun, startLiveRun, type LiveRunSink } from "@/lib/pi/live-run";
 import { applySchedulingToolPolicy, hasScheduleIntent, hasScheduleManagementIntent } from "@/lib/pi/schedule-intent";
 import { describeProviderFailure, type ProviderFailure } from "@/lib/pi/provider-failure";
 import type { PiChatRunOptions, PiRuntimeStats, PiToolRecord } from "@/lib/pi/types";
@@ -268,6 +269,19 @@ function buildPiRuntimeStats(session: {
       : undefined),
     context,
   };
+}
+
+/**
+ * The sentence a failed turn ends on, in the shape the client already expects.
+ *
+ * It used to come from createUIMessageStream's own onError, which only sees the
+ * exception the response that started the run threw. The failure is written
+ * into the run's buffer now so that everyone watching gets it; this keeps the
+ * wording identical, including the fallback for an error carrying no message.
+ */
+function streamErrorText(error: unknown): string {
+  const message = error instanceof Error ? error.message : String(error);
+  return message || "pi chat failed";
 }
 
 function normalizeToolInput(input: unknown): Record<string, unknown> {
@@ -635,6 +649,27 @@ export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?:
   const tools = new Map<string, PiToolRecord>();
   const timelineParts: ChatMessagePart[] = [];
   let mcpOAuthPending = false;
+  let stopped = false;
+
+  // A turn started in Telegram is the same turn as one started in the browser,
+  // and the workspace's own chat window should be able to watch it happen
+  // rather than wait for the finished message to appear. This path has no
+  // stream of its own, so it shapes the same chunks by hand.
+  let live: LiveRunSink | null = null;
+  let liveTextId: string | null = null;
+  const liveText = (delta: string) => {
+    if (!live) return;
+    if (!liveTextId) {
+      liveTextId = `pi-text-${crypto.randomUUID()}`;
+      live.push({ type: "text-start", id: liveTextId });
+    }
+    live.push({ type: "text-delta", id: liveTextId, delta });
+  };
+  const liveCloseText = () => {
+    if (!live || !liveTextId) return;
+    live.push({ type: "text-end", id: liveTextId });
+    liveTextId = null;
+  };
 
   const unsubscribe = session.subscribe((event: unknown) => {
     const record = asRecord(event);
@@ -645,6 +680,7 @@ export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?:
       if (assistantEvent?.type === "text_delta" && typeof assistantEvent.delta === "string") {
         assistantText += assistantEvent.delta;
         appendTimelineText(timelineParts, assistantEvent.delta);
+        liveText(assistantEvent.delta);
       }
       return;
     }
@@ -661,6 +697,11 @@ export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?:
           message.stopReason === "error"
             ? describeProviderFailure(message.errorMessage) ?? providerFailure
             : null;
+        live?.push({
+          type: "data-piStats",
+          id: "pi-runtime-stats",
+          data: buildPiRuntimeStats(session, currentPromptUsage, addUsage(baselineUsage, currentPromptUsage)),
+        });
       }
       return;
     }
@@ -669,14 +710,17 @@ export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?:
       const toolCallId =
         typeof record.toolCallId === "string" ? record.toolCallId : crypto.randomUUID();
       const toolName = typeof record.toolName === "string" ? record.toolName : "tool";
+      const input = getToolArgs(record);
       const toolRecord: PiToolRecord = {
         toolCallId,
         toolName,
-        input: getToolArgs(record),
+        input,
         status: "running",
       };
       tools.set(toolCallId, toolRecord);
       upsertTimelineTool(timelineParts, toolRecord);
+      liveCloseText();
+      live?.push({ type: "tool-input-available", toolCallId, toolName, input, dynamic: true });
       return;
     }
 
@@ -700,18 +744,43 @@ export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?:
       }
       tools.set(toolCallId, toolRecord);
       upsertTimelineTool(timelineParts, toolRecord);
+      live?.push(
+        toolRecord.status === "error"
+          ? { type: "tool-output-error", toolCallId, errorText: stringifyForDisplay(output), dynamic: true }
+          : { type: "tool-output-available", toolCallId, output: stringifyForDisplay(output), dynamic: true }
+      );
     }
+  });
+
+  live = startLiveRun({
+    chatId: options.chatId,
+    runId,
+    projectId: options.projectId ?? null,
+    surface: "external",
   });
 
   try {
     applySchedulingToolPolicy(session, prompt);
     // Reachable while it runs, so a second message can stop it or be added to
     // it instead of starting a rival agent in the same chat.
-    registerActiveRun(options.chatId, { session, runId, surface: "external" });
+    registerActiveRun(options.chatId, {
+      session,
+      runId,
+      surface: "external",
+      requestStop: () => {
+        stopped = true;
+        void session.abort().catch((error) => {
+          console.warn("Failed to stop the running turn:", error);
+        });
+      },
+    });
     await session.prompt(preparePromptForRuntime(prompt));
+    liveCloseText();
     currentPromptUsage = currentPromptUsage ?? subtractUsage(getSessionTokenUsage(session), baselineUsage);
     lastTurnUsage = lastTurnUsage ?? currentPromptUsage;
-    if (isEmptyZeroTokenTurn(assistantText, tools.values(), currentPromptUsage)) {
+    // A turn someone stopped produced nothing because they said so, which is
+    // not the same fact as a provider that answered nothing.
+    if (!stopped && isEmptyZeroTokenTurn(assistantText, tools.values(), currentPromptUsage)) {
       throw await emptyTurnError(providerFailure);
     }
     await persistAssistantMessage({
@@ -722,7 +791,15 @@ export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?:
       parts: timelineParts,
     });
     return assistantText;
+  } catch (error) {
+    // The caller of this path answers the messenger it came from; anyone
+    // watching the same turn from the web would otherwise see the stream
+    // simply stop, with nothing said about why.
+    liveCloseText();
+    live?.push({ type: "error", errorText: streamErrorText(error) });
+    throw error;
   } finally {
+    live?.finish();
     clearActiveRun(options.chatId, runId);
     cancelPendingInteractionsForRun(runId);
     unsubscribe();
@@ -753,13 +830,29 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
       const tCompaction = await getServerTranslator();
       await persistUserMessage(options, userMessageId);
 
-      let aborted = options.abortSignal?.aborted === true;
+      // The turn is stopped through here and nowhere else. It used to be tied to
+      // the request that started it, so closing the tab killed the work - and
+      // switching to another chat left the only copy of the output going into a
+      // connection nobody was reading. Stopping is now something the person
+      // asks for explicitly, through the stop button or a stop word.
+      const runAbort = new AbortController();
+      if (options.abortSignal) {
+        if (options.abortSignal.aborted) runAbort.abort();
+        else options.abortSignal.addEventListener("abort", () => runAbort.abort(), { once: true });
+      }
+
+      let aborted = runAbort.signal.aborted;
       let persisted = false;
       let abortPromise: Promise<void> | null = null;
 
+      // Set once the run is registered; until then this response is the only
+      // reader there could be.
+      let live: LiveRunSink | null = null;
+
       const safeWrite = (part: Parameters<typeof writer.write>[0]) => {
         if (aborted) return;
-        writer.write(part);
+        if (live) live.push(part);
+        else writer.write(part);
       };
 
       // The composer is disabled while this tab's own turn runs, so a message
@@ -787,7 +880,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         chatId: options.chatId,
         projectId: options.projectId,
         runId,
-        abortSignal: options.abortSignal,
+        abortSignal: runAbort.signal,
         onPiInteraction: (interaction) => {
           safeWrite({
             type: "data-piInteraction",
@@ -868,9 +961,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         void abortSession();
       };
 
-      options.abortSignal?.addEventListener("abort", handleAbort, { once: true });
-
-      emitStats(buildPiRuntimeStats(session));
+      runAbort.signal.addEventListener("abort", handleAbort, { once: true });
 
       const unsubscribe = session.subscribe((event: unknown) => {
         const record = asRecord(event);
@@ -1017,6 +1108,23 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         }
       });
 
+      // From here the run owns a buffer rather than a connection, and this
+      // response is simply the first thing reading it. A second tab, or the same
+      // tab coming back to the chat, attaches to the same buffer and sees the
+      // turn from the beginning.
+      live = startLiveRun({
+        chatId: options.chatId,
+        runId,
+        projectId: options.projectId ?? null,
+        surface: "web",
+      });
+      attachToLiveRun(options.chatId, {
+        onChunk: (chunk) => writer.write(chunk),
+        onFinish: () => {},
+      });
+
+      emitStats(buildPiRuntimeStats(session));
+
       try {
         if (aborted) {
           await persistPartialAssistant();
@@ -1026,7 +1134,14 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         applySchedulingToolPolicy(session, options.userMessage);
         // See runPiAgentText: a run has to be reachable from the other surfaces
         // for the whole time it is working.
-        registerActiveRun(options.chatId, { session, runId, surface: "web" });
+        registerActiveRun(options.chatId, {
+          session,
+          runId,
+          surface: "web",
+          requestStop: () => {
+            void abortSession();
+          },
+        });
         await session.prompt(preparePromptForRuntime(options.userMessage));
 
         if (aborted) {
@@ -1052,7 +1167,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         });
         persisted = true;
       } catch (error) {
-        if (aborted || options.abortSignal?.aborted) {
+        if (aborted || runAbort.signal.aborted) {
           aborted = true;
           await abortPromise;
           await persistPartialAssistant();
@@ -1088,10 +1203,14 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
           parts: [...completedTimelineParts(timelineParts), { type: "text", text: errorText }],
         });
         persisted = true;
-        throw error;
+        // Written into the buffer rather than rethrown: an exception out of
+        // execute reaches only the response that started the run, and everyone
+        // else watching would be left with a stream that simply stopped.
+        safeWrite({ type: "error", errorText: streamErrorText(error) });
       } finally {
+        live?.finish();
         clearActiveRun(options.chatId, runId);
-        options.abortSignal?.removeEventListener("abort", handleAbort);
+        runAbort.signal.removeEventListener("abort", handleAbort);
         unsubscribe();
         if (aborted) {
           cancelPendingInteractionsForRun(runId);

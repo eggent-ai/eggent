@@ -33,6 +33,9 @@ const enMessages = {
   "nav.files": "Files",
   "nav.chats": "Chats",
   "nav.noChats": "No chats yet",
+  // Read out for the mark on a chat whose turn is still running. Sighted users
+  // get a pulsing dot; this is the same sentence in words.
+  "nav.chatWorking": "Still working",
   "nav.settings": "Settings",
   "nav.documentation": "Documentation",
   "nav.logout": "Logout",

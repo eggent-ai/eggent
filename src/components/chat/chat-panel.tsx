@@ -11,6 +11,7 @@ import type { ChatMessage, ChatMessagePart } from "@/lib/types";
 import type { PiRuntimeStats } from "@/lib/pi/types";
 import type { PiPendingInteraction } from "@/lib/pi/interaction-types";
 import { useBackgroundSync } from "@/hooks/use-background-sync";
+import { useActiveRuns } from "@/hooks/use-active-runs";
 import { useI18n } from "@/i18n/provider";
 import type { MessageKey } from "@/i18n/messages";
 import { generateClientId } from "@/lib/utils";
@@ -439,6 +440,17 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
   const [configuredRuntimeStats, setConfiguredRuntimeStats] = useState<PiRuntimeStats | null>(null);
   const [quickSkills, setQuickSkills] = useState<QuickSkillAction[]>(initialQuickSkills);
   const [launchingSkill, setLaunchingSkill] = useState<string | null>(null);
+  // Which chat's stored messages are on screen. Attaching to a running turn has
+  // to wait for this, or the answer arrives over an empty transcript.
+  const [loadedHistoryChatId, setLoadedHistoryChatId] = useState<string | null>(null);
+  // Set from the moment stop is pressed until the server says the turn is over
+  // and written down. Reloading the conversation inside that window reads the
+  // chat before the half-written answer has landed in it, and the person who
+  // just chose to keep that answer watches it disappear instead. State rather
+  // than a ref, so clearing it is what asks for the reload.
+  const [stopSettling, setStopSettling] = useState(false);
+  const stopSettlingRef = useRef(false);
+  stopSettlingRef.current = stopSettling;
 
   // Internal chatId that stays stable during a message send.
   // Pre-generate a UUID so useChat always has a consistent id.
@@ -462,11 +474,23 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
   // Track the last activeChatId we've seen to detect external navigation
   const prevActiveChatId = useRef(activeChatId);
 
+  // Assigned during render, so it always closes over the chat being left rather
+  // than the one being opened.
+  const stopStreamRef = useRef<() => void>(() => {});
+
   // Sync internalChatId when user navigates to a different chat via sidebar
   useEffect(() => {
     if (activeChatId !== prevActiveChatId.current) {
       prevActiveChatId.current = activeChatId;
       setChatError(null);
+      // Leaving a conversation ends this view of it and not the turn: the run
+      // carries on server-side and we attach to it again on the way back. What
+      // this panel was tracking belongs to the chat being left, so it stops
+      // being tracked here - otherwise a turn interrupted by navigation reads
+      // as one that failed to answer.
+      pendingProjectSwitchRef.current = false;
+      submissionStartCountRef.current = null;
+      stopStreamRef.current();
       if (activeChatId !== null) {
         setInternalChatId(activeChatId);
       } else {
@@ -524,7 +548,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     []
   );
 
-  const { messages, sendMessage, status, stop, setMessages } = useChat({
+  const { messages, sendMessage, status, stop, setMessages, resumeStream } = useChat({
     id: internalChatId,
     transport,
     onError: (error) => {
@@ -532,6 +556,10 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
       setChatError(formatChatErrorMessage(error, t));
     },
   });
+  stopStreamRef.current = stop;
+
+  const activeRuns = useActiveRuns();
+  const activeRunForChat = activeRuns.byChat.get(internalChatId);
 
   const runtimeStats = useMemo(() => getLatestPiRuntimeStats(messages), [messages]);
   const compactionStatus = useMemo(() => getLatestPiCompactionStatus(messages), [messages]);
@@ -592,6 +620,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
   useEffect(() => {
     if (activeChatId === null) return;
     if (status === "submitted" || status === "streaming") return;
+    if (stopSettling) return;
 
     let cancelled = false;
     fetch(`/api/chat/history?id=${encodeURIComponent(activeChatId)}`)
@@ -608,17 +637,19 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         if (statusRef.current === "submitted" || statusRef.current === "streaming") {
           return;
         }
+        if (stopSettlingRef.current) return;
 
         if (!chat?.messages) {
           setMessages([]);
+          setLoadedHistoryChatId(activeChatId);
           return;
         }
 
         const nextMessages = chatMessagesToUIMessages(chat.messages);
-        if (areUIMessagesEquivalentById(messagesRef.current, nextMessages)) {
-          return;
+        if (!areUIMessagesEquivalentById(messagesRef.current, nextMessages)) {
+          setMessages(nextMessages);
         }
-        setMessages(nextMessages);
+        setLoadedHistoryChatId(activeChatId);
       })
       .catch(() => {
         // Keep last known messages on transient polling/network errors.
@@ -626,7 +657,34 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [activeChatId, setMessages, status, syncTick]);
+  }, [activeChatId, setMessages, status, stopSettling, syncTick]);
+
+  // Coming back to a chat that is still working.
+  //
+  // The stored chat holds the opening message and nothing else until the turn
+  // ends, so without this the screen is a question with no answer under it -
+  // for as long as the work takes. Attaching to the run replays everything the
+  // agent has produced since and then follows it live, which is what the tab
+  // that started it has been seeing all along.
+  //
+  // One attempt per run per refresh: enough to pick a dropped connection back
+  // up within a poll, never enough to ask twice for the same answer.
+  const resumeAttemptRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!activeRunForChat) return;
+    if (status === "submitted" || status === "streaming") return;
+    // Stored messages first, always. The turn in flight is only the tail of the
+    // conversation, and attaching before the rest of it has loaded put the
+    // answer on screen without the question that asked for it - and then the
+    // history load, which refuses to write over a running stream, never got
+    // another chance until the turn ended.
+    if (loadedHistoryChatId !== internalChatId) return;
+
+    const attempt = `${internalChatId}:${activeRunForChat.runId}:${activeRuns.version}`;
+    if (resumeAttemptRef.current === attempt) return;
+    resumeAttemptRef.current = attempt;
+    void resumeStream();
+  }, [activeRunForChat, activeRuns.version, internalChatId, loadedHistoryChatId, resumeStream, status]);
 
   const refreshProjects = useCallback(async () => {
     try {
@@ -886,7 +944,26 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
   const handleStop = useCallback(() => {
     const snapshot = messagesRef.current;
     stopRequestedRef.current = true;
+    setStopSettling(true);
+    stopSettlingRef.current = true;
     stop();
+    // Dropping the connection is no longer what stops a turn - that is the whole
+    // point of the run outliving the tab - so the intent has to be sent. It
+    // reaches the run wherever it was started from, including Telegram, and it
+    // answers once the half-written turn has been stored.
+    void fetch(`/api/chat/${encodeURIComponent(internalChatIdRef.current)}/stop`, {
+      method: "POST",
+    })
+      .catch(() => {
+        // Nothing useful to say here: the turn either stopped or is about to
+        // finish on its own, and the history sync shows whichever happened.
+      })
+      .finally(() => {
+        // Clearing this is what asks for the reload, and by now the stored copy
+        // is the one that answers it.
+        stopSettlingRef.current = false;
+        setStopSettling(false);
+      });
     // The AI SDK clears the in-flight assistant message on client abort. Put the
     // last streamed snapshot back immediately; the server persists the same
     // partial turn and the normal history sync will reconcile it afterwards.

@@ -259,6 +259,13 @@
     animation-duration: 1.6s !important;
     animation-iteration-count: infinite !important;
   }
+  /* Same for the mark on a chat that is still working: a dot that has stopped
+     moving is a dot that finished, and it would be wrong for as long as the
+     run lasts. */
+  [data-eggent-live] {
+    animation-duration: 3.2s !important;
+    animation-iteration-count: infinite !important;
+  }
 }
 
 /* The authored moment: a result confirming itself.
@@ -334,9 +341,12 @@
 
 /* ---------------------------------------------------------------------------
    Light motion, for a surface people work in.
-   Three jobs only: say a page arrived, say a message landed, and answer a
-   press. Nothing loops, nothing blocks, nothing exceeds 380ms, and everything
-   here is already switched off above under prefers-reduced-motion.
+   Four jobs: say a page arrived, say a message landed, answer a press, and say
+   a chat is still working. Nothing blocks, nothing exceeds 380ms, and the three
+   authored moments are already switched off above under prefers-reduced-motion.
+   The fourth loops, because it reports a state rather than an event and has to
+   keep reporting it for as long as the state lasts - the same reason the
+   spinner loops. It is calmed there rather than stopped, for the same reason.
    --------------------------------------------------------------------------- */
 
 @keyframes eggent-page-in {
@@ -360,6 +370,20 @@
    deliver, and until now it appeared the way a table row appears. */
 [data-message-role] {
   animation: eggent-message-in 300ms var(--ease-out) both;
+}
+
+@keyframes eggent-live-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50%      { opacity: 0.4; transform: scale(0.8); }
+}
+
+/* A chat with an agent still working in it, marked in the list.
+   A turn now outlives the tab that started it, so the list has to say which
+   chats are still going; without it the only way to find out is to open each
+   one. Slow and small on purpose: it sits in the periphery for minutes at a
+   time, and a fast blink there is an alarm, not a status. */
+[data-eggent-live] {
+  animation: eggent-live-pulse 1.8s var(--ease-in-out) infinite;
 }
 
 /* Feedback lives at a tenth of a second: fast enough to feel like the control

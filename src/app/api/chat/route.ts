@@ -66,12 +66,15 @@ export async function POST(req: NextRequest) {
     const resolvedCurrentPath = typeof currentPath === "string" ? currentPath : undefined;
 
     if (process.env.EGGENT_AGENT_BACKEND !== "legacy") {
+      // Deliberately not `req.signal`: a turn belongs to the chat, not to the
+      // connection that started it. Tying the two together meant closing the tab
+      // threw the work away, and it is stopped explicitly now - through the stop
+      // button, which posts to this chat's stop endpoint, or a stop word.
       const stream = createPiChatUIMessageStream({
         chatId: resolvedChatId,
         userMessage: message,
         projectId,
         cwd: resolvedCurrentPath,
-        abortSignal: req.signal,
       });
 
       return createUIMessageStreamResponse({
