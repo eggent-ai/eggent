@@ -8,6 +8,7 @@ import { ArrowRight, CheckCircle2, ExternalLink, Loader2, MessageCircle, Sparkle
 import type { UIMessage } from "ai";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
+import { SkeletonList } from "@/components/ui/skeleton-list";
 import { useI18n } from "@/i18n/provider";
 import type { MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/utils";
@@ -45,6 +46,8 @@ interface ChatMessagesProps {
   quickSkills?: QuickSkillAction[];
   onLaunchSkill?: (skillName: string) => void;
   launchingSkill?: string | null;
+  /** A conversation is open but its stored messages have not arrived yet. */
+  awaitingHistory?: boolean;
 }
 
 function interactionKindLabelKey(kind: PiPendingInteraction["kind"]): MessageKey {
@@ -170,7 +173,7 @@ function InteractionCard({
   );
 }
 
-export function ChatMessages({ messages, isLoading, errorMessage, compactionStatus, actionNotice, pendingInteraction, onRespondToInteraction, quickSkills = [], onLaunchSkill, launchingSkill }: ChatMessagesProps) {
+export function ChatMessages({ messages, isLoading, errorMessage, compactionStatus, actionNotice, pendingInteraction, onRespondToInteraction, quickSkills = [], onLaunchSkill, launchingSkill, awaitingHistory = false }: ChatMessagesProps) {
   const { t } = useI18n();
   const scrollRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -197,6 +200,21 @@ export function ChatMessages({ messages, isLoading, errorMessage, compactionStat
   useEffect(() => {
     updateShouldAutoScroll();
   }, [updateShouldAutoScroll]);
+
+  // A conversation whose messages are still on their way is not an empty one.
+  // Switching chats put the new-chat screen on the screen for the half second
+  // the fetch took - an invitation to start something, over a conversation that
+  // already exists. The same wrapper and the same rhythm as the transcript, so
+  // nothing moves when the real messages land.
+  if (messages.length === 0 && !isLoading && awaitingHistory) {
+    return (
+      <div className="flex-1 overflow-y-auto px-4 md:px-6">
+        <div className="max-w-3xl mx-auto py-4">
+          <SkeletonList rows={3} />
+        </div>
+      </div>
+    );
+  }
 
   if (messages.length === 0 && !isLoading) {
     return (

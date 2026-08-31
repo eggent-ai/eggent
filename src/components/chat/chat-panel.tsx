@@ -1,7 +1,7 @@
 "use client";
 
 import { useChat } from "@ai-sdk/react";
-import { useRouter } from "next/navigation";
+import { usePathname, useRouter } from "next/navigation";
 import { DefaultChatTransport } from "ai";
 import type { UIMessage } from "ai";
 import { ChatMessages, type QuickSkillAction } from "./chat-messages";
@@ -15,7 +15,7 @@ import { useBackgroundSync } from "@/hooks/use-background-sync";
 import { useActiveRuns } from "@/hooks/use-active-runs";
 import { useI18n } from "@/i18n/provider";
 import type { MessageKey } from "@/i18n/messages";
-import { chatPath } from "@/lib/dashboard-routes";
+import { DASHBOARD_CHAT_ROOT, chatPath } from "@/lib/dashboard-routes";
 import { generateClientId } from "@/lib/utils";
 
 /** Convert stored ChatMessage to UIMessage (parts format for useChat) */
@@ -426,6 +426,7 @@ interface ChatPanelProps {
 export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
   const { t } = useI18n();
   const router = useRouter();
+  const pathname = usePathname();
   const noFinalResponseFallback = t("chat.errors.noFinalAfterTools");
   const {
     activeChatId,
@@ -448,6 +449,12 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
   // whenever the open chat changes, so it always means "this visit", never "the
   // last time this chat happened to be open".
   const [loadedHistoryChatId, setLoadedHistoryChatId] = useState<string | null>(null);
+  // The chat whose history could not be fetched. Kept apart from the marker
+  // above on purpose: for the screen this settles the question - stop waiting
+  // and show what we have - but for attaching to a running turn it settles
+  // nothing, and attaching over a transcript we failed to load is the thing
+  // that marker exists to prevent.
+  const [historyFailedChatId, setHistoryFailedChatId] = useState<string | null>(null);
   // Set beside it: a conversation whose stored messages end on the person's own
   // message had something answering it. That is worth trying to attach to
   // without waiting to be told, because it is exactly the state a chat is in
@@ -511,6 +518,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
       // the next attach run against the previous visit's transcript.
       resumeAttemptRef.current = null;
       setLoadedHistoryChatId(null);
+      setHistoryFailedChatId(null);
       if (activeChatId !== null) {
         setInternalChatId(activeChatId);
       } else {
@@ -678,7 +686,10 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         setLoadedHistoryChatId(activeChatId);
       })
       .catch(() => {
-        // Keep last known messages on transient polling/network errors.
+        // Keep last known messages on transient polling/network errors, but
+        // stop waiting: a loading shape that never resolves is worse than the
+        // empty screen it replaced. The next sync tick tries again.
+        if (!cancelled) setHistoryFailedChatId(activeChatId);
       });
     return () => {
       cancelled = true;
@@ -873,6 +884,22 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
 
   const isLoading = status === "submitted" || status === "streaming";
 
+  // Between opening a conversation and its messages arriving there is nothing
+  // to show, and what used to fill it was the new-chat screen - asking what to
+  // start, on top of something already started. It is only a question for a
+  // chat that does not exist yet.
+  //
+  // The address decides, not the store. The store learns which conversation is
+  // open one tick after the page does, and on a first load it starts out empty:
+  // that put the new-chat screen into the server-rendered html of every
+  // conversation opened from a link, before the client had even asked for the
+  // messages.
+  const addressNamesAChat = pathname !== DASHBOARD_CHAT_ROOT;
+  const historySettled =
+    activeChatId !== null &&
+    (loadedHistoryChatId === activeChatId || historyFailedChatId === activeChatId);
+  const awaitingHistory = addressNamesAChat && !historySettled;
+
   const registerOutgoingChat = useCallback((messageText: string, projectId: string | null | undefined) => {
     if (!activeChatId) {
       prevActiveChatId.current = internalChatId;
@@ -1052,6 +1079,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         quickSkills={showQuickSkills}
         onLaunchSkill={requestSkillLaunch}
         launchingSkill={launchingSkill}
+        awaitingHistory={awaitingHistory}
       />
       <ChatInput
         input={input}
