@@ -15,6 +15,7 @@ import {
   Trash2,
 } from "lucide-react";
 import { useAppStore } from "@/store/app-store";
+import { chatPath } from "@/lib/dashboard-routes";
 import { FileTree } from "@/components/file-tree";
 import { useBackgroundSync } from "@/hooks/use-background-sync";
 import { useActiveRuns } from "@/hooks/use-active-runs";
@@ -44,12 +45,11 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     chats,
     setChats,
     activeChatId,
-    setActiveChatId,
+    openChat,
     removeChat,
     projects,
     setProjects,
     activeProjectId,
-    setActiveProjectId,
   } = useAppStore();
   const projectsTick = useBackgroundSync({
     topics: ["projects", "global"],
@@ -60,33 +60,64 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   });
   const activeRuns = useActiveRuns();
 
-  const isOnChatPage = pathname === "/dashboard";
+  /**
+   * Open a conversation, in the store and in the address bar.
+   *
+   * Both, and in that order: the store is what the screen reads, so writing it
+   * first is what makes the click feel immediate, and the address follows so
+   * the conversation can be linked to, reopened and found again with Back. The
+   * route confirms the same two values when it arrives.
+   *
+   * `projectId` undefined leaves the project alone - a chat picked out of the
+   * list is already in the project whose list it came from.
+   */
+  const goToChat = React.useCallback(
+    (chatId: string | null, projectId?: string | null) => {
+      openChat(chatId, projectId);
+      router.push(chatPath(chatId));
+    },
+    [openChat, router]
+  );
 
-  // Navigate to chat page when not already there (e.g. from settings/projects/memory)
-  const goToChatIfNeeded = React.useCallback(() => {
-    if (!isOnChatPage) router.push("/dashboard");
-  }, [isOnChatPage, router]);
+  // Until the list has actually arrived once, "this project is not in the list"
+  // means nothing - see the guard below.
+  const [projectsLoaded, setProjectsLoaded] = React.useState(false);
 
   // Keep projects list in sync with background updates.
   useEffect(() => {
     fetch("/api/projects")
       .then((r) => r.json())
       .then((data) => {
-        if (Array.isArray(data)) setProjects(data);
+        if (!Array.isArray(data)) return;
+        setProjects(data);
+        setProjectsLoaded(true);
       })
-      .catch(() => {});
+      .catch(() => {
+        // Leave the flag alone: a failed fetch is not evidence that a project
+        // is gone, and acting on it would close the chat that is open.
+      });
   }, [setProjects, projectsTick]);
 
   // Keep active project aligned with available projects, but keep the
   // orchestrator (activeProjectId === null) as a valid persistent mode.
+  //
+  // Only once the list is known. An empty list is the ordinary first state of a
+  // page load, and treating it as proof meant that opening a project's chat
+  // from a link raced this: the address set the project, this fired against the
+  // not-yet-loaded list, decided the project was gone and sent the person back
+  // to an empty composer in the orchestrator.
   useEffect(() => {
+    if (!projectsLoaded) return;
     if (activeProjectId === null) return;
 
     const activeExists = projects.some((project) => project.id === activeProjectId);
     if (!activeExists) {
-      setActiveProjectId(null);
+      // The project went away and took its chats with it, so the address has to
+      // move too - otherwise the screen shows an empty composer while the
+      // browser still names a conversation that is gone.
+      goToChat(null, null);
     }
-  }, [projects, activeProjectId, setActiveProjectId]);
+  }, [projects, projectsLoaded, activeProjectId, goToChat]);
 
   // Keep chat list synced for the active project.
   useEffect(() => {
@@ -105,17 +136,15 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   }, [activeProjectId, setChats, chatsTick]);
 
   const handleNewChat = () => {
-    setActiveChatId(null);
+    goToChat(null);
     if (typeof window !== "undefined") {
       window.sessionStorage.setItem("eggent-focus-chat-input", "1");
       window.dispatchEvent(new Event("eggent:focus-chat-input"));
     }
-    goToChatIfNeeded();
   };
 
   const handleChatClick = (chatId: string) => {
-    setActiveChatId(chatId);
-    goToChatIfNeeded();
+    goToChat(chatId);
   };
 
   const handleOrchestratorClick = () => {
@@ -125,14 +154,10 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       .then((data) => {
         const list = Array.isArray(data) ? data : [];
         setChats(list);
-        setActiveProjectId(null);
-        setActiveChatId(list[0]?.id ?? null);
-        goToChatIfNeeded();
+        goToChat(list[0]?.id ?? null, null);
       })
       .catch(() => {
-        setActiveProjectId(null);
-        setActiveChatId(null);
-        goToChatIfNeeded();
+        goToChat(null, null);
       });
   };
 
@@ -143,21 +168,21 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       .then((data) => {
         const list = Array.isArray(data) ? data : [];
         setChats(list);
-        setActiveProjectId(projectId);
-        setActiveChatId(list[0]?.id ?? null);
-        goToChatIfNeeded();
+        goToChat(list[0]?.id ?? null, projectId);
       })
       .catch(() => {
-        setActiveProjectId(projectId);
-        setActiveChatId(null);
-        goToChatIfNeeded();
+        goToChat(null, projectId);
       });
   };
 
   const handleDeleteChat = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
+    const wasOpen = activeChatId === id;
     await fetch(`/api/chat/history?id=${id}`, { method: "DELETE" });
     removeChat(id);
+    // The address still names the chat that was just deleted; leaving it there
+    // would make Reload reopen an empty conversation under a dead id.
+    if (wasOpen) goToChat(null);
   };
 
   const handleLogout = async () => {

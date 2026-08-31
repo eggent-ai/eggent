@@ -9,6 +9,20 @@ interface AppState {
   activeChatId: string | null;
   setChats: (chats: ChatListItem[]) => void;
   setActiveChatId: (id: string | null) => void;
+  /**
+   * Put a chat on screen, together with the project it belongs to.
+   *
+   * Opening a chat by its address is the case this exists for: the browser
+   * knows which conversation to show and nothing else, while the composer, the
+   * file tree and the chat list all read the project. Setting the two
+   * separately meant going through a state where the chat was open under the
+   * wrong project - and `setActiveProjectId` clears the open chat by default,
+   * so the obvious order does not even work.
+   *
+   * `projectId` undefined means "leave the project alone", which is what the
+   * new-chat screen wants: starting one inside a project stays in it.
+   */
+  openChat: (chatId: string | null, projectId?: string | null) => void;
   addChat: (chat: ChatListItem) => void;
   removeChat: (id: string) => void;
 
@@ -40,6 +54,18 @@ export const useAppStore = create<AppState>((set) => ({
   activeChatId: null,
   setChats: (chats) => set({ chats }),
   setActiveChatId: (id) => set({ activeChatId: id }),
+  openChat: (chatId, projectId) =>
+    set((state) => {
+      const nextProjectId = projectId === undefined ? state.activeProjectId : projectId;
+      // Changing project resets where the file tree and the composer are
+      // pointing, exactly as picking one from the sidebar does.
+      const projectChanged = nextProjectId !== state.activeProjectId;
+      return {
+        activeChatId: chatId,
+        activeProjectId: nextProjectId,
+        currentPath: projectChanged ? "" : state.currentPath,
+      };
+    }),
   addChat: (chat) =>
     set((state) => ({ chats: [chat, ...state.chats] })),
   removeChat: (id) =>

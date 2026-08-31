@@ -1,6 +1,7 @@
 "use client";
 
 import { useChat } from "@ai-sdk/react";
+import { useRouter } from "next/navigation";
 import { DefaultChatTransport } from "ai";
 import type { UIMessage } from "ai";
 import { ChatMessages, type QuickSkillAction } from "./chat-messages";
@@ -14,6 +15,7 @@ import { useBackgroundSync } from "@/hooks/use-background-sync";
 import { useActiveRuns } from "@/hooks/use-active-runs";
 import { useI18n } from "@/i18n/provider";
 import type { MessageKey } from "@/i18n/messages";
+import { chatPath } from "@/lib/dashboard-routes";
 import { generateClientId } from "@/lib/utils";
 
 /** Convert stored ChatMessage to UIMessage (parts format for useChat) */
@@ -423,6 +425,7 @@ interface ChatPanelProps {
 
 export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
   const { t } = useI18n();
+  const router = useRouter();
   const noFinalResponseFallback = t("chat.errors.noFinalAfterTools");
   const {
     activeChatId,
@@ -825,8 +828,14 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         updatedAt: new Date().toISOString(),
         messageCount: 1,
       });
+      // The conversation exists from this message on, so give it its address.
+      // Replace rather than push: the empty composer it is replacing is not
+      // somewhere to go back to, and Back should reach whatever was open
+      // before. Both addresses share one layout, so the turn that is already
+      // being sent is not interrupted by the change.
+      router.replace(chatPath(internalChatId));
     }
-  }, [activeChatId, internalChatId, setActiveChatId, addChat]);
+  }, [activeChatId, internalChatId, setActiveChatId, addChat, router]);
 
   const respondToInteraction = useCallback(async (interaction: PiPendingInteraction, value: string | boolean | null, cancel = false) => {
     try {
