@@ -444,8 +444,16 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
   const [quickSkills, setQuickSkills] = useState<QuickSkillAction[]>(initialQuickSkills);
   const [launchingSkill, setLaunchingSkill] = useState<string | null>(null);
   // Which chat's stored messages are on screen. Attaching to a running turn has
-  // to wait for this, or the answer arrives over an empty transcript.
+  // to wait for this, or the answer arrives over an empty transcript. Cleared
+  // whenever the open chat changes, so it always means "this visit", never "the
+  // last time this chat happened to be open".
   const [loadedHistoryChatId, setLoadedHistoryChatId] = useState<string | null>(null);
+  // Set beside it: a conversation whose stored messages end on the person's own
+  // message had something answering it. That is worth trying to attach to
+  // without waiting to be told, because it is exactly the state a chat is in
+  // while a turn is running - the question is stored when the turn starts, the
+  // answer only when it ends.
+  const historyEndsOnUserRef = useRef(false);
   // Set from the moment stop is pressed until the server says the turn is over
   // and written down. Reloading the conversation inside that window reads the
   // chat before the half-written answer has landed in it, and the person who
@@ -494,6 +502,15 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
       pendingProjectSwitchRef.current = false;
       submissionStartCountRef.current = null;
       stopStreamRef.current();
+      // Both belong to the conversation being left. Keeping the attach attempt
+      // was the bug this comment exists for: coming back to a chat that was
+      // still working showed the opening message and nothing else, because the
+      // attempt had already been spent on the previous visit and only a refresh
+      // of the run list - a window focus, or the 30s poll - would mint a new
+      // one. Keeping the loaded-history marker is the other half: it would let
+      // the next attach run against the previous visit's transcript.
+      resumeAttemptRef.current = null;
+      setLoadedHistoryChatId(null);
       if (activeChatId !== null) {
         setInternalChatId(activeChatId);
       } else {
@@ -563,6 +580,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
 
   const activeRuns = useActiveRuns();
   const activeRunForChat = activeRuns.byChat.get(internalChatId);
+  const refreshActiveRuns = activeRuns.refresh;
 
   const runtimeStats = useMemo(() => getLatestPiRuntimeStats(messages), [messages]);
   const compactionStatus = useMemo(() => getLatestPiCompactionStatus(messages), [messages]);
@@ -611,6 +629,8 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
   const shouldRefreshProjectsRef = useRef(false);
   const switchInFlightRef = useRef(false);
   const stopRequestedRef = useRef(false);
+  /** The last attach this panel asked for; cleared when the open chat changes. */
+  const resumeAttemptRef = useRef<string | null>(null);
 
   // Reset local messages when switching to "new chat" mode.
   useEffect(() => {
@@ -644,6 +664,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
 
         if (!chat?.messages) {
           setMessages([]);
+          historyEndsOnUserRef.current = false;
           setLoadedHistoryChatId(activeChatId);
           return;
         }
@@ -652,6 +673,8 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         if (!areUIMessagesEquivalentById(messagesRef.current, nextMessages)) {
           setMessages(nextMessages);
         }
+        historyEndsOnUserRef.current =
+          nextMessages[nextMessages.length - 1]?.role === "user";
         setLoadedHistoryChatId(activeChatId);
       })
       .catch(() => {
@@ -662,6 +685,15 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     };
   }, [activeChatId, setMessages, status, stopSettling, syncTick]);
 
+  // Nothing about clicking a chat produces an event, so the run list can be
+  // seconds stale exactly when it is being read. Ask on arrival: it decides
+  // whether to attach, and it puts the mark on the row. Unconditional on
+  // purpose - the answer is a few bytes, and gating it on the status would skip
+  // the arrival that matters, the one that interrupted a stream.
+  useEffect(() => {
+    refreshActiveRuns();
+  }, [internalChatId, refreshActiveRuns]);
+
   // Coming back to a chat that is still working.
   //
   // The stored chat holds the opening message and nothing else until the turn
@@ -670,12 +702,19 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
   // agent has produced since and then follows it live, which is what the tab
   // that started it has been seeing all along.
   //
-  // One attempt per run per refresh: enough to pick a dropped connection back
-  // up within a poll, never enough to ask twice for the same answer.
-  const resumeAttemptRef = useRef<string | null>(null);
+  // One attempt per reason to attach, and leaving the chat forgets them all, so
+  // arriving is always a fresh reason. It used to be one attempt per run per
+  // refresh of the list and nothing else, which meant the second visit to a
+  // working chat was silently skipped - the attempt had been spent on the first
+  // - until something happened to bump the list. Focusing the window did it,
+  // which is why the screen came back to life when the person clicked away and
+  // back rather than when they opened the chat.
   useEffect(() => {
-    if (!activeRunForChat) return;
     if (status === "submitted" || status === "streaming") return;
+    // Only for the conversation the panel has settled on. Mid-switch these two
+    // disagree for one render, and attaching then would open a stream for the
+    // chat being left.
+    if (!internalChatId || activeChatId !== internalChatId) return;
     // Stored messages first, always. The turn in flight is only the tail of the
     // conversation, and attaching before the rest of it has loaded put the
     // answer on screen without the question that asked for it - and then the
@@ -683,11 +722,29 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     // another chance until the turn ended.
     if (loadedHistoryChatId !== internalChatId) return;
 
-    const attempt = `${internalChatId}:${activeRunForChat.runId}:${activeRuns.version}`;
-    if (resumeAttemptRef.current === attempt) return;
+    // Two reasons to attach, and the run list is only one of them. A
+    // conversation that ends on the person's own message is one somebody was
+    // answering, and that is worth acting on without waiting to be told -
+    // otherwise a stale list means the turn stays invisible, and a turn that is
+    // waiting on a question stays invisible for as long as it waits, because
+    // the question lives only in the stream and never in the stored chat.
+    const attempt = activeRunForChat
+      ? `${internalChatId}:${activeRunForChat.runId}:${activeRuns.version}`
+      : historyEndsOnUserRef.current
+        ? `${internalChatId}:unanswered`
+        : null;
+    if (!attempt || resumeAttemptRef.current === attempt) return;
     resumeAttemptRef.current = attempt;
     void resumeStream();
-  }, [activeRunForChat, activeRuns.version, internalChatId, loadedHistoryChatId, resumeStream, status]);
+  }, [
+    activeChatId,
+    activeRunForChat,
+    activeRuns.version,
+    internalChatId,
+    loadedHistoryChatId,
+    resumeStream,
+    status,
+  ]);
 
   const refreshProjects = useCallback(async () => {
     try {

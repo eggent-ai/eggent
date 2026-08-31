@@ -27,6 +27,14 @@ export interface ActiveRuns {
   /** chatId -> the run working in it. */
   byChat: Map<string, ActiveRunSummary>;
   /**
+   * Ask again now, rather than waiting for the next event or the fallback poll.
+   *
+   * Opening a conversation is the moment this answer matters most and the
+   * moment it is most likely to be stale, because nothing about clicking a chat
+   * produces an event.
+   */
+  refresh: () => void;
+  /**
    * Bumped on every refresh, whether or not anything changed.
    *
    * The open chat uses it to decide it may try attaching again: once per chat,
@@ -36,12 +44,15 @@ export interface ActiveRuns {
   version: number;
 }
 
-const EMPTY: ActiveRuns = { byChat: new Map(), version: 0 };
+interface ActiveRunsState {
+  byChat: Map<string, ActiveRunSummary>;
+  version: number;
+}
 
-let current: ActiveRuns = EMPTY;
+let current: ActiveRunsState = { byChat: new Map(), version: 0 };
 let inFlight: Promise<void> | null = null;
 let nextListenerId = 1;
-const listeners = new Map<number, (value: ActiveRuns) => void>();
+const listeners = new Map<number, (value: ActiveRunsState) => void>();
 
 function refresh(): Promise<void> {
   if (inFlight) return inFlight;
@@ -79,7 +90,7 @@ function refresh(): Promise<void> {
 
 export function useActiveRuns(): ActiveRuns {
   const tick = useBackgroundSync({ topics: ["chat", "global"] });
-  const [value, setValue] = useState<ActiveRuns>(current);
+  const [value, setValue] = useState<ActiveRunsState>(current);
 
   useEffect(() => {
     const id = nextListenerId++;
@@ -93,5 +104,5 @@ export function useActiveRuns(): ActiveRuns {
     void refresh();
   }, [tick]);
 
-  return value;
+  return { byChat: value.byChat, version: value.version, refresh };
 }

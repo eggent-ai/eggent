@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect } from "react";
+import { chatPath } from "@/lib/dashboard-routes";
 import { useAppStore } from "@/store/app-store";
 
 /**
@@ -24,6 +25,16 @@ export function ChatRouteSync({
   const openChat = useAppStore((state) => state.openChat);
 
   useEffect(() => {
+    // Only if the browser is still on the address this was rendered for.
+    //
+    // Routes settle in the order their payloads arrive, not the order they were
+    // asked for: leave a conversation and come back before the first navigation
+    // has landed, and the page for the address you left mounts after the one
+    // you arrived at. It would then assert an address nobody is on any more -
+    // a chat named in the bar with an empty composer underneath it and nothing
+    // selected in the list. The address bar is the authority; a page that no
+    // longer matches it has nothing to say.
+    if (window.location.pathname !== chatPath(chatId)) return;
     openChat(chatId, projectId);
   }, [chatId, projectId, openChat]);
 

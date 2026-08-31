@@ -204,6 +204,44 @@ check("a finished turn offers nothing to attach to", () => {
   assert.equal(getLiveRun("chat-7"), null);
 });
 
+/**
+ * The question an agent asks lives only here.
+ *
+ * `persistAssistantMessage` stores text and tool calls; a pending question is
+ * neither, so it exists in the stream and nowhere else. A reader that attaches
+ * without being handed it sees a turn that is working and no way to answer it -
+ * and since the turn is waiting for that answer, it never ends, and the screen
+ * stays that way for as long as the person looks at it.
+ */
+check("a question already asked is replayed to whoever arrives next", () => {
+  const live = startLiveRun({ chatId: "chat-ask", runId: "run-ask", surface: "web" });
+  live.push({ type: "text-start", id: "t1" });
+  live.push({ type: "text-delta", id: "t1", delta: "A few short questions." });
+  live.push({ type: "tool-input-available", toolCallId: "c1", toolName: "eggent_ask_user", input: {}, dynamic: true });
+  live.push({
+    type: "data-piInteraction",
+    id: "pi-interaction-q1",
+    data: { id: "q1", runId: "run-ask", kind: "select", title: "Shall we start?", status: "pending" },
+  });
+
+  const late = collector();
+  attachToLiveRun("chat-ask", late.reader);
+
+  const question = late.chunks.find(
+    (chunk): chunk is Extract<LiveRunChunk, { type: `data-${string}` }> =>
+      chunk.type === "data-piInteraction"
+  );
+  assert.ok(question, "the pending question must be replayed");
+  assert.equal((question.data as { status?: string }).status, "pending");
+  // And in its place: after the text it belongs under, not before it.
+  const types = late.chunks.map((chunk) => chunk.type);
+  assert.ok(
+    types.indexOf("data-piInteraction") > types.indexOf("text-delta"),
+    "it must arrive after the message it interrupts"
+  );
+  live.finish();
+});
+
 check("a chat that is not working has no run", () => {
   assert.equal(getLiveRun("nobody"), null);
   assert.equal(attachToLiveRun("nobody", collector().reader), null);
