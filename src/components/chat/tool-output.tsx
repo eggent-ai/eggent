@@ -161,7 +161,7 @@ export function ToolOutput({ toolName, args, result }: ToolOutputProps) {
   if (toolName === "response") return null;
 
   return (
-    <div className="border rounded-lg my-2 overflow-hidden bg-card">
+    <div className="border rounded-lg overflow-hidden bg-card">
       <button
         onClick={() => setExpanded(!expanded)}
         className="flex items-center gap-2 w-full px-3 py-2 text-sm text-left hover:bg-muted/50 transition-colors"

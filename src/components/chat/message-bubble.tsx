@@ -74,6 +74,14 @@ function renderMarkdownBlock(content: string, key: string) {
   );
 }
 
+// The avatar is 32px and sits at the top of the row, so its centre line is 16px
+// down. A line of text is 28px tall (leading-7) starting 2px down, so it centres
+// at 16px too and the two agree without help. A tool card does not: its header is
+// 36px inside a 1px border, centring 21px down. Nudge the avatar by the 5px
+// difference rather than shrinking the card, and only when a card is what the
+// message opens with.
+const AVATAR_TOOL_CARD_OFFSET = "mt-[5px]";
+
 export function MessageBubble({ message }: MessageBubbleProps) {
   const isUser = message.role === "user";
 
@@ -104,11 +112,23 @@ export function MessageBubble({ message }: MessageBubbleProps) {
   // unchanged; only the grouping around it is new.
   const renderedParts: ReactNode[] = [];
   let pendingTools: { node: ReactNode; name: string; running: boolean }[] = [];
+  // Which of the two the avatar has to line up with; decided by the first block
+  // that actually renders, since an empty text part draws nothing.
+  let opensWithToolCard = false;
+  let openingBlockDecided = false;
+
+  const noteOpeningBlock = (isToolCard: boolean) => {
+    if (openingBlockDecided) return;
+    openingBlockDecided = true;
+    opensWithToolCard = isToolCard;
+  };
 
   const flushTools = () => {
     if (!pendingTools.length) return;
     const group = pendingTools;
     pendingTools = [];
+
+    noteOpeningBlock(true);
 
     // A single call is not a fence; leave it as it was.
     if (group.length === 1) {
@@ -131,7 +151,11 @@ export function MessageBubble({ message }: MessageBubbleProps) {
   message.parts.forEach((part, idx) => {
     if (part.type === "text") {
       flushTools();
-      renderedParts.push(renderMarkdownBlock(part.text, `text-${idx}`));
+      const block = renderMarkdownBlock(part.text, `text-${idx}`);
+      if (block) {
+        renderedParts.push(block);
+        noteOpeningBlock(false);
+      }
       return;
     }
 
@@ -140,7 +164,11 @@ export function MessageBubble({ message }: MessageBubbleProps) {
 
     if (tool.toolName === "response" && tool.state === "output-available") {
       flushTools();
-      renderedParts.push(renderMarkdownBlock(valueToText(tool.output), `response-${tool.toolCallId || idx}`));
+      const block = renderMarkdownBlock(valueToText(tool.output), `response-${tool.toolCallId || idx}`);
+      if (block) {
+        renderedParts.push(block);
+        noteOpeningBlock(false);
+      }
       return;
     }
 
@@ -173,7 +201,11 @@ export function MessageBubble({ message }: MessageBubbleProps) {
 
   return (
     <div className="flex items-start gap-3 py-2" data-message-role="assistant">
-      <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background">
+      <div
+        className={`flex size-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background ${
+          opensWithToolCard ? AVATAR_TOOL_CARD_OFFSET : ""
+        }`}
+      >
         <Bot className="size-4" />
       </div>
       <div className="flex min-w-0 flex-1 flex-col gap-3 pt-0.5 text-sm leading-7">

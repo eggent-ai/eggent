@@ -47,9 +47,13 @@ export function ToolGroup({ count, running, names, children }: ToolGroupProps) {
         {expanded ? <ChevronDown className="size-3.5 shrink-0" /> : <ChevronRight className="size-3.5 shrink-0" />}
         <Wrench className={`size-3.5 shrink-0 ${running ? "animate-pulse" : ""}`} />
         <span className="font-medium">{t("chat.tools.group")}</span>
+        {/* The leading is pinned because an arbitrary font size resets it to
+            "normal", which made this badge - the tallest thing in the row - 1.33px
+            shorter than the same badge in a single tool card, and the two headers
+            then sat at different heights beside the same avatar. */}
         <span
           key={count}
-          className={`inline-flex min-w-5 justify-center rounded-full bg-muted px-1.5 py-0.5 text-[11px] font-medium tabular-nums text-foreground ${
+          className={`inline-flex min-w-5 justify-center rounded-full bg-muted px-1.5 py-0.5 text-[11px]/4 font-medium tabular-nums text-foreground ${
             bumped ? "animate-in zoom-in-50 fade-in duration-300" : ""
           }`}
         >
