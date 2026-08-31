@@ -106,7 +106,7 @@ check("a chat id is not mistaken for a dashboard name", () => {
 });
 
 check("an id that needs escaping stays one segment", () => {
-  for (const id of ["a b", "a/b", "a?b", "a#b", "чат"]) {
+  for (const id of ["a b", "a/b", "a?b", "a#b", "café"]) {
     const encoded = chatPath(id).slice("/dashboard/".length);
     assert.ok(!encoded.includes("/"), `must stay one segment: ${id}`);
     assert.equal(decodeURIComponent(encoded), id, `must decode back: ${id}`);
