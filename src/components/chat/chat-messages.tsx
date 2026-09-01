@@ -91,7 +91,16 @@ function InteractionCard({
 }) {
   const { t } = useI18n();
   const [draft, setDraft] = useState("");
-  const acceptsText = interaction.kind === "text" || interaction.kind === "secret" || interaction.kind === "terminal_input";
+  // A card with options used to render the buttons and nothing else, so anyone
+  // whose answer was not one of four buttons could not answer at all - they
+  // typed into the composer and were told "Selected option is not available".
+  // The options are the likely answers; they were never meant to be the only
+  // ones.
+  const acceptsText =
+    interaction.kind === "text" ||
+    interaction.kind === "secret" ||
+    interaction.kind === "terminal_input" ||
+    interaction.kind === "select";
   const question = interaction.message?.trim() || interaction.title;
   const heading = interaction.message?.trim() && interaction.title !== interaction.message ? interaction.title : null;
 
@@ -139,9 +148,12 @@ function InteractionCard({
           <Input
             value={draft}
             onChange={(event) => setDraft(event.target.value)}
-            placeholder={interaction.placeholder || t("chat.interaction.answerPlaceholder")}
+            placeholder={
+              interaction.placeholder ||
+              t(interaction.options?.length ? "chat.interaction.orTypeYourOwn" : "chat.interaction.answerPlaceholder")
+            }
             type={interaction.kind === "secret" ? "password" : "text"}
-            autoFocus
+            autoFocus={!interaction.options?.length}
           />
           <Button type="submit" size="sm" disabled={!draft.trim()} className="sm:w-auto">
             {t("chat.interaction.send")}

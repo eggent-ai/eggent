@@ -134,12 +134,11 @@ export function respondToPendingInteraction(
     value = String(response.value);
   }
 
-  if (entry.interaction.kind === "select" && typeof value === "string") {
-    const allowed = entry.interaction.options ?? [];
-    if (allowed.length > 0 && !allowed.includes(value)) {
-      throw new Error("Selected option is not available");
-    }
-  }
+  // A select card offers likely answers, not the only ones: it now carries an
+  // input beside its buttons, so a typed answer is the normal case rather than a
+  // tampered one. Rejecting it left the user with a question they could see and
+  // could not answer. The stale-card case this guarded is already covered - the
+  // answer is matched to a live entry by id before it gets here.
 
   finishInteraction(entry, "completed");
   entry.resolve(value);

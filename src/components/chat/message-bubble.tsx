@@ -6,6 +6,9 @@ import { Bot, User } from "lucide-react";
 import { CodeBlock } from "./code-block";
 import { ToolOutput } from "./tool-output";
 import { ToolGroup } from "./tool-group";
+import { FileMention } from "./file-mention";
+import { fileMentionPath } from "@/lib/files/openable";
+import { useAppStore } from "@/store/app-store";
 import type { ReactNode } from "react";
 import type { UIMessage } from "ai";
 
@@ -216,6 +219,9 @@ export function MessageBubble({ message }: MessageBubbleProps) {
 }
 
 function MarkdownContent({ content }: { content: string }) {
+  // The orchestrator is a project like any other on the file API; the store
+  // spells it null and the API spells it "none".
+  const projectId = useAppStore((state) => state.activeProjectId) ?? "none";
   return (
     <ReactMarkdown
       remarkPlugins={[remarkGfm]}
@@ -224,6 +230,20 @@ function MarkdownContent({ content }: { content: string }) {
           const match = /language-(\w+)/.exec(className || "");
           const isInline = !match;
           if (isInline) {
+            // `site/preview.html` in an answer is where the work landed, and it
+            // was a piece of text: find the panel, expand the folder, click,
+            // land in the editor, find Open. Five steps to see your own page.
+            const mention =
+              typeof children === "string" || (Array.isArray(children) && children.every((c) => typeof c === "string"))
+                ? fileMentionPath(Array.isArray(children) ? children.join("") : children)
+                : null;
+            if (mention) {
+              return (
+                <FileMention projectId={projectId} path={mention}>
+                  {children}
+                </FileMention>
+              );
+            }
             return (
               <code
                 className="bg-muted px-1.5 py-0.5 rounded text-sm"

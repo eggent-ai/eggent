@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { Textarea } from "@/components/ui/textarea";
 import { useI18n } from "@/i18n/provider";
+import { fileDownloadUrl, isOpenableFile } from "@/lib/files/openable";
 
 type FilePayload = {
   projectId: string;
@@ -45,20 +46,17 @@ export default function GenericFileEditorPage() {
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const downloadHref = useMemo(() => {
-    const params = new URLSearchParams({ project: projectId, path: filePath });
-    return `/api/files/download?${params.toString()}`;
-  }, [projectId, filePath]);
+  const downloadHref = useMemo(() => fileDownloadUrl(projectId, filePath), [projectId, filePath]);
 
   // A built page could only be downloaded as an unnamed binary, so the one
   // thing its author wanted — to look at it — was the one thing they could not
   // do here. Opening is served sandboxed, in its own tab.
-  const openHref = useMemo(() => {
-    const params = new URLSearchParams({ project: projectId, path: filePath, inline: "1" });
-    return `/api/files/download?${params.toString()}`;
-  }, [projectId, filePath]);
+  const openHref = useMemo(
+    () => fileDownloadUrl(projectId, filePath, { inline: true }),
+    [projectId, filePath]
+  );
 
-  const isOpenable = /\.(html?|pdf|svg|png|jpe?g|gif|webp)$/i.test(filePath);
+  const isOpenable = isOpenableFile(filePath);
 
   useEffect(() => {
     let cancelled = false;

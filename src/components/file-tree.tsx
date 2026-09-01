@@ -12,6 +12,7 @@ import {
   File,
   ImageIcon,
   Download,
+  ExternalLink,
   FilePlus,
   FolderPlus,
   Trash2,
@@ -21,6 +22,8 @@ import { ORCHESTRATOR_SCOPE_ID } from "@/lib/orchestrator-scope";
 import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { useBackgroundSync } from "@/hooks/use-background-sync";
+import { fileDownloadUrl, isOpenableFile } from "@/lib/files/openable";
+import { useI18n } from "@/i18n/provider";
 
 interface FileEntry {
   name: string;
@@ -237,20 +240,24 @@ function TreeNode({
   onCreated,
 }: TreeNodeProps) {
   const router = useRouter();
+  const { t } = useI18n();
   const { currentPath } = useAppStore();
   const [expanded, setExpanded] = useState(false);
   const [children, setChildren] = useState<FileEntry[] | null>(null);
   const childrenRef = useRef<FileEntry[] | null>(null);
   const [loading, setLoading] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
-  const downloadHref = useMemo(() => {
-    if (type !== "file") return "";
-    const params = new URLSearchParams({
-      project: projectId,
-      path: relativePath,
-    });
-    return `/api/files/download?${params.toString()}`;
-  }, [projectId, relativePath, type]);
+  const downloadHref = useMemo(
+    () => (type === "file" ? fileDownloadUrl(projectId, relativePath) : ""),
+    [projectId, relativePath, type]
+  );
+  // The Files page has offered this for a while and the tree has not, so the
+  // one place people are told to look was the one place that could only hand
+  // back the source.
+  const openHref = useMemo(
+    () => (type === "file" && isOpenableFile(relativePath) ? fileDownloadUrl(projectId, relativePath, { inline: true }) : ""),
+    [projectId, relativePath, type]
+  );
 
   const isActive = type === "directory" && currentPath === relativePath;
 
@@ -465,13 +472,26 @@ function TreeNode({
         </button>
         {type === "file" && (
         <div className="absolute right-1 top-1/2 flex -translate-y-1/2 items-center gap-0.5 rounded-sm bg-background/80 opacity-0 transition-opacity group-hover/tree-node:opacity-100 group-focus-within/tree-node:opacity-100 focus-within:opacity-100 pointer-coarse:opacity-100">
+          {openHref ? (
+            <a
+              href={openHref}
+              target="_blank"
+              rel="noopener noreferrer"
+              onClick={(event) => event.stopPropagation()}
+              className="inline-flex size-5 items-center justify-center rounded-sm text-muted-foreground transition hover:bg-accent hover:text-foreground"
+              title={`${t("files.open")} ${name}`}
+              aria-label={`${t("files.open")} ${name}`}
+            >
+              <ExternalLink className="size-3.5" />
+            </a>
+          ) : null}
           <a
             href={downloadHref}
             download={name}
             onClick={(event) => event.stopPropagation()}
             className="inline-flex size-5 items-center justify-center rounded-sm text-muted-foreground transition hover:bg-accent hover:text-foreground"
-            title={`Download ${name}`}
-            aria-label={`Download ${name}`}
+            title={`${t("common.download")} ${name}`}
+            aria-label={`${t("common.download")} ${name}`}
           >
             <Download className="size-3.5" />
           </a>

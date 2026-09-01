@@ -197,6 +197,7 @@ const enMessages = {
   "chat.yes": "Yes",
   "chat.no": "No",
   "chat.interaction.answerPlaceholder": "Type your answer",
+  "chat.interaction.orTypeYourOwn": "Or type your own answer",
   "chat.interaction.send": "Answer",
   "chat.interaction.decideForMe": "Decide for me",
   "chat.interaction.skip": "Skip",
@@ -276,6 +277,7 @@ const enMessages = {
 
   "files.previewTitle": "File Preview",
   "files.open": "Open",
+  "files.openInEditor": "Open in the editor",
   "files.defaultTitle": "File",
   "files.noFileSelected": "No file selected.",
   "files.loadFailed": "Failed to load file",
