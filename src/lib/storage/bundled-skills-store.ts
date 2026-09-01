@@ -26,6 +26,20 @@ const BUNDLED_SKILLS_DIR = path.join(process.cwd(), "bundled-skills");
  */
 const VINTAGES_FILE_NAME = ".vintages";
 
+/**
+ * A directory of sibling skills shipped inside one bundled skill.
+ *
+ * Some work is not one skill but a set that is used in turn - build with one,
+ * review with the next, audit with the third. Those belong in the project as
+ * siblings, because that is the only shape the runtime discovers: a first-level
+ * directory under `skills/` whose SKILL.md names itself. Nesting them under the
+ * skill that brought them would leave them invisible.
+ *
+ * One card still installs the set, so the quick-start grid keeps offering the
+ * piece of work rather than its parts.
+ */
+const BUNDLE_DIR_NAME = "bundle";
+
 /** Files that describe the bundle rather than belonging to the skill. */
 const BUNDLE_METADATA_FILES = new Set([VINTAGES_FILE_NAME]);
 
@@ -88,11 +102,53 @@ async function refreshInstalledSkill(
   return "refreshed";
 }
 
+/**
+ * Put the skill's siblings in the project beside it.
+ *
+ * Each one is installed exactly like the skill that carries it: copied when it
+ * is absent, brought up to date when the copy is provably ours, and left alone
+ * when it is not. A failure here never fails the install - the set is still
+ * usable one skill short, and the alternative is a card that does nothing.
+ */
+async function installBundledSiblings(sourceDir: string, targetBaseDir: string): Promise<string[]> {
+  const bundleDir = path.join(sourceDir, BUNDLE_DIR_NAME);
+  const entries = await fs.readdir(bundleDir, { withFileTypes: true }).catch(() => null);
+  if (!entries) return [];
+
+  const installed: string[] = [];
+  for (const entry of entries) {
+    if (!entry.isDirectory() || entry.name.startsWith(".")) continue;
+    const name = entry.name.toLowerCase();
+    // The runtime only finds a skill whose directory name is a legal skill name
+    // and whose frontmatter agrees with it, so a directory that cannot become
+    // one is skipped here rather than copied and silently ignored later.
+    if (validateSkillName(name)) continue;
+
+    const from = path.join(bundleDir, entry.name);
+    const to = path.join(targetBaseDir, name);
+    try {
+      await fs.access(path.join(from, SKILL_FILE_NAME));
+      if (await dirExists(to)) {
+        await refreshInstalledSkill(from, to);
+      } else {
+        await fs.mkdir(to, { recursive: true });
+        await copySkillTree(from, to);
+      }
+      installed.push(name);
+    } catch (error) {
+      console.error(`Failed to install bundled sibling skill "${name}":`, error);
+    }
+  }
+  return installed;
+}
+
 /** Copy the source over the target, leaving anything extra in the target alone. */
 async function copySkillTree(sourceDir: string, targetDir: string): Promise<void> {
   const entries = await fs.readdir(sourceDir, { withFileTypes: true });
   for (const entry of entries) {
     if (BUNDLE_METADATA_FILES.has(entry.name)) continue;
+    // Its siblings are installed beside it, not inside it.
+    if (entry.name === BUNDLE_DIR_NAME) continue;
     // Editor and archive leftovers travel with a copied directory and are not
     // part of any skill.
     if (entry.name.startsWith("._") || entry.name === ".DS_Store") continue;
@@ -316,6 +372,9 @@ export async function installBundledSkill(
       console.error(`Failed to refresh installed skill "${normalizedName}":`, error);
       return "user-modified" as const;
     });
+    // A set can gain a skill after somebody installed it, so the siblings are
+    // reconciled on reuse too, not only on the first install.
+    await installBundledSiblings(sourceDir, targetBaseDir);
     return {
       success: false,
       error: `Skill "${normalizedName}" is already installed in this workspace`,
@@ -329,6 +388,7 @@ export async function installBundledSkill(
   try {
     await fs.mkdir(targetDir, { recursive: true });
     await copySkillTree(sourceDir, targetDir);
+    await installBundledSiblings(sourceDir, targetBaseDir);
     return { success: true, targetDir };
   } catch {
     return {

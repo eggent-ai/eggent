@@ -40,6 +40,28 @@ async function writeSource(name: string, body: string, vintages: string[]): Prom
 await writeSource("demo", NEW_BODY, [md5(OLD_BODY), md5(NEW_BODY)]);
 await writeSource("unmanaged", NEW_BODY, []);
 
+// A card that installs a set: the skill carries its siblings in bundle/, and
+// they belong in the project beside it, because a first-level directory under
+// skills/ is the only shape the runtime discovers.
+const SIB_OLD = "---\nname: sibling-one\ndescription: A sibling, earlier.\n---\n\nOld sibling.\n";
+const SIB_NEW = "---\nname: sibling-one\ndescription: A sibling, shipped.\n---\n\nNew sibling.\n";
+await writeSource("suite", NEW_BODY.replace("name: demo", "name: suite"), []);
+{
+  const bundle = path.join(bundledDir, "suite", "bundle");
+  await fs.mkdir(path.join(bundle, "sibling-one"), { recursive: true });
+  await fs.writeFile(path.join(bundle, "sibling-one", "SKILL.md"), SIB_NEW);
+  await fs.writeFile(path.join(bundle, "sibling-one", ".vintages"), [md5(SIB_OLD), md5(SIB_NEW)].join("\n") + "\n");
+  await fs.mkdir(path.join(bundle, "sibling-two", "references"), { recursive: true });
+  await fs.writeFile(
+    path.join(bundle, "sibling-two", "SKILL.md"),
+    "---\nname: sibling-two\ndescription: The other sibling.\n---\n\nTwo.\n"
+  );
+  await fs.writeFile(path.join(bundle, "sibling-two", "references", "deep.md"), "deep\n");
+  // Not a legal skill name, so it can never be discovered and must not be copied.
+  await fs.mkdir(path.join(bundle, "Not A Skill"), { recursive: true });
+  await fs.writeFile(path.join(bundle, "Not A Skill", "SKILL.md"), "---\nname: x\ndescription: y\n---\n");
+}
+
 const store = await import("../src/lib/storage/bundled-skills-store.ts");
 const { getProjectSkillsDir } = await import("./stubs/project-store.ts");
 
@@ -128,6 +150,50 @@ await check("launching a card refreshes the copy it reuses", async () => {
   const result = await store.launchBundledSkill("demo", "none", "en");
   assert.equal(result.success, true, "a reused skill still launches");
   assert.equal(await readInstalled("demo", "SKILL.md"), NEW_BODY);
+});
+
+await check("a card that carries a set installs the whole set as siblings", async () => {
+  await fs.rm(getProjectSkillsDir("none"), { recursive: true, force: true });
+  const result = await store.installBundledSkill("none", "suite");
+  assert.equal(result.success, true);
+  assert.equal(await readInstalled("suite", "SKILL.md"), NEW_BODY.replace("name: demo", "name: suite"));
+  assert.equal(await readInstalled("sibling-one", "SKILL.md"), SIB_NEW, "a sibling lands beside the skill");
+  assert.equal(await readInstalled("sibling-two", "references/deep.md"), "deep\n", "with its own references");
+});
+
+await check("the set is not nested inside the skill that carries it", async () => {
+  await assert.rejects(
+    () => readInstalled("suite", "bundle/sibling-one/SKILL.md"),
+    "a nested copy would be invisible to the runtime and billed for nothing"
+  );
+});
+
+await check("a directory that could never be a skill is not copied", async () => {
+  await assert.rejects(() => readInstalled("Not A Skill", "SKILL.md"));
+});
+
+await check("a sibling the user has not touched is refreshed on the next launch", async () => {
+  await fs.writeFile(path.join(installedDir("sibling-one"), "SKILL.md"), SIB_OLD);
+  await store.installBundledSkill("none", "suite");
+  assert.equal(await readInstalled("sibling-one", "SKILL.md"), SIB_NEW);
+});
+
+await check("a sibling the user edited is left alone", async () => {
+  const mine = SIB_OLD + "\nMy own note.\n";
+  await fs.writeFile(path.join(installedDir("sibling-one"), "SKILL.md"), mine);
+  await store.installBundledSkill("none", "suite");
+  assert.equal(await readInstalled("sibling-one", "SKILL.md"), mine);
+});
+
+await check("a set gains a skill without reinstalling the card", async () => {
+  const bundle = path.join(bundledDir, "suite", "bundle");
+  await fs.mkdir(path.join(bundle, "sibling-three"), { recursive: true });
+  await fs.writeFile(
+    path.join(bundle, "sibling-three", "SKILL.md"),
+    "---\nname: sibling-three\ndescription: Added later.\n---\n\nThree.\n"
+  );
+  await store.installBundledSkill("none", "suite");
+  assert.match(await readInstalled("sibling-three", "SKILL.md"), /Added later/);
 });
 
 console.log(`\n${ran} checks, ${failed} failed`);
