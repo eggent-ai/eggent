@@ -23,6 +23,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { useBackgroundSync } from "@/hooks/use-background-sync";
 import { fileDownloadUrl, isOpenableFile } from "@/lib/files/openable";
+import { formatUploadSize, MAX_UPLOAD_BYTES, MAX_UPLOAD_LABEL } from "@/lib/files/upload-limits";
 import { useI18n } from "@/i18n/provider";
 
 interface FileEntry {
@@ -194,14 +195,73 @@ async function getDroppedItems(event: DragEvent): Promise<DroppedUploadItems> {
   return { files, directories };
 }
 
-async function uploadFilesToDirectory(projectId: string, targetPath: string, items: DroppedUploadItems) {
+function withoutOversized(items: DroppedUploadItems): DroppedUploadItems {
+  return { ...items, files: items.files.filter((item) => item.file.size <= MAX_UPLOAD_BYTES) };
+}
+
+/**
+ * A file too big to send is reported in the same list as a file the server
+ * refused, because to the person dropping it those are the same event: it did
+ * not arrive, and this is why.
+ */
+function oversizedErrors(
+  items: DroppedUploadItems,
+  t: (key: "api.error.uploadTooLarge", values?: Record<string, string>) => string
+): Array<{ name: string; error: string }> {
+  return items.files
+    .filter((item) => item.file.size > MAX_UPLOAD_BYTES)
+    .map((item) => ({
+      name: item.relativePath || item.file.name,
+      error: t("api.error.uploadTooLarge", {
+        size: formatUploadSize(item.file.size),
+        limit: MAX_UPLOAD_LABEL,
+      }),
+    }));
+}
+
+type UploadResult = {
+  uploaded?: Array<{ name: string; path: string; size: number }>;
+  errors?: Array<{ name: string; error: string }>;
+};
+
+/**
+ * Groups of files that each fit in one request.
+ *
+ * The limit is on the request rather than on the file, and nobody dropping a
+ * folder of photos thinks in requests: a hundred small files are one gesture
+ * and become several uploads here. A single file over the limit is its own
+ * group, refused by the server with its size in the message.
+ */
+function uploadBatches(files: DroppedUploadItems["files"]): DroppedUploadItems["files"][] {
+  const batches: DroppedUploadItems["files"][] = [];
+  let current: DroppedUploadItems["files"] = [];
+  let currentBytes = 0;
+  for (const item of files) {
+    if (current.length > 0 && currentBytes + item.file.size > MAX_UPLOAD_BYTES) {
+      batches.push(current);
+      current = [];
+      currentBytes = 0;
+    }
+    current.push(item);
+    currentBytes += item.file.size;
+  }
+  if (current.length > 0) batches.push(current);
+  return batches;
+}
+
+async function postUpload(
+  projectId: string,
+  targetPath: string,
+  directories: string[],
+  files: DroppedUploadItems["files"]
+): Promise<UploadResult> {
   const formData = new FormData();
   formData.append("project", projectId);
   formData.append("path", targetPath);
-  for (const directory of items.directories) {
+  for (const directory of directories) {
     formData.append("directories", directory);
   }
-  for (const item of items.files) {
+  for (const item of files) {
     formData.append("files", item.file, item.file.name);
     formData.append("relativePaths", item.relativePath);
   }
@@ -214,10 +274,23 @@ async function uploadFilesToDirectory(projectId: string, targetPath: string, ite
   if (!res.ok) {
     throw new Error(typeof payload.error === "string" ? payload.error : "Failed to upload files");
   }
-  return payload as {
-    uploaded?: Array<{ name: string; path: string; size: number }>;
-    errors?: Array<{ name: string; error: string }>;
-  };
+  return payload as UploadResult;
+}
+
+async function uploadFilesToDirectory(projectId: string, targetPath: string, items: DroppedUploadItems) {
+  const batches = uploadBatches(items.files);
+  const uploaded: NonNullable<UploadResult["uploaded"]> = [];
+  const errors: NonNullable<UploadResult["errors"]> = [];
+
+  // The directories ride with the first request, and go on their own when
+  // there are no files at all - dropping an empty folder still creates it.
+  for (const [index, batch] of (batches.length > 0 ? batches : [[]]).entries()) {
+    const result = await postUpload(projectId, targetPath, index === 0 ? items.directories : [], batch);
+    uploaded.push(...(result.uploaded ?? []));
+    errors.push(...(result.errors ?? []));
+  }
+
+  return { uploaded, errors } satisfies UploadResult;
 }
 
 interface TreeNodeProps {
@@ -364,8 +437,8 @@ function TreeNode({
   const uploadDroppedItems = async (items: DroppedUploadItems) => {
     if (type !== "directory" || (items.files.length === 0 && items.directories.length === 0)) return;
     try {
-      const result = await uploadFilesToDirectory(projectId, relativePath, items);
-      const errors = result.errors ?? [];
+      const result = await uploadFilesToDirectory(projectId, relativePath, withoutOversized(items));
+      const errors = [...oversizedErrors(items, t), ...(result.errors ?? [])];
       if (errors.length > 0) {
         window.alert(errors.map((item) => `${item.name}: ${item.error}`).join("\n"));
       }
@@ -597,6 +670,7 @@ interface FileTreeProps {
 
 export function FileTree({ projectId }: FileTreeProps) {
   const router = useRouter();
+  const { t } = useI18n();
   const { currentPath, setCurrentPath } = useAppStore();
   const [rootEntries, setRootEntries] = useState<FileEntry[] | null>(null);
   const [isRootDragOver, setIsRootDragOver] = useState(false);
@@ -662,8 +736,8 @@ export function FileTree({ projectId }: FileTreeProps) {
   const uploadDroppedRootItems = async (items: DroppedUploadItems) => {
     if (items.files.length === 0 && items.directories.length === 0) return;
     try {
-      const result = await uploadFilesToDirectory(projectId, "", items);
-      const errors = result.errors ?? [];
+      const result = await uploadFilesToDirectory(projectId, "", withoutOversized(items));
+      const errors = [...oversizedErrors(items, t), ...(result.errors ?? [])];
       if (errors.length > 0) {
         window.alert(errors.map((item) => `${item.name}: ${item.error}`).join("\n"));
       }

@@ -5,6 +5,7 @@ import {
     deleteChatFile,
 } from "@/lib/storage/chat-files-store";
 import { getServerTranslator } from "@/i18n/server";
+import { formatUploadSize, MAX_UPLOAD_LABEL, oversizedRequestBytes } from "@/lib/files/upload-limits";
 
 /**
  * GET /api/chat/files?chatId=xxx
@@ -39,6 +40,16 @@ export async function GET(req: NextRequest) {
  */
 export async function POST(req: NextRequest) {
     const t = await getServerTranslator(req.headers.get("accept-language"));
+    // Same door as the file tree, same reason: past the limit the body is
+    // already truncated and parsing it would report malformed multipart
+    // instead of the size.
+    const oversized = oversizedRequestBytes(req.headers.get("content-length"));
+    if (oversized !== null) {
+        return Response.json(
+            { error: t("api.error.uploadTooLarge", { size: formatUploadSize(oversized), limit: MAX_UPLOAD_LABEL }) },
+            { status: 413 }
+        );
+    }
     try {
         const formData = await req.formData();
         const chatId = formData.get("chatId") as string;

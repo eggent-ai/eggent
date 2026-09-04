@@ -4,6 +4,7 @@ import path from "path";
 import { getWorkDir } from "@/lib/storage/project-store";
 import { publishUiSyncEvent } from "@/lib/realtime/event-bus";
 import { getServerTranslator } from "@/i18n/server";
+import { formatUploadSize, MAX_UPLOAD_LABEL, oversizedRequestBytes } from "@/lib/files/upload-limits";
 
 function resolveSafeDir(projectId: string, dirPath: string) {
   const workDir = getWorkDir(projectId);
@@ -40,6 +41,16 @@ function resolveSafeChildPath(rootDir: string, relativePath: string) {
 
 export async function POST(req: NextRequest) {
   const t = await getServerTranslator(req.headers.get("accept-language"));
+  // Before the body is touched: past the limit it has already been truncated
+  // upstream, and parsing it would fail as malformed multipart rather than as
+  // the one thing worth saying, which is how big is too big.
+  const oversized = oversizedRequestBytes(req.headers.get("content-length"));
+  if (oversized !== null) {
+    return Response.json(
+      { error: t("api.error.uploadTooLarge", { size: formatUploadSize(oversized), limit: MAX_UPLOAD_LABEL }) },
+      { status: 413 }
+    );
+  }
   const formData = await req.formData();
   const projectId = String(formData.get("project") || "");
   const dirPath = String(formData.get("path") || "");

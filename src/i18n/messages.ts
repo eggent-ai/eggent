@@ -726,6 +726,7 @@ const enMessages = {
   "api.error.failedWriteFile": "Failed to write file",
   "api.error.failedGetChatFiles": "Failed to get chat files",
   "api.error.failedUploadFile": "Failed to upload file",
+  "api.error.uploadTooLarge": "{size} is too big to upload — one upload can carry at most {limit}",
   "api.error.failedDeleteFile": "Failed to delete file",
   "api.error.pathNotFile": "Path is not a file",
   "api.error.fileTooLargePreview": "File is too large to preview as text",

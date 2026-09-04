@@ -4,6 +4,7 @@ import { useRef, useCallback, useState, useEffect, useMemo } from "react";
 import { Send, Square, Paperclip, X, FileIcon, ImageIcon, Mic, MicOff, Loader2, Sparkles } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n/provider";
+import { formatUploadSize, MAX_UPLOAD_BYTES, MAX_UPLOAD_LABEL } from "@/lib/files/upload-limits";
 import type { MessageKey } from "@/i18n/messages";
 import type { ChatFile } from "@/lib/types";
 import type { PiRuntimeStats } from "@/lib/pi/types";
@@ -351,6 +352,12 @@ export function ChatInput({
   const uploadFile = useCallback(
     async (file: File) => {
       if (!chatId) return;
+      if (file.size > MAX_UPLOAD_BYTES) {
+        // Said here rather than after a round trip: the request would be cut
+        // short on the way in and fail as a malformed body.
+        window.alert(`${file.name}: ${t("api.error.uploadTooLarge", { size: formatUploadSize(file.size), limit: MAX_UPLOAD_LABEL })}`);
+        return;
+      }
 
       setUploadingFiles((prev) => [...prev, file.name]);
 
@@ -379,7 +386,7 @@ export function ChatInput({
         setUploadingFiles((prev) => prev.filter((name) => name !== file.name));
       }
     },
-    [chatId, onFilesUploaded]
+    [chatId, onFilesUploaded, t]
   );
 
   const handleFileSelect = useCallback(
