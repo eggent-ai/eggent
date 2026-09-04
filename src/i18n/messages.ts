@@ -284,6 +284,8 @@ const enMessages = {
   "files.textPreview": "Text preview",
   "files.upload": "Upload files",
   "files.uploadInto": "Upload files into {name}",
+  "files.uploadFolder": "Upload folder",
+  "files.uploadFolderInto": "Upload folder into {name}",
   "files.uploading": "Uploading {percent}%",
   "files.uploadFailed": "Failed to upload files",
   "files.uploadTooLarge": "\"{name}\" is larger than the {limit} MB upload limit",

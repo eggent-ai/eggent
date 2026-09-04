@@ -498,9 +498,25 @@ curl -X POST http://localhost:3000/api/files/upload \
   -F "files=@./notes.md"
 ```
 
+A whole folder goes in the same request: `relativePaths` says where each file
+should land, pairing with `files` by position, and `directories` names the
+folders to create - which is how an empty one survives the trip.
+
+```bash
+curl -X POST http://localhost:3000/api/files/upload \
+  -F "project=<project-id>" \
+  -F "path=." \
+  -F "directories=docs/drafts" \
+  -F "files=@./intro.md" -F "relativePaths=docs/intro.md" \
+  -F "files=@./api.md" -F "relativePaths=docs/drafts/api.md"
+```
+
 Requests larger than `EGGENT_MAX_UPLOAD_MB` are rejected with `413` before the
 body is read. `GET /api/files/upload` returns the limit in bytes, or `null` when
-it is disabled, so a client can refuse an oversized file before sending it.
+it is disabled, so a client can refuse an oversized file before sending it. The
+limit bounds a request rather than an upload: the dashboard sends a folder as
+however many requests it takes to stay under it, so a folder larger than the
+limit still uploads.
 
 ### Pipelines
 
@@ -651,8 +667,15 @@ Eggent context can come from:
 Pasted images are stored as chat files and passed to the agent with file type and absolute path metadata.
 
 Files already on your machine go into a project workspace from the file tree in
-the sidebar: the upload button on a folder opens a file picker, and files or
-whole folders can also be dropped onto it.
+the sidebar. Every folder in the tree carries two buttons: one opens a file
+picker, the other a folder picker that takes the whole tree underneath it,
+however deep, and rebuilds it in the workspace. Files and folders can also be
+dropped onto a folder, which does the same thing.
+
+A folder is sent as several requests, each under `EGGENT_MAX_UPLOAD_MB`, so its
+size is not capped by that limit - only each file in it is. Folder pickers are a
+desktop-browser feature: where the browser has none (iOS Safari), the button
+falls back to picking files.
 
 ---
 

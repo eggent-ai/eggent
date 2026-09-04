@@ -16,6 +16,7 @@ import {
   FolderPlus,
   Trash2,
   Upload,
+  FolderUp,
 } from "lucide-react";
 import { useAppStore } from "@/store/app-store";
 import { ORCHESTRATOR_SCOPE_ID } from "@/lib/orchestrator-scope";
@@ -23,6 +24,11 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { useBackgroundSync } from "@/hooks/use-background-sync";
 import { useI18n } from "@/i18n/provider";
+import {
+  UNLIMITED_BATCH_BYTES,
+  collectParentDirectories,
+  planUploadBatches,
+} from "@/lib/files/upload-plan";
 
 interface FileEntry {
   name: string;
@@ -207,8 +213,10 @@ interface UploadResult {
 /**
  * Files a picker handed over, in the shape a drop already produces.
  *
- * A picked directory arrives as its files with `webkitRelativePath` set, so the
- * structure survives without the directory entries a drop reports separately.
+ * A picked folder arrives as its files with `webkitRelativePath` set - the
+ * whole tree, however deep, flattened into paths. The directories a drop
+ * reports separately are read back out of those paths, so both ways in produce
+ * the same request.
  */
 function itemsFromFileList(fileList: FileList | null): DroppedUploadItems {
   const files: DroppedUploadFile[] = [];
@@ -221,7 +229,7 @@ function itemsFromFileList(fileList: FileList | null): DroppedUploadItems {
     });
   }
 
-  return { files, directories: [] };
+  return { files, directories: collectParentDirectories(files.map((item) => item.relativePath)) };
 }
 
 function megabytes(bytes: number): number {
@@ -229,10 +237,12 @@ function megabytes(bytes: number): number {
 }
 
 /**
- * Send an upload with XMLHttpRequest rather than fetch.
+ * Send one upload request with XMLHttpRequest rather than fetch.
  *
  * A hundred-megabyte upload takes long enough that a silent tree looks like a
  * broken one, and upload progress is the one thing fetch still cannot report.
+ * Progress is reported as a fraction of this request, because a request is
+ * rarely the whole upload: the caller knows what share of the folder it is.
  * The message of a rejection is left empty when the server did not supply one,
  * so the caller can translate it.
  */
@@ -241,7 +251,7 @@ function uploadFilesToDirectory(
   targetPath: string,
   items: DroppedUploadItems,
   conflict: "skip" | "overwrite",
-  onProgress: (percent: number) => void
+  onProgress: (fraction: number) => void
 ): Promise<UploadResult> {
   const formData = new FormData();
   formData.append("project", projectId);
@@ -261,7 +271,7 @@ function uploadFilesToDirectory(
 
     request.upload.addEventListener("progress", (event) => {
       if (event.lengthComputable) {
-        onProgress(Math.round((event.loaded / event.total) * 100));
+        onProgress(event.loaded / event.total);
       }
     });
 
@@ -287,6 +297,69 @@ function uploadFilesToDirectory(
   });
 }
 
+/**
+ * Send a whole folder, as however many requests it takes.
+ *
+ * Everything the requests report - a name already taken, a file that would not
+ * write - is appended to `errors`, so a failure part-way through still leaves
+ * the caller everything the earlier requests said. A rejection ends the upload:
+ * the requests after it would fail the same way, and a folder half sent is
+ * easier to reason about than a folder sent full of holes.
+ *
+ * The directories ride along with the first request. They cost nothing and they
+ * mean the folder appears in the tree at once, rather than after the last file
+ * of a long upload lands.
+ */
+async function uploadInBatches(
+  projectId: string,
+  targetPath: string,
+  items: DroppedUploadItems,
+  conflict: "skip" | "overwrite",
+  budgetBytes: number,
+  onProgress: (percent: number) => void,
+  errors: UploadError[]
+): Promise<void> {
+  // The path is sent twice - as the part's filename and as its own field - so a
+  // deep tree of long names is worth counting against the budget.
+  const batches = planUploadBatches(
+    items.files,
+    (item) => item.file.size + item.relativePath.length * 2,
+    budgetBytes
+  );
+  const totalBytes = items.files.reduce((sum, item) => sum + item.file.size, 0);
+  let sentBytes = 0;
+
+  onProgress(0);
+
+  // A folder with nothing in it is still a folder worth creating, and it has no
+  // batch to travel in.
+  if (batches.length === 0) {
+    if (items.directories.length === 0) return;
+    const result = await uploadFilesToDirectory(projectId, targetPath, items, conflict, () => undefined);
+    errors.push(...(result.errors ?? []));
+    onProgress(100);
+    return;
+  }
+
+  for (const [index, batch] of batches.entries()) {
+    const batchBytes = batch.reduce((sum, item) => sum + item.file.size, 0);
+    const result = await uploadFilesToDirectory(
+      projectId,
+      targetPath,
+      { files: batch, directories: index === 0 ? items.directories : [] },
+      conflict,
+      (fraction) => {
+        const done = totalBytes === 0 ? 1 : (sentBytes + fraction * batchBytes) / totalBytes;
+        onProgress(Math.min(100, Math.round(done * 100)));
+      }
+    );
+
+    errors.push(...(result.errors ?? []));
+    sentBytes += batchBytes;
+    onProgress(totalBytes === 0 ? 100 : Math.min(100, Math.round((sentBytes / totalBytes) * 100)));
+  }
+}
+
 interface TreeNodeProps {
   projectId: string;
   name: string;
@@ -297,6 +370,7 @@ interface TreeNodeProps {
   uploadingPath: string | null;
   uploadPercent: number;
   onRequestUpload: (targetPath: string) => void;
+  onRequestFolderUpload: (targetPath: string) => void;
   onUpload: (targetPath: string, items: DroppedUploadItems) => Promise<void>;
   onCreated?: () => void;
 }
@@ -311,6 +385,7 @@ function TreeNode({
   uploadingPath,
   uploadPercent,
   onRequestUpload,
+  onRequestFolderUpload,
   onUpload,
   onCreated,
 }: TreeNodeProps) {
@@ -511,7 +586,7 @@ function TreeNode({
           className={cn(
             "flex items-center gap-1 w-full text-left text-xs py-1 px-1 rounded-sm hover:bg-accent/50 transition-colors",
             type === "file" && "pr-12",
-            type === "directory" && "pr-20",
+            type === "directory" && "pr-24",
             isActive && "bg-accent text-accent-foreground font-medium"
           )}
           style={{ paddingLeft: `${depth * 12 + 4}px` }}
@@ -584,6 +659,18 @@ function TreeNode({
             type="button"
             onClick={(event) => {
               event.stopPropagation();
+              onRequestFolderUpload(relativePath);
+            }}
+            className="inline-flex size-5 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+            title={t("files.uploadFolderInto", { name })}
+            aria-label={t("files.uploadFolderInto", { name })}
+          >
+            <FolderUp className="size-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
               void createEntry("file");
             }}
             className="inline-flex size-5 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
@@ -646,6 +733,7 @@ function TreeNode({
               uploadingPath={uploadingPath}
               uploadPercent={uploadPercent}
               onRequestUpload={onRequestUpload}
+              onRequestFolderUpload={onRequestFolderUpload}
               onUpload={onUpload}
               onCreated={onCreated}
             />
@@ -676,6 +764,7 @@ export function FileTree({ projectId }: FileTreeProps) {
   const [isRootDragOver, setIsRootDragOver] = useState(false);
   const [upload, setUpload] = useState<{ path: string; percent: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
   const uploadTargetRef = useRef<string>("");
   const maxUploadBytesRef = useRef<number | null>(null);
   const refreshToken = useBackgroundSync({
@@ -737,6 +826,18 @@ export function FileTree({ projectId }: FileTreeProps) {
     }
   };
 
+  // The attribute that turns the second picker into a folder picker. React
+  // renders no prop for it and the DOM typings declare none, so it is set on
+  // the element. A browser that does not know it - iOS Safari among them -
+  // ignores it and opens the ordinary file picker, which is a poorer answer
+  // than a folder but not a broken one.
+  useEffect(() => {
+    const input = folderInputRef.current;
+    if (!input) return;
+    input.setAttribute("webkitdirectory", "");
+    input.setAttribute("directory", "");
+  }, []);
+
   // Asked once, so a file too large to be accepted can be refused here instead
   // of after it has been sent. A limit the server declines to state is treated
   // as no limit: the server still has the final say.
@@ -757,9 +858,9 @@ export function FileTree({ projectId }: FileTreeProps) {
   /**
    * Upload into a directory, reporting everything that went wrong once.
    *
-   * The first attempt never replaces anything. Files whose names are already
-   * taken come back named, and are sent again - only those - once the user has
-   * said that replacing them is what they meant.
+   * The first pass never replaces anything. Files whose names are already taken
+   * come back named, and are sent again - only those - once the user has said
+   * that replacing them is what they meant.
    */
   const runUpload = useCallback(
     async (targetPath: string, items: DroppedUploadItems) => {
@@ -783,34 +884,48 @@ export function FileTree({ projectId }: FileTreeProps) {
         return;
       }
 
+      // The limit bounds a request, not an upload: a folder is sent as as many
+      // requests as it takes to stay under it.
+      const budgetBytes = maxUploadBytes ?? UNLIMITED_BATCH_BYTES;
       const report = (percent: number) => setUpload({ path: targetPath, percent });
-      report(0);
 
-      try {
-        const result = await uploadFilesToDirectory(projectId, targetPath, sendable, "skip", report);
-        const errors = result.errors ?? [];
-        const taken = errors.filter((item) => item.code === "exists");
-        const rest = errors.filter((item) => item.code !== "exists");
-
-        if (taken.length > 0 && window.confirm(t("files.uploadReplacePrompt", { count: taken.length }))) {
-          const names = new Set(taken.map((item) => item.name));
-          const replacements: DroppedUploadItems = {
-            files: sendable.files.filter((item) => names.has(item.relativePath)),
-            directories: [],
-          };
-          const replaced = await uploadFilesToDirectory(projectId, targetPath, replacements, "overwrite", report);
-          rest.push(...(replaced.errors ?? []));
-        } else {
-          rest.push(...taken);
+      const send = async (
+        batch: DroppedUploadItems,
+        conflict: "skip" | "overwrite",
+        into: UploadError[]
+      ): Promise<string | null> => {
+        try {
+          await uploadInBatches(projectId, targetPath, batch, conflict, budgetBytes, report, into);
+          return null;
+        } catch (error) {
+          return error instanceof Error && error.message ? error.message : t("files.uploadFailed");
         }
+      };
 
-        problems.push(...rest.map((item) => `${item.name}: ${item.error}`));
-      } catch (error) {
-        problems.push(error instanceof Error && error.message ? error.message : t("files.uploadFailed"));
-      } finally {
-        setUpload(null);
+      const reported: UploadError[] = [];
+      let failure = await send(sendable, "skip", reported);
+
+      const taken = reported.filter((item) => item.code === "exists");
+      const rest = reported.filter((item) => item.code !== "exists");
+
+      if (
+        !failure &&
+        taken.length > 0 &&
+        window.confirm(t("files.uploadReplacePrompt", { count: taken.length }))
+      ) {
+        const names = new Set(taken.map((item) => item.name));
+        const replacements: DroppedUploadItems = {
+          files: sendable.files.filter((item) => names.has(item.relativePath)),
+          directories: [],
+        };
+        failure = await send(replacements, "overwrite", rest);
+      } else {
+        rest.push(...taken);
       }
 
+      setUpload(null);
+      problems.push(...rest.map((item) => `${item.name}: ${item.error}`));
+      if (failure) problems.push(failure);
       if (problems.length > 0) window.alert(problems.join("\n"));
       await loadRootEntries();
     },
@@ -822,9 +937,15 @@ export function FileTree({ projectId }: FileTreeProps) {
     fileInputRef.current?.click();
   }, []);
 
+  const openFolderDialog = useCallback((targetPath: string) => {
+    uploadTargetRef.current = targetPath;
+    folderInputRef.current?.click();
+  }, []);
+
   const handleFilesPicked = (event: ChangeEvent<HTMLInputElement>) => {
     const items = itemsFromFileList(event.target.files);
-    // Cleared so picking the same file twice in a row still fires a change.
+    // Cleared so picking the same file or folder twice in a row still fires a
+    // change.
     event.target.value = "";
     if (items.files.length === 0) return;
     void runUpload(uploadTargetRef.current, items);
@@ -862,6 +983,13 @@ export function FileTree({ projectId }: FileTreeProps) {
         className="hidden"
         onChange={handleFilesPicked}
       />
+      <input
+        ref={folderInputRef}
+        type="file"
+        multiple
+        className="hidden"
+        onChange={handleFilesPicked}
+      />
 
       {/* Project root button */}
       <div
@@ -876,7 +1004,7 @@ export function FileTree({ projectId }: FileTreeProps) {
         <button
           onClick={() => setCurrentPath("")}
           className={cn(
-            "flex items-center gap-1 w-full text-left text-xs py-1 px-1 pr-16 rounded-sm hover:bg-accent/50 transition-colors",
+            "flex items-center gap-1 w-full text-left text-xs py-1 px-1 pr-20 rounded-sm hover:bg-accent/50 transition-colors",
             currentPath === "" && "bg-accent text-accent-foreground font-medium"
           )}
         >
@@ -900,6 +1028,18 @@ export function FileTree({ projectId }: FileTreeProps) {
             aria-label={t("files.upload")}
           >
             <Upload className="size-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              openFolderDialog("");
+            }}
+            className="inline-flex size-5 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+            title={t("files.uploadFolder")}
+            aria-label={t("files.uploadFolder")}
+          >
+            <FolderUp className="size-3.5" />
           </button>
           <button
             type="button"
@@ -951,6 +1091,7 @@ export function FileTree({ projectId }: FileTreeProps) {
             uploadingPath={upload?.path ?? null}
             uploadPercent={upload?.percent ?? 0}
             onRequestUpload={openUploadDialog}
+            onRequestFolderUpload={openFolderDialog}
             onUpload={runUpload}
             onCreated={loadRootEntries}
           />

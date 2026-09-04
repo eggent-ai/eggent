@@ -7,6 +7,10 @@
  * Everything it decides before touching any of them - how large a request may
  * be, where a name is allowed to land, and what happens when the name is
  * already taken - is decided here, where it can be tested without any of them.
+ *
+ * The browser's half of the same upload - which folders a picked tree implies,
+ * and how many requests it has to become - is decided in upload-plan.ts, and is
+ * checked here too.
  */
 import assert from "node:assert/strict";
 import path from "node:path";
@@ -20,6 +24,11 @@ import {
   resolveUploadTarget,
   safeRelativePath,
 } from "../src/lib/files/upload.ts";
+import {
+  MAX_FILES_PER_BATCH,
+  collectParentDirectories,
+  planUploadBatches,
+} from "../src/lib/files/upload-plan.ts";
 
 function takenNames(...names: string[]) {
   const taken = new Set(names);
@@ -109,5 +118,42 @@ assert.deepEqual(await resolveUploadTarget("docs/notes.md", "rename", takenNames
 // A directory full of collisions gives up rather than looping forever.
 const everythingTaken = async () => true;
 assert.equal(await resolveUploadTarget("notes.md", "rename", everythingTaken), null);
+
+// A picked folder arrives as paths and nothing else, so the folders it needs
+// have to be read back out of them - every level, not just the last one.
+assert.deepEqual(collectParentDirectories(["report.md"]), []);
+assert.deepEqual(
+  collectParentDirectories(["docs/a/notes.md", "docs/b.md", "docs/a/deep/c.md"]),
+  ["docs", "docs/a", "docs/a/deep"]
+);
+
+// A folder that fits stays one request; the batches exist to bound a request,
+// not to split what needs no splitting.
+const sized = (...sizes: number[]) => sizes.map((size, index) => ({ name: `f${index}`, size }));
+const sizeOf = (item: { size: number }) => item.size;
+
+assert.equal(planUploadBatches(sized(1, 2, 3), sizeOf, 10 * 1024 * 1024).length, 1);
+assert.deepEqual(planUploadBatches([], sizeOf, 1024), []);
+
+// A folder larger than one request becomes several, each of them under budget.
+const budget = 1000;
+const batches = planUploadBatches(sized(400, 400, 400, 400), (item) => item.size, budget + 4 * 512);
+assert.ok(batches.length > 1);
+for (const batch of batches) {
+  const weight = batch.reduce((sum, item) => sum + item.size + 512, 0);
+  assert.ok(weight <= budget + 4 * 512, `batch of ${weight} bytes exceeds the budget`);
+}
+assert.equal(batches.flat().length, 4);
+
+// Small files cost nothing to send and still cost a part each to parse, so the
+// count is capped as well as the weight.
+const many = planUploadBatches(sized(...new Array(MAX_FILES_PER_BATCH * 2 + 1).fill(1)), sizeOf, Infinity);
+assert.equal(many.length, 3);
+assert.equal(many[0].length, MAX_FILES_PER_BATCH);
+assert.equal(many[2].length, 1);
+
+// A file too large for any batch is still sent, and refused by the route that
+// can say why - rather than dropped here without a word.
+assert.deepEqual(planUploadBatches(sized(5000), sizeOf, 100), [sized(5000)]);
 
 console.log("file upload rules: all assertions passed");
