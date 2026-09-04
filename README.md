@@ -8,7 +8,7 @@
 
 <p align="center">
   <strong>Local-first AI workspace for project agents, files, pipelines, Telegram, and external API integrations.</strong><br />
-  <strong>Current version: 2.0</strong>
+  <strong>Current version: <a href="https://github.com/eggent-ai/eggent/releases/latest">0.2.4</a></strong>
 </p>
 
 Eggent is a browser-based AI workspace and orchestration layer. It gives you project-scoped agents, persistent files and memory, chat history, pasted image/file context, pipelines, Telegram integration, and a simple HTTP API for external systems.
@@ -132,7 +132,7 @@ docker compose -f docker-compose.ghcr.yml up -d
 ```
 
 Images are published to `ghcr.io/eggent-ai/eggent` on every release. Pin one
-with `EGGENT_VERSION` in `.env` (for example `EGGENT_VERSION=0.2.1`) rather than
+with `EGGENT_VERSION` in `.env` (for example `EGGENT_VERSION=0.2.4`) rather than
 tracking `latest`.
 
 ### Build from source

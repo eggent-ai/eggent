@@ -2,6 +2,11 @@
 
 This directory contains release summaries and publish-ready notes.
 
+Cutting a release writes three things: the pair of notes below, the row in this
+table, and the version line at the top of the repository README. That last one
+is the one nobody sees drift - it read `2.0` for months against a package that
+said `0.2.4`, which is why the number there now links to the releases page.
+
 | Version | Name | Date | Notes |
 | --- | --- | --- | --- |
 | `0.2.4` | Resumable Turns and Chat Addresses | 2026-08-31 | [Full snapshot](./0.2.4-resumable-turns-and-chat-addresses.md), [GitHub body](./github-v0.2.4.md) |
