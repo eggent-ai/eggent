@@ -26,7 +26,7 @@ import {
   loadProjectSkillsMetadata,
   readProjectContext,
 } from "@/lib/storage/project-store";
-import { deploymentContext, ensureWebSearchWorkflow, fallbackRuntimeModel, getEggentAiModelLockState, getManagedProviderId, getPiModelRegistry, getPiModelRuntime, getPiSettingsManager } from "@/lib/pi/config-store";
+import { deploymentContext, ensureWebSearchWorkflow, fallbackRuntimeModel, getEggentAiModelLockState, getManagedProviderId, getPiModelRegistry, getPiModelRuntime, getPiSettingsManager, isManagedProviderId } from "@/lib/pi/config-store";
 import { getUsageSnapshot, isUsageProviderConfigured } from "@/lib/usage/usage-provider";
 
 /**
@@ -495,8 +495,10 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     chatFiles,
     projectSkills,
     mcpServerIds,
+    // On the included model the run is reported by its label, whether the whole
+    // workspace is on it or only this project chose it.
     runtimeModel: configuredModel
-      ? modelLock.locked
+      ? (modelLock.locked || await isManagedProviderId(configuredModel.provider))
         ? {
             id: modelLock.label,
             name: modelLock.label,

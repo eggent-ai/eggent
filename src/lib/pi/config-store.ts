@@ -852,6 +852,16 @@ export async function getManagedProviderId(): Promise<string | null> {
   return null;
 }
 
+/**
+ * Whether a provider is the included model's, under whichever id it was
+ * provisioned. Whatever answers on it is reported by its label - including a
+ * single project that chose it while the workspace is on its own provider.
+ */
+export async function isManagedProviderId(provider?: string | null): Promise<boolean> {
+  if (!provider) return false;
+  return provider === "eggent-ai" || provider === (await getManagedProviderId());
+}
+
 export async function disableEggentAiModelLock(cwd = process.cwd()): Promise<void> {
   if (isManagedAiEnforced()) {
     throw new Error(
@@ -1057,10 +1067,13 @@ export async function getResolvedPiRuntimeModel(projectId?: string | null): Prom
     || projectConfiguredModel
     || globalConfiguredModel
     || (modelLock.locked ? availableModels[0] : await fallbackRuntimeModel(availableModels));
+  // A project can run on the included model while the workspace is on its own
+  // provider, and is reported under the label then too.
+  const reportedAsManaged = modelLock.locked || await isManagedProviderId(configuredModel?.provider);
 
   return {
     model: configuredModel
-      ? modelLock.locked
+      ? reportedAsManaged
         ? {
             id: modelLock.label,
             name: modelLock.label,
