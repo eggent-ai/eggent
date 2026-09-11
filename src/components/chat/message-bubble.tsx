@@ -7,7 +7,7 @@ import { CodeBlock } from "./code-block";
 import { ToolOutput } from "./tool-output";
 import { ToolGroup } from "./tool-group";
 import { FileMention } from "./file-mention";
-import { fileMentionPath } from "@/lib/files/openable";
+import { embeddedImageUrl, fileMentionPath } from "@/lib/files/openable";
 import { useAppStore } from "@/store/app-store";
 import type { ReactNode } from "react";
 import type { UIMessage } from "ai";
@@ -304,7 +304,9 @@ function MarkdownContent({ content }: { content: string }) {
           if (!src) return null;
           return (
             <img
-              src={src}
+              // A relative src is a file in the project the agent works in;
+              // left to the browser it resolves against /dashboard/<chatId>.
+              src={typeof src === "string" ? embeddedImageUrl(src, projectId) ?? src : src}
               alt={alt || ""}
               className="my-3 max-h-96 max-w-full rounded-lg border object-contain"
               loading="lazy"

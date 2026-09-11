@@ -22,8 +22,23 @@ const OPENABLE = /\.(html?|pdf|svg|png|jpe?g|gif|webp)$/i;
 const MENTIONABLE =
   /\.(html?|pdf|svg|png|jpe?g|gif|webp|md|txt|csv|tsv|json|ya?ml|js|mjs|ts|tsx|jsx|css|py|sh|sql|xlsx?|docx?|pptx?|zip)$/i;
 
+/**
+ * Images an answer can embed: the types the download route serves as images
+ * (INLINE_CONTENT_TYPES there). Anything else it would serve as text.
+ */
+const EMBEDDABLE_IMAGE = /\.(svg|png|jpe?g|gif|webp)$/i;
+
 export function isOpenableFile(path: string): boolean {
   return OPENABLE.test(path);
+}
+
+/** The path within the project, or null for a URL, an absolute path or a way out. */
+function projectRelativePath(value: string): string | null {
+  if (/^[a-z][a-z0-9+.-]*:/i.test(value)) return null; // http:, mailto:, data:
+  if (value.startsWith("/") || value.startsWith("~")) return null;
+  const normalized = value.replace(/^\.\//, "");
+  if (normalized.split("/").some((segment) => segment === "..")) return null;
+  return normalized;
 }
 
 /**
@@ -37,12 +52,37 @@ export function fileMentionPath(text: string): string | null {
   const value = text.trim();
   if (!value || value.length > 200) return null;
   if (/\s/.test(value)) return null;
-  if (/^[a-z][a-z0-9+.-]*:/i.test(value)) return null; // http:, mailto:, data:
-  if (value.startsWith("/") || value.startsWith("~")) return null;
-  const normalized = value.replace(/^\.\//, "");
-  if (normalized.split("/").some((segment) => segment === "..")) return null;
-  if (!MENTIONABLE.test(normalized)) return null;
+  const normalized = projectRelativePath(value);
+  if (!normalized || !MENTIONABLE.test(normalized)) return null;
   return normalized;
+}
+
+/**
+ * Where an image embedded in an answer loads from, or null when it is not a
+ * file in the project.
+ *
+ * `![jar](./uploads/jar.png)` names a file in the agent's working directory,
+ * but the browser resolves it against the page, and a conversation's page is
+ * /dashboard/<chatId>: it asked for /dashboard/uploads/jar.png and drew a
+ * broken image, while the same path written as inline code under it was a
+ * working link. Both go through the file API now.
+ *
+ * Two differences from a mention. The markdown syntax already marks where the
+ * path ends, so a space belongs to the name. And the markdown pipeline
+ * percent-encodes the url before it gets here - café.png arrives as
+ * caf%C3%A9.png - so it is decoded before it is checked, which also catches an
+ * encoded `..`.
+ */
+export function embeddedImageUrl(src: string, projectId: string): string | null {
+  let value = src.trim();
+  try {
+    value = decodeURIComponent(value);
+  } catch {
+    // A % that escapes nothing; judge the path as written.
+  }
+  const normalized = projectRelativePath(value);
+  if (!normalized || !EMBEDDABLE_IMAGE.test(normalized)) return null;
+  return fileDownloadUrl(projectId, normalized, { inline: true });
 }
 
 export function fileDownloadUrl(
