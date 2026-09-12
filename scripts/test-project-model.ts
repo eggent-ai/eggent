@@ -181,6 +181,28 @@ check("nothing, when the workspace has no model it can serve", () =>
     null
   )
 );
+check("what answers, when the saved model is not one the provider lists", () =>
+  // The saved model is gone from the provider's list, so the runtime fell back
+  // to another one. Reporting nothing here is what made the project form say
+  // "no model selected" over a workspace that had one.
+  assert.deepEqual(
+    workspaceModelSummary({
+      ...ownProvider,
+      current: null,
+      runtimeModel: { provider: "alpha", providerName: "Alpha", model: { id: "a/model" } },
+    }),
+    { provider: "Alpha", model: "a/model" }
+  )
+);
+check("what answers outranks what is written down", () =>
+  assert.deepEqual(
+    workspaceModelSummary({
+      ...ownProvider,
+      runtimeModel: { provider: "bravo", providerName: "Bravo", model: { id: "b-1" } },
+    }),
+    { provider: "Bravo", model: "b-1" }
+  )
+);
 
 console.log(failed === 0 ? `\nall ${ran} checks passed` : `\n${failed} of ${ran} checks failed`);
 process.exit(failed === 0 ? 0 : 1);

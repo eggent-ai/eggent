@@ -372,6 +372,32 @@ export async function getPiModelRuntime(): Promise<ModelRuntime> {
   return ModelRuntime.create({ authPath: getPiAuthPath(), modelsPath: getPiModelsPath() });
 }
 
+/**
+ * Fetch every provider's current model list into the agent directory.
+ *
+ * The runtime built for a request is created offline on purpose - a chat turn
+ * must not wait on a catalog fetch - and nothing else refreshes it, so a
+ * workspace would only ever know the models frozen into the SDK it was built
+ * with. A model saved from outside that list then stops resolving and is
+ * quietly answered by another one. This is the only place allowed to go to the
+ * network for it, and it is called away from the request path.
+ */
+export async function refreshPiModelCatalog(): Promise<{ providers: number; models: number }> {
+  const ModelRuntime = getPiSdkExport<{
+    create?: (options: { authPath: string; modelsPath: string; allowModelNetwork?: boolean }) => Promise<ModelRuntime>;
+  }>("ModelRuntime");
+  if (typeof ModelRuntime.create !== "function") {
+    throw new Error('Eggent runtime SDK export "ModelRuntime.create" is unavailable.');
+  }
+  const runtime = await ModelRuntime.create({
+    authPath: getPiAuthPath(),
+    modelsPath: getPiModelsPath(),
+    allowModelNetwork: true,
+  });
+  const models = (await getPiModelRegistry(runtime)).getAll();
+  return { providers: new Set(models.map((model) => model.provider)).size, models: models.length };
+}
+
 export async function getPiModelRegistry(modelRuntime?: ModelRuntime): Promise<ModelRegistry> {
   const runtime = modelRuntime || await getPiModelRuntime();
   const ModelRegistry = getPiSdkExport<{ new(runtime: ModelRuntime): ModelRegistry }>("ModelRegistry");
@@ -1186,6 +1212,8 @@ export async function getPiModelsState() {
       }],
       models: [lockedModel],
       availableModels: [lockedModel],
+      savedModel: { provider: "eggent-ai", providerName: modelLock.label, model: modelLock.label, available: true },
+      runtimeModel: { provider: "eggent-ai", providerName: modelLock.label, model: lockedModel },
     };
   }
 
@@ -1195,7 +1223,33 @@ export async function getPiModelsState() {
   const managedProviderId = await getManagedProviderId();
   const managedRecoverable = await managedCredentialRecoverable();
 
+  // What the workspace is set to, and what will actually answer. The two part
+  // company when a saved model is not in the provider's list any more: the
+  // runtime falls back without a word, and a screen reporting only the registry
+  // then said "no model selected" over a workspace that had one.
+  const savedProvider = settings.defaultProvider;
+  const savedModelId = settings.defaultModel;
+  const savedIsAvailable = Boolean(savedProvider && savedModelId && isAvailable(savedProvider, savedModelId));
+  const runtimeModel = savedIsAvailable
+    ? available.find((model) => model.provider === savedProvider && model.id === savedModelId)
+    : await fallbackRuntimeModel(available);
+
   return {
+    savedModel: savedProvider && savedModelId
+      ? {
+          provider: savedProvider,
+          providerName: modelRegistry.getProviderDisplayName(savedProvider),
+          model: savedModelId,
+          available: savedIsAvailable,
+        }
+      : null,
+    runtimeModel: runtimeModel
+      ? {
+          provider: runtimeModel.provider,
+          providerName: modelRegistry.getProviderDisplayName(runtimeModel.provider),
+          model: serializeModel(runtimeModel, true),
+        }
+      : null,
     agentDir: getPiAgentDir(),
     authFile: getPiAuthPath(),
     settings,

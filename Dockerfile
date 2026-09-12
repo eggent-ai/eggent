@@ -120,6 +120,16 @@ RUN echo "node ALL=(root) NOPASSWD: ALL" > /etc/sudoers.d/eggent-node \
 COPY package*.json ./
 RUN npm ci --omit=dev
 
+# The runtime knows each provider's models from a catalog shipped inside the
+# SDK, and refreshes it into data/pi-agent/models-store.json. It takes the
+# refreshed copy only when that is newer than the shipped one, compared by file
+# mtime - which npm sets to install time, so a freshly built image always looks
+# newer and the refreshed copy is thrown away. One workspace was left choosing
+# from 271 of the 445 models its provider serves, and the model it had saved
+# stopped resolving and was quietly answered by another one. Dating the shipped
+# catalog back is what lets a refresh count.
+RUN find /app/node_modules -path '*pi-ai/dist/providers/data/*.json' -exec touch -t 200001010000 {} +
+
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/next.config.mjs ./next.config.mjs
 COPY --from=builder /app/scripts/docker-entrypoint.sh ./scripts/docker-entrypoint.sh

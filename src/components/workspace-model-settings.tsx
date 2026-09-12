@@ -12,7 +12,7 @@
  */
 
 import { useEffect, useId, useMemo, useState } from "react";
-import { Check, ExternalLink, KeyRound, Loader2, PlugZap, Save } from "lucide-react";
+import { Check, ExternalLink, KeyRound, Loader2, PlugZap, Save, TriangleAlert } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -135,6 +135,10 @@ interface PiState {
     reason?: string;
   };
   imageProviders?: Array<{ id: string; name: string }>;
+  /** What the workspace is set to, whether or not the provider still lists it. */
+  savedModel?: { provider: string; providerName?: string; model: string; available: boolean } | null;
+  /** What actually answers: the saved model while it is servable, the fallback otherwise. */
+  runtimeModel?: { provider: string; providerName?: string; model: PiModelState } | null;
 }
 
 type LoginEvent =
@@ -587,14 +591,22 @@ export function WorkspaceModelSettings() {
   const modelLockEnforced = Boolean(piState.modelLock?.enforced);
   const modelLockSelfHostedUrl = piState.modelLock?.selfHostedUrl || "https://github.com/eggent-ai/eggent";
   const eggentImagesEnabled = Boolean(piState.imageGeneration?.enabled);
-  // The pickers already show the saved choice, so what is answering is worth a
-  // line of its own only when it is something else - a saved model the
-  // workspace cannot serve right now, answered by the fallback instead.
-  const current = piState.current;
+  // The pickers show what is saved; these say what actually answers, which is
+  // something else whenever the saved model is not one the workspace can serve.
+  const savedModel = piState.savedModel ?? null;
+  const runtime = piState.runtimeModel ?? null;
+  const savedUnavailable = Boolean(savedModel && !savedModel.available);
+  const runtimeProviderName = runtime?.providerName || runtime?.provider || "";
+  const runtimeModelId = runtime?.model?.id || "";
   const answeringElsewhere = Boolean(
-    current?.model?.available &&
-    (current.provider !== piState.settings?.defaultProvider || current.model.id !== piState.settings?.defaultModel)
+    runtimeModelId &&
+    (runtime?.provider !== piState.settings?.defaultProvider || runtimeModelId !== piState.settings?.defaultModel)
   );
+  // A saved model the provider no longer lists still belongs in the picker,
+  // disabled: an empty box over a workspace that has a model reads as a fault.
+  const staleModel = defaultModelSelection && !modelChoices.some((model) => model.id === defaultModelSelection)
+    ? defaultModelSelection
+    : "";
   const showConnect = Boolean(defaultProviderSelection) && (!selectedProviderConnected || replacingKey);
 
   const providerFieldId = `${fieldId}-provider`;
@@ -649,12 +661,28 @@ export function WorkspaceModelSettings() {
           </div>
         ) : (
           <div className="space-y-5">
-            {answeringElsewhere ? (
+            {savedUnavailable ? (
+              // The colour sits on the border and the icon; the words stay in
+              // the foreground, because warning text on a warning wash fails
+              // contrast.
+              <Alert className="border-warning/60 text-warning">
+                <TriangleAlert />
+                <AlertDescription className="text-foreground">
+                  {runtimeModelId
+                    ? t("settings.savedModelUnavailableAnswering", {
+                        model: savedModel?.model || "",
+                        provider: runtimeProviderName,
+                        runtime: runtimeModelId,
+                      })
+                    : t("settings.savedModelUnavailable", { model: savedModel?.model || "" })}
+                </AlertDescription>
+              </Alert>
+            ) : answeringElsewhere ? (
               <p className="text-sm text-muted-foreground">
                 {t("settings.activeNow")}:{" "}
-                <span className="text-foreground">{current?.providerName || current?.provider}</span>
+                <span className="text-foreground">{runtimeProviderName}</span>
                 {" · "}
-                <span className="break-all font-mono text-foreground">{current?.model?.id}</span>
+                <span className="break-all font-mono text-foreground">{runtimeModelId}</span>
               </p>
             ) : null}
 
@@ -857,6 +885,11 @@ export function WorkspaceModelSettings() {
                         {model.id}{model.name && model.name !== model.id ? ` · ${model.name}` : ""}
                       </SelectItem>
                     ))}
+                    {staleModel ? (
+                      <SelectItem value={staleModel} disabled>
+                        {t("settings.modelUnavailable", { model: staleModel })}
+                      </SelectItem>
+                    ) : null}
                   </SelectGroup>
                 </SelectContent>
               </Select>

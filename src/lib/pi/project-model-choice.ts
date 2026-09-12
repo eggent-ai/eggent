@@ -36,6 +36,12 @@ export interface ProjectModelsState {
     providerName?: string;
     model?: { id: string; available?: boolean };
   } | null;
+  /** What the workspace answers with, which is the saved model only while it is servable. */
+  runtimeModel?: {
+    provider?: string;
+    providerName?: string;
+    model?: { id: string; name?: string };
+  } | null;
 }
 
 export interface ProjectProviderOption {
@@ -122,6 +128,13 @@ export function projectModelChoiceServable(state: ProjectModelsState, choice: Pr
 /** What "the workspace model" means right now, or null when the workspace has none. */
 export function workspaceModelSummary(state: ProjectModelsState): { provider: string; model?: string } | null {
   if (state.modelLock?.locked) return { provider: state.modelLock.label || MANAGED_FALLBACK_LABEL };
+  // What answers, not what is written down: a saved model the workspace cannot
+  // serve is answered by another one, and saying nothing at all reads as "no
+  // model selected" to somebody who selected one.
+  const runtime = state.runtimeModel;
+  if (runtime?.model?.id) {
+    return { provider: runtime.providerName || runtime.provider || runtime.model.id, model: runtime.model.id };
+  }
   const current = state.current;
   if (!current?.provider || !current.model?.available) return null;
   return { provider: current.providerName || current.provider, model: current.model.id };

@@ -396,7 +396,7 @@ export function ProjectModelSettings({ projectId }: { projectId: string }) {
                               ))}
                               {staleModel ? (
                                 <SelectItem value={staleModel} disabled>
-                                  {t("projectSub.settings.modelUnavailable", { model: staleModel })}
+                                  {t("settings.modelUnavailable", { model: staleModel })}
                                 </SelectItem>
                               ) : null}
                             </SelectGroup>
