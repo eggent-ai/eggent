@@ -1,5 +1,6 @@
 /**
- * Checks that a chat's address is a chat's address and nothing else.
+ * Checks that a chat's address is a chat's address and nothing else, and that
+ * a settings tab's address says whose settings it shows.
  *
  * Run with Node 22: node --experimental-strip-types scripts/test-dashboard-routes.ts
  *
@@ -12,6 +13,10 @@
  * the chat route and quietly become a conversation named after it. The route
  * refuses the names on the list; the list is checked against the folder here,
  * because forgetting to add one breaks nothing loudly.
+ *
+ * The settings tabs that exist once for the orchestrator and once per project
+ * carry the choice in `?project=`, and a project's old pages send their links
+ * there. Getting either wrong shows one project's files under another's name.
  */
 import assert from "node:assert/strict";
 import fs from "node:fs";
@@ -22,6 +27,13 @@ import {
   chatPath,
   isReservedDashboardSegment,
 } from "../src/lib/dashboard-routes.ts";
+import {
+  ORCHESTRATOR_SCOPE_ID,
+  SCOPE_PARAM,
+  projectIdFromPath,
+  resolveSettingsScope,
+  settingsScopeHref,
+} from "../src/lib/orchestrator-scope.ts";
 
 let failed = 0;
 let ran = 0;
@@ -110,6 +122,90 @@ check("an id that needs escaping stays one segment", () => {
     const encoded = chatPath(id).slice("/dashboard/".length);
     assert.ok(!encoded.includes("/"), `must stay one segment: ${id}`);
     assert.equal(decodeURIComponent(encoded), id, `must decode back: ${id}`);
+  }
+});
+
+const loaded = { projectIds: ["alpha", "bravo"], projectsLoaded: true };
+
+check("a settings tab follows the address, then the open project, then the orchestrator", () => {
+  assert.deepEqual(
+    resolveSettingsScope({ ...loaded, requested: "alpha", activeProjectId: "bravo" }),
+    { scopeId: "alpha", stale: false }
+  );
+  assert.deepEqual(
+    resolveSettingsScope({ ...loaded, requested: null, activeProjectId: "bravo" }),
+    { scopeId: "bravo", stale: false }
+  );
+  assert.deepEqual(
+    resolveSettingsScope({ ...loaded, requested: null, activeProjectId: null }),
+    { scopeId: ORCHESTRATOR_SCOPE_ID, stale: false }
+  );
+  // Choosing the orchestrator on purpose has to survive being inside a project.
+  assert.deepEqual(
+    resolveSettingsScope({ ...loaded, requested: ORCHESTRATOR_SCOPE_ID, activeProjectId: "bravo" }),
+    { scopeId: ORCHESTRATOR_SCOPE_ID, stale: false }
+  );
+  assert.deepEqual(
+    resolveSettingsScope({ ...loaded, requested: "  ", activeProjectId: "bravo" }),
+    { scopeId: "bravo", stale: false }
+  );
+});
+
+check("a deleted project falls back to the orchestrator, but only once the list is known", () => {
+  // Before the list arrives nothing is known to be gone; bouncing here is the
+  // race that once sent people from a project's link to the orchestrator.
+  assert.deepEqual(
+    resolveSettingsScope({ projectIds: [], projectsLoaded: false, requested: "charlie", activeProjectId: null }),
+    { scopeId: "charlie", stale: false }
+  );
+  assert.deepEqual(
+    resolveSettingsScope({ ...loaded, requested: "charlie", activeProjectId: null }),
+    { scopeId: ORCHESTRATOR_SCOPE_ID, stale: true }
+  );
+  assert.deepEqual(
+    resolveSettingsScope({ ...loaded, requested: null, activeProjectId: "charlie" }),
+    { scopeId: ORCHESTRATOR_SCOPE_ID, stale: true }
+  );
+  assert.deepEqual(
+    resolveSettingsScope({ projectIds: [], projectsLoaded: true, requested: ORCHESTRATOR_SCOPE_ID, activeProjectId: null }),
+    { scopeId: ORCHESTRATOR_SCOPE_ID, stale: false }
+  );
+});
+
+check("the scope travels in the address and comes back out intact", () => {
+  assert.equal(settingsScopeHref("/dashboard/context", "alpha"), `/dashboard/context?${SCOPE_PARAM}=alpha`);
+  assert.equal(settingsScopeHref("/dashboard/context", ORCHESTRATOR_SCOPE_ID), `/dashboard/context?${SCOPE_PARAM}=none`);
+  assert.equal(settingsScopeHref("/dashboard/context", null), "/dashboard/context");
+  assert.equal(settingsScopeHref("/dashboard/context", ""), "/dashboard/context");
+  for (const id of ["a b", "a&b=c", "a#b", "café"]) {
+    const url = new URL(settingsScopeHref("/dashboard/memory", id), "https://dashboard.example.test");
+    assert.equal(url.pathname, "/dashboard/memory", `path must survive: ${id}`);
+    assert.equal(url.searchParams.get(SCOPE_PARAM), id, `must decode back: ${id}`);
+  }
+});
+
+check("a project's own page counts as looking at that project", () => {
+  assert.equal(projectIdFromPath("/dashboard/projects/alpha"), "alpha");
+  assert.equal(projectIdFromPath("/dashboard/projects/alpha/context"), "alpha");
+  assert.equal(projectIdFromPath("/dashboard/projects/caf%C3%A9"), "café");
+  assert.equal(projectIdFromPath("/dashboard/projects"), null);
+  assert.equal(projectIdFromPath("/dashboard/context"), null);
+  assert.equal(projectIdFromPath("/dashboard/alpha"), null);
+});
+
+check("a project's old pages still answer, and send their links to the tabs", () => {
+  for (const [page, tab] of [
+    ["context", "/dashboard/context"],
+    ["memory", "/dashboard/memory"],
+    ["mcp", "/dashboard/mcp"],
+    ["skills", "/dashboard/skills"],
+    ["settings", "/dashboard/settings"],
+  ]) {
+    const file = path.join(dashboardDir, "projects", "[id]", page, "page.tsx");
+    assert.ok(fs.existsSync(file), `a link to /dashboard/projects/<id>/${page} must still resolve`);
+    const source = fs.readFileSync(file, "utf-8");
+    assert.ok(source.includes("redirect("), `${page} should hand over to its tab`);
+    assert.ok(source.includes(`"${tab}"`), `${page} should hand over to ${tab}`);
   }
 });
 

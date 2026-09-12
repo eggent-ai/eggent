@@ -1,23 +1,11 @@
-"use client";
+import { redirect } from "next/navigation";
+import { settingsScopeHref } from "@/lib/orchestrator-scope";
 
-import { useParams } from "next/navigation";
-import { ProjectFileEditor } from "@/components/project-file-editor";
-import { ProjectPageShell } from "@/components/project-page-shell";
-import { useI18n } from "@/i18n/provider";
-
-export default function ProjectMemoryPage() {
-  const { t } = useI18n();
-  const { id } = useParams();
-  const projectId = id as string;
-  return (
-    <ProjectPageShell projectId={projectId} title={t("projectSub.memory.title")} description={t("projectSub.memory.description")}>
-      <ProjectFileEditor
-        projectId={projectId}
-        endpoint="memory"
-        filename="memory.md"
-        title="memory.md"
-        description={t("projectSub.memory.editorDescription")}
-      />
-    </ProjectPageShell>
-  );
+/**
+ * A project's memory is edited on the Memory tab with the project selected.
+ * The address stays so that links to it keep working.
+ */
+export default async function ProjectMemoryPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  redirect(settingsScopeHref("/dashboard/memory", id));
 }

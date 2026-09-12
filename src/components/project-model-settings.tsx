@@ -33,6 +33,7 @@ import {
 import { SkeletonBlock } from "@/components/ui/skeleton-list";
 import { Textarea } from "@/components/ui/textarea";
 import { useI18n } from "@/i18n/provider";
+import { ORCHESTRATOR_SCOPE_ID, settingsScopeHref } from "@/lib/orchestrator-scope";
 import {
   parseProjectModelFile,
   projectModelChoiceComplete,
@@ -55,7 +56,10 @@ interface ModelLockState {
   selfHostedUrl?: string;
 }
 
-const SETTINGS_HREF = "/dashboard/settings";
+// Providers are connected on the workspace's own model: the Models tab with
+// the orchestrator selected. Named explicitly, since this form sits on that
+// same tab and a bare address would reopen the project it is already showing.
+const SETTINGS_HREF = settingsScopeHref("/dashboard/settings", ORCHESTRATOR_SCOPE_ID);
 
 function errorText(error: unknown): string {
   return error instanceof Error ? error.message : String(error);

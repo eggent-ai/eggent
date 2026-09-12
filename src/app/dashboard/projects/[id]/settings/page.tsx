@@ -1,17 +1,11 @@
-"use client";
+import { redirect } from "next/navigation";
+import { settingsScopeHref } from "@/lib/orchestrator-scope";
 
-import { useParams } from "next/navigation";
-import { ProjectModelSettings } from "@/components/project-model-settings";
-import { ProjectPageShell } from "@/components/project-page-shell";
-import { useI18n } from "@/i18n/provider";
-
-export default function ProjectSettingsPage() {
-  const { t } = useI18n();
-  const { id } = useParams();
-  const projectId = id as string;
-  return (
-    <ProjectPageShell projectId={projectId} title={t("projectSub.settings.title")} description={t("projectSub.settings.description")}>
-      <ProjectModelSettings projectId={projectId} />
-    </ProjectPageShell>
-  );
+/**
+ * A project's model is chosen on the Models tab with the project selected.
+ * The address stays so that links to it keep working.
+ */
+export default async function ProjectSettingsPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  redirect(settingsScopeHref("/dashboard/settings", id));
 }

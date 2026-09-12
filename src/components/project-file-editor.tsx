@@ -9,20 +9,19 @@ import { Textarea } from "@/components/ui/textarea";
 import { useI18n } from "@/i18n/provider";
 
 interface ProjectFileEditorProps {
+  /** A project id, or the orchestrator's scope id. */
   projectId: string;
-  endpoint: "context" | "memory" | "model" | "mcp";
-  title: string;
-  description: string;
+  endpoint: "context" | "memory";
   filename: string;
+  description?: string;
   rows?: number;
 }
 
 export function ProjectFileEditor({
   projectId,
   endpoint,
-  title,
-  description,
   filename,
+  description,
   rows = 18,
 }: ProjectFileEditorProps) {
   const { t } = useI18n();
@@ -32,6 +31,7 @@ export function ProjectFileEditor({
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const url = `/api/projects/${encodeURIComponent(projectId)}/${endpoint}`;
 
   useEffect(() => {
     let cancelled = false;
@@ -40,7 +40,7 @@ export function ProjectFileEditor({
         setLoading(true);
         setStatus(null);
         setError(null);
-        const res = await fetch(`/api/projects/${projectId}/${endpoint}`, { cache: "no-store" });
+        const res = await fetch(url, { cache: "no-store" });
         const json = await res.json();
         if (!res.ok) throw new Error(json.error || t("projectEditor.loadFailed", { filename }));
         if (cancelled) return;
@@ -57,14 +57,15 @@ export function ProjectFileEditor({
     return () => {
       cancelled = true;
     };
-  }, [projectId, endpoint, filename]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [url, filename]);
 
   async function save() {
     try {
       setSaving(true);
       setStatus(null);
       setError(null);
-      const res = await fetch(`/api/projects/${projectId}/${endpoint}`, {
+      const res = await fetch(url, {
         method: "PUT",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ content: draft }),
@@ -85,12 +86,11 @@ export function ProjectFileEditor({
   const dirty = draft !== content;
 
   return (
-    <section className="rounded-xl border bg-card p-4 md:p-5 space-y-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <div className="text-xs font-mono text-muted-foreground">{filename}</div>
-          <h2 className="text-xl font-semibold">{title}</h2>
-          <p className="text-sm text-muted-foreground">{description}</p>
+    <section className="space-y-4 rounded-xl border bg-card p-4 md:p-5">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <div className="font-mono text-sm text-muted-foreground">{filename}</div>
+          {description ? <p className="text-sm text-muted-foreground">{description}</p> : null}
         </div>
         <Button onClick={save} disabled={saving || loading || !dirty} className="gap-2">
           {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
@@ -111,6 +111,7 @@ export function ProjectFileEditor({
         </div>
       ) : (
         <Textarea
+          aria-label={filename}
           value={draft}
           onChange={(event) => setDraft(event.target.value)}
           rows={rows}

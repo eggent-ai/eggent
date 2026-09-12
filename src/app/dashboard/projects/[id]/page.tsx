@@ -22,42 +22,45 @@ import {
 } from "lucide-react";
 import { useI18n } from "@/i18n/provider";
 import type { MessageKey } from "@/i18n/messages";
+import { settingsScopeHref } from "@/lib/orchestrator-scope";
 import type { Project } from "@/lib/types";
 
+// Each file opens on the settings tab it belongs to, with this project already
+// selected - the same place its switcher would take you.
 const projectFiles: Array<{ name: string; titleKey: MessageKey; descriptionKey: MessageKey; href: string; icon: typeof FileText }> = [
   {
     name: "context.md",
     titleKey: "projectDetail.file.context.title",
     descriptionKey: "projectDetail.file.context.description",
-    href: "context",
+    href: "/dashboard/context",
     icon: FileText,
   },
   {
     name: "memory.md",
     titleKey: "projectDetail.file.memory.title",
     descriptionKey: "projectDetail.file.memory.description",
-    href: "memory",
+    href: "/dashboard/memory",
     icon: FileText,
   },
   {
     name: "skills/",
     titleKey: "projectDetail.file.skills.title",
     descriptionKey: "projectDetail.file.skills.description",
-    href: "skills",
+    href: "/dashboard/skills",
     icon: Puzzle,
   },
   {
     name: ".mcp.json",
     titleKey: "projectDetail.file.mcp.title",
     descriptionKey: "projectDetail.file.mcp.description",
-    href: "mcp",
+    href: "/dashboard/mcp",
     icon: Wrench,
   },
   {
     name: "model.json",
     titleKey: "projectDetail.file.model.title",
     descriptionKey: "projectDetail.file.model.description",
-    href: "settings",
+    href: "/dashboard/settings",
     icon: Settings2,
   },
 ];
@@ -164,7 +167,7 @@ export default function ProjectDetailsPage() {
                     return (
                       <Link
                         key={item.name}
-                        href={`/dashboard/projects/${project.id}/${item.href}`}
+                        href={settingsScopeHref(item.href, project.id)}
                         className="group rounded-lg border p-4 transition hover:border-primary/50 hover:bg-muted/40"
                       >
                         <div className="mb-3 flex items-center justify-between gap-3">

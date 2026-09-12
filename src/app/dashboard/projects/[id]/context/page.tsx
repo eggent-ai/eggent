@@ -1,23 +1,11 @@
-"use client";
+import { redirect } from "next/navigation";
+import { settingsScopeHref } from "@/lib/orchestrator-scope";
 
-import { useParams } from "next/navigation";
-import { ProjectFileEditor } from "@/components/project-file-editor";
-import { ProjectPageShell } from "@/components/project-page-shell";
-import { useI18n } from "@/i18n/provider";
-
-export default function ProjectContextPage() {
-  const { t } = useI18n();
-  const { id } = useParams();
-  const projectId = id as string;
-  return (
-    <ProjectPageShell projectId={projectId} title={t("projectSub.context.title")} description={t("projectSub.context.description")}>
-      <ProjectFileEditor
-        projectId={projectId}
-        endpoint="context"
-        filename="context.md"
-        title="context.md"
-        description={t("projectSub.context.editorDescription")}
-      />
-    </ProjectPageShell>
-  );
+/**
+ * A project's context is edited on the Context tab with the project selected.
+ * The address stays so that links to it keep working.
+ */
+export default async function ProjectContextPage({ params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
+  redirect(settingsScopeHref("/dashboard/context", id));
 }
