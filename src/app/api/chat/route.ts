@@ -59,7 +59,8 @@ export async function POST(req: NextRequest) {
     // The context mode is the chat's, not the request's: it is settled by
     // whoever opened the chat and every later message inherits it. Trusting the
     // field on each message would let a second tab - or a client that simply
-    // forgot it - silently send a light chat's next turn at full price.
+    // forgot it - silently send the next turn of a light chat with the whole
+    // workspace attached again.
     const requestedContextMode = parseContextMode(body.contextMode);
 
     // Create chat if needed

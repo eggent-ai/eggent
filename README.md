@@ -8,7 +8,7 @@
 
 <p align="center">
   <strong>Local-first AI workspace for project agents, files, pipelines, Telegram, and external API integrations.</strong><br />
-  <strong>Current version: <a href="https://github.com/eggent-ai/eggent/releases/latest">0.2.4</a></strong>
+  <strong>Current version: <a href="https://github.com/eggent-ai/eggent/releases/latest">0.2.5</a></strong>
 </p>
 
 Eggent is a browser-based AI workspace and orchestration layer. It gives you project-scoped agents, persistent files and memory, chat history, pasted image/file context, pipelines, Telegram integration, and a simple HTTP API for external systems.
