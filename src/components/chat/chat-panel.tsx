@@ -8,7 +8,7 @@ import { ChatMessages, type QuickSkillAction } from "./chat-messages";
 import { ChatInput } from "./chat-input";
 import { useAppStore } from "@/store/app-store";
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
-import type { ChatMessage, ChatMessagePart } from "@/lib/types";
+import type { ChatContextMode, ChatMessage, ChatMessagePart } from "@/lib/types";
 import type { PiRuntimeStats } from "@/lib/pi/types";
 import type { PiPendingInteraction } from "@/lib/pi/interaction-types";
 import { useBackgroundSync } from "@/hooks/use-background-sync";
@@ -439,6 +439,10 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     addChat,
   } = useAppStore();
   const [input, setInput] = useState("");
+  // Settled when the chat is opened and then fixed: the server stores it on the
+  // chat and answers from there, so this is only what a not-yet-created chat
+  // will be created with, plus what the footer shows for one that exists.
+  const [contextMode, setContextMode] = useState<ChatContextMode>("full");
   const [chatError, setChatError] = useState<string | null>(null);
   const [inputFocusSignal, setInputFocusSignal] = useState(0);
   const [configuredRuntimeStats, setConfiguredRuntimeStats] = useState<PiRuntimeStats | null>(null);
@@ -489,6 +493,9 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
   const currentPathRef = useRef(currentPath);
   currentPathRef.current = currentPath;
 
+  const contextModeRef = useRef(contextMode);
+  contextModeRef.current = contextMode;
+
   // Track the last activeChatId we've seen to detect external navigation
   const prevActiveChatId = useRef(activeChatId);
 
@@ -524,6 +531,9 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
       } else {
         // "New chat" clicked — generate fresh id
         setInternalChatId(generateClientId());
+        // A light chat is a deliberate choice for one conversation, so the next
+        // one starts full again rather than inheriting it.
+        setContextMode("full");
       }
     }
   }, [activeChatId]);
@@ -570,6 +580,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         body: () => ({
           chatId: internalChatIdRef.current,
           projectId: activeProjectIdRef.current,
+          contextMode: contextModeRef.current,
           currentPath: currentPathRef.current,
         }),
       }),
@@ -660,7 +671,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
           return null;
         }
         if (!r.ok) throw new Error("Failed to load chat");
-        return r.json() as Promise<{ messages?: ChatMessage[] }>;
+        return r.json() as Promise<{ messages?: ChatMessage[]; contextMode?: ChatContextMode }>;
       })
       .then((chat) => {
         if (cancelled) return;
@@ -669,6 +680,8 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
           return;
         }
         if (stopSettlingRef.current) return;
+
+        setContextMode(chat?.contextMode ?? "full");
 
         if (!chat?.messages) {
           setMessages([]);
@@ -1093,6 +1106,12 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         currentPath={currentPath}
         focusSignal={inputFocusSignal}
         runtimeStats={displayRuntimeStats}
+        contextMode={contextMode}
+        onContextModeChange={setContextMode}
+        // The first message fixes it. The prompt prefix is cached per shape,
+        // and a history of calls to tools that are no longer offered is not
+        // worth what it costs at the provider.
+        contextModeLocked={messages.length > 0 || isLoading}
       />
     </div>
   );

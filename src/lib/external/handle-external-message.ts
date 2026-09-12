@@ -14,6 +14,7 @@ import {
 } from "@/lib/storage/external-session-store";
 import { getServerTranslator } from "@/i18n/server";
 import type { MessageKey } from "@/i18n/messages";
+import type { ChatContextMode } from "@/lib/types";
 import type { ChatMessage } from "@/lib/types";
 import {
   rememberTelegramDestinationFromRuntime,
@@ -238,6 +239,8 @@ interface ResolvedExternalMessageRunContext {
   resolvedChatId: string;
   beforeCount: number;
   runtimeData?: Record<string, unknown>;
+  /** Whatever the chat was opened with; absent means the full workspace. */
+  chatContextMode?: ChatContextMode;
 }
 
 async function resolveExternalMessageRunContext(
@@ -332,7 +335,15 @@ async function resolveExternalMessageRunContext(
       }
     : input.runtimeData;
 
-  return { session, resolvedProjectId, currentPath, resolvedChatId, beforeCount, runtimeData };
+  return {
+    session,
+    resolvedProjectId,
+    currentPath,
+    resolvedChatId,
+    beforeCount,
+    runtimeData,
+    chatContextMode: beforeChat?.contextMode,
+  };
 }
 
 function sanitizeExternalFileName(value: string): string {
@@ -371,6 +382,7 @@ export async function handleExternalMessage(
     resolvedChatId,
     beforeCount,
     runtimeData,
+    chatContextMode,
   } = await resolveExternalMessageRunContext(input);
 
   // Leaving a project is a state change in the interface, so it is answered
@@ -432,6 +444,10 @@ export async function handleExternalMessage(
     chatId: resolvedChatId,
     userMessage: message,
     projectId: resolvedProjectId,
+    // The mode belongs to the chat, not to the surface answering it: a light
+    // chat opened in the web stays light when the next message arrives from
+    // Telegram, instead of quietly costing forty times as much there.
+    chatContextMode,
     cwd: currentPath || undefined,
     runtimeData,
     toolRuntimeData: input.toolRuntimeData,

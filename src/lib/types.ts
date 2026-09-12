@@ -106,10 +106,25 @@ export interface Attachment {
   path?: string;
 }
 
+/**
+ * How much of the workspace a chat carries into every request.
+ *
+ * "full" is everything - tool schemas, skills, the runtime context, the
+ * operator's deployment block - and costs about 12 000 tokens before the
+ * person has typed anything. The two light modes replace all of it with a few
+ * lines and either no tools at all or reading only, which is ~200 and ~650
+ * tokens. Fixed when the chat starts: the mode decides the cached prefix, and
+ * a history full of calls to tools that are no longer offered is not worth the
+ * trouble it causes at the provider.
+ */
+export type ChatContextMode = "full" | "plain" | "files";
+
 export interface Chat {
   id: string;
   title: string;
   projectId?: string;
+  /** Absent on every chat made before light modes existed, and read as "full". */
+  contextMode?: ChatContextMode;
   messages: ChatMessage[];
   createdAt: string;
   updatedAt: string;
@@ -119,6 +134,7 @@ export interface ChatListItem {
   id: string;
   title: string;
   projectId?: string;
+  contextMode?: ChatContextMode;
   createdAt: string;
   updatedAt: string;
   messageCount: number;

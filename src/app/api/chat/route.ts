@@ -2,6 +2,7 @@ import { createUIMessageStreamResponse } from "ai";
 import { NextRequest } from "next/server";
 import { createPiChatUIMessageStream } from "@/lib/pi/chat-runner";
 import { createChat, getChat } from "@/lib/storage/chat-store";
+import type { ChatContextMode } from "@/lib/types";
 import { getServerTranslator } from "@/i18n/server";
 import type { MessageKey } from "@/i18n/messages";
 
@@ -15,6 +16,10 @@ function formatChatStreamError(error: unknown, t: (key: MessageKey, values?: Rec
   }
   const short = compact.length > 220 ? `${compact.slice(0, 220)}...` : compact;
   return t("api.error.generationAfterToolsDetails", { details: short });
+}
+
+function parseContextMode(value: unknown): ChatContextMode | undefined {
+  return value === "plain" || value === "files" || value === "full" ? value : undefined;
 }
 
 export async function POST(req: NextRequest) {
@@ -51,15 +56,26 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // The context mode is the chat's, not the request's: it is settled by
+    // whoever opened the chat and every later message inherits it. Trusting the
+    // field on each message would let a second tab - or a client that simply
+    // forgot it - silently send a light chat's next turn at full price.
+    const requestedContextMode = parseContextMode(body.contextMode);
+
     // Create chat if needed
     let resolvedChatId = chatId;
+    let contextMode: ChatContextMode | undefined;
     if (!resolvedChatId) {
       resolvedChatId = crypto.randomUUID();
-      await createChat(resolvedChatId, t("api.chat.newTitle"), projectId);
+      contextMode = requestedContextMode;
+      await createChat(resolvedChatId, t("api.chat.newTitle"), projectId, contextMode);
     } else {
       const existing = await getChat(resolvedChatId);
       if (!existing) {
-        await createChat(resolvedChatId, t("api.chat.newTitle"), projectId);
+        contextMode = requestedContextMode;
+        await createChat(resolvedChatId, t("api.chat.newTitle"), projectId, contextMode);
+      } else {
+        contextMode = existing.contextMode;
       }
     }
 
@@ -74,6 +90,7 @@ export async function POST(req: NextRequest) {
         chatId: resolvedChatId,
         userMessage: message,
         projectId,
+        chatContextMode: contextMode,
         cwd: resolvedCurrentPath,
       });
 

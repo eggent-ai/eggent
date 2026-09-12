@@ -636,6 +636,7 @@ export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?:
     tools: options.tools,
     chatId: options.chatId,
     projectId: options.projectId,
+    chatContextMode: options.chatContextMode,
     toolRuntimeData: options.toolRuntimeData,
     runId,
     abortSignal: options.abortSignal,
@@ -879,6 +880,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         tools: options.tools,
         chatId: options.chatId,
         projectId: options.projectId,
+        chatContextMode: options.chatContextMode,
         runId,
         abortSignal: runAbort.signal,
         onPiInteraction: (interaction) => {

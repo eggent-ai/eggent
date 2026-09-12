@@ -1,12 +1,19 @@
 "use client";
 
 import { useRef, useCallback, useState, useEffect, useMemo } from "react";
-import { Send, Square, Paperclip, X, FileIcon, ImageIcon, Mic, MicOff, Loader2, Sparkles } from "lucide-react";
+import { Send, Square, Paperclip, X, FileIcon, ImageIcon, Mic, MicOff, Loader2, Sparkles, Check, Gauge } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useI18n } from "@/i18n/provider";
 import { formatUploadSize, MAX_UPLOAD_BYTES, MAX_UPLOAD_LABEL } from "@/lib/files/upload-limits";
 import type { MessageKey } from "@/i18n/messages";
-import type { ChatFile } from "@/lib/types";
+import type { ChatContextMode, ChatFile } from "@/lib/types";
 import type { PiRuntimeStats } from "@/lib/pi/types";
 import type { PiPendingInteraction } from "@/lib/pi/interaction-types";
 
@@ -109,6 +116,99 @@ interface SlashCommand {
   path?: string;
 }
 
+/**
+ * The keys are written out rather than built from the mode, because the
+ * translator's key type is a union of literals and a template would not compile.
+ */
+const CONTEXT_MODE_COPY: Record<ChatContextMode, { label: MessageKey; description: MessageKey }> = {
+  full: { label: "chat.contextMode.fullLabel", description: "chat.contextMode.fullDescription" },
+  plain: { label: "chat.contextMode.plainLabel", description: "chat.contextMode.plainDescription" },
+  files: { label: "chat.contextMode.filesLabel", description: "chat.contextMode.filesDescription" },
+};
+
+const CONTEXT_MODE_ORDER: ChatContextMode[] = ["full", "plain", "files"];
+
+/**
+ * How much of the workspace this chat carries, in the line that already reports
+ * the model and the token counts.
+ *
+ * Deliberately the quietest control on the screen: most chats want the full
+ * workspace and never touch it. It is a menu only while the chat is empty -
+ * after the first message the mode is the chat's for good - and it disappears
+ * entirely from a full chat that can no longer be changed, so the line gains
+ * nothing where there is nothing to say.
+ */
+function ContextModeControl({
+  mode,
+  locked,
+  onChange,
+}: {
+  mode: ChatContextMode;
+  locked: boolean;
+  onChange?: (mode: ChatContextMode) => void;
+}) {
+  const { t } = useI18n();
+
+  if (locked && mode === "full") return null;
+
+  const label = t(CONTEXT_MODE_COPY[mode].label);
+
+  if (locked) {
+    return (
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <span className="flex cursor-default items-center gap-1 font-mono">
+            <Gauge className="size-3" aria-hidden />
+            {label}
+          </span>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="max-w-72 text-xs leading-relaxed">
+          {t(CONTEXT_MODE_COPY[mode].description)} {t("chat.contextMode.locked")}
+        </TooltipContent>
+      </Tooltip>
+    );
+  }
+
+  return (
+    <DropdownMenu>
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <DropdownMenuTrigger asChild>
+            <button
+              type="button"
+              aria-label={t("chat.contextMode.trigger")}
+              className="flex items-center gap-1 rounded-sm font-mono underline-offset-2 transition-colors hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+            >
+              <Gauge className="size-3" aria-hidden />
+              {label}
+            </button>
+          </DropdownMenuTrigger>
+        </TooltipTrigger>
+        <TooltipContent side="top" className="max-w-80 text-xs leading-relaxed">
+          {t("chat.contextMode.hint")}
+        </TooltipContent>
+      </Tooltip>
+      <DropdownMenuContent align="start" side="top" className="max-w-80">
+        {CONTEXT_MODE_ORDER.map((option) => (
+          <DropdownMenuItem
+            key={option}
+            onSelect={() => onChange?.(option)}
+            className="flex-col items-start gap-0.5 py-2"
+          >
+            <span className="flex w-full items-center gap-2 font-medium">
+              {t(CONTEXT_MODE_COPY[option].label)}
+              {option === mode && <Check className="size-3.5" aria-hidden />}
+            </span>
+            <span className="text-xs leading-snug text-muted-foreground">
+              {t(CONTEXT_MODE_COPY[option].description)}
+            </span>
+          </DropdownMenuItem>
+        ))}
+      </DropdownMenuContent>
+    </DropdownMenu>
+  );
+}
+
 interface ChatInputProps {
   input: string;
   setInput: (input: string) => void;
@@ -123,6 +223,9 @@ interface ChatInputProps {
   onFilesUploaded?: (files: ChatFile[]) => void;
   focusSignal?: number;
   runtimeStats?: PiRuntimeStats | null;
+  contextMode?: ChatContextMode;
+  onContextModeChange?: (mode: ChatContextMode) => void;
+  contextModeLocked?: boolean;
 }
 
 export function ChatInput({
@@ -139,6 +242,9 @@ export function ChatInput({
   onFilesUploaded,
   focusSignal,
   runtimeStats,
+  contextMode = "full",
+  onContextModeChange,
+  contextModeLocked = false,
 }: ChatInputProps) {
   const { t } = useI18n();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -808,6 +914,11 @@ export function ChatInput({
           </div>
         )}
         <div className="mt-2 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+          <ContextModeControl
+            mode={contextMode}
+            locked={contextModeLocked}
+            onChange={onContextModeChange}
+          />
           <span className="font-mono">{formatModelName(runtimeStats)}</span>
           <span className="font-mono">in {formatTokenCount(runtimeStats?.session?.input ?? runtimeStats?.lastTurn?.input)}</span>
           <span className="font-mono">out {formatTokenCount(runtimeStats?.session?.output ?? runtimeStats?.lastTurn?.output)}</span>

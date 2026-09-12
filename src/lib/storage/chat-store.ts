@@ -1,6 +1,6 @@
 import fs from "fs/promises";
 import path from "path";
-import type { Chat, ChatListItem } from "@/lib/types";
+import type { Chat, ChatContextMode, ChatListItem } from "@/lib/types";
 import { publishUiSyncEvent } from "@/lib/realtime/event-bus";
 
 const DATA_DIR = path.join(process.cwd(), "data");
@@ -24,6 +24,7 @@ export async function getAllChats(): Promise<ChatListItem[]> {
         id: chat.id,
         title: chat.title,
         projectId: chat.projectId,
+        contextMode: chat.contextMode,
         createdAt: chat.createdAt,
         updatedAt: chat.updatedAt,
         messageCount: chat.messages.length,
@@ -109,13 +110,17 @@ export async function deleteChatsByProjectId(projectId: string): Promise<number>
 export async function createChat(
   id: string,
   title: string,
-  projectId?: string
+  projectId?: string,
+  contextMode?: ChatContextMode
 ): Promise<Chat> {
   const now = new Date().toISOString();
   const chat: Chat = {
     id,
     title,
     projectId,
+    // Stored only when it is not the default, so nothing changes on disk for
+    // the chats that every other surface creates.
+    ...(contextMode && contextMode !== "full" ? { contextMode } : {}),
     messages: [],
     createdAt: now,
     updatedAt: now,

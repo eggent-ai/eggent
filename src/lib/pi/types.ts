@@ -1,4 +1,5 @@
 import type { PiPendingInteraction } from "@/lib/pi/interaction-types";
+import type { ChatContextMode } from "@/lib/types";
 
 export interface PiSessionOptions {
   cwd?: string;
@@ -7,6 +8,12 @@ export interface PiSessionOptions {
   chatId?: string;
   projectId?: string;
   memorySubdir?: string;
+  /**
+   * How much of the workspace this run carries. Absent or "full" is the whole
+   * thing; the light modes replace the system prompt and cut the tool list.
+   * See buildLiteSystemPrompt in session.ts.
+   */
+  chatContextMode?: ChatContextMode;
   enableEggentTools?: boolean;
   /**
    * Optional escape hatch for tests/debugging: when true, disables pi-discovered

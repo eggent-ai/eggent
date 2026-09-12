@@ -156,6 +156,16 @@ const enMessages = {
   "settings.nav.api": "API",
   "settings.nav.mcp": "MCP",
 
+  "chat.contextMode.trigger": "How much context this chat carries",
+  "chat.contextMode.hint": "How much of the workspace goes into every message. The full mode sends every tool, skill and workspace instruction — about 12 000 tokens before you have typed anything. Chosen when a chat starts and kept for its whole life.",
+  "chat.contextMode.locked": "The mode is chosen when a chat starts and does not change. Open a new chat for a different one.",
+  "chat.contextMode.fullLabel": "full context",
+  "chat.contextMode.fullDescription": "Everything: files, web, images, Telegram, schedules, skills and the workspace instructions. ~12 000 tokens per message.",
+  "chat.contextMode.plainLabel": "plain chat",
+  "chat.contextMode.plainDescription": "Your question and this chat's history, nothing else. No tools at all. ~250 tokens per message.",
+  "chat.contextMode.filesLabel": "chat + files",
+  "chat.contextMode.filesDescription": "Plus reading files and switching between projects. No writing, commands or web. ~700 tokens per message.",
+
   "chat.attachFiles": "Attach files",
   "chat.attachFilesDisabled": "Send a message first to attach files",
   "chat.dictate": "Dictate with microphone",

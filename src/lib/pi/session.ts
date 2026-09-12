@@ -3,9 +3,11 @@ import fs from "fs";
 import path from "path";
 import {
   createAgentSession,
+  createLsToolDefinition,
   DefaultResourceLoader,
   getAgentDir,
   SessionManager,
+  type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
 import { createEggentPiTools } from "@/lib/pi/eggent-tools";
 import { createEggentPiExtensionUIContext } from "@/lib/pi/interaction-ui-context";
@@ -14,7 +16,7 @@ import { normalizePiScheduleStore } from "@/lib/pi/schedule-host";
 import { eggentSchedulePolicyExtension } from "@/lib/pi/schedule-policy";
 import type { PiSessionOptions } from "@/lib/pi/types";
 import { getChatFiles } from "@/lib/storage/chat-files-store";
-import type { ChatFile, ProjectSkillMetadata } from "@/lib/types";
+import type { ChatContextMode, ChatFile, ProjectSkillMetadata } from "@/lib/types";
 import {
   ensureOrchestratorDiskLayout,
   ensureProjectMcpAdapterConfig,
@@ -374,6 +376,70 @@ function buildEggentProjectContext(options: {
   return [...shared, ...thisWorkspace].filter(Boolean).join("\n");
 }
 
+/**
+ * The tools a light chat may use, by mode.
+ *
+ * "plain" is the answer and nothing else. "files" adds reading only - read and
+ * ls from the runtime, and the two project tools, because a chat that cannot
+ * say which project it is in makes the file paths meaningless. Writing,
+ * commands, the web, images, Telegram, schedules and skills are all out: each
+ * one costs its schema on every turn, and the point of the mode is that the
+ * turn costs almost nothing.
+ */
+const LITE_TOOL_NAMES: Record<Exclude<ChatContextMode, "full">, string[]> = {
+  plain: [],
+  files: ["read", "ls", "switch_project", "list_projects"],
+};
+
+function resolveLiteMode(mode?: ChatContextMode): Exclude<ChatContextMode, "full"> | null {
+  return mode === "plain" || mode === "files" ? mode : null;
+}
+
+/**
+ * The entire system prompt for a light chat.
+ *
+ * A full turn sends around 12 000 tokens before the person has typed anything:
+ * 31 tool schemas, pi's own coding-assistant preamble, the Eggent runtime
+ * context, the operator's deployment block. A question that needs none of it
+ * still pays for all of it. This replaces the lot with the handful of facts an
+ * answer actually needs.
+ *
+ * The last paragraph is the one that earns its place: the model has to know
+ * what it cannot do here, or it promises to read a file and then reports a
+ * tool that does not exist. The way out is a new chat, because the mode is
+ * fixed when the chat starts.
+ */
+function buildLiteSystemPrompt(options: {
+  mode: Exclude<ChatContextMode, "full">;
+  cwd: string;
+  projectId?: string;
+  projectName?: string;
+}): string {
+  const scope = options.projectId
+    ? `Project: ${options.projectName || options.projectId} (id: ${options.projectId})`
+    : "Scope: the orchestrator, which coordinates the projects in this workspace.";
+  const missing = options.mode === "files"
+    ? [
+        "This chat runs in light mode: chat and reading. Your only tools are read (read one file), ls (list a directory) and switching between projects.",
+        "You cannot write or edit files, run commands, search the web, fetch a page, generate images, send anything to Telegram, manage schedules or pipelines, or use skills.",
+      ]
+    : [
+        "This chat runs in light mode: conversation only. You have no tools at all.",
+        "You cannot read or write files, run commands, search the web, fetch a page, generate images, send anything to Telegram, manage schedules or pipelines, or use skills.",
+      ];
+
+  return [
+    "You are Eggent, a universal AI assistant. Answer the question you were asked, in the language it was asked in. Be concise and concrete.",
+    "",
+    `Today: ${new Date().toISOString().slice(0, 10)} (UTC). Count "yesterday", "last week" and any other relative date from this, not from memory.`,
+    scope,
+    // The runtime appends the working directory itself, at the end.
+    "",
+    ...missing,
+    "If the request needs something that is off here, say so in one line and tell the user to open a new chat in full mode - a chat keeps the mode it was opened with. Do not apologise at length, and never describe work you did not do.",
+  ].join("\n");
+}
+
 function getEggentPiSessionDir(): string {
   return path.join(process.cwd(), "data", "pi-sessions");
 }
@@ -406,6 +472,7 @@ function createSessionManager(options: PiSessionOptions, cwd: string): SessionMa
  * extensions, context files, retry/compaction, and session behavior.
  */
 export async function createEggentPiSession(options: PiSessionOptions = {}) {
+  const liteMode = resolveLiteMode(options.chatContextMode);
   const projectId = normalizeProjectId(options.projectId);
   const cwd = resolveCwd({ ...options, projectId });
   const agentDir = options.agentDir || getAgentDir();
@@ -475,17 +542,23 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
 
   // A project keeps its instructions in project.json (mirrored to context.md);
   // the orchestrator has only the file.
-  const workspaceInstructions = project ? project.instructions : await readProjectContext(scopeId);
-  const projectSkills = await loadProjectSkillsMetadata(scopeId);
+  // Everything from here to the resource loader exists to build the full
+  // context. A light chat sends none of it, so it is not read either.
+  const workspaceInstructions = liteMode
+    ? ""
+    : project
+      ? project.instructions
+      : await readProjectContext(scopeId);
+  const projectSkills = liteMode ? [] : await loadProjectSkillsMetadata(scopeId);
   const projectSkillPaths = projectSkills.map((skill) => path.join(skill.skillDir, "SKILL.md"));
   // Read the scope's own file rather than the session cwd: an orchestrator run
   // started inside a project directory would otherwise report that project's
   // servers as its own.
-  const mcpServerIds = loadConfiguredMcpServerIds(getWorkDir(scopeId));
-  const chatFiles = options.chatId ? await getChatFiles(options.chatId) : [];
-  const corePiToolsOnly = options.corePiToolsOnly === true;
+  const mcpServerIds = liteMode ? [] : loadConfiguredMcpServerIds(getWorkDir(scopeId));
+  const chatFiles = !liteMode && options.chatId ? await getChatFiles(options.chatId) : [];
+  const corePiToolsOnly = options.corePiToolsOnly === true || liteMode !== null;
 
-  const projectContext = buildEggentProjectContext({
+  const projectContext = liteMode ? "" : buildEggentProjectContext({
     projectId,
     projectName: project?.name,
     projectDescription: project?.description,
@@ -515,7 +588,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     deploymentContext: deploymentContext(),
     budgetLevel: await currentBudgetLevel(),
   });
-  const explicitContextFiles = loadEggentContextFiles(cwd, agentDir);
+  const explicitContextFiles = liteMode ? [] : loadEggentContextFiles(cwd, agentDir);
 
   const resourceLoader = new DefaultResourceLoader({
     cwd,
@@ -526,7 +599,20 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     noSkills: corePiToolsOnly,
     noPromptTemplates: corePiToolsOnly,
     noThemes: corePiToolsOnly,
+    // pi's own preamble opens by calling itself a coding assistant and closes
+    // with the path to its README inside node_modules - 945 tokens of it, on
+    // every turn. A light chat replaces it outright rather than appending to it.
+    ...(liteMode
+      ? {
+          systemPromptOverride: () =>
+            buildLiteSystemPrompt({ mode: liteMode, cwd, projectId, projectName: project?.name }),
+        }
+      : {}),
     agentsFilesOverride: (current) => {
+      // A light chat carries no context files at all: not the Eggent runtime
+      // context, not context.md, not an AGENTS.md the loader found on the way
+      // up. The whole prompt is the one built above.
+      if (liteMode) return { agentsFiles: [] };
       const seen = new Set<string>();
       const agentsFiles = [
         ...current.agentsFiles,
@@ -573,7 +659,11 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     }, 0);
   };
 
-  const eggentTools = options.enableEggentTools === false
+  // "plain" answers and nothing else, so the Eggent tools are not even built:
+  // creating them starts MCP watchers and registers a UI context this chat has
+  // no use for. "files" needs switch_project and list_projects from the set,
+  // and the allowlist below decides which of them the model is shown.
+  const eggentTools = options.enableEggentTools === false || liteMode === "plain"
     ? { tools: [], cleanup: async () => {} }
     : await createEggentPiTools({
         chatId: options.chatId,
@@ -594,7 +684,14 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
       });
   const customTools = [
     ...eggentTools.tools,
-    ...(options.runId
+    // ls is not among the runtime's default tools, and read without it is a
+    // tool that can only open a path somebody already knew.
+    // Cast because the SDK's own concrete definitions are not assignable to the
+    // erased ToolDefinition its customTools field asks for.
+    ...(liteMode === "files" ? [createLsToolDefinition(cwd) as ToolDefinition] : []),
+    // The interactive bash tool replaces the runtime's own bash. A light chat
+    // has no bash, so building it would only add a tool the allowlist drops.
+    ...(options.runId && !liteMode
       ? [createEggentInteractiveBashTool({
           cwd,
           runId: options.runId,
@@ -607,13 +704,21 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
   ];
   const customToolNames = customTools.map((tool) => tool.name);
 
+  // noTools "all" leaves the request without a tools field at all, which is
+  // what "plain" means; an allowlist is what every other mode narrows through.
+  const toolSelection = liteMode === "plain"
+    ? { noTools: "all" as const }
+    : liteMode === "files"
+      ? { tools: LITE_TOOL_NAMES.files }
+      : { tools: options.tools ? [...options.tools, ...customToolNames] : undefined };
+
   const { session } = await createAgentSession({
     cwd,
     agentDir,
     model: configuredModel,
     modelRuntime,
     resourceLoader,
-    tools: options.tools ? [...options.tools, ...customToolNames] : undefined,
+    ...toolSelection,
     customTools,
     sessionManager: createSessionManager(options, cwd),
   });
