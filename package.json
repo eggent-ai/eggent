@@ -12,8 +12,8 @@
     "test:vocabulary": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-vocabulary.ts",
     "test:schedules": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/test-schedule-policy.mjs",
     "test:active-runs": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-active-runs.ts",
-  "test:live-runs": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-live-runs.ts",
-  "test:dashboard-routes": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-dashboard-routes.ts",
+    "test:live-runs": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-live-runs.ts",
+    "test:dashboard-routes": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-dashboard-routes.ts",
     "test:provider-failure": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-provider-failure.ts",
     "test:provider-probe": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/test-provider-probe.ts",
     "test:managed-provider": "EGGENT_TEST_STUBS=lib/storage/project-store node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-managed-provider-repair.ts",
@@ -26,14 +26,15 @@
     "test:upload-limit": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-upload-limit.ts",
     "test:chat-images": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-chat-images.ts",
     "test:project-model": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-project-model.ts",
-    "test:skill-launch": "EGGENT_TEST_STUBS=lib/storage/project-store node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-skill-launch-scope.ts"
+    "test:skill-launch": "EGGENT_TEST_STUBS=lib/storage/project-store node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-skill-launch-scope.ts",
+    "test:agent-turn": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/test-agent-turn.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.37",
     "@ai-sdk/google": "^3.0.21",
     "@ai-sdk/openai": "^3.0.25",
     "@ai-sdk/react": "3.0.79",
-    "@earendil-works/pi-coding-agent": "^0.81.1",
+    "@earendil-works/pi-coding-agent": "^0.85.1",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "@radix-ui/react-label": "^2.1.7",
     "@radix-ui/react-slot": "^1.2.3",
