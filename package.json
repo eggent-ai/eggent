@@ -34,7 +34,7 @@
     "@ai-sdk/google": "^3.0.21",
     "@ai-sdk/openai": "^3.0.25",
     "@ai-sdk/react": "3.0.79",
-    "@earendil-works/pi-coding-agent": "^0.85.1",
+    "@earendil-works/pi-coding-agent": "^0.81.1",
     "@modelcontextprotocol/sdk": "^1.26.0",
     "@radix-ui/react-label": "^2.1.7",
     "@radix-ui/react-slot": "^1.2.3",
