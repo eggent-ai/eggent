@@ -48,7 +48,7 @@ async function check(name: string, fn: () => void | Promise<void>): Promise<void
 const OWN_PROVIDER = {
   name: "My proxy",
   baseUrl: "https://proxy.example.test/v1",
-  api: "openai-completions",
+  api: "openai-responses",
   models: [{ id: "some-model" }],
 };
 
@@ -87,7 +87,9 @@ await check("the eggent-ai entry comes back with a baseUrl and a model", async (
   assert.equal(repair.backupPath, undefined);
   const entry = (await readModels()).providers["eggent-ai"];
   assert.equal(entry.baseUrl, "https://cloud.example.test/v1");
-  assert.equal(entry.api, "openai-completions");
+  // Responses, not chat completions: that endpoint refuses tools and reasoning
+  // together, and an agent turn always carries tools.
+  assert.equal(entry.api, "openai-responses");
   assert.equal(entry.models[0].id, "eggent-ai");
 });
 

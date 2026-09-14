@@ -904,7 +904,12 @@ async function restoreManagedProviderEntry(providerId: string): Promise<ManagedP
   if (!baseUrl) {
     throw new Error("This deployment does not say where the included model is served from.");
   }
-  const api = process.env.EGGENT_AI_MODEL_API?.trim().toLowerCase() || "openai-completions";
+  // The Responses dialect, because `/v1/chat/completions` refuses tools and
+  // reasoning in the same request - "Function tools with reasoning_effort are
+  // not supported" - and an agent turn always carries tools. That refusal took
+  // the whole product down once. `EGGENT_AI_MODEL_API` is the way back without
+  // a rebuild if this ever needs one.
+  const api = process.env.EGGENT_AI_MODEL_API?.trim().toLowerCase() || "openai-responses";
   const entry = managedProviderEntry(providerId, baseUrl, api, await readManagedCatalog());
 
   const raw = await readPiModelsJson();
