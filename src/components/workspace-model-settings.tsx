@@ -763,8 +763,15 @@ export function WorkspaceModelSettings() {
                   onValueChange={saveIncludedModel}
                   disabled={savingDefaultModel}
                 >
+                  {/* The name only. Radix renders the whole selected item into
+                      the trigger, and the sentence plus the price does not fit
+                      one collapsed row - it came out clipped against the
+                      chevron. Passing children overrides that; the note still
+                      shows in the open list. */}
                   <SelectTrigger id={modelFieldId} className="w-full">
-                    <SelectValue placeholder={t("settings.selectModel")} />
+                    <SelectValue placeholder={t("settings.selectModel")}>
+                      {includedModelChoices.find((item) => item.id === defaultModelSelection)?.name}
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     {includedModelGroups.map((group, index) => (
