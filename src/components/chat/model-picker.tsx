@@ -16,7 +16,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, Loader2, Search } from "lucide-react";
+import { Check, ChevronDown, Loader2, Search, Sparkles } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useI18n } from "@/i18n/provider";
 import { parseProjectModelFile, serializeProjectModelFile } from "@/lib/pi/project-model-choice";
@@ -39,6 +39,10 @@ interface PickerState {
 export interface ModelPickerProps {
   /** Null for the orchestrator, where the choice is the workspace default. */
   projectId?: string | null;
+  /** Set by the composer, which gives the trigger its own size and spacing. */
+  triggerClassName?: string;
+  /** In the composer, where the row is shared with the text field. */
+  compact?: boolean;
 }
 
 interface ModelOption {
@@ -48,7 +52,7 @@ interface ModelOption {
   group: string;
 }
 
-export function ModelPicker({ projectId }: ModelPickerProps) {
+export function ModelPicker({ projectId, triggerClassName, compact }: ModelPickerProps) {
   const { t } = useI18n();
   const [state, setState] = useState<PickerState | null>(null);
   const [chosen, setChosen] = useState<{ provider: string; model: string } | null>(null);
@@ -188,7 +192,7 @@ export function ModelPicker({ projectId }: ModelPickerProps) {
 
   if (options.length === 0) {
     // Nothing to choose between - a workspace with one model, or none loaded.
-    return <span className="font-mono">{currentLabel || t("chat.modelPicker.none")}</span>;
+    return <span className={triggerClassName ?? "font-mono"}>{currentLabel || t("chat.modelPicker.none")}</span>;
   }
 
   return (
@@ -207,12 +211,24 @@ export function ModelPicker({ projectId }: ModelPickerProps) {
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="inline-flex items-center gap-1 rounded font-mono transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+          className={
+            triggerClassName
+            ?? "inline-flex items-center gap-1 rounded font-mono transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+          }
           aria-label={t("chat.modelPicker.trigger")}
         >
-          <span>{currentLabel || t("chat.modelPicker.none")}</span>
-          {thinking ? <span className="text-muted-foreground">· {thinking}</span> : null}
-          <ChevronDown className="size-3" />
+          {/* Inside the composer the name shares the row with the text field.
+              On a phone that field was down to 78px, so below `sm` the name
+              gives way to the icon and only the chevron stays - the control is
+              still there, and there is somewhere to type. */}
+          {compact ? <Sparkles className="size-3.5 shrink-0 sm:hidden" /> : null}
+          <span className={compact ? "hidden truncate sm:inline" : "truncate"}>
+            {currentLabel || t("chat.modelPicker.none")}
+          </span>
+          {thinking ? (
+            <span className={`shrink-0 text-muted-foreground${compact ? " hidden sm:inline" : ""}`}>· {thinking}</span>
+          ) : null}
+          <ChevronDown className="size-3 shrink-0" />
         </button>
       </PopoverTrigger>
       <PopoverContent align="center" className="w-80 p-0" sideOffset={6}>

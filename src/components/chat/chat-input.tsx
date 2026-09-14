@@ -881,6 +881,14 @@ export function ChatInput({
             />
           </div>
 
+            {/* The model sits in the row it applies to, not in the note under
+                it: this is the thing you glance at before pressing send. */}
+            <ModelPicker
+              projectId={projectId ?? null}
+              compact
+              triggerClassName="inline-flex max-w-[9rem] shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+            />
+
             {isLoading && !pendingInteraction ? (
               <Button
                 variant="destructive"
@@ -913,7 +921,6 @@ export function ChatInput({
             locked={contextModeLocked}
             onChange={onContextModeChange}
           />
-          <ModelPicker projectId={projectId ?? null} />
           <span className="font-mono">in {formatTokenCount(runtimeStats?.session?.input ?? runtimeStats?.lastTurn?.input)}</span>
           <span className="font-mono">out {formatTokenCount(runtimeStats?.session?.output ?? runtimeStats?.lastTurn?.output)}</span>
           <span className="font-mono">{formatContextUsage(runtimeStats)}</span>
