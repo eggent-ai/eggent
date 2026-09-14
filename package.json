@@ -26,6 +26,7 @@
     "test:upload-limit": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-upload-limit.ts",
     "test:chat-images": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-chat-images.ts",
     "test:project-model": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-project-model.ts",
+    "test:managed-models": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-managed-models.ts",
     "test:skill-launch": "EGGENT_TEST_STUBS=lib/storage/project-store node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-skill-launch-scope.ts",
     "test:agent-turn": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/test-agent-turn.ts"
   },

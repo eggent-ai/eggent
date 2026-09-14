@@ -29,6 +29,8 @@ import {
   readProjectContext,
 } from "@/lib/storage/project-store";
 import { deploymentContext, ensureWebSearchWorkflow, fallbackRuntimeModel, getEggentAiModelLockState, getManagedProviderId, getPiModelRegistry, getPiModelRuntime, getPiSettingsManager, isManagedProviderId } from "@/lib/pi/config-store";
+import { managedDefaultTextModel, readManagedCatalog } from "@/lib/pi/managed-models";
+import { pickManagedRuntimeModel } from "@/lib/pi/project-model-choice";
 import { getUsageSnapshot, isUsageProviderConfigured } from "@/lib/usage/usage-provider";
 
 /**
@@ -509,7 +511,21 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     ? await (async () => {
         const managedProvider = await getManagedProviderId();
         if (!managedProvider) return undefined;
-        return availableModels.find((model) => model.provider === managedProvider);
+        // One rule, in one place: the settings screen resolves the included
+        // model the same way, and a screen reporting a different model than the
+        // one answering is the failure this shares code to avoid.
+        return pickManagedRuntimeModel({
+          managedAvailable: availableModels.filter((model) => model.provider === managedProvider),
+          managedProvider,
+          projectChoice: projectModelSettings && projectModelSettings.inheritsGlobal !== true
+            ? {
+                provider: typeof projectModelSettings.provider === "string" ? projectModelSettings.provider : undefined,
+                model: typeof projectModelSettings.model === "string" ? projectModelSettings.model : undefined,
+              }
+            : undefined,
+          workspaceChoice: { provider: settingsManager.getDefaultProvider(), model: settingsManager.getDefaultModel() },
+          catalogDefaultId: managedDefaultTextModel(await readManagedCatalog())?.id,
+        });
       })()
     : undefined;
 
@@ -568,13 +584,16 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     chatFiles,
     projectSkills,
     mcpServerIds,
-    // On the included model the run is reported by its label, whether the whole
-    // workspace is on it or only this project chose it.
+    // On the included model the provider is reported by its label - the run is
+    // on Eggent AI whether the whole workspace is or only this project chose it
+    // - while the model keeps its own name, because there are several to choose
+    // from now and "Eggent AI" alone no longer says which one is answering.
     runtimeModel: configuredModel
       ? (modelLock.locked || await isManagedProviderId(configuredModel.provider))
         ? {
-            id: modelLock.label,
-            name: modelLock.label,
+            provider: modelLock.label,
+            id: configuredModel.id,
+            name: configuredModel.name,
           }
         : {
             provider: configuredModel.provider,

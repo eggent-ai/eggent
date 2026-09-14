@@ -127,7 +127,17 @@ export function projectModelChoiceServable(state: ProjectModelsState, choice: Pr
 
 /** What "the workspace model" means right now, or null when the workspace has none. */
 export function workspaceModelSummary(state: ProjectModelsState): { provider: string; model?: string } | null {
-  if (state.modelLock?.locked) return { provider: state.modelLock.label || MANAGED_FALLBACK_LABEL };
+  if (state.modelLock?.locked) {
+    // Name the model too, now that the included plan holds several. Without it
+    // "the workspace model" and "a project's own included model" read as the
+    // same thing on a screen whose whole job is to tell them apart.
+    const label = state.modelLock.label || MANAGED_FALLBACK_LABEL;
+    const locked = state.runtimeModel?.model;
+    // Its name, not its id: the picker two rows down shows names, and a row
+    // showing a raw id beside it reads as a different kind of thing.
+    if (!locked?.id) return { provider: label };
+    return { provider: label, model: locked.name || locked.id };
+  }
   // What answers, not what is written down: a saved model the workspace cannot
   // serve is answered by another one, and saying nothing at all reads as "no
   // model selected" to somebody who selected one.
@@ -138,4 +148,100 @@ export function workspaceModelSummary(state: ProjectModelsState): { provider: st
   const current = state.current;
   if (!current?.provider || !current.model?.available) return null;
   return { provider: current.providerName || current.provider, model: current.model.id };
+}
+
+/**
+ * What a project's model.json is allowed to say while the workspace is on the
+ * included plan, and what it is allowed to show.
+ *
+ * The plan fixes the provider, not the model: a project may name a different
+ * included model, and that is honoured. Anything naming somebody else's
+ * provider is not - the runtime would ignore it - so it is masked on the way
+ * out and refused on the way in, rather than saved and quietly dropped.
+ *
+ * Pure, and here rather than in the route, for the same reason as the rules
+ * above: this is where a test can reach them.
+ */
+export function maskProjectModelUnderLock(content: string, managedProvider: string): string {
+  const inherit = `${JSON.stringify({ inheritsGlobal: true }, null, 2)}\n`;
+  const parsed = parseProjectModelFile(content);
+  if (!parsed.readable || parsed.choice.mode !== "project") return inherit;
+  return isManagedChoiceProvider(parsed.choice.provider, managedProvider) ? content : inherit;
+}
+
+export type ManagedSaveRefusal = "not_json" | "foreign_provider" | "unknown_model";
+
+/**
+ * Null when the content may be saved under the lock.
+ *
+ * `catalogModelIds` empty means the workspace has never reached the gateway and
+ * holds exactly one included model, so there is no choice to get wrong and the
+ * model id is not checked.
+ */
+export function managedProjectSaveRefusal(
+  content: string,
+  managedProvider: string,
+  catalogModelIds: string[]
+): ManagedSaveRefusal | null {
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(content.trim() || "{}");
+  } catch {
+    return "not_json";
+  }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return "not_json";
+  const record = parsed as Record<string, unknown>;
+  if (record.inheritsGlobal === true) return null;
+  const provider = typeof record.provider === "string" ? record.provider.trim() : "";
+  const model = typeof record.model === "string" ? record.model.trim() : "";
+  // Neither named: the same thing as following the workspace, which is how an
+  // empty file and a half-written one have always been read.
+  if (!provider && !model) return null;
+  if (!isManagedChoiceProvider(provider, managedProvider)) return "foreign_provider";
+  if (catalogModelIds.length === 0) return null;
+  return catalogModelIds.includes(model) ? null : "unknown_model";
+}
+
+/**
+ * Whether a saved provider names the included one.
+ *
+ * Two ids mean it: whichever the workspace was provisioned under, and the
+ * literal "eggent-ai" that every screen sends and every older file carries.
+ */
+export function isManagedChoiceProvider(provider: string, managedProvider: string): boolean {
+  return Boolean(provider) && (provider === managedProvider || provider === MANAGED_FALLBACK_ID);
+}
+
+/**
+ * Which included model a run answers with.
+ *
+ * The order is the whole rule and it is shared by two places that must not
+ * drift: the run itself, and the settings screen that claims to report it. The
+ * project's choice first - a project may sit on a cheaper model than the
+ * workspace - then the workspace's, then the deployment's default, and only
+ * then whatever is first, which is an accident of file order and never a
+ * choice.
+ *
+ * A choice naming a model the deployment no longer serves falls through rather
+ * than stopping the run: withdrawing a model must not leave a workspace unable
+ * to answer.
+ */
+export function pickManagedRuntimeModel<T extends { provider: string; id: string }>(params: {
+  managedAvailable: T[];
+  managedProvider: string;
+  projectChoice?: { provider?: string; model?: string };
+  workspaceChoice?: { provider?: string; model?: string };
+  catalogDefaultId?: string;
+}): T | undefined {
+  const { managedAvailable, managedProvider, catalogDefaultId } = params;
+  if (managedAvailable.length === 0) return undefined;
+  const pick = (choice?: { provider?: string; model?: string }) => {
+    if (!choice?.provider || !choice.model) return undefined;
+    if (!isManagedChoiceProvider(choice.provider, managedProvider)) return undefined;
+    return managedAvailable.find((model) => model.id === choice.model);
+  };
+  return pick(params.projectChoice)
+    || pick(params.workspaceChoice)
+    || managedAvailable.find((model) => model.id === catalogDefaultId)
+    || managedAvailable[0];
 }

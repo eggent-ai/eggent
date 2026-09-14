@@ -15,6 +15,15 @@ function isTruthyEnv(value: string | undefined): boolean {
   return normalized === "1" || normalized === "true" || normalized === "yes";
 }
 
+import {
+  managedDefaultTextModel,
+  readManagedCatalog,
+  MANAGED_MODEL_CONTEXT_WINDOW as CATALOG_CONTEXT_WINDOW,
+  MANAGED_MODEL_MAX_TOKENS as CATALOG_MAX_TOKENS,
+  type ManagedCatalogModel,
+} from "@/lib/pi/managed-models";
+import { pickManagedRuntimeModel } from "@/lib/pi/project-model-choice";
+
 export function eggentAiModelLabel(): string {
   return process.env.EGGENT_AI_MODEL_LABEL?.trim() || "Eggent AI";
 }
@@ -736,6 +745,22 @@ function managedTokenFromEnv(): string | null {
 }
 
 /** Whether the workspace can be put back on the included model at all. */
+/**
+ * The gateway credential, wherever it lives.
+ *
+ * auth.json first, because that is where provisioning puts it and where a
+ * repair puts it back; the environment second, for a workspace whose auth.json
+ * lost it. Used to ask the deployment which models it offers, which is the one
+ * call core makes to the gateway that is not a chat turn.
+ */
+export async function getManagedGatewayToken(): Promise<string> {
+  const auth: Record<string, StoredCredentialRecord> = await readAuthJson().catch(() => ({}));
+  for (const record of Object.values(auth)) {
+    if (typeof record?.key === "string" && record.key.startsWith("eggw_")) return record.key;
+  }
+  return managedTokenFromEnv() || "";
+}
+
 export async function managedCredentialRecoverable(): Promise<boolean> {
   return Boolean((await getManagedProviderId()) || managedTokenFromEnv());
 }
@@ -758,8 +783,8 @@ async function restoreManagedCredential(): Promise<string | null> {
 }
 
 /** The included model as it is described to the runtime. */
-export const MANAGED_MODEL_CONTEXT_WINDOW = 272000;
-export const MANAGED_MODEL_MAX_TOKENS = 128000;
+export const MANAGED_MODEL_CONTEXT_WINDOW = CATALOG_CONTEXT_WINDOW;
+export const MANAGED_MODEL_MAX_TOKENS = CATALOG_MAX_TOKENS;
 
 /**
  * Where the included model is served from, for rebuilding its models.json entry.
@@ -803,25 +828,84 @@ export interface ManagedProviderRepair {
  * models.json that does not parse is set aside rather than merged into nothing,
  * so nobody's own configuration is lost to the repair.
  */
+/**
+ * The included provider as models.json describes it.
+ *
+ * One entry per model the deployment offers, so the picker has something to
+ * pick from. With no catalog yet - a workspace that has never reached the
+ * gateway, or a self-hosted one - it falls back to the single entry this file
+ * has always written, whose id is the provider id. That id is what every
+ * workspace provisioned before the catalog carries in its settings, which is
+ * why the fallback has to stay: without it such a workspace would hold a
+ * saved model that resolves to nothing.
+ */
+function managedProviderEntry(
+  providerId: string,
+  baseUrl: string,
+  api: string,
+  catalog: ManagedCatalogModel[]
+): Record<string, unknown> {
+  const label = eggentAiModelLabel();
+  const text = catalog.filter((model) => model.kind === "text");
+  const models = text.length > 0
+    ? text.map((model) => ({
+        id: model.id,
+        name: model.name,
+        input: model.input.length > 0 ? model.input : ["text"],
+        contextWindow: model.contextWindow || MANAGED_MODEL_CONTEXT_WINDOW,
+        maxTokens: model.maxTokens || MANAGED_MODEL_MAX_TOKENS,
+        ...(model.reasoning ? { reasoning: true } : {}),
+      }))
+    : [{
+        id: providerId,
+        name: label,
+        input: ["text", "image"],
+        contextWindow: MANAGED_MODEL_CONTEXT_WINDOW,
+        maxTokens: MANAGED_MODEL_MAX_TOKENS,
+      }];
+  return { name: label, baseUrl, api, models };
+}
+
+/**
+ * Bring models.json and the saved model in step with a freshly fetched catalog.
+ *
+ * Called after a refresh, never from a request. Two things have to happen
+ * together: the provider entry gains the models on offer, and a workspace whose
+ * settings still name the old single entry - the provider id - is moved onto
+ * the catalog's default. Doing only the first would leave that workspace with a
+ * saved model the registry no longer holds, which is the exact failure the
+ * catalog refresh work was about.
+ */
+export async function syncManagedProviderCatalog(cwd = process.cwd()): Promise<{ models: number; movedTo?: string }> {
+  const providerId = await getManagedProviderId();
+  if (!providerId) return { models: 0 };
+  const catalog = await readManagedCatalog();
+  const text = catalog.filter((model) => model.kind === "text");
+  if (text.length === 0) return { models: 0 };
+
+  const repair = await restoreManagedProviderEntry(providerId);
+  void repair;
+
+  const settingsManager = getPiSettingsManager(cwd);
+  if (settingsManager.getDefaultProvider() !== providerId) return { models: text.length };
+  const saved = settingsManager.getDefaultModel();
+  if (saved && text.some((model) => model.id === saved)) return { models: text.length };
+  // Either the provider id from before the catalog, or a model that has since
+  // been withdrawn. Both resolve to nothing, so name the default outright.
+  const fallback = managedDefaultTextModel(text);
+  if (!fallback) return { models: text.length };
+  settingsManager.setDefaultModel(fallback.id);
+  await settingsManager.flush();
+  return { models: text.length, movedTo: fallback.id };
+}
+
 async function restoreManagedProviderEntry(providerId: string): Promise<ManagedProviderRepair> {
   const baseUrl = managedProviderBaseUrl();
   if (!baseUrl) {
     throw new Error("This deployment does not say where the included model is served from.");
   }
   const api = process.env.EGGENT_AI_MODEL_API?.trim().toLowerCase() || "openai-completions";
-  const label = eggentAiModelLabel();
-  const entry = {
-    name: label,
-    baseUrl,
-    api,
-    models: [{
-      id: providerId,
-      name: label,
-      input: ["text", "image"],
-      contextWindow: MANAGED_MODEL_CONTEXT_WINDOW,
-      maxTokens: MANAGED_MODEL_MAX_TOKENS,
-    }],
-  };
+  const entry = managedProviderEntry(providerId, baseUrl, api, await readManagedCatalog());
 
   const raw = await readPiModelsJson();
   let parsed: Record<string, unknown> = {};
@@ -932,7 +1016,12 @@ export async function enableEggentAiModelLock(cwd = process.cwd()): Promise<Mana
   const modelRuntime = await getPiModelRuntime();
   const modelRegistry = await getPiModelRegistry(modelRuntime);
   await modelRegistry.refresh();
-  const managedModel = modelRegistry.getAll().find((model) => model.provider === managedProvider);
+  // The catalog's default, not whatever the registry happens to list first:
+  // with several models under one provider "first" is an accident of file
+  // order, and it decides what every workspace coming back is put on.
+  const managedModels = modelRegistry.getAll().filter((model) => model.provider === managedProvider);
+  const preferredId = managedDefaultTextModel(await readManagedCatalog())?.id;
+  const managedModel = (preferredId && managedModels.find((model) => model.id === preferredId)) || managedModels[0];
   // Never fall back to the provider id here. Writing it into defaultModel is
   // what turned a lost models.json entry into a workspace that reported the
   // included model as selected and then had nothing to answer with.
@@ -960,12 +1049,55 @@ export async function getPiSettingsState(cwd = process.cwd()) {
   };
 }
 
+/**
+ * Change the model - and only the model - while the workspace is on Eggent AI.
+ *
+ * Returns the new settings when it applied, null when the request was for
+ * something else, so the caller can refuse that the way it always did. A model
+ * the deployment does not serve is refused by name rather than ignored: a
+ * silent no-op here is what makes a saved setting and a live one differ.
+ */
+async function setManagedModelWhileLocked(
+  options: { provider?: string; model?: string; thinkingLevel?: string },
+  cwd: string
+): Promise<Awaited<ReturnType<typeof getPiSettingsState>> | null> {
+  const managedProvider = await getManagedProviderId();
+  if (!managedProvider) return null;
+  const provider = options.provider?.trim();
+  if (provider && provider !== managedProvider && provider !== "eggent-ai") return null;
+  const model = options.model?.trim();
+  const thinkingLevel = options.thinkingLevel?.trim();
+  if (!model && !thinkingLevel) return null;
+
+  const settingsManager = getPiSettingsManager(cwd);
+  if (model) {
+    const modelRuntime = await getPiModelRuntime();
+    const modelRegistry = await getPiModelRegistry(modelRuntime);
+    await modelRegistry.refresh();
+    const available = modelRegistry.getAvailable().filter((entry) => entry.provider === managedProvider);
+    if (!available.some((entry) => entry.id === model)) {
+      throw new Error(`${eggentAiModelLabel()} does not offer a model called "${model}" in this workspace.`);
+    }
+    settingsManager.setDefaultProvider(managedProvider);
+    settingsManager.setDefaultModel(model);
+  }
+  if (thinkingLevel) settingsManager.setDefaultThinkingLevel(thinkingLevel as never);
+  await settingsManager.flush();
+  return getPiSettingsState(cwd);
+}
+
 export async function updatePiModelDefaults(options: {
   provider?: string;
   model?: string;
   thinkingLevel?: string;
 }, cwd = process.cwd()) {
   if ((await getEggentAiModelLockState(cwd)).locked) {
+    // Being on the included plan fixes the provider, not the model. Picking a
+    // different model within it is an ordinary choice - a cheaper one to make
+    // the balance last, a stronger one for hard work - and refusing it was the
+    // reason a workspace on Eggent AI could not choose at all.
+    const settled = await setManagedModelWhileLocked(options, cwd);
+    if (settled) return settled;
     throw new Error("Model selection is managed by Eggent AI for this workspace.");
   }
 
@@ -1086,7 +1218,22 @@ export async function getResolvedPiRuntimeModel(projectId?: string | null): Prom
     ? await (async () => {
         const managedProvider = await getManagedProviderId();
         if (!managedProvider) return undefined;
-        return availableModels.find((model) => model.provider === managedProvider);
+        // The same one function the run and the settings screen resolve with.
+        // Taking "the first model of the managed provider" here is what made
+        // the composer report a 272k window under a model with a million: the
+        // choice was ignored and the first entry answered for it.
+        return pickManagedRuntimeModel({
+          managedAvailable: availableModels.filter((model) => model.provider === managedProvider),
+          managedProvider,
+          projectChoice: projectModelSettings && projectModelSettings.inheritsGlobal !== true
+            ? {
+                provider: typeof projectModelSettings.provider === "string" ? projectModelSettings.provider : undefined,
+                model: typeof projectModelSettings.model === "string" ? projectModelSettings.model : undefined,
+              }
+            : undefined,
+          workspaceChoice: { provider: settingsManager.getDefaultProvider(), model: settingsManager.getDefaultModel() },
+          catalogDefaultId: managedDefaultTextModel(await readManagedCatalog())?.id,
+        });
       })()
     : undefined;
   const configuredModel = managedModel
@@ -1101,8 +1248,12 @@ export async function getResolvedPiRuntimeModel(projectId?: string | null): Prom
     model: configuredModel
       ? reportedAsManaged
         ? {
-            id: modelLock.label,
-            name: modelLock.label,
+            // The plan is the provider; the model keeps its own name, because
+            // there are several to choose from and "Eggent AI" no longer says
+            // which one is answering.
+            provider: modelLock.label,
+            id: configuredModel.id,
+            name: configuredModel.name,
           }
         : {
             provider: configuredModel.provider,
@@ -1161,31 +1312,45 @@ export async function getPiModelsState() {
   const imageGeneration = await getImageGenerationState();
 
   if (modelLock.locked) {
-    const lockedModel = currentModel
-      ? {
-          ...serializeModel(currentModel, true),
+    // Being on the included plan is a provider, not a model. The screen used to
+    // synthesize one fake entry named after the plan, which is why a workspace
+    // on Eggent AI had nothing to choose between; it now reports the models the
+    // deployment actually offers, under the provider's label.
+    const managedProvider = (await getManagedProviderId()) || "eggent-ai";
+    const catalog = await readManagedCatalog();
+    const offered = available
+      .filter((model) => model.provider === managedProvider)
+      .map((model) => ({ ...serializeModel(model, true), provider: "eggent-ai" }));
+    // A workspace that has never reached the gateway has no catalog and one
+    // model in models.json. It keeps working, on one entry named after the plan.
+    const lockedModels = offered.length > 0
+      ? offered
+      : [{
           provider: "eggent-ai",
           id: modelLock.label,
           name: modelLock.label,
           available: true,
-        }
-      : {
-          provider: "eggent-ai",
-          id: modelLock.label,
-          name: modelLock.label,
-          available: true,
-          contextWindow: 128000,
-          maxTokens: 16384,
+          contextWindow: MANAGED_MODEL_CONTEXT_WINDOW,
+          maxTokens: MANAGED_MODEL_MAX_TOKENS,
           reasoning: false,
-          input: ["text", "image"],
-        };
+          input: ["text", "image"] as string[],
+        }];
+    // The same order the run resolves in, so the screen cannot report one model
+    // while another answers: what is saved, else the catalog default, else the
+    // first on offer.
+    const lockedModel = pickManagedRuntimeModel({
+      managedAvailable: lockedModels,
+      managedProvider: "eggent-ai",
+      workspaceChoice: { provider: "eggent-ai", model: settings.defaultModel },
+      catalogDefaultId: managedDefaultTextModel(catalog)?.id,
+    }) || lockedModels[0];
     return {
       agentDir: getPiAgentDir(),
       authFile: getPiAuthPath(),
       settings: {
         ...settings,
         defaultProvider: "eggent-ai",
-        defaultModel: modelLock.label,
+        defaultModel: lockedModel.id,
       },
       modelsFile: getPiModelsPath(),
       modelLock,
@@ -1207,12 +1372,16 @@ export async function getPiModelsState() {
         auth: { configured: true, source: "managed", label: modelLock.label },
         credentialType: "api_key",
         stored: false,
-        modelCount: 1,
-        availableModelCount: 1,
+        modelCount: lockedModels.length,
+        availableModelCount: lockedModels.length,
       }],
-      models: [lockedModel],
-      availableModels: [lockedModel],
-      savedModel: { provider: "eggent-ai", providerName: modelLock.label, model: modelLock.label, available: true },
+      models: lockedModels,
+      availableModels: lockedModels,
+      // What the catalog says about each one - the sentence under the name and
+      // what it costs. Core holds no price table of its own; this is the
+      // deployment's own answer, passed through.
+      managedModels: catalog.filter((model) => model.kind === "text"),
+      savedModel: { provider: "eggent-ai", providerName: modelLock.label, model: lockedModel.id, available: true },
       runtimeModel: { provider: "eggent-ai", providerName: modelLock.label, model: lockedModel },
     };
   }
@@ -1263,6 +1432,10 @@ export async function getPiModelsState() {
       .map((provider) => ({ id: provider, name: modelRegistry.getProviderDisplayName(provider) }))
       .sort((a, b) => a.name.localeCompare(b.name)),
     managed: { available: managedRecoverable, providerId: managedProviderId || "eggent-ai", label: modelLock.label },
+    // Also here, not only under the lock: a workspace on its own provider can
+    // still put one project on the included model, and that form offers the
+    // same list.
+    managedModels: (await readManagedCatalog()).filter((model) => model.kind === "text"),
     current: currentModel ? {
       provider: settings.defaultProvider,
       providerName: modelRegistry.getProviderDisplayName(settings.defaultProvider || currentModel.provider),

@@ -1,5 +1,6 @@
 import { initTelegramLifecycle } from "@/lib/telegram/polling-lifecycle";
-import { refreshPiModelCatalog } from "@/lib/pi/config-store";
+import { getManagedGatewayToken, refreshPiModelCatalog, syncManagedProviderCatalog } from "@/lib/pi/config-store";
+import { managedGatewayBaseUrl, refreshManagedCatalog } from "@/lib/pi/managed-models";
 import { restorePiSchedules } from "@/lib/pi/schedule-host";
 
 initTelegramLifecycle().catch((error) => {
@@ -35,7 +36,55 @@ function refreshModelCatalog(): void {
     .catch((error) => {
       console.warn(`[Models] Catalog refresh failed: ${error instanceof Error ? error.message : error}`);
     });
+  refreshIncludedModelCatalog();
 }
+
+/**
+ * Which models the included plan offers is the deployment's answer, not ours,
+ * so it is fetched on the same schedule and for the same reason as the provider
+ * catalogs above: a chat turn must not wait on it, and a workspace that cannot
+ * reach the gateway keeps whatever it last knew.
+ */
+/**
+ * Bring models.json in step with the catalog already on disk.
+ *
+ * Separate from the fetch, and outside the network switch, because it needs no
+ * network: a workspace that cannot reach the gateway - or one told never to try
+ * - would otherwise keep answering from a models.json that disagrees with the
+ * list it already holds, which is the same "saved model resolves to nothing"
+ * failure by a different route.
+ */
+function syncIncludedModelsFromDisk(): void {
+  syncManagedProviderCatalog()
+    .then(({ models, movedTo }) => {
+      if (models === 0) return;
+      console.log(`[Models] Eggent AI offers ${models} models${movedTo ? `; workspace moved onto ${movedTo}` : ""}`);
+    })
+    .catch((error) => {
+      console.warn(`[Models] Eggent AI model list could not be applied: ${error instanceof Error ? error.message : error}`);
+    });
+}
+
+function refreshIncludedModelCatalog(): void {
+  if (!managedGatewayBaseUrl()) return;
+  getManagedGatewayToken()
+    .then(async (token) => {
+      if (!token) return;
+      const { models } = await refreshManagedCatalog(token);
+      if (models === 0) return;
+      const { movedTo } = await syncManagedProviderCatalog();
+      console.log(
+        `[Models] Eggent AI list refreshed: ${models} models${movedTo ? `; workspace moved onto ${movedTo}` : ""}`
+      );
+    })
+    .catch((error) => {
+      console.warn(`[Models] Eggent AI model list failed: ${error instanceof Error ? error.message : error}`);
+    });
+}
+
+// Always, before anything is fetched: applying what is already known cannot
+// fail on a network the workspace may not have.
+syncIncludedModelsFromDisk();
 
 if (modelCatalogRefreshEnabled()) {
   refreshModelCatalog();

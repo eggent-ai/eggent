@@ -10,6 +10,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
+import { ModelPicker } from "@/components/chat/model-picker";
 import { useI18n } from "@/i18n/provider";
 import { formatUploadSize, MAX_UPLOAD_BYTES, MAX_UPLOAD_LABEL } from "@/lib/files/upload-limits";
 import type { MessageKey } from "@/i18n/messages";
@@ -31,13 +32,6 @@ function formatContextUsage(stats?: PiRuntimeStats | null) {
   const window = formatTokenCount(context.contextWindow);
   const percent = context.percent === null ? "—" : `${Math.round(context.percent)}%`;
   return `ctx ${tokens}/${window} (${percent})`;
-}
-
-function formatModelName(stats?: PiRuntimeStats | null) {
-  const model = stats?.model;
-  if (!model) return "model —";
-  const id = model.name || model.id || "unknown";
-  return model.provider ? `${model.provider}/${id}` : id;
 }
 
 function extensionForMimeType(mimeType: string): string {
@@ -919,7 +913,7 @@ export function ChatInput({
             locked={contextModeLocked}
             onChange={onContextModeChange}
           />
-          <span className="font-mono">{formatModelName(runtimeStats)}</span>
+          <ModelPicker projectId={projectId ?? null} />
           <span className="font-mono">in {formatTokenCount(runtimeStats?.session?.input ?? runtimeStats?.lastTurn?.input)}</span>
           <span className="font-mono">out {formatTokenCount(runtimeStats?.session?.output ?? runtimeStats?.lastTurn?.output)}</span>
           <span className="font-mono">{formatContextUsage(runtimeStats)}</span>

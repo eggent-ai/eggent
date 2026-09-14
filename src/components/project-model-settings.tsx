@@ -16,7 +16,7 @@
 
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import Link from "next/link";
-import { Check, ExternalLink, Loader2, Save, Settings2, TriangleAlert } from "lucide-react";
+import { Check, Loader2, Save, TriangleAlert } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -145,38 +145,10 @@ export function ProjectModelSettings({ projectId }: { projectId: string }) {
     );
   }
 
-  // On the included model the runtime ignores model.json entirely, so the form
-  // would only let someone save a choice that does nothing.
-  if (lock?.locked) {
-    return (
-      <section className="space-y-3 rounded-xl border bg-card p-5">
-        <h2 className="font-medium">{t("projectSub.settings.lockedTitle", { label: lock.label })}</h2>
-        <p className="max-w-prose text-sm text-muted-foreground">
-          {lock.enforced
-            ? t("settings.modelLock.enforcedDescription", { label: lock.label })
-            : t("projectSub.settings.lockedDescription", { label: lock.label })}
-        </p>
-        {lock.enforced ? (
-          lock.selfHostedUrl ? (
-            <Button variant="outline" className="gap-2" asChild>
-              <a href={lock.selfHostedUrl} target="_blank" rel="noreferrer noopener">
-                <ExternalLink className="size-4" />
-                {t("settings.modelLock.selfHostedCta")}
-              </a>
-            </Button>
-          ) : null
-        ) : (
-          <Button variant="outline" className="gap-2" asChild>
-            <Link href={SETTINGS_HREF}>
-              <Settings2 className="size-4" />
-              {t("projectSub.settings.openSettings")}
-            </Link>
-          </Button>
-        )}
-      </section>
-    );
-  }
-
+  // Under the included plan the form still works: the plan fixes the provider,
+  // not which of its models answers, so a project can sit on a cheaper one than
+  // the workspace. Only the provider list narrows - see projectProviderOptions,
+  // which offers what can answer now - and a note above says so.
   const workspace = workspaceModelSummary(models);
   const changed = !sameProjectModelChoice(choice, file.choice);
   // An unreadable file is replaced by whatever the form saves, so saving is
@@ -286,6 +258,12 @@ export function ProjectModelSettings({ projectId }: { projectId: string }) {
         </Alert>
       ) : null}
 
+      {lock?.locked ? (
+        <p className="max-w-prose text-sm text-muted-foreground">
+          {t("projectSub.settings.lockedChoiceNote", { label: lock.label })}
+        </p>
+      ) : null}
+
       <fieldset className="space-y-3">
         <legend className="text-sm font-medium">{t("projectSub.settings.legend")}</legend>
 
@@ -368,7 +346,9 @@ export function ProjectModelSettings({ projectId }: { projectId: string }) {
                   </div>
 
                   <div className="space-y-2">
-                    {choosingManaged ? (
+                    {choosingManaged && modelOptions.length <= 1 ? (
+                      // One included model and nothing to choose between. The
+                      // picker would be a control with a single option.
                       <>
                         <span className="block text-xs font-medium text-muted-foreground">{t("settings.chooseModelLabel")}</span>
                         <p className="flex min-h-9 items-center text-sm text-muted-foreground">
@@ -390,8 +370,13 @@ export function ProjectModelSettings({ projectId }: { projectId: string }) {
                             <SelectGroup>
                               {modelOptions.map((model) => (
                                 <SelectItem key={model.id} value={model.id}>
-                                  {model.id}
-                                  {model.name && model.name !== model.id ? ` · ${model.name}` : ""}
+                                  {/* The included models carry a real name, so
+                                      the id beside it is the same thing twice.
+                                      A connected provider's model is usually
+                                      known by its id, so there it stays. */}
+                                  {choosingManaged
+                                    ? model.name || model.id
+                                    : `${model.id}${model.name && model.name !== model.id ? ` · ${model.name}` : ""}`}
                                 </SelectItem>
                               ))}
                               {staleModel ? (

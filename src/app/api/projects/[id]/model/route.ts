@@ -1,5 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getEggentAiModelLockState } from "@/lib/pi/config-store";
+import { getEggentAiModelLockState, getManagedProviderId } from "@/lib/pi/config-store";
+import { readManagedTextCatalog } from "@/lib/pi/managed-models";
+import { managedProjectSaveRefusal, maskProjectModelUnderLock } from "@/lib/pi/project-model-choice";
 import { getProject, readProjectModelSettingsFile, saveProjectModelSettingsFile } from "@/lib/storage/project-store";
 
 export async function GET(
@@ -11,7 +13,7 @@ export async function GET(
   if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
   const lock = await getEggentAiModelLockState();
   const content = lock.locked
-    ? `${JSON.stringify({ inheritsGlobal: true }, null, 2)}\n`
+    ? maskProjectModelUnderLock(await readProjectModelSettingsFile(id), (await getManagedProviderId()) || "eggent-ai")
     : await readProjectModelSettingsFile(id);
   return NextResponse.json({ content, path: "model.json", modelLock: lock });
 }
@@ -24,13 +26,29 @@ export async function PUT(
   const project = await getProject(id);
   if (!project) return NextResponse.json({ error: "Project not found" }, { status: 404 });
   const lock = await getEggentAiModelLockState();
-  if (lock.locked) {
-    return NextResponse.json({ error: "Project model overrides are managed by Eggent AI for this workspace." }, { status: 403 });
-  }
-
   const body = await req.json().catch(() => null) as { content?: unknown } | null;
   if (typeof body?.content !== "string") {
     return NextResponse.json({ error: 'Field "content" must be a string.' }, { status: 400 });
+  }
+  if (lock.locked) {
+    const catalog = await readManagedTextCatalog();
+    const refusal = managedProjectSaveRefusal(
+      body.content,
+      (await getManagedProviderId()) || "eggent-ai",
+      catalog.map((model) => model.id)
+    );
+    if (refusal === "not_json") {
+      return NextResponse.json({ error: "Project model settings must be valid JSON." }, { status: 400 });
+    }
+    if (refusal === "foreign_provider") {
+      return NextResponse.json(
+        { error: `This workspace runs on ${lock.label}, so a project can only choose among its models.` },
+        { status: 403 }
+      );
+    }
+    if (refusal === "unknown_model") {
+      return NextResponse.json({ error: `${lock.label} does not offer that model.` }, { status: 403 });
+    }
   }
   try {
     const content = await saveProjectModelSettingsFile(id, body.content);

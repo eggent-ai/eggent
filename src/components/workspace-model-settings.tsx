@@ -18,11 +18,35 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SkeletonBlock } from "@/components/ui/skeleton-list";
 import { Textarea } from "@/components/ui/textarea";
 import { useI18n } from "@/i18n/provider";
 import type { MessageKey, MessageValues } from "@/i18n/messages";
+
+/**
+ * A price as a person reads it.
+ *
+ * Both the figure and its currency come from the deployment - core holds no
+ * price table and no opinion about which currency a workspace is billed in -
+ * so this only formats, the same way the usage meter does. Two decimals is the
+ * shape money has, and more only where two would round a real difference away:
+ * a cheap model is priced at 0.825, and 0.83 is a different number.
+ */
+function formatPerMillion(amount: number, currency?: string): string {
+  let digits = 2;
+  while (digits < 4 && Number(amount.toFixed(digits)) !== amount) digits += 1;
+  try {
+    return new Intl.NumberFormat(undefined, {
+      style: "currency",
+      currency: currency || "EUR",
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
+    }).format(amount);
+  } catch {
+    return amount.toFixed(digits);
+  }
+}
 
 interface ModelSelectionResult {
   switched: boolean;
@@ -126,6 +150,16 @@ interface PiState {
     providerId?: string | null;
     label?: string;
   };
+  /** What the deployment says about each included model: the sentence under the
+   *  name, and what a million tokens costs. Core holds no price table itself. */
+  managedModels?: Array<{
+    id: string;
+    name: string;
+    family?: string;
+    description?: string;
+    default?: boolean;
+    price?: { input: number; output: number; currency?: string };
+  }>;
   imageGeneration?: {
     enabled: boolean;
     provider: "eggent" | "custom" | "none";
@@ -506,6 +540,41 @@ export function WorkspaceModelSettings() {
     }
   }
 
+  /**
+   * Save the included model the moment it is picked.
+   *
+   * The provider is named as "eggent-ai" whatever id this workspace was
+   * provisioned under, which is what every other screen sends and what the
+   * server resolves; sending the raw id would work in most workspaces and fail
+   * in the ones provisioned differently.
+   */
+  async function saveIncludedModel(modelId: string) {
+    const previous = defaultModelSelection;
+    setDefaultModelSelection(modelId);
+    setModelSavedAt(null);
+    try {
+      setSavingDefaultModel(true);
+      setPiError(null);
+      const res = await fetch("/api/pi/settings", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider: "eggent-ai", model: modelId }),
+      });
+      const json = await res.json();
+      if (!res.ok) throw new Error(json.error || t("settings.errors.saveDefaultModel"));
+      await loadPiState();
+      setModelSavedAt(Date.now());
+    } catch (error) {
+      // Put the picker back on what is actually in force. A control that keeps
+      // showing the choice the server refused is how a workspace ends up
+      // believing it is on a model it never moved to.
+      setDefaultModelSelection(previous);
+      setPiError(error instanceof Error ? error.message : t("settings.errors.saveDefaultModel"));
+    } finally {
+      setSavingDefaultModel(false);
+    }
+  }
+
   async function saveModelsJson() {
     try {
       setSavingModelsJson(true);
@@ -541,6 +610,46 @@ export function WorkspaceModelSettings() {
   }, [piState]);
 
   const imageProviderChoices = useMemo(() => piState?.imageProviders ?? [], [piState]);
+
+  /**
+   * The included models, each with the one line that decides between them.
+   *
+   * The description comes from the deployment; the price is appended rather
+   * than replacing it, because "cheaper" is the reason somebody switches and a
+   * name alone does not say which way that goes.
+   */
+  const includedModelChoices = useMemo(() => {
+    const described = new Map((piState?.managedModels ?? []).map((model) => [model.id, model]));
+    return (piState?.availableModels ?? []).map((model) => {
+      const catalog = described.get(model.id);
+      const price = catalog?.price
+        ? t("settings.modelLock.perMillion", {
+            input: formatPerMillion(catalog.price.input, catalog.price.currency),
+            output: formatPerMillion(catalog.price.output, catalog.price.currency),
+          })
+        : "";
+      const note = [catalog?.description, price].filter(Boolean).join(" \u00b7 ");
+      return { id: model.id, name: catalog?.name || model.name || model.id, note, family: catalog?.family || "" };
+    });
+  }, [piState, t]);
+
+  /**
+   * The same list under headings, in the order the deployment sent it.
+   *
+   * A flat seventeen shows about five at a time and gives the reader no way to
+   * see where one family ends; with headings the scroll has landmarks. A
+   * deployment that names no families gets one unnamed group, which renders as
+   * the flat list it was.
+   */
+  const includedModelGroups = useMemo(() => {
+    const groups: Array<{ family: string; models: typeof includedModelChoices }> = [];
+    for (const model of includedModelChoices) {
+      const last = groups[groups.length - 1];
+      if (last && last.family === model.family) last.models.push(model);
+      else groups.push({ family: model.family, models: [model] });
+    }
+    return groups;
+  }, [includedModelChoices]);
 
   const modelChoices = useMemo(() => {
     return (piState?.availableModels ?? [])
@@ -634,12 +743,65 @@ export function WorkspaceModelSettings() {
         ) : null}
 
         {modelLocked ? (
-          <div className="space-y-3">
+          <div className="space-y-4">
             <div>
               <div className="text-xs text-muted-foreground">{t("settings.activeNow")}</div>
               <p className="font-medium">{modelLockLabel}</p>
               <p className="text-sm text-muted-foreground">{t("settings.modelLock.includedCredits")}</p>
             </div>
+
+            {/* The plan fixes the provider, not the model. This is the one
+                decision left on this screen, so it gets the weight, and it
+                saves on change - there is nothing else here to save with it. */}
+            {includedModelChoices.length > 1 ? (
+              <div className="space-y-2">
+                <Label htmlFor={modelFieldId} className="text-xs text-muted-foreground">
+                  {t("settings.chooseModelLabel")}
+                </Label>
+                <Select
+                  value={defaultModelSelection}
+                  onValueChange={saveIncludedModel}
+                  disabled={savingDefaultModel}
+                >
+                  <SelectTrigger id={modelFieldId} className="w-full">
+                    <SelectValue placeholder={t("settings.selectModel")} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {includedModelGroups.map((group, index) => (
+                      <SelectGroup key={group.family || `group-${index}`}>
+                        {group.family ? <SelectLabel>{group.family}</SelectLabel> : null}
+                        {group.models.map((item) => (
+                          <SelectItem key={item.id} value={item.id}>
+                            <span className="flex flex-col items-start gap-0.5 py-0.5">
+                              <span>{item.name}</span>
+                              {item.note ? (
+                                <span className="text-xs text-muted-foreground">{item.note}</span>
+                              ) : null}
+                            </span>
+                          </SelectItem>
+                        ))}
+                      </SelectGroup>
+                    ))}
+                  </SelectContent>
+                </Select>
+                <p className="text-xs text-muted-foreground">
+                  {savingDefaultModel ? (
+                    <span className="inline-flex items-center gap-1.5">
+                      <Loader2 className="size-3 animate-spin" />
+                      {t("common.saving")}
+                    </span>
+                  ) : modelSavedAt ? (
+                    <span className="inline-flex items-center gap-1.5 text-success">
+                      <Check className="size-3" />
+                      {t("settings.saved")}
+                    </span>
+                  ) : (
+                    t("settings.modelLock.chooseModelHint")
+                  )}
+                </p>
+              </div>
+            ) : null}
+
             {modelLockEnforced ? (
               <>
                 <p className="max-w-prose text-sm text-muted-foreground">
