@@ -1633,6 +1633,14 @@ export function createModel(
       });
     }
 
+    case "requesty": {
+      return createOpenAICompatibleChatModel(config, {
+        providerName: "requesty",
+        apiKey: config.apiKey || process.env.REQUESTY_API_KEY || "",
+        fallbackBaseUrl: "https://router.requesty.ai/v1",
+      });
+    }
+
     case "ollama": {
       return createOpenAICompatibleChatModel(config, {
         providerName: "ollama",
@@ -1704,6 +1712,13 @@ export function createEmbeddingModel(config: {
         providerName: "openrouter",
         apiKey: config.apiKey || process.env.OPENROUTER_API_KEY || "",
         fallbackBaseUrl: "https://openrouter.ai/api/v1",
+      });
+
+    case "requesty":
+      return createOpenAICompatibleEmbeddingModel(config, {
+        providerName: "requesty",
+        apiKey: config.apiKey || process.env.REQUESTY_API_KEY || "",
+        fallbackBaseUrl: "https://router.requesty.ai/v1",
       });
 
     case "ollama":

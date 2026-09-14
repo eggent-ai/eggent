@@ -14,6 +14,7 @@ export interface ModelConfig {
     | "anthropic"
     | "google"
     | "openrouter"
+    | "requesty"
     | "ollama"
     | "custom"
     | "codex-cli"
@@ -30,7 +31,7 @@ export interface AppSettings {
   chatModel: ModelConfig;
   utilityModel: ModelConfig;
   embeddingsModel: {
-    provider: "openai" | "openrouter" | "google" | "ollama" | "custom" | "mock";
+    provider: "openai" | "openrouter" | "requesty" | "google" | "ollama" | "custom" | "mock";
     model: string;
     apiKey?: string;
     baseUrl?: string;

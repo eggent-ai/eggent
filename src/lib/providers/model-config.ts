@@ -64,6 +64,14 @@ export const MODEL_PROVIDERS: Record<string, ProviderConfig> = {
     authMethods: ["api_key"],
     defaultAuthMethod: "api_key",
   },
+  requesty: {
+    name: "Requesty",
+    models: [],
+    envKey: "REQUESTY_API_KEY",
+    requiresApiKey: true,
+    authMethods: ["api_key"],
+    defaultAuthMethod: "api_key",
+  },
   ollama: {
     name: "Ollama",
     models: [],
