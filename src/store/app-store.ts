@@ -46,9 +46,59 @@ interface AppState {
   // UI
   sidebarTab: "chats" | "projects";
   setSidebarTab: (tab: "chats" | "projects") => void;
+  /**
+   * The file tree, which lives in its own panel on the right.
+   *
+   * It used to sit in the left sidebar under the chat list, where it competed
+   * for height with the thing people came for. On the right it is a panel you
+   * open when you are looking at files and close when you are not, so the
+   * state is remembered per browser rather than reset on every load.
+   */
+  filesPanelOpen: boolean;
+  setFilesPanelOpen: (open: boolean) => void;
+  toggleFilesPanel: () => void;
+}
+
+const FILES_PANEL_KEY = "eggent.filesPanelOpen";
+
+/**
+ * Read back last session's choice.
+ *
+ * Called from the panel after mount rather than used as the store's initial
+ * value: the server renders this too, and a value that exists only in the
+ * browser would make the first paint disagree with the markup.
+ */
+export function readFilesPanelPreference(): boolean {
+  if (typeof window === "undefined") return false;
+  try {
+    return window.localStorage.getItem(FILES_PANEL_KEY) === "1";
+  } catch {
+    // Private windows and blocked site data throw on access rather than
+    // returning nothing, and a closed panel is the safe default.
+    return false;
+  }
+}
+
+function rememberFilesPanel(open: boolean): void {
+  try {
+    window.localStorage.setItem(FILES_PANEL_KEY, open ? "1" : "0");
+  } catch {
+    // Not worth an error: the panel still works for this page.
+  }
 }
 
 export const useAppStore = create<AppState>((set) => ({
+  filesPanelOpen: false,
+  setFilesPanelOpen: (open) => {
+    rememberFilesPanel(open);
+    set({ filesPanelOpen: open });
+  },
+  toggleFilesPanel: () =>
+    set((state) => {
+      const next = !state.filesPanelOpen;
+      rememberFilesPanel(next);
+      return { filesPanelOpen: next };
+    }),
   // Chats
   chats: [],
   activeChatId: null,

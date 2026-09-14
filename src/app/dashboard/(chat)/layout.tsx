@@ -1,6 +1,7 @@
 import { AppSidebar } from "@/components/app-sidebar"
 import { SiteHeader } from "@/components/site-header"
 import { ChatPanel } from "@/components/chat/chat-panel"
+import { FilesPanel } from "@/components/files-panel"
 import {
   SidebarInset,
   SidebarProvider,
@@ -42,6 +43,7 @@ export default async function ChatLayout({
               <ChatPanel initialQuickSkills={quickSkills} />
             </div>
           </SidebarInset>
+          <FilesPanel />
         </div>
       </SidebarProvider>
       {children}

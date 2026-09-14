@@ -113,6 +113,8 @@ const enMessages = {
   "settings.managedReturn.cta": "Use {label} again",
   "settings.modelLock.includedCredits": "Included with this workspace",
   "projectSub.settings.lockedChoiceNote": "This workspace runs on {label}. A project can answer with a different {label} model - a cheaper one for bulk work, a stronger one where it pays off.",
+  "files.panel.toggle": "Files",
+  "files.panel.close": "Close files",
   "chat.modelPicker.trigger": "Change the model",
   "chat.modelPicker.search": "Search models",
   "chat.modelPicker.noMatch": "No model matches that.",

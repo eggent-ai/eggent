@@ -16,7 +16,6 @@ import {
 } from "lucide-react";
 import { useAppStore } from "@/store/app-store";
 import { chatPath } from "@/lib/dashboard-routes";
-import { FileTree } from "@/components/file-tree";
 import { useBackgroundSync } from "@/hooks/use-background-sync";
 import { useActiveRuns } from "@/hooks/use-active-runs";
 import { useI18n } from "@/i18n/provider";
@@ -269,16 +268,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         </SidebarGroup>
 
         {/* File tree */}
-        <SidebarGroup>
-          <SidebarGroupLabel>
-            <FolderOpen className="size-3.5 mr-1" />
-            {t("nav.files")}
-          </SidebarGroupLabel>
-          <div className="px-2">
-            <FileTree projectId={activeProjectId ?? "none"} />
-          </div>
-        </SidebarGroup>
-
         {/* Chat history */}
         <SidebarGroup>
           <SidebarGroupLabel>

@@ -5,6 +5,7 @@ import { SiteHeader } from "@/components/site-header";
 import { SettingsNavigation } from "@/components/settings-navigation";
 import { TelegramIntegrationManager } from "@/components/telegram-integration-manager";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { FilesPanel } from "@/components/files-panel";
 import { useI18n } from "@/i18n/provider";
 
 export default function MessengersPage() {
@@ -54,6 +55,7 @@ export default function MessengersPage() {
               <TelegramIntegrationManager />
             </div>
           </SidebarInset>
+          <FilesPanel />
         </div>
       </SidebarProvider>
     </div>

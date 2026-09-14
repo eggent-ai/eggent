@@ -6,6 +6,7 @@ import { SettingsNavigation } from "@/components/settings-navigation";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
+import { FilesPanel } from "@/components/files-panel";
 import { getServerTranslator } from "@/i18n/server";
 
 function CodeBlock({ code }: { code: string }) {
@@ -213,6 +214,7 @@ console.log(data.reply);`}
               </InfoCard>
             </div>
           </SidebarInset>
+          <FilesPanel />
         </div>
       </SidebarProvider>
     </div>
