@@ -267,7 +267,7 @@ function buildEggentProjectContext(options: {
     // /app/data/projects/.../report.ps1" over Telegram and answered "it is not
     // saved anywhere" - correctly, from where they were sitting. Say where it
     // is in a way they can act on, and over a messenger just send it.
-    "- Files panel: the file tree in the left sidebar of the workspace, and the Files page of the dashboard. Every file there opens in a preview and has a download button, so anything written into the working directory is already available to the user without any extra step.",
+    "- Files panel: the file tree, opened from the folder button in the top right of the workspace, and the Files page of the dashboard. Every file there opens in a preview and has a download button, so anything written into the working directory is already available to the user without any extra step.",
     "- Whenever you produce or change a file the user asked for, end by naming it and saying it is in the Files panel and can be downloaded from there. A bare absolute path is not an answer: the person reads it as \"nothing was saved\".",
     "- In Telegram there is no Files panel, so send the file itself with telegram_send_file instead of describing where it landed.",
     "- Settings -> Models and login: provider, sign-in or API key, model choice, image model, and the custom providers editor.",

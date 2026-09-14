@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef, type DragEvent } from "react";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import {
   ChevronRight,
   ChevronDown,
@@ -332,7 +332,13 @@ function TreeNode({
     [projectId, relativePath, type]
   );
 
-  const isActive = type === "directory" && currentPath === relativePath;
+  // A directory is active when the tree is inside it; a file when it is the one
+  // being viewed. The file half was missing, so clicking a file navigated away
+  // and left nothing marked - the tree forgot where you just were.
+  const openedFile = useSearchParams().get("path");
+  const isActive = type === "directory"
+    ? currentPath === relativePath
+    : openedFile === relativePath;
 
   // Auto-expand if this folder is a parent of currentPath
   useEffect(() => {
