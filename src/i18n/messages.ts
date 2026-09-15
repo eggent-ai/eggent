@@ -310,6 +310,13 @@ const enMessages = {
   "files.saveFailed": "Failed to save file",
   "files.saved": "File saved.",
   "files.textPreview": "Text preview",
+  "files.upload": "Upload files",
+  "files.uploadInto": "Upload files into {name}",
+  "files.uploadFolder": "Upload folder",
+  "files.uploadFolderInto": "Upload folder into {name}",
+  "files.uploading": "Uploading {percent}%",
+  "files.uploadFailed": "Failed to upload files",
+  "files.uploadReplacePrompt": "{count} file(s) already exist here. Replace them?",
 
   "context.title": "Context",
   "context.description": "Instructions the agent gets in every chat. The orchestrator and each project have their own.",
