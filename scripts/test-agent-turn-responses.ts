@@ -214,7 +214,7 @@ check("and it carried what the tool returned", () => assert.deepEqual(stub.toolR
 check("the answer arrived as text deltas", () => assert.ok(assistantText.includes(ANSWER), `got: ${assistantText || "(nothing)"}`));
 check("the runtime spoke the Responses dialect, not chat completions", () => {
   const first = stub.bodies()[0] ?? {};
-  assert.ok(Array.isArray(first.input), "тело должно нести input, а не messages");
+  assert.ok(Array.isArray(first.input), "the body must carry input, not messages");
   assert.equal(first.messages, undefined);
 });
 check("tools and reasoning travelled together", () => {
@@ -222,9 +222,9 @@ check("tools and reasoning travelled together", () => {
   // product goes back to answering every message with that refusal.
   const first = stub.bodies()[0] as Record<string, unknown>;
   const tools = first.tools as Array<Record<string, unknown>> | undefined;
-  assert.ok(tools && tools.length > 0, "инструменты не доехали");
-  assert.equal(tools![0].name, TOOL, "инструмент должен лежать плоско, без обёртки function");
-  assert.ok(first.reasoning, "размышление не доехало");
+  assert.ok(tools && tools.length > 0, "the tools never arrived");
+  assert.equal(tools![0].name, TOOL, "the tool must be flat, not wrapped in a function object");
+  assert.ok(first.reasoning, "the reasoning never arrived");
 });
 check("no turn ended in a provider error", () => assert.ok(!stopReasons.includes("error"), stopReasons.join(", ")));
 

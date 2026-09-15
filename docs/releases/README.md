@@ -9,6 +9,7 @@ said `0.2.4`, which is why the number there now links to the releases page.
 
 | Version | Name | Date | Notes |
 | --- | --- | --- | --- |
+| `0.2.6` | Model Picker and Files Panel | 2026-09-15 | [Full snapshot](./0.2.6-model-picker-and-files-panel.md), [GitHub body](./github-v0.2.6.md) |
 | `0.2.5` | Light Chats and Model Settings | 2026-09-12 | [Full snapshot](./0.2.5-light-chats-and-model-settings.md), [GitHub body](./github-v0.2.5.md) |
 | `0.2.4` | Resumable Turns and Chat Addresses | 2026-08-31 | [Full snapshot](./0.2.4-resumable-turns-and-chat-addresses.md), [GitHub body](./github-v0.2.4.md) |
 | `0.2.3` | Legible Interface | 2026-08-26 | [Full snapshot](./0.2.3-legible-interface.md), [GitHub body](./github-v0.2.3.md) |
