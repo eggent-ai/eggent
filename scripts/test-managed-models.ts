@@ -18,6 +18,7 @@ import assert from "node:assert/strict";
 import {
   managedDefaultTextModel,
   parseManagedCatalogPayload,
+  usableManagedTextModels,
   type ManagedCatalogModel,
 } from "../src/lib/pi/managed-models.ts";
 import {
@@ -258,6 +259,47 @@ check("a model with no name of its own falls back to its id", () => {
 });
 check("with nothing resolved yet, the label alone", () => {
   assert.deepEqual(workspaceModelSummary({ modelLock: { locked: true, label: "Eggent AI" } }), { provider: "Eggent AI" });
+});
+
+console.log("\na model listed but not offered to this workspace:");
+const gated = parseManagedCatalogPayload({
+  data: [
+    {
+      id: "flagship",
+      eggent: {
+        name: "Flagship", kind: "text", default: true, available: false,
+        note: "  Not available here right now.  ",
+        manage: { url: "https://cloud.example.test/manage/demo", label: "Manage" },
+      },
+    },
+    { id: "light", eggent: { name: "Light", kind: "text", available: true, note: "stray", manage: { url: "https://x.example.test", label: "x" } } },
+    { id: "older", eggent: { name: "Older", kind: "text" } },
+    { id: "sneaky", eggent: { name: "Sneaky", kind: "text", available: false, note: "n", manage: { url: "javascript:alert(1)", label: "x" } } },
+    { id: "pictures", eggent: { name: "Pictures", kind: "image", available: false } },
+  ],
+});
+const byId = (id: string) => gated.find((model) => model.id === id) as ManagedCatalogModel;
+check("it is kept in the list, marked, with its sentence and link", () => {
+  assert.equal(byId("flagship").available, false);
+  assert.equal(byId("flagship").note, "Not available here right now.");
+  assert.deepEqual(byId("flagship").manage, { url: "https://cloud.example.test/manage/demo", label: "Manage" });
+});
+check("an available one carries no sentence even if one was sent", () => {
+  assert.equal(byId("light").available, true);
+  assert.equal(byId("light").note, undefined);
+  assert.equal(byId("light").manage, undefined);
+});
+check("a deployment that says nothing about it means available", () => {
+  assert.equal(byId("older").available, true);
+});
+check("a link that is not http(s) is dropped", () => {
+  assert.equal(byId("sneaky").manage, undefined);
+});
+check("usable chat models exclude it, and images", () => {
+  assert.deepEqual(usableManagedTextModels(gated).map((model) => model.id), ["light", "older"]);
+});
+check("the default is never an unavailable model while another is on offer", () => {
+  assert.equal(managedDefaultTextModel(gated)?.id, "light");
 });
 
 console.log(failed === 0 ? `\nall ${ran} checks passed` : `\n${failed} of ${ran} failed`);

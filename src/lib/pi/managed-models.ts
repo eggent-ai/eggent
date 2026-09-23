@@ -41,6 +41,22 @@ export interface ManagedCatalogModel {
   /** False when the deployment publishes no cached-input rate for this model. */
   cached: boolean;
   price?: ManagedCatalogPrice;
+  /**
+   * False when the deployment does not offer this model to this workspace right
+   * now. It is still listed, so the picker can show it and say what opens it,
+   * but it never enters models.json: a model the registry does not hold cannot
+   * be chosen, saved or answered with - the same rule that keeps embeddings out.
+   */
+  available: boolean;
+  /** Why it is unavailable, in the workspace's language, as the deployment put it. */
+  note?: string;
+  /** Where to go about it. */
+  manage?: ManagedCatalogLink;
+}
+
+export interface ManagedCatalogLink {
+  url: string;
+  label: string;
 }
 
 interface ManagedCatalogCache {
@@ -94,6 +110,21 @@ function positiveInteger(value: unknown): number | undefined {
   return Number.isFinite(parsed) && parsed > 0 ? Math.floor(parsed) : undefined;
 }
 
+/** A link from the deployment, kept only when it is an http(s) address. */
+function parseLink(value: unknown): ManagedCatalogLink | undefined {
+  if (!isRecord(value)) return undefined;
+  const url = typeof value.url === "string" ? value.url.trim() : "";
+  const label = typeof value.label === "string" ? value.label.trim() : "";
+  if (!url || !label) return undefined;
+  try {
+    const parsed = new URL(url);
+    if (parsed.protocol !== "https:" && parsed.protocol !== "http:") return undefined;
+  } catch {
+    return undefined;
+  }
+  return { url, label: label.slice(0, 80) };
+}
+
 function parsePrice(value: unknown): ManagedCatalogPrice | undefined {
   if (!isRecord(value)) return undefined;
   const input = Number(value.input);
@@ -145,6 +176,13 @@ export function parseManagedCatalogPayload(payload: unknown): ManagedCatalogMode
       // there is a cache tier - the same as before this field existed.
       cached: extra.cached !== false,
       price: parsePrice(extra.price),
+      // Absent means available: that is what every deployment said before the
+      // field existed, and reading it the other way would lock every model.
+      available: extra.available !== false,
+      note: extra.available === false && typeof extra.note === "string" && extra.note.trim()
+        ? extra.note.trim().slice(0, 300)
+        : undefined,
+      manage: extra.available === false ? parseLink(extra.manage) : undefined,
     });
   }
   return models;
@@ -166,9 +204,32 @@ export async function readManagedTextCatalog(): Promise<ManagedCatalogModel[]> {
   return (await readManagedCatalog()).filter((model) => model.kind === "text");
 }
 
+/** The chat models this workspace can actually use: what goes into models.json. */
+export function usableManagedTextModels(models: ManagedCatalogModel[]): ManagedCatalogModel[] {
+  return models.filter((model) => model.kind === "text" && model.available !== false);
+}
+
+/**
+ * The model a workspace answers with when it names none.
+ *
+ * Never an unavailable one while anything else is on offer: the default is what
+ * a workspace whose own choice is unavailable gets moved onto.
+ */
 export function managedDefaultTextModel(models: ManagedCatalogModel[]): ManagedCatalogModel | undefined {
   const text = models.filter((model) => model.kind === "text");
-  return text.find((model) => model.default) || text[0];
+  const usable = usableManagedTextModels(models);
+  return usable.find((model) => model.default) || usable[0] || text.find((model) => model.default) || text[0];
+}
+
+/** How old the cached list is, or Infinity when there is none. */
+export async function managedCatalogAgeMs(): Promise<number> {
+  try {
+    const raw = await fs.readFile(await getManagedCatalogPath(), "utf-8");
+    const fetchedAt = Date.parse((JSON.parse(raw) as ManagedCatalogCache)?.fetchedAt || "");
+    return Number.isFinite(fetchedAt) ? Math.max(0, Date.now() - fetchedAt) : Infinity;
+  } catch {
+    return Infinity;
+  }
 }
 
 async function writeManagedCatalog(models: ManagedCatalogModel[]): Promise<void> {
@@ -186,11 +247,12 @@ async function writeManagedCatalog(models: ManagedCatalogModel[]): Promise<void>
  * catalog is worse than holding a slightly old one, because the workspace
  * resolves its chat model out of it.
  */
-export async function refreshManagedCatalog(token: string): Promise<{ models: number }> {
+export async function refreshManagedCatalog(token: string, options: { timeoutMs?: number } = {}): Promise<{ models: number }> {
   const baseUrl = managedGatewayBaseUrl();
   if (!baseUrl || !token) return { models: 0 };
   const response = await fetch(new URL(`${baseUrl.replace(/\/+$/, "")}/models`), {
     headers: { authorization: `Bearer ${token}` },
+    ...(options.timeoutMs ? { signal: AbortSignal.timeout(options.timeoutMs) } : {}),
   });
   if (!response.ok) {
     throw new Error(`Eggent AI model list failed (${response.status}).`);

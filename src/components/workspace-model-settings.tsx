@@ -12,7 +12,7 @@
  */
 
 import { useEffect, useId, useMemo, useState } from "react";
-import { Check, ExternalLink, KeyRound, Loader2, PlugZap, Save, TriangleAlert } from "lucide-react";
+import { Check, ExternalLink, KeyRound, Loader2, Lock, PlugZap, Save, TriangleAlert } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -159,6 +159,10 @@ interface PiState {
     description?: string;
     default?: boolean;
     price?: { input: number; output: number; currency?: string };
+    /** False when this workspace cannot use it right now; `note` says why. */
+    available?: boolean;
+    note?: string;
+    manage?: { url: string; label: string };
   }>;
   imageGeneration?: {
     enabled: boolean;
@@ -629,9 +633,25 @@ export function WorkspaceModelSettings() {
           })
         : "";
       const note = [catalog?.description, price].filter(Boolean).join(" \u00b7 ");
-      return { id: model.id, name: catalog?.name || model.name || model.id, note, family: catalog?.family || "" };
+      return { id: model.id, name: catalog?.name || model.name || model.id, note, family: catalog?.family || "", locked: false };
     });
   }, [piState, t]);
+
+  /**
+   * The included models this workspace cannot use right now, and the one line
+   * that says why. They are listed, disabled, so the list is honest about what
+   * exists; the sentence and the link come from the deployment.
+   */
+  const lockedIncludedModels = useMemo(
+    () => (piState?.managedModels ?? [])
+      .filter((model) => model.available === false)
+      .map((model) => ({ id: model.id, name: model.name || model.id, note: "", family: model.family || "", locked: true })),
+    [piState]
+  );
+  const lockedIncludedHint = useMemo(() => {
+    const first = (piState?.managedModels ?? []).find((model) => model.available === false && model.note);
+    return first ? { note: first.note as string, manage: first.manage } : null;
+  }, [piState]);
 
   /**
    * The same list under headings, in the order the deployment sent it.
@@ -642,14 +662,21 @@ export function WorkspaceModelSettings() {
    * the flat list it was.
    */
   const includedModelGroups = useMemo(() => {
+    // Grouped in the order headings first appear, the usable ones first, so a
+    // family nobody here can use yet follows the ones that answer.
     const groups: Array<{ family: string; models: typeof includedModelChoices }> = [];
-    for (const model of includedModelChoices) {
-      const last = groups[groups.length - 1];
-      if (last && last.family === model.family) last.models.push(model);
-      else groups.push({ family: model.family, models: [model] });
+    const byFamily = new Map<string, { family: string; models: typeof includedModelChoices }>();
+    for (const model of [...includedModelChoices, ...lockedIncludedModels]) {
+      const existing = byFamily.get(model.family);
+      if (existing) existing.models.push(model);
+      else {
+        const created = { family: model.family, models: [model] };
+        byFamily.set(model.family, created);
+        groups.push(created);
+      }
     }
     return groups;
-  }, [includedModelChoices]);
+  }, [includedModelChoices, lockedIncludedModels]);
 
   const modelChoices = useMemo(() => {
     return (piState?.availableModels ?? [])
@@ -753,7 +780,7 @@ export function WorkspaceModelSettings() {
             {/* The plan fixes the provider, not the model. This is the one
                 decision left on this screen, so it gets the weight, and it
                 saves on change - there is nothing else here to save with it. */}
-            {includedModelChoices.length > 1 ? (
+            {includedModelChoices.length > 1 || lockedIncludedModels.length > 0 ? (
               <div className="space-y-2">
                 <Label htmlFor={modelFieldId} className="text-xs text-muted-foreground">
                   {t("settings.chooseModelLabel")}
@@ -778,9 +805,12 @@ export function WorkspaceModelSettings() {
                       <SelectGroup key={group.family || `group-${index}`}>
                         {group.family ? <SelectLabel>{group.family}</SelectLabel> : null}
                         {group.models.map((item) => (
-                          <SelectItem key={item.id} value={item.id}>
+                          <SelectItem key={item.id} value={item.id} disabled={item.locked}>
                             <span className="flex flex-col items-start gap-0.5 py-0.5">
-                              <span>{item.name}</span>
+                              <span className="inline-flex items-center gap-1.5">
+                                {item.name}
+                                {item.locked ? <Lock className="size-3" aria-hidden="true" /> : null}
+                              </span>
                               {item.note ? (
                                 <span className="text-xs text-muted-foreground">{item.note}</span>
                               ) : null}
@@ -791,6 +821,28 @@ export function WorkspaceModelSettings() {
                     ))}
                   </SelectContent>
                 </Select>
+                {lockedIncludedHint ? (
+                  <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
+                    <Lock className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
+                    <span>
+                      {lockedIncludedHint.note}
+                      {lockedIncludedHint.manage ? (
+                        <>
+                          {" "}
+                          <a
+                            href={lockedIncludedHint.manage.url}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-0.5 font-medium text-foreground underline-offset-2 hover:underline"
+                          >
+                            {lockedIncludedHint.manage.label}
+                            <ExternalLink className="size-3" aria-hidden="true" />
+                          </a>
+                        </>
+                      ) : null}
+                    </span>
+                  </p>
+                ) : null}
                 <p className="text-xs text-muted-foreground">
                   {savingDefaultModel ? (
                     <span className="inline-flex items-center gap-1.5">

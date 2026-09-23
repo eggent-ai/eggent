@@ -36,6 +36,17 @@ export interface ProjectModelsState {
     providerName?: string;
     model?: { id: string; available?: boolean };
   } | null;
+  /**
+   * The included models as the deployment lists them. One the workspace cannot
+   * use right now is marked unavailable and carries the deployment's sentence.
+   */
+  managedModels?: Array<{
+    id: string;
+    name?: string;
+    available?: boolean;
+    note?: string;
+    manage?: { url: string; label: string };
+  }>;
   /** What the workspace answers with, which is the saved model only while it is servable. */
   runtimeModel?: {
     provider?: string;

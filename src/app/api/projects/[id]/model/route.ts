@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getEggentAiModelLockState, getManagedProviderId } from "@/lib/pi/config-store";
-import { readManagedTextCatalog } from "@/lib/pi/managed-models";
-import { managedProjectSaveRefusal, maskProjectModelUnderLock } from "@/lib/pi/project-model-choice";
+import { readManagedTextCatalog, usableManagedTextModels } from "@/lib/pi/managed-models";
+import { managedProjectSaveRefusal, maskProjectModelUnderLock, parseProjectModelFile } from "@/lib/pi/project-model-choice";
 import { getProject, readProjectModelSettingsFile, saveProjectModelSettingsFile } from "@/lib/storage/project-store";
 
 export async function GET(
@@ -32,10 +32,14 @@ export async function PUT(
   }
   if (lock.locked) {
     const catalog = await readManagedTextCatalog();
+    // Only what this workspace can use: a listed but unavailable model would be
+    // ignored by the runtime, so saving it would be saving a choice that
+    // silently does not apply.
+    const usable = usableManagedTextModels(catalog);
     const refusal = managedProjectSaveRefusal(
       body.content,
       (await getManagedProviderId()) || "eggent-ai",
-      catalog.map((model) => model.id)
+      (usable.length > 0 ? usable : catalog).map((model) => model.id)
     );
     if (refusal === "not_json") {
       return NextResponse.json({ error: "Project model settings must be valid JSON." }, { status: 400 });
@@ -47,6 +51,15 @@ export async function PUT(
       );
     }
     if (refusal === "unknown_model") {
+      const named = parseProjectModelFile(body.content).choice.model;
+      const listed = catalog.find((model) => model.id === named);
+      if (listed && listed.available === false) {
+        const reason = listed.note || `${listed.name} is not available in this workspace right now.`;
+        return NextResponse.json(
+          { error: listed.manage ? `${reason} ${listed.manage.label}: ${listed.manage.url}` : reason, manage: listed.manage },
+          { status: 403 }
+        );
+      }
       return NextResponse.json({ error: `${lock.label} does not offer that model.` }, { status: 403 });
     }
   }

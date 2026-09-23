@@ -16,7 +16,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, Loader2, Search, Sparkles } from "lucide-react";
+import { Check, ChevronDown, ExternalLink, Loader2, Lock, Search, Sparkles } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { useI18n } from "@/i18n/provider";
 import { parseProjectModelFile, serializeProjectModelFile } from "@/lib/pi/project-model-choice";
@@ -32,7 +32,15 @@ interface PickerState {
   availableModels?: PickerModel[];
   managed?: { providerId?: string | null; label?: string };
   modelLock?: { locked?: boolean; label?: string };
-  managedModels?: Array<{ id: string; name: string; family?: string }>;
+  managedModels?: Array<{
+    id: string;
+    name: string;
+    family?: string;
+    kind?: string;
+    available?: boolean;
+    note?: string;
+    manage?: { url: string; label: string };
+  }>;
   settings?: { defaultProvider?: string; defaultModel?: string; defaultThinkingLevel?: string };
 }
 
@@ -50,6 +58,8 @@ interface ModelOption {
   id: string;
   label: string;
   group: string;
+  /** Listed so it can be seen, but this workspace cannot use it right now. */
+  locked?: boolean;
 }
 
 export function ModelPicker({ projectId, triggerClassName, compact }: ModelPickerProps) {
@@ -102,7 +112,8 @@ export function ModelPicker({ projectId, triggerClassName, compact }: ModelPicke
   const options = useMemo<ModelOption[]>(() => {
     const families = new Map((state?.managedModels ?? []).map((model) => [model.id, model]));
     const providerNames = new Map((state?.providers ?? []).map((provider) => [provider.id, provider.name || provider.id]));
-    return (state?.availableModels ?? []).map((model) => {
+    const managedGroup = (family?: string) => family || state?.modelLock?.label || state?.managed?.label || "Eggent AI";
+    const usable: ModelOption[] = (state?.availableModels ?? []).map((model) => {
       const managed = model.provider === managedId || model.provider === "eggent-ai";
       const catalog = families.get(model.id);
       return {
@@ -113,12 +124,27 @@ export function ModelPicker({ projectId, triggerClassName, compact }: ModelPicke
         // id says nothing, so the family is the useful heading. On your own
         // providers the provider is the heading, because that is the thing you
         // connected.
-        group: managed
-          ? catalog?.family || state?.modelLock?.label || state?.managed?.label || "Eggent AI"
-          : providerNames.get(model.provider) || model.provider,
+        group: managed ? managedGroup(catalog?.family) : providerNames.get(model.provider) || model.provider,
       };
     });
+    // The included models this workspace cannot use right now are still shown,
+    // after the ones it can, so the list says what else exists and the line at
+    // the bottom says what opens it. Only where the included provider answers
+    // at all: otherwise there is nothing here they would belong to.
+    const managedOffered = usable.some((option) => option.provider === managedId || option.provider === "eggent-ai");
+    const locked: ModelOption[] = managedOffered
+      ? (state?.managedModels ?? [])
+          .filter((model) => model.available === false && (!model.kind || model.kind === "text"))
+          .map((model) => ({ provider: managedId, id: model.id, label: model.name || model.id, group: managedGroup(model.family), locked: true }))
+      : [];
+    return [...usable, ...locked];
   }, [state, managedId]);
+
+  /** The deployment's own sentence about the unavailable ones, and where to go. */
+  const lockedHint = useMemo(() => {
+    const first = (state?.managedModels ?? []).find((model) => model.available === false && model.note);
+    return first && options.some((option) => option.locked) ? { note: first.note as string, manage: first.manage } : null;
+  }, [state, options]);
 
   const groups = useMemo(() => {
     const needle = query.trim().toLowerCase();
@@ -128,26 +154,41 @@ export function ModelPicker({ projectId, triggerClassName, compact }: ModelPicke
           || option.id.toLowerCase().includes(needle)
           || option.group.toLowerCase().includes(needle))
       : options;
+    // Grouped by heading in the order headings first appear, so a family whose
+    // models are unavailable follows the ones that answer rather than breaking
+    // them up.
     const ordered: Array<{ group: string; models: ModelOption[] }> = [];
+    const byGroup = new Map<string, { group: string; models: ModelOption[] }>();
     for (const option of matching) {
-      const last = ordered[ordered.length - 1];
-      if (last && last.group === option.group) last.models.push(option);
-      else ordered.push({ group: option.group, models: [option] });
+      const existing = byGroup.get(option.group);
+      if (existing) existing.models.push(option);
+      else {
+        const created = { group: option.group, models: [option] };
+        byGroup.set(option.group, created);
+        ordered.push(created);
+      }
     }
     return ordered;
   }, [options, query]);
 
   const currentLabel = useMemo(() => {
     if (!chosen) return null;
-    const match = options.find((option) => option.id === chosen.model && (option.provider === chosen.provider
-      || chosen.provider === "eggent-ai" || option.provider === "eggent-ai"));
+    const find = (provider: string, model: string) => options.find((option) => option.id === model && (option.provider === provider
+      || provider === "eggent-ai" || option.provider === "eggent-ai"));
+    const match = find(chosen.provider, chosen.model);
+    // A saved choice this workspace cannot use is not what answers: the run
+    // falls through to the workspace model, so that is what the line names.
+    if (match?.locked) {
+      const fallback = find(state?.settings?.defaultProvider || "", state?.settings?.defaultModel || "");
+      if (fallback && !fallback.locked) return fallback.label;
+    }
     return match?.label || chosen.model;
-  }, [chosen, options]);
+  }, [chosen, options, state]);
 
   const thinking = state?.settings?.defaultThinkingLevel;
 
   async function choose(option: ModelOption) {
-    if (saving) return;
+    if (saving || option.locked) return;
     setSaving(option.id);
     setError(null);
     const previous = chosen;
@@ -190,7 +231,7 @@ export function ModelPicker({ projectId, triggerClassName, compact }: ModelPicke
     }
   }
 
-  if (options.length === 0) {
+  if (!options.some((option) => !option.locked)) {
     // Nothing to choose between - a workspace with one model, or none loaded.
     return <span className={triggerClassName ?? "font-mono"}>{currentLabel || t("chat.modelPicker.none")}</span>;
   }
@@ -252,6 +293,22 @@ export function ModelPicker({ projectId, triggerClassName, compact }: ModelPicke
                   {group.group}
                 </div>
                 {group.models.map((option) => {
+                  if (option.locked) {
+                    // Focusable and announced, so a screen reader meets it too,
+                    // and pointing at the line below that says why.
+                    return (
+                      <button
+                        key={`${option.provider}/${option.id}`}
+                        type="button"
+                        aria-disabled="true"
+                        aria-describedby={lockedHint ? "model-picker-locked-hint" : undefined}
+                        className="flex w-full cursor-default items-center gap-2 px-3 py-1.5 text-left text-sm text-muted-foreground"
+                      >
+                        <span className="flex-1 truncate">{option.label}</span>
+                        <Lock className="size-3 shrink-0" aria-hidden="true" />
+                      </button>
+                    );
+                  }
                   const active = chosen?.model === option.id;
                   return (
                     <button
@@ -273,6 +330,28 @@ export function ModelPicker({ projectId, triggerClassName, compact }: ModelPicke
             ))
           )}
         </div>
+        {lockedHint ? (
+          <p id="model-picker-locked-hint" className="flex items-start gap-1.5 border-t px-3 py-2 text-xs text-muted-foreground">
+            <Lock className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
+            <span>
+              {lockedHint.note}
+              {lockedHint.manage ? (
+                <>
+                  {" "}
+                  <a
+                    href={lockedHint.manage.url}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-0.5 font-medium text-foreground underline-offset-2 hover:underline"
+                  >
+                    {lockedHint.manage.label}
+                    <ExternalLink className="size-3" aria-hidden="true" />
+                  </a>
+                </>
+              ) : null}
+            </span>
+          </p>
+        ) : null}
         {error ? (
           <p className="border-t px-3 py-2 text-xs text-destructive">{error}</p>
         ) : (

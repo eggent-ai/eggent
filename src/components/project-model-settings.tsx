@@ -16,7 +16,7 @@
 
 import { useCallback, useEffect, useId, useMemo, useState } from "react";
 import Link from "next/link";
-import { Check, Loader2, Save, TriangleAlert } from "lucide-react";
+import { Check, ExternalLink, Loader2, Lock, Save, TriangleAlert } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -123,6 +123,13 @@ export function ProjectModelSettings({ projectId }: { projectId: string }) {
     () => (models && choice.provider ? projectModelOptions(models, choice.provider) : []),
     [models, choice.provider]
   );
+  // The included models this workspace cannot use right now: shown disabled
+  // under the ones it can, with the deployment's sentence about them below.
+  const lockedManagedModels = useMemo(
+    () => (choosingManaged ? (models?.managedModels ?? []).filter((model) => model.available === false) : []),
+    [models, choosingManaged]
+  );
+  const lockedManagedHint = lockedManagedModels.find((model) => model.note) ?? null;
 
   if (status === "loading") {
     return (
@@ -379,6 +386,14 @@ export function ProjectModelSettings({ projectId }: { projectId: string }) {
                                     : `${model.id}${model.name && model.name !== model.id ? ` · ${model.name}` : ""}`}
                                 </SelectItem>
                               ))}
+                              {lockedManagedModels.map((model) => (
+                                <SelectItem key={model.id} value={model.id} disabled>
+                                  <span className="inline-flex items-center gap-1.5">
+                                    {model.name || model.id}
+                                    <Lock className="size-3" aria-hidden="true" />
+                                  </span>
+                                </SelectItem>
+                              ))}
                               {staleModel ? (
                                 <SelectItem value={staleModel} disabled>
                                   {t("settings.modelUnavailable", { model: staleModel })}
@@ -387,6 +402,28 @@ export function ProjectModelSettings({ projectId }: { projectId: string }) {
                             </SelectGroup>
                           </SelectContent>
                         </Select>
+                        {lockedManagedHint?.note ? (
+                          <p className="flex items-start gap-1.5 text-xs text-muted-foreground">
+                            <Lock className="mt-0.5 size-3 shrink-0" aria-hidden="true" />
+                            <span>
+                              {lockedManagedHint.note}
+                              {lockedManagedHint.manage ? (
+                                <>
+                                  {" "}
+                                  <a
+                                    href={lockedManagedHint.manage.url}
+                                    target="_blank"
+                                    rel="noreferrer"
+                                    className="inline-flex items-center gap-0.5 font-medium text-foreground underline-offset-2 hover:underline"
+                                  >
+                                    {lockedManagedHint.manage.label}
+                                    <ExternalLink className="size-3" aria-hidden="true" />
+                                  </a>
+                                </>
+                              ) : null}
+                            </span>
+                          </p>
+                        ) : null}
                       </>
                     )}
                   </div>

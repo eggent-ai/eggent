@@ -28,8 +28,17 @@ process.env.EGGENT_AI_MODEL_LOCKED = "1";
 process.env.EGGENT_AI_MODEL_LABEL = "Eggent AI";
 delete process.env.EGGENT_MANAGED_AI_ENFORCED;
 delete process.env.EGGENT_AI_MODEL_BASE_URL;
+// No network: a refusal looks at the list once more before it is final, and
+// here the list on disk is the whole truth.
+process.env.EGGENT_MODEL_CATALOG_REFRESH = "0";
 
-const { enableEggentAiModelLock, getEggentAiModelLockState } = await import("../src/lib/pi/config-store.ts");
+const {
+  enableEggentAiModelLock,
+  getEggentAiModelLockState,
+  switchToModelProvider,
+  syncManagedProviderCatalog,
+  updatePiModelDefaults,
+} = await import("../src/lib/pi/config-store.ts");
 
 let failed = 0;
 let ran = 0;
@@ -158,6 +167,68 @@ await check("with no gateway address it fails loudly instead of guessing", async
     process.env.EGGENT_USAGE_API_URL = usage;
   }
 });
+
+console.log("\nA model the deployment does not offer this workspace right now:");
+
+const UNAVAILABLE_NOTE = "Not available in this workspace right now.";
+async function seedCatalog(): Promise<void> {
+  const models = [
+    { id: "flagship", name: "Flagship", kind: "text", input: ["text"], reasoning: true, default: false, cached: true,
+      available: false, note: UNAVAILABLE_NOTE, manage: { url: "https://cloud.example.test/manage/demo", label: "Manage" } },
+    { id: "light", name: "Light", kind: "text", input: ["text"], reasoning: false, default: true, cached: true, available: true },
+    { id: "light-plus", name: "Light Plus", kind: "text", input: ["text"], reasoning: true, default: false, cached: true, available: true },
+    { id: "pictures", name: "Pictures", kind: "image", input: ["text"], reasoning: false, default: true, cached: true, available: true },
+  ];
+  await fs.writeFile(
+    path.join(agentDir, "eggent-ai-models.json"),
+    JSON.stringify({ fetchedAt: new Date().toISOString(), models }, null, 2),
+    "utf-8"
+  );
+}
+
+await check("it is left out of models.json, the usable ones stay", async () => {
+  await seed({ providers: { "my-proxy": OWN_PROVIDER } });
+  await seedCatalog();
+  await enableEggentAiModelLock(workDir);
+  const ids = (await readModels()).providers["eggent-ai"].models.map((model: { id: string }) => model.id);
+  assert.deepEqual(ids, ["light", "light-plus"]);
+});
+
+await check("a workspace saved on it is moved onto the default the deployment names", async () => {
+  await fs.writeFile(
+    path.join(agentDir, "settings.json"),
+    JSON.stringify({ defaultProvider: "eggent-ai", defaultModel: "flagship" }, null, 2),
+    "utf-8"
+  );
+  const { movedTo } = await syncManagedProviderCatalog(workDir);
+  assert.equal(movedTo, "light");
+  assert.equal((await readSettings()).defaultModel, "light");
+});
+
+await check("choosing it is refused with the deployment's own sentence and link", async () => {
+  await assert.rejects(
+    () => updatePiModelDefaults({ provider: "eggent-ai", model: "flagship" }, workDir),
+    (error: Error) => error.message.includes(UNAVAILABLE_NOTE) && error.message.includes("https://cloud.example.test/manage/demo")
+  );
+  assert.equal((await readSettings()).defaultModel, "light");
+});
+
+await check("the agent's switch sets the model it was asked for, not the default", async () => {
+  // It used to switch the included provider off and on again, which put the
+  // workspace on the default and still reported success.
+  await switchToModelProvider("eggent-ai", "light-plus", workDir);
+  assert.equal((await readSettings()).defaultModel, "light-plus");
+});
+
+await check("the agent's switch to an unavailable one is refused the same way", async () => {
+  await assert.rejects(
+    () => switchToModelProvider("eggent-ai", "flagship", workDir),
+    (error: Error) => error.message.includes(UNAVAILABLE_NOTE)
+  );
+  assert.equal((await readSettings()).defaultModel, "light-plus");
+  assert.equal((await getEggentAiModelLockState(workDir)).locked, true);
+});
+await fs.rm(path.join(agentDir, "eggent-ai-models.json"), { force: true });
 
 await fs.rm(workDir, { recursive: true, force: true });
 

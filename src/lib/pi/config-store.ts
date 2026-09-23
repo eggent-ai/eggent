@@ -16,8 +16,11 @@ function isTruthyEnv(value: string | undefined): boolean {
 }
 
 import {
+  managedCatalogAgeMs,
   managedDefaultTextModel,
   readManagedCatalog,
+  refreshManagedCatalog,
+  usableManagedTextModels,
   MANAGED_MODEL_CONTEXT_WINDOW as CATALOG_CONTEXT_WINDOW,
   MANAGED_MODEL_MAX_TOKENS as CATALOG_MAX_TOKENS,
   type ManagedCatalogModel,
@@ -601,6 +604,19 @@ export async function switchToModelProvider(
   model: string,
   cwd = process.cwd()
 ): Promise<Awaited<ReturnType<typeof getPiSettingsState>>> {
+  // The included provider is chosen by model, not switched off and back on.
+  // Cycling the lock put the workspace on the default and reported success,
+  // so an agent asked for one included model said it had switched and had not.
+  // Ahead of the enforcement check: choosing among the included models is
+  // allowed wherever the picker allows it.
+  const managedProvider = await getManagedProviderId();
+  if (managedProvider && (provider === managedProvider || provider === "eggent-ai")) {
+    if (!(await getEggentAiModelLockState(cwd)).locked) {
+      await enableEggentAiModelLock(cwd);
+    }
+    return await updatePiModelDefaults({ provider: managedProvider, model }, cwd);
+  }
+
   if (isManagedAiEnforced()) {
     throw new Error(
       `Model selection is managed for this workspace. To use your own model, run Eggent self-hosted: ${selfHostedDocsUrl()}`
@@ -846,7 +862,11 @@ function managedProviderEntry(
   catalog: ManagedCatalogModel[]
 ): Record<string, unknown> {
   const label = eggentAiModelLabel();
-  const text = catalog.filter((model) => model.kind === "text");
+  // Only what this workspace can use right now. A model left out of the
+  // registry cannot be chosen, saved or answered with, which is the same rule
+  // that keeps embeddings out of a chat - and it holds against a hand-edited
+  // settings.json as well as against the picker.
+  const text = usableManagedTextModels(catalog);
   const models = text.length > 0
     ? text.map((model) => ({
         id: model.id,
@@ -880,7 +900,7 @@ export async function syncManagedProviderCatalog(cwd = process.cwd()): Promise<{
   const providerId = await getManagedProviderId();
   if (!providerId) return { models: 0 };
   const catalog = await readManagedCatalog();
-  const text = catalog.filter((model) => model.kind === "text");
+  const text = usableManagedTextModels(catalog);
   if (text.length === 0) return { models: 0 };
 
   const repair = await restoreManagedProviderEntry(providerId);
@@ -890,9 +910,10 @@ export async function syncManagedProviderCatalog(cwd = process.cwd()): Promise<{
   if (settingsManager.getDefaultProvider() !== providerId) return { models: text.length };
   const saved = settingsManager.getDefaultModel();
   if (saved && text.some((model) => model.id === saved)) return { models: text.length };
-  // Either the provider id from before the catalog, or a model that has since
-  // been withdrawn. Both resolve to nothing, so name the default outright.
-  const fallback = managedDefaultTextModel(text);
+  // The provider id from before the catalog, a model since withdrawn, or one
+  // the deployment no longer offers this workspace. None of them resolves, so
+  // name the workspace's default outright - which the deployment chooses.
+  const fallback = managedDefaultTextModel(catalog);
   if (!fallback) return { models: text.length };
   settingsManager.setDefaultModel(fallback.id);
   await settingsManager.flush();
@@ -1062,6 +1083,58 @@ export async function getPiSettingsState(cwd = process.cwd()) {
  * the deployment does not serve is refused by name rather than ignored: a
  * silent no-op here is what makes a saved setting and a live one differ.
  */
+/**
+ * Why a model cannot be chosen here, in words the person can act on.
+ *
+ * An unavailable model carries the deployment's own sentence and link; this
+ * workspace does not know the reason and must not guess at one. Whoever asked -
+ * the picker, a settings form, the agent on somebody's behalf - gets that
+ * sentence rather than "does not offer", which reads like a model that does not
+ * exist.
+ */
+async function managedModelRefusal(model: string): Promise<string> {
+  const listed = (await readManagedCatalog()).find((entry) => entry.kind === "text" && entry.id === model);
+  if (listed && listed.available === false) {
+    const reason = listed.note || `${listed.name} is not available in this workspace right now.`;
+    return listed.manage ? `${reason} ${listed.manage.label}: ${listed.manage.url}` : reason;
+  }
+  return `${eggentAiModelLabel()} does not offer a model called "${model}" in this workspace.`;
+}
+
+function includedModelRefreshEnabled(): boolean {
+  const raw = process.env.EGGENT_MODEL_CATALOG_REFRESH?.trim().toLowerCase();
+  return raw !== "0" && raw !== "false" && raw !== "off";
+}
+
+/**
+ * Fetch the included model list now and apply it. True when a list arrived.
+ *
+ * For the few places a person is looking at the answer - the model list on
+ * screen, a refused choice - and never for a chat turn, which must not wait on
+ * the network. Bounded, and silent on failure: the list already on disk is
+ * still a correct answer, only an older one.
+ */
+export async function refreshManagedCatalogNow(timeoutMs = 2500): Promise<boolean> {
+  if (!includedModelRefreshEnabled()) return false;
+  try {
+    const token = await getManagedGatewayToken();
+    if (!token) return false;
+    const { models } = await refreshManagedCatalog(token, { timeoutMs });
+    if (models === 0) return false;
+    await syncManagedProviderCatalog();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/** The same, only when the list on disk is older than `maxAgeMs`. */
+export async function refreshManagedCatalogIfStale(maxAgeMs = 60_000): Promise<void> {
+  if (!(await getManagedProviderId())) return;
+  if ((await managedCatalogAgeMs()) < maxAgeMs) return;
+  await refreshManagedCatalogNow();
+}
+
 async function setManagedModelWhileLocked(
   options: { provider?: string; model?: string; thinkingLevel?: string },
   cwd: string
@@ -1079,9 +1152,18 @@ async function setManagedModelWhileLocked(
     const modelRuntime = await getPiModelRuntime();
     const modelRegistry = await getPiModelRegistry(modelRuntime);
     await modelRegistry.refresh();
-    const available = modelRegistry.getAvailable().filter((entry) => entry.provider === managedProvider);
+    let available = modelRegistry.getAvailable().filter((entry) => entry.provider === managedProvider);
     if (!available.some((entry) => entry.id === model)) {
-      throw new Error(`${eggentAiModelLabel()} does not offer a model called "${model}" in this workspace.`);
+      // Listed but unavailable: look once more before refusing, because what
+      // opens a model happens elsewhere and the list here may predate it.
+      const listed = (await readManagedCatalog()).find((entry) => entry.kind === "text" && entry.id === model);
+      if (listed && listed.available === false && (await refreshManagedCatalogNow())) {
+        await modelRegistry.refresh();
+        available = modelRegistry.getAvailable().filter((entry) => entry.provider === managedProvider);
+      }
+    }
+    if (!available.some((entry) => entry.id === model)) {
+      throw new Error(await managedModelRefusal(model));
     }
     settingsManager.setDefaultProvider(managedProvider);
     settingsManager.setDefaultModel(model);
@@ -1277,6 +1359,9 @@ export async function getResolvedPiRuntimeModel(projectId?: string | null): Prom
 }
 
 export async function getPiModelsState() {
+  // Somebody opening the model list may have just done whatever opens a model,
+  // so a list older than a minute is fetched again first.
+  await refreshManagedCatalogIfStale();
   const modelRuntime = await getPiModelRuntime();
   const modelRegistry = await getPiModelRegistry(modelRuntime);
   await modelRegistry.refresh();
