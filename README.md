@@ -663,8 +663,8 @@ Eggent context can come from:
 
 Pasted images are stored as chat files and passed to the agent with file type and absolute path metadata.
 
-Files already on your machine go into a project workspace from the file tree in
-the sidebar. Every folder in the tree carries two buttons: one opens a file
+Files already on your machine go into a project workspace from the Files panel,
+the file tree opened from the header. Every folder in the tree carries two buttons: one opens a file
 picker, the other a folder picker that takes the whole tree underneath it,
 however deep, and rebuilds it in the workspace. Files and folders can also be
 dropped onto a folder, which does the same thing.

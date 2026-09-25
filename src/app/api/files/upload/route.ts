@@ -121,6 +121,14 @@ export async function POST(req: NextRequest) {
       const targetPath = resolveSafeChildPath(targetDir, target.relativePath);
       await fs.mkdir(path.dirname(targetPath), { recursive: true });
 
+      // Replacing opens the file without O_EXCL, and that follows a symbolic
+      // link to wherever it points - outside the project included. A link is
+      // never replaced; the plain create below it still refuses one by itself.
+      if (target.overwrite && (await fs.lstat(targetPath).catch(() => null))?.isSymbolicLink()) {
+        errors.push({ name: safeFilePath, error: t("api.error.failedWriteFile"), code: "failed" });
+        continue;
+      }
+
       // Streamed to disk rather than buffered again: the parsed body is already
       // one copy of the file, and a second one buys nothing.
       await pipeline(
