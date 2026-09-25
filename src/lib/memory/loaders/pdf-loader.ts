@@ -24,6 +24,11 @@ export async function loadPdf(filePath: string): Promise<LoadedDocument> {
         data: uint8Array,
         useSystemFonts: true, // Attempt to use system fonts to avoid some font errors
         disableFontFace: true, // Disable font face loading to avoid some parsing errors
+        // The PDFs read here come from uploads and from pages the agent fetched,
+        // so none of them is trusted. With eval allowed, this version compiles a
+        // font's drawing commands into a function, which is how a crafted font
+        // runs its own code (CVE-2024-4367); text extraction needs none of it.
+        isEvalSupported: false,
     });
 
     const doc = await loadingTask.promise;
