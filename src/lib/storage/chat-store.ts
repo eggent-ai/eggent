@@ -2,6 +2,7 @@ import fs from "fs/promises";
 import path from "path";
 import type { Chat, ChatContextMode, ChatListItem } from "@/lib/types";
 import { publishUiSyncEvent } from "@/lib/realtime/event-bus";
+import { withoutInlineImages } from "@/lib/storage/chat-media";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const CHATS_DIR = path.join(DATA_DIR, "chats");
@@ -44,7 +45,9 @@ export async function getChat(chatId: string): Promise<Chat | null> {
   const filePath = path.join(CHATS_DIR, `${chatId}.json`);
   try {
     const content = await fs.readFile(filePath, "utf-8");
-    return JSON.parse(content);
+    // A chat saved before pictures were dropped on write still carries them,
+    // and this is what the chat page downloads.
+    return withoutInlineImages(JSON.parse(content) as Chat);
   } catch {
     return null;
   }
@@ -53,7 +56,7 @@ export async function getChat(chatId: string): Promise<Chat | null> {
 export async function saveChat(chat: Chat): Promise<void> {
   await ensureDir(CHATS_DIR);
   const filePath = path.join(CHATS_DIR, `${chat.id}.json`);
-  await fs.writeFile(filePath, JSON.stringify(chat, null, 2), "utf-8");
+  await fs.writeFile(filePath, JSON.stringify(withoutInlineImages(chat), null, 2), "utf-8");
   publishUiSyncEvent({
     topic: "chat",
     chatId: chat.id,

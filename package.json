@@ -27,6 +27,7 @@
     "test:telegram-failure": "EGGENT_TEST_STUBS=i18n/server,lib/external/handle-external-message node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-telegram-failure.ts",
     "test:upload-limit": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-upload-limit.ts",
     "test:chat-images": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-chat-images.ts",
+    "test:chat-media": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-chat-media.ts",
     "test:project-model": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-project-model.ts",
     "test:managed-models": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-managed-models.ts",
     "test:skill-launch": "EGGENT_TEST_STUBS=lib/storage/project-store node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-skill-launch-scope.ts",
