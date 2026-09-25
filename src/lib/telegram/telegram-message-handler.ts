@@ -2,6 +2,8 @@ import {
     handleExternalMessage,
     ExternalMessageError,
 } from "@/lib/external/handle-external-message";
+import { agentFailureText } from "@/lib/telegram/failure-reply";
+import { redactSecrets } from "@/lib/pi/provider-failure";
 import {
     createDefaultTelegramSessionId,
     createFreshTelegramSessionId,
@@ -1019,8 +1021,9 @@ export async function processTelegramUpdate(
             t,
         });
 
+        let result: Awaited<ReturnType<typeof handleExternalMessage>>;
         try {
-            const result = await handleExternalMessage({
+            result = await handleExternalMessage({
                 sessionId,
                 message: incomingSavedFile && !isVoiceMessage
                     ? `${effectiveIncomingText}\n\n${t("telegram.bot.attachedFile", { name: incomingSavedFile.name })}`
@@ -1043,29 +1046,39 @@ export async function processTelegramUpdate(
                 },
                 telegramVia: "workspace-bot",
             });
-
-            stopProgressNotifier();
-            await sendTelegramMessage(
-                botToken,
-                chatId,
-                result.reply,
-                messageId,
-                t,
-                projectKeyboard(result.context.activeProjectName, t)
-            );
-            return { ok: true };
         } catch (error) {
             stopProgressNotifier();
-            if (error instanceof ExternalMessageError) {
-                const errorMessage =
-                    typeof error.payload.error === "string"
-                        ? error.payload.error
-                        : t("telegram.bot.processingFailed");
-                await sendTelegramMessage(botToken, chatId, t("telegram.bot.errorPrefix", { error: errorMessage }), messageId, t);
-                return { ok: true, handledError: true, status: error.status };
+            // A turn that failed is answered once, and the update counts as
+            // handled. Rethrowing here made polling run the whole turn twice
+            // more and then drop the update, and made a webhook answer 500 so
+            // Telegram delivered it again - each time through the same broken
+            // model, while the person heard nothing (issue #26). Only failing
+            // to reach Telegram itself, below, is still worth a retry.
+            const structured = error instanceof ExternalMessageError;
+            if (!structured) {
+                console.error(
+                    "[Telegram] Turn failed:",
+                    redactSecrets(error instanceof Error ? error.message : String(error))
+                );
             }
-            throw error;
+            const fallback = t("telegram.bot.processingFailed");
+            const errorMessage = structured
+                ? agentFailureText(typeof error.payload.error === "string" ? error.payload.error : "", fallback)
+                : agentFailureText(error, fallback);
+            await sendTelegramMessage(botToken, chatId, t("telegram.bot.errorPrefix", { error: errorMessage }), messageId, t);
+            return { ok: true, handledError: true, status: structured ? error.status : 500 };
         }
+
+        stopProgressNotifier();
+        await sendTelegramMessage(
+            botToken,
+            chatId,
+            result.reply,
+            messageId,
+            t,
+            projectKeyboard(result.context.activeProjectName, t)
+        );
+        return { ok: true };
     } catch (error) {
         await releaseTelegramUpdate(botId, updateId);
         throw error;

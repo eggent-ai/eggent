@@ -1,12 +1,12 @@
 import fs from "fs/promises";
 import path from "path";
-import {
+import type {
   Project,
-  type ProjectSkill,
-  type ProjectSkillMetadata,
-  type ProjectMcpConfig,
-  type McpServerConfig,
-  type McpServersFileCursor,
+  ProjectSkill,
+  ProjectSkillMetadata,
+  ProjectMcpConfig,
+  McpServerConfig,
+  McpServersFileCursor,
 } from "@/lib/types";
 import { deleteChatsByProjectId } from "@/lib/storage/chat-store";
 import { clearMemoryCache } from "@/lib/memory/memory";

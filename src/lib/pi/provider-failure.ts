@@ -44,7 +44,7 @@ const SECRET_PATTERNS: RegExp[] = [
   /\b(?:api[_-]?key|apikey|access[_-]?token|authorization)["']?\s*[:=]\s*["']?[A-Za-z0-9._\-]{8,}/gi,
 ];
 
-function redactSecrets(text: string): string {
+export function redactSecrets(text: string): string {
   let out = text;
   for (const pattern of SECRET_PATTERNS) out = out.replace(pattern, "[redacted]");
   return out;

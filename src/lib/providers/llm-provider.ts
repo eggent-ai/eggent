@@ -12,10 +12,10 @@ import type {
   LanguageModelV3Usage,
 } from "@ai-sdk/provider";
 import { spawn } from "child_process";
-import {
+import type {
   ModelConfig,
-  type McpServerConfig,
-  type ProjectMcpConfig,
+  McpServerConfig,
+  ProjectMcpConfig,
 } from "@/lib/types";
 import {
   getWorkDir,

@@ -23,6 +23,7 @@
     "test:default-model": "EGGENT_TEST_STUBS=lib/storage/project-store node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-default-model-selection.ts",
     "test:skill-refresh": "EGGENT_TEST_STUBS=lib/storage/project-store node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-skill-refresh.ts",
     "test:session-chat": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-session-chat.ts",
+    "test:telegram-failure": "EGGENT_TEST_STUBS=i18n/server,lib/external/handle-external-message node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-telegram-failure.ts",
     "test:upload-limit": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-upload-limit.ts",
     "test:chat-images": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-chat-images.ts",
     "test:project-model": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-project-model.ts",
