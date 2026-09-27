@@ -30,18 +30,20 @@ await fs.mkdir(bundledDir, { recursive: true });
 // Both stores resolve their roots from cwd at import time, so move first.
 process.chdir(workDir);
 
-async function writeBundledSkill(name: string, title: string): Promise<void> {
+async function writeBundledSkill(name: string, title: string, extra = ""): Promise<void> {
   const dir = path.join(bundledDir, name);
   await fs.mkdir(dir, { recursive: true });
   await fs.writeFile(
     path.join(dir, "SKILL.md"),
-    `---\nname: ${name}\ndescription: Test skill ${name}, written for the model.\ntitle_en: ${title}\nsummary_en: Short card copy.\n---\n\n# ${title}\n`
+    `---\nname: ${name}\ndescription: Test skill ${name}, written for the model.\ntitle_en: ${title}\nsummary_en: Short card copy.\n${extra}---\n\n# ${title}\n`
   );
 }
 
 await writeBundledSkill("about-you", "Tell me about yourself");
 await writeBundledSkill("business-system", "Business AI system");
 await writeBundledSkill("iishenka-rag", "RAG over your files");
+// Declares its own scope, the way a deployment adds one without a new core.
+await writeBundledSkill("own-bot", "Your own bot", "launch_scope: orchestrator\n");
 
 const { launchBundledSkill, isOrchestratorScopedSkill } = await import("../src/lib/storage/bundled-skills-store.ts");
 const { listProjects, getProject } = await import("./stubs/project-store.ts");
@@ -73,6 +75,13 @@ const businessSystem = await launchBundledSkill("business-system");
 await check("business-system stays in the orchestrator too", async () => {
   assert.equal(businessSystem.success, true);
   assert.equal(businessSystem.success && businessSystem.projectId, null);
+  assert.equal((await listProjects()).length, 0);
+});
+
+const ownBot = await launchBundledSkill("own-bot");
+await check("a skill that declares launch_scope: orchestrator stays there, with no core change", async () => {
+  assert.equal(ownBot.success, true);
+  assert.equal(ownBot.success && ownBot.projectId, null);
   assert.equal((await listProjects()).length, 0);
 });
 

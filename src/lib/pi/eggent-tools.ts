@@ -424,7 +424,7 @@ export async function createEggentPiTools(options: {
       name: "eggent_manage_telegram",
       label: "Manage Telegram Bot",
       description:
-        "Connect, inspect or disconnect the Telegram bot of this workspace, and grant people access to it. Use this whenever the user gives a bot token from BotFather or asks to hook the workspace up to Telegram. Sending a message with curl does NOT connect a bot: only this tool registers the token so incoming messages reach the workspace. When a freshly connected bot answers the user with \"activate access with a code\", finish the job here with allow_user or access_code instead of sending them to the settings screen. Never repeat the token back to the user or write it into files.",
+        "Connect, inspect or disconnect the Telegram bot of this workspace, and grant people access to it. Use this whenever the user gives a bot token from BotFather or asks to hook the workspace up to Telegram. A token is best entered on the Messengers page of the settings (/dashboard/messengers), which never passes it through the chat - send people there and confirm with action=status; if one is pasted here anyway, connect with it, and say it now sits in the chat history and can be reissued with /revoke in BotFather. Sending a message with curl does NOT connect a bot: only this tool registers the token so incoming messages reach the workspace. When a freshly connected bot answers the user with \"activate access with a code\", finish the job here with allow_user or access_code instead of sending them to the settings screen. Never repeat the token back to the user or write it into files.",
       parameters: Type.Object({
         action: Type.Union(
           [
@@ -465,11 +465,31 @@ export async function createEggentPiTools(options: {
 
           if (params.action === "status") {
             const settings = await getTelegramIntegrationPublicSettings();
+            const connected = Boolean(settings.botToken);
+            // Which bot it is, so a person connected from the settings page can be
+            // sent to it by name; a token Telegram rejects shows up here too.
+            let bot: { username: string; link: string } | { error: string } | null = null;
+            if (connected) {
+              try {
+                const { getTelegramIntegrationRuntimeConfig } = await import("@/lib/storage/telegram-integration-store");
+                const { getTelegramBotInfo } = await import("@/lib/telegram/setup");
+                const info = await getTelegramBotInfo((await getTelegramIntegrationRuntimeConfig()).botToken);
+                if (info.username) bot = { username: `@${info.username}`, link: `https://t.me/${info.username}` };
+              } catch (error) {
+                bot = { error: error instanceof Error ? error.message : String(error) };
+              }
+            }
+            const { getTelegramRelayConfig } = await import("@/lib/telegram/outbound");
             return textResult(
               JSON.stringify(
                 {
                   success: true,
-                  connected: Boolean(settings.botToken),
+                  connected,
+                  bot,
+                  // A deployment may carry a shared bot of its own. Someone writing
+                  // through it has Telegram already, without a bot of their own.
+                  sharedBotAvailable: Boolean(getTelegramRelayConfig()),
+                  thisRunFromTelegram: Boolean(getTelegramRuntimeData(options.toolRuntimeData)),
                   mode: settings.detectedMode,
                   defaultProjectId: settings.defaultProjectId || null,
                   allowedUserIds: settings.allowedUserIds,

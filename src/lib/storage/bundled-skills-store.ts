@@ -174,6 +174,14 @@ async function copySkillTree(sourceDir: string, targetDir: string): Promise<void
  */
 const ORCHESTRATOR_SCOPED_SKILLS = new Set(["about-you", "business-system"]);
 
+/**
+ * A skill can say the same thing about itself with `launch_scope: orchestrator`
+ * in its frontmatter, so a deployment that adds one does not need a new core.
+ */
+function frontmatterLaunchScope(value: string | undefined): BundledSkill["scope"] {
+  return value?.trim().toLowerCase() === "orchestrator" ? "orchestrator" : "project";
+}
+
 export function isOrchestratorScopedSkill(skillName: string): boolean {
   return ORCHESTRATOR_SCOPED_SKILLS.has(skillName.trim().toLowerCase());
 }
@@ -192,6 +200,8 @@ export interface BundledSkill {
   summary: string;
   /** Card position; lower comes first. */
   order: number;
+  /** Where a card launch runs: the orchestrator, or a project of its own. */
+  scope: "orchestrator" | "project";
 }
 
 /**
@@ -296,6 +306,7 @@ async function readBundledSkillFromDir(
     title: resolveCardText(frontmatter, "title", locale, name),
     summary: resolveCardText(frontmatter, "summary", locale, description),
     order: Number.isFinite(parsedOrder) ? parsedOrder : DEFAULT_CARD_ORDER,
+    scope: frontmatterLaunchScope(frontmatter.launch_scope),
   };
 }
 
@@ -516,7 +527,7 @@ export async function launchBundledSkill(
       return { success: false, error: "Project not found", code: 404 };
     }
     targetScope = requestedScope;
-  } else if (isOrchestratorScopedSkill(normalizedName)) {
+  } else if (skill.scope === "orchestrator" || isOrchestratorScopedSkill(normalizedName)) {
     targetScope = GLOBAL_PROJECT_ID;
   } else {
     // The card names the work in the user's own language; the id stays derived
