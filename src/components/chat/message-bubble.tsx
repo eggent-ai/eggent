@@ -1,15 +1,15 @@
 "use client";
 
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { Bot, User } from "lucide-react";
 import { CodeBlock } from "./code-block";
 import { ToolOutput } from "./tool-output";
 import { ToolGroup } from "./tool-group";
 import { FileMention } from "./file-mention";
-import { embeddedImageUrl, fileMentionPath } from "@/lib/files/openable";
+import { embeddedAudioPath, embeddedImageUrl, fileMentionPath } from "@/lib/files/openable";
 import { useAppStore } from "@/store/app-store";
-import type { ReactNode } from "react";
+import { useMemo, type ReactNode } from "react";
 import type { UIMessage } from "ai";
 
 interface MessageBubbleProps {
@@ -222,150 +222,176 @@ function MarkdownContent({ content }: { content: string }) {
   // The orchestrator is a project like any other on the file API; the store
   // spells it null and the API spells it "none".
   const projectId = useAppStore((state) => state.activeProjectId) ?? "none";
+  // Built once per project rather than on every render. react-markdown uses
+  // these functions as component types, so a fresh object each time remounted
+  // everything they drew - every file mention in the answer - whenever the chat
+  // re-rendered, and the window regaining focus was enough. A link flashed back
+  // to plain code; a recording stopped mid-play.
+  const components = useMemo<Components>(() => ({
+    code({ className, children, ...props }) {
+      const match = /language-(\w+)/.exec(className || "");
+      const isInline = !match;
+      if (isInline) {
+        // `site/preview.html` in an answer is where the work landed, and it
+        // was a piece of text: find the panel, expand the folder, click,
+        // land in the editor, find Open. Five steps to see your own page.
+        const mention =
+          typeof children === "string" || (Array.isArray(children) && children.every((c) => typeof c === "string"))
+            ? fileMentionPath(Array.isArray(children) ? children.join("") : children)
+            : null;
+        if (mention) {
+          return (
+            <FileMention projectId={projectId} path={mention}>
+              {children}
+            </FileMention>
+          );
+        }
+        return (
+          <code
+            className="bg-muted px-1.5 py-0.5 rounded text-sm"
+            {...props}
+          >
+            {children}
+          </code>
+        );
+      }
+      return (
+        <CodeBlock
+          code={String(children).replace(/\n$/, "")}
+          language={match[1]}
+        />
+      );
+    },
+    a({ href, children, ...props }) {
+      // `[listen](tts/take-1.mp3)` is a recording in the project; left to
+      // the browser it resolves against /dashboard/<chatId>, exactly like
+      // an embedded image did.
+      const audioPath = typeof href === "string" ? embeddedAudioPath(href) : null;
+      if (audioPath) {
+        return (
+          <FileMention projectId={projectId} path={audioPath} fallback={<span>{children}</span>}>
+            {children}
+          </FileMention>
+        );
+      }
+      const external = /^https?:\/\//i.test(href || "");
+      return (
+        <a
+          {...props}
+          href={href}
+          // Nothing marked links as links: they inherited body colour and
+          // the theme has no accent to borrow. Weight and an underline do
+          // the job in both themes. Long URLs wrap instead of overflowing
+          // the bubble.
+          className="break-words font-medium text-foreground underline decoration-foreground/40 underline-offset-2 transition-colors hover:decoration-foreground"
+          // Anything off-site opens beside the chat, so following a link
+          // never costs the conversation.
+          {...(external ? { target: "_blank", rel: "noopener noreferrer" } : {})}
+        >
+          {children}
+        </a>
+      );
+    },
+    ul({ children, ...props }) {
+      return (
+        <ul className="my-2 list-disc pl-6 space-y-1" {...props}>
+          {children}
+        </ul>
+      );
+    },
+    ol({ children, ...props }) {
+      return (
+        <ol className="my-2 list-decimal pl-6 space-y-1" {...props}>
+          {children}
+        </ol>
+      );
+    },
+    li({ children, ...props }) {
+      return (
+        <li className="marker:text-muted-foreground" {...props}>
+          {children}
+        </li>
+      );
+    },
+    img({ src, alt, ...props }) {
+      if (!src) return null;
+      // `![take 1](tts/take-1.mp3)`: an embedded recording plays, the way
+      // an embedded picture shows.
+      const audioPath = typeof src === "string" ? embeddedAudioPath(src) : null;
+      if (audioPath) {
+        const label = alt || audioPath.split("/").pop() || audioPath;
+        return (
+          <FileMention projectId={projectId} path={audioPath} fallback={<span>{label}</span>}>
+            {label}
+          </FileMention>
+        );
+      }
+      return (
+        <img
+          // A relative src is a file in the project the agent works in;
+          // left to the browser it resolves against /dashboard/<chatId>.
+          src={typeof src === "string" ? embeddedImageUrl(src, projectId) ?? src : src}
+          alt={alt || ""}
+          className="my-3 max-h-96 max-w-full rounded-lg border object-contain"
+          loading="lazy"
+          {...props}
+        />
+      );
+    },
+    table({ children, ...props }) {
+      return (
+        <div className="my-3 overflow-x-auto rounded-lg border border-border">
+          <table className="w-full min-w-[520px] border-collapse text-sm" {...props}>
+            {children}
+          </table>
+        </div>
+      );
+    },
+    thead({ children, ...props }) {
+      return (
+        <thead className="bg-muted/60" {...props}>
+          {children}
+        </thead>
+      );
+    },
+    tbody({ children, ...props }) {
+      return (
+        <tbody className="[&_tr:last-child_td]:border-b-0" {...props}>
+          {children}
+        </tbody>
+      );
+    },
+    tr({ children, ...props }) {
+      return (
+        <tr className="border-b border-border/70" {...props}>
+          {children}
+        </tr>
+      );
+    },
+    th({ children, ...props }) {
+      return (
+        <th
+          className="border-r border-border/70 px-3 py-2 text-left font-semibold text-foreground last:border-r-0"
+          {...props}
+        >
+          {children}
+        </th>
+      );
+    },
+    td({ children, ...props }) {
+      return (
+        <td
+          className="border-r border-border/70 px-3 py-2 align-top text-foreground/90 last:border-r-0"
+          {...props}
+        >
+          {children}
+        </td>
+      );
+    },
+  }), [projectId]);
+
   return (
-    <ReactMarkdown
-      remarkPlugins={[remarkGfm]}
-      components={{
-        code({ className, children, ...props }) {
-          const match = /language-(\w+)/.exec(className || "");
-          const isInline = !match;
-          if (isInline) {
-            // `site/preview.html` in an answer is where the work landed, and it
-            // was a piece of text: find the panel, expand the folder, click,
-            // land in the editor, find Open. Five steps to see your own page.
-            const mention =
-              typeof children === "string" || (Array.isArray(children) && children.every((c) => typeof c === "string"))
-                ? fileMentionPath(Array.isArray(children) ? children.join("") : children)
-                : null;
-            if (mention) {
-              return (
-                <FileMention projectId={projectId} path={mention}>
-                  {children}
-                </FileMention>
-              );
-            }
-            return (
-              <code
-                className="bg-muted px-1.5 py-0.5 rounded text-sm"
-                {...props}
-              >
-                {children}
-              </code>
-            );
-          }
-          return (
-            <CodeBlock
-              code={String(children).replace(/\n$/, "")}
-              language={match[1]}
-            />
-          );
-        },
-        a({ href, children, ...props }) {
-          const external = /^https?:\/\//i.test(href || "");
-          return (
-            <a
-              {...props}
-              href={href}
-              // Nothing marked links as links: they inherited body colour and
-              // the theme has no accent to borrow. Weight and an underline do
-              // the job in both themes. Long URLs wrap instead of overflowing
-              // the bubble.
-              className="break-words font-medium text-foreground underline decoration-foreground/40 underline-offset-2 transition-colors hover:decoration-foreground"
-              // Anything off-site opens beside the chat, so following a link
-              // never costs the conversation.
-              {...(external ? { target: "_blank", rel: "noopener noreferrer" } : {})}
-            >
-              {children}
-            </a>
-          );
-        },
-        ul({ children, ...props }) {
-          return (
-            <ul className="my-2 list-disc pl-6 space-y-1" {...props}>
-              {children}
-            </ul>
-          );
-        },
-        ol({ children, ...props }) {
-          return (
-            <ol className="my-2 list-decimal pl-6 space-y-1" {...props}>
-              {children}
-            </ol>
-          );
-        },
-        li({ children, ...props }) {
-          return (
-            <li className="marker:text-muted-foreground" {...props}>
-              {children}
-            </li>
-          );
-        },
-        img({ src, alt, ...props }) {
-          if (!src) return null;
-          return (
-            <img
-              // A relative src is a file in the project the agent works in;
-              // left to the browser it resolves against /dashboard/<chatId>.
-              src={typeof src === "string" ? embeddedImageUrl(src, projectId) ?? src : src}
-              alt={alt || ""}
-              className="my-3 max-h-96 max-w-full rounded-lg border object-contain"
-              loading="lazy"
-              {...props}
-            />
-          );
-        },
-        table({ children, ...props }) {
-          return (
-            <div className="my-3 overflow-x-auto rounded-lg border border-border">
-              <table className="w-full min-w-[520px] border-collapse text-sm" {...props}>
-                {children}
-              </table>
-            </div>
-          );
-        },
-        thead({ children, ...props }) {
-          return (
-            <thead className="bg-muted/60" {...props}>
-              {children}
-            </thead>
-          );
-        },
-        tbody({ children, ...props }) {
-          return (
-            <tbody className="[&_tr:last-child_td]:border-b-0" {...props}>
-              {children}
-            </tbody>
-          );
-        },
-        tr({ children, ...props }) {
-          return (
-            <tr className="border-b border-border/70" {...props}>
-              {children}
-            </tr>
-          );
-        },
-        th({ children, ...props }) {
-          return (
-            <th
-              className="border-r border-border/70 px-3 py-2 text-left font-semibold text-foreground last:border-r-0"
-              {...props}
-            >
-              {children}
-            </th>
-          );
-        },
-        td({ children, ...props }) {
-          return (
-            <td
-              className="border-r border-border/70 px-3 py-2 align-top text-foreground/90 last:border-r-0"
-              {...props}
-            >
-              {children}
-            </td>
-          );
-        },
-      }}
-    >
+    <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>
       {content}
     </ReactMarkdown>
   );

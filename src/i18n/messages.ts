@@ -244,6 +244,8 @@ const enMessages = {
   "chat.compaction.failedWithReason": "Could not compact the context: {details}",
   "chat.voice.comment": "Comment on the voice message: {text}",
   "chat.voice.transcript": "🎙 Voice message:\n{text}",
+  "chat.audio.play": "Play {name}",
+  "chat.audio.pause": "Pause {name}",
   "chat.errors.providerRefused": "{provider} refused the request: {details}",
   "chat.errors.providerRefusedWithStatus": "{provider} refused the request ({status}): {details}",
   "chat.errors.providerRejectedKey": "{provider} rejected the API key, so nothing can run. Open Settings → Models and login and paste a valid key.",

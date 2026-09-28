@@ -20,7 +20,7 @@ const OPENABLE = /\.(html?|pdf|svg|png|jpe?g|gif|webp)$/i;
  * package name, a CSS value - is not mistaken for a file.
  */
 const MENTIONABLE =
-  /\.(html?|pdf|svg|png|jpe?g|gif|webp|md|txt|csv|tsv|json|ya?ml|js|mjs|ts|tsx|jsx|css|py|sh|sql|xlsx?|docx?|pptx?|zip)$/i;
+  /\.(html?|pdf|svg|png|jpe?g|gif|webp|md|txt|csv|tsv|json|ya?ml|js|mjs|ts|tsx|jsx|css|py|sh|sql|xlsx?|docx?|pptx?|zip|mp3|wav|ogg|oga|opus|m4a|aac|flac)$/i;
 
 /**
  * Images an answer can embed: the types the download route serves as images
@@ -28,8 +28,38 @@ const MENTIONABLE =
  */
 const EMBEDDABLE_IMAGE = /\.(svg|png|jpe?g|gif|webp)$/i;
 
+/**
+ * Audio the browser plays itself, and the type it has to be served as.
+ *
+ * A voice the agent generated sat in the project as an .mp3 while the chat
+ * showed its path as plain text, the file screen refused it as a binary it could
+ * not preview, and the download route would have served it as text/plain under
+ * nosniff - which no browser plays. One table answers all three. Raw .pcm is not
+ * here: it has no header, so there is nothing a browser could decode.
+ */
+const AUDIO_CONTENT_TYPES: Record<string, string> = {
+  ".mp3": "audio/mpeg",
+  ".wav": "audio/wav",
+  ".ogg": "audio/ogg",
+  ".oga": "audio/ogg",
+  ".opus": "audio/ogg",
+  ".m4a": "audio/mp4",
+  ".aac": "audio/aac",
+  ".flac": "audio/flac",
+};
+
 export function isOpenableFile(path: string): boolean {
   return OPENABLE.test(path);
+}
+
+/** The type an audio file is served as, or null when it is not audio. */
+export function audioContentType(path: string): string | null {
+  const extension = /\.[^./\\]+$/.exec(path)?.[0].toLowerCase() ?? "";
+  return AUDIO_CONTENT_TYPES[extension] ?? null;
+}
+
+export function isAudioFile(path: string): boolean {
+  return audioContentType(path) !== null;
 }
 
 /** The path within the project, or null for a URL, an absolute path or a way out. */
@@ -74,15 +104,30 @@ export function fileMentionPath(text: string): string | null {
  * encoded `..`.
  */
 export function embeddedImageUrl(src: string, projectId: string): string | null {
+  const normalized = embeddedPath(src);
+  if (!normalized || !EMBEDDABLE_IMAGE.test(normalized)) return null;
+  return fileDownloadUrl(projectId, normalized, { inline: true });
+}
+
+/**
+ * The project path of an audio file an answer embeds or links to, or null.
+ *
+ * `![voice](tts/take-1.mp3)` and `[listen](tts/take-1.mp3)` both mean "play
+ * this", and both arrive percent-encoded exactly like an image does.
+ */
+export function embeddedAudioPath(src: string): string | null {
+  const normalized = embeddedPath(src);
+  return normalized && isAudioFile(normalized) ? normalized : null;
+}
+
+function embeddedPath(src: string): string | null {
   let value = src.trim();
   try {
     value = decodeURIComponent(value);
   } catch {
     // A % that escapes nothing; judge the path as written.
   }
-  const normalized = projectRelativePath(value);
-  if (!normalized || !EMBEDDABLE_IMAGE.test(normalized)) return null;
-  return fileDownloadUrl(projectId, normalized, { inline: true });
+  return projectRelativePath(value);
 }
 
 export function fileDownloadUrl(

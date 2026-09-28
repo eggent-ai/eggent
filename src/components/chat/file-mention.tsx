@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import { ExternalLink } from "lucide-react";
 import { useI18n } from "@/i18n/provider";
-import { fileDownloadUrl, filesPageUrl, isOpenableFile } from "@/lib/files/openable";
+import { fileDownloadUrl, filesPageUrl, isAudioFile, isOpenableFile } from "@/lib/files/openable";
+import { AudioMention } from "./audio-mention";
 
 /**
  * A file path the agent named, turned into something you can click.
@@ -57,10 +58,12 @@ export function forgetFileListings(): void {
   listings.clear();
 }
 
-export function FileMention({ projectId, path, children }: {
+export function FileMention({ projectId, path, children, fallback }: {
   projectId: string;
   path: string;
   children: React.ReactNode;
+  /** What stands in until the file is confirmed; a piece of inline code by default. */
+  fallback?: React.ReactNode;
 }) {
   const { t } = useI18n();
   const [exists, setExists] = useState<Existence>("unknown");
@@ -79,24 +82,36 @@ export function FileMention({ projectId, path, children }: {
   }, [projectId, path]);
 
   if (exists !== "present") {
-    return <code className="bg-muted px-1.5 py-0.5 rounded text-sm">{children}</code>;
+    return fallback ?? <code className="bg-muted px-1.5 py-0.5 rounded text-sm">{children}</code>;
   }
 
   const openable = isOpenableFile(path);
+  const audio = isAudioFile(path);
   // A page opens rendered, in its own tab. Anything else goes to the file's own
-  // screen, where it can be read, edited and downloaded.
+  // screen, where it can be read, edited, played and downloaded.
   const href = openable ? fileDownloadUrl(projectId, path, { inline: true }) : filesPageUrl(projectId, path);
 
-  return (
+  const link = (
     <a
       href={href}
       target={openable ? "_blank" : undefined}
       rel={openable ? "noopener noreferrer" : undefined}
-      title={openable ? t("files.open") : t("files.openInEditor")}
+      title={openable || audio ? t("files.open") : t("files.openInEditor")}
       className="bg-muted hover:bg-accent inline-flex items-center gap-1 rounded px-1.5 py-0.5 align-baseline font-mono text-sm underline decoration-dotted underline-offset-2 transition-colors"
     >
       {children}
       {openable ? <ExternalLink className="size-3 shrink-0" aria-hidden /> : null}
     </a>
   );
+
+  // A recording plays where it is named. The plain link stays for a browser
+  // that cannot decode it, since the file's screen still offers the download.
+  if (audio) {
+    return (
+      <AudioMention src={fileDownloadUrl(projectId, path, { inline: true })} href={href} name={path} fallback={link}>
+        {children}
+      </AudioMention>
+    );
+  }
+  return link;
 }

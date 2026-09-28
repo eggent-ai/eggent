@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { Download, ExternalLink, FileText, ImageIcon, Loader2, Save } from "lucide-react";
+import { Download, ExternalLink, FileAudio, FileText, ImageIcon, Loader2, Save } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { AppSidebar } from "@/components/app-sidebar";
@@ -120,6 +120,8 @@ export default function GenericFileEditorPage() {
   const dirty = draft !== content;
   const title = metadata?.filename || filePath.split("/").pop() || t("files.defaultTitle");
   const isImagePreview = Boolean(metadata?.previewUrl && metadata.contentType?.startsWith("image/"));
+  const isAudioPreview = Boolean(metadata?.previewUrl && metadata.contentType?.startsWith("audio/"));
+  const isMediaPreview = isImagePreview || isAudioPreview;
 
   return (
     <div className="[--header-height:calc(--spacing(14))]">
@@ -141,11 +143,13 @@ export default function GenericFileEditorPage() {
                   <div className="flex items-start gap-2 min-w-0">
                     {isImagePreview ? (
                       <ImageIcon className="mt-1 size-4 shrink-0 text-primary" />
+                    ) : isAudioPreview ? (
+                      <FileAudio className="mt-1 size-4 shrink-0 text-primary" />
                     ) : (
                       <FileText className="mt-1 size-4 shrink-0 text-primary" />
                     )}
                     <div className="min-w-0">
-                      <div className="truncate text-sm font-medium">{isImagePreview ? metadata?.contentType : t("files.textPreview")}</div>
+                      <div className="truncate text-sm font-medium">{isMediaPreview ? metadata?.contentType : t("files.textPreview")}</div>
                       <div className="text-xs text-muted-foreground">
                         {formatFileSize(metadata?.size)}{metadata?.updatedAt ? ` · ${t("common.updated", { date: new Date(metadata.updatedAt).toLocaleString() })}` : ""}
                       </div>
@@ -166,7 +170,7 @@ export default function GenericFileEditorPage() {
                         {t("common.download")}
                       </a>
                     </Button>
-                    {!isImagePreview ? (
+                    {!isMediaPreview ? (
                       <Button onClick={save} disabled={loading || saving || !dirty} className="gap-2">
                         {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
                         {t("common.save")}
@@ -192,6 +196,18 @@ export default function GenericFileEditorPage() {
                       src={metadata.previewUrl}
                       alt={title}
                       className="mx-auto max-h-[70vh] max-w-full rounded object-contain"
+                    />
+                  </div>
+                ) : isAudioPreview && metadata?.previewUrl ? (
+                  // The browser's own player: seeking, volume and speed come
+                  // with it, and it is the screen a chat mention links to.
+                  <div className="rounded-lg border bg-muted/20 p-3">
+                    <audio
+                      controls
+                      preload="metadata"
+                      src={metadata.previewUrl}
+                      aria-label={title}
+                      className="w-full dark:scheme-dark"
                     />
                   </div>
                 ) : (

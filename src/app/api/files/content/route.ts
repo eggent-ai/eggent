@@ -1,9 +1,10 @@
-import { NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
 import fs from "fs/promises";
 import path from "path";
 import { getWorkDir } from "@/lib/storage/project-store";
 import { publishUiSyncEvent } from "@/lib/realtime/event-bus";
 import { getServerTranslator } from "@/i18n/server";
+import { audioContentType, fileDownloadUrl } from "@/lib/files/openable";
 
 const MAX_TEXT_FILE_BYTES = 1024 * 1024;
 
@@ -56,16 +57,20 @@ export async function GET(req: NextRequest) {
     if (!stat.isFile()) {
       return Response.json({ error: t("api.error.pathNotFile") }, { status: 400 });
     }
+    // A picture shows and a recording plays on the file's own screen, instead
+    // of being refused as a binary. Audio is served as itself: Safari will not
+    // play what arrives as application/octet-stream.
     const imageMimeType = imageMimeTypeForPath(resolved.filePath);
-    if (imageMimeType) {
-      const params = new URLSearchParams({ project: projectId, path: filePath });
+    const audioMimeType = imageMimeType ? null : audioContentType(resolved.filePath);
+    const previewType = imageMimeType ?? audioMimeType;
+    if (previewType) {
       return Response.json({
         projectId,
         path: filePath,
         filename: path.basename(filePath),
         content: "",
-        contentType: imageMimeType,
-        previewUrl: `/api/files/download?${params.toString()}`,
+        contentType: previewType,
+        previewUrl: fileDownloadUrl(projectId, filePath, { inline: Boolean(audioMimeType) }),
         binary: true,
         size: stat.size,
         updatedAt: stat.mtime.toISOString(),

@@ -1,8 +1,12 @@
-import { NextRequest } from "next/server";
+import type { NextRequest } from "next/server";
+import { createReadStream } from "fs";
 import fs from "fs/promises";
 import path from "path";
+import { Readable } from "stream";
 import { getWorkDir } from "@/lib/storage/project-store";
 import { getServerTranslator } from "@/i18n/server";
+import { audioContentType } from "@/lib/files/openable";
+import { contentDisposition, parseByteRange } from "@/lib/files/download-headers";
 
 /**
  * Content types worth opening in a browser rather than saving to disk.
@@ -30,7 +34,11 @@ const INLINE_CONTENT_TYPES: Record<string, string> = {
 };
 
 function inlineContentType(fileName: string): string {
-  return INLINE_CONTENT_TYPES[path.extname(fileName).toLowerCase()] || "text/plain; charset=utf-8";
+  return (
+    INLINE_CONTENT_TYPES[path.extname(fileName).toLowerCase()] ||
+    audioContentType(fileName) ||
+    "text/plain; charset=utf-8"
+  );
 }
 
 export async function GET(req: NextRequest) {
@@ -45,31 +53,37 @@ export async function GET(req: NextRequest) {
     );
   }
 
-  const workDir = getWorkDir(projectId);
-  const fullPath = path.join(workDir, filePath);
+  const resolvedWorkDir = path.resolve(getWorkDir(projectId));
+  const resolvedPath = path.resolve(path.join(resolvedWorkDir, filePath));
 
-  // Security check
-  const resolvedPath = path.resolve(fullPath);
-  const resolvedWorkDir = path.resolve(workDir);
-  if (!resolvedPath.startsWith(resolvedWorkDir)) {
+  // Security check. A bare prefix test also let through a sibling whose name
+  // starts with this directory's - `../projects.json` from `projects`.
+  if (resolvedPath !== resolvedWorkDir && !resolvedPath.startsWith(resolvedWorkDir + path.sep)) {
     return Response.json(
       { error: t("api.error.invalidFilePath") },
       { status: 403 }
     );
   }
 
+  let size: number;
   try {
-    const content = await fs.readFile(fullPath);
-    const fileName = path.basename(filePath);
+    const stat = await fs.stat(resolvedPath);
+    if (!stat.isFile()) throw new Error("Not a file");
+    size = stat.size;
+  } catch {
+    return Response.json({ error: t("api.error.fileNotFound") }, { status: 404 });
+  }
 
-    // Opening a result rather than filing it away. Everything here downloaded
-    // as an unnamed binary, so a finished page could not be looked at: someone
-    // who asked for a link to their site spent an afternoon being sent invented
-    // URLs and third-party hosts while the built page sat in the project.
-    if (req.nextUrl.searchParams.get("inline") === "1") {
-      return new Response(content, {
-        headers: {
-          "Content-Disposition": `inline; filename="${fileName}"`,
+  const fileName = path.basename(filePath);
+
+  // Opening a result rather than filing it away. Everything here downloaded
+  // as an unnamed binary, so a finished page could not be looked at: someone
+  // who asked for a link to their site spent an afternoon being sent invented
+  // URLs and third-party hosts while the built page sat in the project.
+  const headers: Record<string, string> =
+    req.nextUrl.searchParams.get("inline") === "1"
+      ? {
+          "Content-Disposition": contentDisposition("inline", fileName),
           "Content-Type": inlineContentType(fileName),
           // The file is served from the same origin as the dashboard, and the
           // agent writes files out of pages it read on the internet, so its
@@ -80,17 +94,33 @@ export async function GET(req: NextRequest) {
           "Content-Security-Policy": "sandbox allow-scripts allow-forms allow-popups allow-modals",
           "X-Content-Type-Options": "nosniff",
           "Referrer-Policy": "no-referrer",
-        },
-      });
-    }
+        }
+      : {
+          "Content-Disposition": contentDisposition("attachment", fileName),
+          "Content-Type": "application/octet-stream",
+        };
+  headers["Accept-Ranges"] = "bytes";
 
-    return new Response(content, {
-      headers: {
-        "Content-Disposition": `attachment; filename="${fileName}"`,
-        "Content-Type": "application/octet-stream",
-      },
+  // An audio element reads a file in pieces, and Safari will not play one at
+  // all from a server that answers a piece with the whole file.
+  const range = parseByteRange(req.headers.get("range"), size);
+  if (range === "unsatisfiable") {
+    return new Response(null, {
+      status: 416,
+      headers: { ...headers, "Content-Range": `bytes */${size}` },
     });
-  } catch {
-    return Response.json({ error: t("api.error.fileNotFound") }, { status: 404 });
   }
+
+  const start = range ? range.start : 0;
+  const end = range ? range.end : size - 1;
+  headers["Content-Length"] = String(size === 0 ? 0 : end - start + 1);
+  if (range) headers["Content-Range"] = `bytes ${start}-${end}/${size}`;
+
+  // Streamed rather than read whole: a player asks for `bytes=0-` of a long
+  // recording and then for piece after piece as it seeks.
+  const body =
+    size === 0
+      ? null
+      : (Readable.toWeb(createReadStream(resolvedPath, { start, end })) as unknown as ReadableStream<Uint8Array>);
+  return new Response(body, { status: range ? 206 : 200, headers });
 }
