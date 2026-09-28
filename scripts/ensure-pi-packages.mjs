@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
@@ -35,6 +36,13 @@ const RETIRED_PACKAGES = [
 
 const MAX_ATTEMPTS = Number(process.env.EGGENT_PI_PACKAGE_INSTALL_ATTEMPTS || 3) || 3;
 const LOCK_STALE_MS = Number(process.env.EGGENT_PI_PACKAGE_INSTALL_LOCK_STALE_MS || 10 * 60 * 1000) || 10 * 60 * 1000;
+
+// Where the image keeps these packages already installed (see the Dockerfile).
+// A workspace starting for the first time copies that tree instead of fetching
+// the same packages from the registry, one at a time: measured, the fetch was
+// 25 of the 46 seconds before a new workspace answered its first request, and
+// every workspace ended up with identical files anyway.
+const SEED_DIR = process.env.EGGENT_PI_PACKAGE_SEED_DIR?.trim() || "/opt/eggent-pi-seed";
 
 // Keep per-workspace cold-start installs less aggressive. A signup burst can otherwise
 // make many npm processes compete for CPU/RAM and leave partial node_modules trees.
@@ -144,6 +152,35 @@ function cleanupPartialNpmInstall(agentDir, { full = false } = {}) {
   }
 }
 
+// Only a workspace that has never had an npm tree is seeded. An existing one,
+// whole or partial, is left to the installer below, which already knows how to
+// repair it - copying over a tree is how two trees end up interleaved.
+function seedFromImage(agentDir) {
+  const source = path.join(SEED_DIR, "npm");
+  const target = path.join(agentDir, "npm");
+  // A copy interrupted by a stopped container stays behind under this name.
+  for (const entry of fs.readdirSync(agentDir)) {
+    if (entry.startsWith(".npm-seed-")) rmrf(path.join(agentDir, entry));
+  }
+  if (!fs.existsSync(path.join(source, "node_modules")) || fs.existsSync(target)) return false;
+
+  // Copied beside the target and renamed into place, so that anything short of
+  // a finished copy never looks like an installed tree.
+  const staging = path.join(agentDir, `.npm-seed-${process.pid}`);
+  const startedAt = Date.now();
+  try {
+    execFileSync("cp", ["-a", source, staging], { stdio: ["ignore", "ignore", "pipe"] });
+    fs.renameSync(staging, target);
+  } catch (error) {
+    rmrf(staging);
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(`Could not copy pi packages from the image, installing them instead: ${message}`);
+    return false;
+  }
+  console.log(`Copied pi packages from the image in ${Date.now() - startedAt} ms`);
+  return true;
+}
+
 async function withInstallLock(agentDir, fn) {
   const lockPath = path.join(agentDir, ".ensure-pi-packages.lock");
   const lockPayload = () => JSON.stringify({ pid: process.pid, createdAt: new Date().toISOString() }) + "\n";
@@ -177,7 +214,7 @@ async function withInstallLock(agentDir, fn) {
   }
 }
 
-async function ensureOnce({ agentDir, packages, DefaultPackageManager, SettingsManager }) {
+async function ensureOnce({ agentDir, packages, seeded, DefaultPackageManager, SettingsManager }) {
   const settingsManager = SettingsManager.create(process.cwd(), agentDir);
   const packageManager = new DefaultPackageManager({
     cwd: process.cwd(),
@@ -209,6 +246,18 @@ async function ensureOnce({ agentDir, packages, DefaultPackageManager, SettingsM
     if (configured && !installed) {
       console.log(`Installing missing pi package files: ${source}`);
       await packageManager.install(source, { local: false });
+      changed = true;
+      continue;
+    }
+
+    // The files were copied from the image a moment ago, so they are exactly
+    // what installing this source would have produced: it only has to be
+    // written into the settings. Files found any other way are still
+    // reinstalled, since nothing here can tell a whole tree from a torn one.
+    if (seeded && installed) {
+      packageManager.addSourceToSettings(source, { local: false });
+      configuredSources.push(source);
+      console.log(`Pi package ready from the image: ${source}`);
       changed = true;
       continue;
     }
@@ -255,16 +304,20 @@ async function ensureOnce({ agentDir, packages, DefaultPackageManager, SettingsM
 
 async function ensureWithRetries({ agentDir, packages }) {
   const { DefaultPackageManager, SettingsManager } = await import("@earendil-works/pi-coding-agent");
+  let seeded = seedFromImage(agentDir);
   let lastError;
   for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
     try {
       cleanupPartialNpmInstall(agentDir, { full: false });
-      await ensureOnce({ agentDir, packages, DefaultPackageManager, SettingsManager });
+      await ensureOnce({ agentDir, packages, seeded, DefaultPackageManager, SettingsManager });
       return;
     } catch (error) {
       lastError = error;
       const message = error instanceof Error ? error.message : String(error);
       console.error(`Pi package ensure attempt ${attempt}/${MAX_ATTEMPTS} failed: ${message}`);
+      // The retry below removes the tree, so what it finds next is no longer
+      // the copy from the image.
+      if (attempt < MAX_ATTEMPTS) seeded = false;
       cleanupPartialNpmInstall(agentDir, { full: attempt < MAX_ATTEMPTS });
       if (attempt < MAX_ATTEMPTS) {
         await sleep(1500 * attempt);

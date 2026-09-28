@@ -130,10 +130,23 @@ RUN npm ci --omit=dev
 # catalog back is what lets a refresh count.
 RUN find /app/node_modules -path '*pi-ai/dist/providers/data/*.json' -exec touch -t 200001010000 {} +
 
+# The pi packages every workspace loads, installed once here rather than on each
+# workspace's first start. That install fetched the same packages from the
+# registry one at a time and was 25 of the 46 seconds a new workspace took to
+# answer its first request; ensure-pi-packages.mjs now copies this tree when a
+# workspace has none yet and leaves every existing tree alone. The script comes
+# from the context rather than the build output, so this layer is rebuilt only
+# when the script or the dependencies change. The npm cache and temp files are
+# kept out of /app/data, which is a mount at runtime and would hide them anyway.
+COPY scripts/ensure-pi-packages.mjs ./scripts/ensure-pi-packages.mjs
+RUN PI_CODING_AGENT_DIR=/opt/eggent-pi-seed TMPDIR=/tmp npm_config_cache=/tmp/eggent-pi-seed-npm-cache \
+    node ./scripts/ensure-pi-packages.mjs \
+  && rm -rf /tmp/eggent-pi-seed-npm-cache \
+  && chown -R node:node /opt/eggent-pi-seed
+
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/next.config.mjs ./next.config.mjs
 COPY --from=builder /app/scripts/docker-entrypoint.sh ./scripts/docker-entrypoint.sh
-COPY --from=builder /app/scripts/ensure-pi-packages.mjs ./scripts/ensure-pi-packages.mjs
 COPY --from=whisper /usr/local/bin/whisper-cli /usr/local/bin/whisper-cli
 COPY --from=whisper /usr/local/lib/ /usr/local/lib/
 
