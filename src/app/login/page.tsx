@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, Suspense, useMemo, useState } from "react";
+import { FormEvent, Suspense, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Loader2, LockKeyhole } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -15,10 +15,26 @@ function normalizeNextPath(value: string | null): string {
   return value;
 }
 
+// A one-time sign-in link arrives as /login#handoff=<token>. It rides in the
+// fragment because browsers never send that part to a server, so the token
+// stays out of access logs and Referer headers until it is spent here.
+function readHandoffToken(): string | null {
+  const fragment = window.location.hash.replace(/^#/, "");
+  for (const part of fragment.split("&")) {
+    if (part.startsWith("handoff=")) {
+      const token = decodeURIComponent(part.slice("handoff=".length)).trim();
+      return token || null;
+    }
+  }
+  return null;
+}
+
 function LoginPageClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { t } = useI18n();
+  const [handoff, setHandoff] = useState<"none" | "redeeming" | "failed">("none");
+  const handoffStarted = useRef(false);
   // Deliberately empty. These fields used to be seeded with the default
   // credentials on every visit, forever - so a returning user had to clear two
   // fields the app had filled with an answer that was wrong for their install,
@@ -36,6 +52,37 @@ function LoginPageClient() {
   // person rather than that they chose to sign in. Saying so is the difference
   // between an explanation and a silent bounce.
   const wasInterrupted = Boolean(nextParam);
+
+  // Layout effect, so the form is never painted under a link that is about to
+  // sign the person in. The ref keeps a development double-run from spending
+  // the token twice - the second attempt would find it gone.
+  useLayoutEffect(() => {
+    if (handoffStarted.current) return;
+    const token = readHandoffToken();
+    if (!token) return;
+    handoffStarted.current = true;
+    // Out of the address bar before anything else, so the link is not left in
+    // history or copied onward; it has done its job either way.
+    window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
+    setHandoff("redeeming");
+    void (async () => {
+      try {
+        const response = await fetch("/api/auth/handoff/redeem", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ token }),
+        });
+        const payload = (await response.json().catch(() => null)) as
+          | { mustChangeCredentials?: boolean }
+          | null;
+        if (!response.ok) throw new Error("handoff refused");
+        router.replace(payload?.mustChangeCredentials ? "/dashboard/onboarding" : nextPath);
+        router.refresh();
+      } catch {
+        setHandoff("failed");
+      }
+    })();
+  }, [nextPath, router]);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -69,6 +116,23 @@ function LoginPageClient() {
     }
   }
 
+  if (handoff === "redeeming") {
+    return (
+      <main className="min-h-screen bg-muted/20 px-4 py-8">
+        <div className="mx-auto flex min-h-[calc(100vh-4rem)] w-full max-w-md items-center">
+          <section
+            className="flex w-full items-center gap-3 rounded-xl border bg-card p-6 shadow-sm"
+            role="status"
+            aria-live="polite"
+          >
+            <Loader2 className="size-5 animate-spin text-primary" />
+            <h1 className="text-xl font-semibold">{t("login.handoffSigningIn")}</h1>
+          </section>
+        </div>
+      </main>
+    );
+  }
+
   return (
     <main className="min-h-screen bg-muted/20 px-4 py-8">
       <div className="mx-auto flex min-h-[calc(100vh-4rem)] w-full max-w-md items-center">
@@ -78,7 +142,11 @@ function LoginPageClient() {
             <h1 className="text-xl font-semibold">{t("login.title")}</h1>
           </div>
 
-          {wasInterrupted && (
+          {handoff === "failed" ? (
+            <p className="mb-6 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-foreground">
+              {t("login.handoffExpired")}
+            </p>
+          ) : wasInterrupted && (
             <p className="mb-6 rounded-lg border border-warning/40 bg-warning/10 px-3 py-2 text-sm text-foreground">
               {t("login.sessionExpired")}
             </p>

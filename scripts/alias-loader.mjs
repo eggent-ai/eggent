@@ -31,5 +31,8 @@ export function resolve(specifier, context, nextResolve) {
     const resolved = firstExisting(path.join(srcDir, relative));
     if (resolved) return { url: pathToFileURL(resolved).href, shortCircuit: true };
   }
+  // Next ships no exports map, so a route importing values from "next/server"
+  // needs the file name the bundler would have supplied.
+  if (specifier === "next/server") return nextResolve("next/server.js", context);
   return nextResolve(specifier, context);
 }
