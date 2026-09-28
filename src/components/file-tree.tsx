@@ -38,6 +38,39 @@ interface FileEntry {
   size: number;
 }
 
+/**
+ * What each folder held when it was last listed, kept from one tree to the next.
+ *
+ * Every page mounts a files panel of its own, so opening a file from the chat
+ * drew the next page's tree from nothing: a skeleton in each open folder, then
+ * its contents, one level after another. Drawn from here first, the new tree
+ * looks the way the last one was left and refreshes quietly behind it.
+ */
+const listings = new Map<string, FileEntry[]>();
+
+function listingKey(projectId: string, path: string): string {
+  return `${projectId}\u0000${path}`;
+}
+
+/** The folders a path sits inside, outermost first: `a/b/c.mp3` gives `a`, `a/b`. */
+function enclosingFolders(path: string): string[] {
+  const parts = path.split("/").filter(Boolean);
+  return parts.slice(0, -1).map((_, index) => parts.slice(0, index + 1).join("/"));
+}
+
+/**
+ * The file on screen, when it belongs to the project this tree shows.
+ *
+ * The Files page names it in `?path=` beside `?project=`, which it reads as
+ * the orchestrator when absent. Every other page carries no `path`.
+ */
+function useOpenedFile(projectId: string): string | null {
+  const searchParams = useSearchParams();
+  const path = searchParams.get("path");
+  if (!path) return null;
+  return (searchParams.get("project") || "none") === projectId ? path : null;
+}
+
 function getFileIcon(name: string) {
   const ext = name.split(".").pop()?.toLowerCase();
   switch (ext) {
@@ -388,10 +421,19 @@ function TreeNode({
 }: TreeNodeProps) {
   const router = useRouter();
   const { t } = useI18n();
-  const { currentPath } = useAppStore();
-  const [expanded, setExpanded] = useState(false);
-  const [children, setChildren] = useState<FileEntry[] | null>(null);
-  const childrenRef = useRef<FileEntry[] | null>(null);
+  const currentPath = useAppStore((state) => state.currentPath);
+  const panelOpen = useAppStore((state) => state.filesPanelOpen);
+  const expanded = useAppStore((state) => Boolean(state.expandedFolders[projectId]?.[relativePath]));
+  const setFolderExpanded = useAppStore((state) => state.setFolderExpanded);
+  const setExpanded = useCallback(
+    (value: boolean) => setFolderExpanded(projectId, relativePath, value),
+    [setFolderExpanded, projectId, relativePath]
+  );
+  const [children, setChildren] = useState<FileEntry[] | null>(
+    () => listings.get(listingKey(projectId, relativePath)) ?? null
+  );
+  const childrenRef = useRef<FileEntry[] | null>(children);
+  const rowRef = useRef<HTMLButtonElement>(null);
   const [loading, setLoading] = useState(false);
   const [isDragOver, setIsDragOver] = useState(false);
   const downloadHref = useMemo(
@@ -409,22 +451,20 @@ function TreeNode({
   // A directory is active when the tree is inside it; a file when it is the one
   // being viewed. The file half was missing, so clicking a file navigated away
   // and left nothing marked - the tree forgot where you just were.
-  const openedFile = useSearchParams().get("path");
+  const openedFile = useOpenedFile(projectId);
   const isActive = type === "directory"
     ? currentPath === relativePath
     : openedFile === relativePath;
   const isUploading = type === "directory" && uploadingPath === relativePath;
 
-  // Auto-expand if this folder is a parent of currentPath
+  // A new tree starts scrolled to its top, and the file just opened can sit far
+  // below it. Brought into view when it becomes the open file, or when the
+  // panel opens on it - and left alone after that, so the scroll stays yours.
   useEffect(() => {
-    if (
-      type === "directory" &&
-      currentPath.startsWith(relativePath + "/") &&
-      !expanded
-    ) {
-      setExpanded(true);
+    if (type === "file" && isActive && panelOpen) {
+      rowRef.current?.scrollIntoView({ block: "nearest" });
     }
-  }, [currentPath, relativePath, type, expanded]);
+  }, [type, isActive, panelOpen]);
 
   useEffect(() => {
     childrenRef.current = children;
@@ -443,6 +483,7 @@ function TreeNode({
       const res = await fetch(`/api/files?${params}`);
       const data = await res.json();
       if (Array.isArray(data)) {
+        listings.set(listingKey(projectId, relativePath), data);
         childrenRef.current = data;
         setChildren(data);
       }
@@ -564,7 +605,8 @@ function TreeNode({
       const willExpand = !expanded;
       setExpanded(willExpand);
       if (willExpand) {
-        void loadChildren(true, true);
+        // What it held last time is already on screen; refresh it quietly.
+        void loadChildren(true, childrenRef.current === null);
       }
     }
   };
@@ -584,6 +626,7 @@ function TreeNode({
     >
       <div className="group/tree-node relative">
         <button
+          ref={rowRef}
           onClick={handleClick}
           className={cn(
             "flex items-center gap-1 w-full text-left text-xs py-1 px-1 rounded-sm hover:bg-accent/50 transition-colors",
@@ -774,8 +817,13 @@ interface FileTreeProps {
 export function FileTree({ projectId }: FileTreeProps) {
   const router = useRouter();
   const { t } = useI18n();
-  const { currentPath, setCurrentPath } = useAppStore();
-  const [rootEntries, setRootEntries] = useState<FileEntry[] | null>(null);
+  const currentPath = useAppStore((state) => state.currentPath);
+  const setCurrentPath = useAppStore((state) => state.setCurrentPath);
+  const expandFolders = useAppStore((state) => state.expandFolders);
+  const openedFile = useOpenedFile(projectId);
+  const [rootEntries, setRootEntries] = useState<FileEntry[] | null>(
+    () => listings.get(listingKey(projectId, "")) ?? null
+  );
   const [isRootDragOver, setIsRootDragOver] = useState(false);
   const [upload, setUpload] = useState<{ path: string; percent: number } | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -787,14 +835,30 @@ export function FileTree({ projectId }: FileTreeProps) {
   });
 
   useEffect(() => {
-    setRootEntries(null);
+    setRootEntries(listings.get(listingKey(projectId, "")) ?? null);
   }, [projectId]);
+
+  // The folders around what is open are opened for you: around the file on
+  // screen, and around the directory the chat works in. Once each time either
+  // changes - the old rule ran on every render and re-opened a folder the
+  // moment it was closed, so the one holding the working directory could never
+  // be closed at all.
+  useEffect(() => {
+    if (openedFile) expandFolders(projectId, enclosingFolders(openedFile));
+  }, [projectId, openedFile, expandFolders]);
+
+  useEffect(() => {
+    if (currentPath) expandFolders(projectId, enclosingFolders(currentPath));
+  }, [projectId, currentPath, expandFolders]);
 
   const loadRootEntries = useCallback(async () => {
     const params = new URLSearchParams({ project: projectId, path: "" });
     const res = await fetch(`/api/files?${params}`);
     const data = await res.json();
-    if (Array.isArray(data)) setRootEntries(data);
+    if (Array.isArray(data)) {
+      listings.set(listingKey(projectId, ""), data);
+      setRootEntries(data);
+    }
   }, [projectId]);
 
   useEffect(() => {
@@ -804,7 +868,10 @@ export function FileTree({ projectId }: FileTreeProps) {
       .then((r) => r.json())
       .then((data) => {
         if (cancelled) return;
-        if (Array.isArray(data)) setRootEntries(data);
+        if (Array.isArray(data)) {
+          listings.set(listingKey(projectId, ""), data);
+          setRootEntries(data);
+        }
       })
       .catch(() => {
         if (!cancelled) {

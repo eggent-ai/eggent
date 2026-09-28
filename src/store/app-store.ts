@@ -57,6 +57,19 @@ interface AppState {
   filesPanelOpen: boolean;
   setFilesPanelOpen: (open: boolean) => void;
   toggleFilesPanel: () => void;
+  /**
+   * The folders open in the file tree, per project.
+   *
+   * Kept here rather than in each folder, because every page mounts a panel
+   * of its own. Clicking a file in the chat's panel opens the file's screen,
+   * and a folder's own state was thrown away on the way there: the file stood
+   * highlighted inside folders that had closed behind it, and finding it again
+   * meant opening them one by one.
+   */
+  expandedFolders: Record<string, Record<string, true>>;
+  setFolderExpanded: (projectId: string, path: string, expanded: boolean) => void;
+  /** Open these folders; the ones already open are left as they are. */
+  expandFolders: (projectId: string, paths: string[]) => void;
 }
 
 const FILES_PANEL_KEY = "eggent.filesPanelOpen";
@@ -98,6 +111,25 @@ export const useAppStore = create<AppState>((set) => ({
       const next = !state.filesPanelOpen;
       rememberFilesPanel(next);
       return { filesPanelOpen: next };
+    }),
+  expandedFolders: {},
+  setFolderExpanded: (projectId, path, expanded) =>
+    set((state) => {
+      const open = state.expandedFolders[projectId] ?? {};
+      if (Boolean(open[path]) === expanded) return state;
+      const next = { ...open };
+      if (expanded) next[path] = true;
+      else delete next[path];
+      return { expandedFolders: { ...state.expandedFolders, [projectId]: next } };
+    }),
+  expandFolders: (projectId, paths) =>
+    set((state) => {
+      const open = state.expandedFolders[projectId] ?? {};
+      const closed = paths.filter((path) => !open[path]);
+      if (closed.length === 0) return state;
+      const next = { ...open };
+      for (const path of closed) next[path] = true;
+      return { expandedFolders: { ...state.expandedFolders, [projectId]: next } };
     }),
   // Chats
   chats: [],
