@@ -9,6 +9,7 @@ said `0.2.4`, which is why the number there now links to the releases page.
 
 | Version | Name | Date | Notes |
 | --- | --- | --- | --- |
+| `0.2.9` | Audio Playback and Unicode File Names | 2026-09-28 | [Full snapshot](./0.2.9-audio-playback-and-unicode-file-names.md), [GitHub body](./github-v0.2.9.md) |
 | `0.2.8` | Light Chat History | 2026-09-25 | [Full snapshot](./0.2.8-light-chat-history.md), [GitHub body](./github-v0.2.8.md) |
 | `0.2.7` | Security Update and Uploads | 2026-09-25 | [Full snapshot](./0.2.7-security-update-and-uploads.md), [GitHub body](./github-v0.2.7.md) |
 | `0.2.6` | Model Picker and Files Panel | 2026-09-15 | [Full snapshot](./0.2.6-model-picker-and-files-panel.md), [GitHub body](./github-v0.2.6.md) |
