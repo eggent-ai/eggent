@@ -84,13 +84,13 @@ await check("not asked for one, the route answers exactly as before", async () =
 });
 
 await check("a failed turn is an error event with the status the JSON route would have used", async () => {
-  setTurn({ deltas: ["Sea"], error: new ExternalMessageError(402, { error: "Balance exhausted" }) });
+  setTurn({ deltas: ["Sea"], error: new ExternalMessageError(429, { error: "Too many requests" }) });
   const response = await messageRoute.POST(messageRequest("text/event-stream"));
   const received = await events(response);
   const last = received[received.length - 1];
   assert.equal(last.type, "error");
-  assert.equal(last.status, 402);
-  assert.equal((last.payload as { error: string }).error, "Balance exhausted");
+  assert.equal(last.status, 429);
+  assert.equal((last.payload as { error: string }).error, "Too many requests");
 });
 
 await check("an unexpected failure is an error event, not a broken stream", async () => {
