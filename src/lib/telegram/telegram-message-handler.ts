@@ -3,7 +3,7 @@ import {
     ExternalMessageError,
 } from "@/lib/external/handle-external-message";
 import { agentFailureText } from "@/lib/telegram/failure-reply";
-import { startDraftStream } from "@/lib/telegram/draft-stream";
+import { startDraftStream, toolActivity, type DraftActivity } from "@/lib/telegram/draft-stream";
 import { redactSecrets } from "@/lib/pi/provider-failure";
 import {
     createDefaultTelegramSessionId,
@@ -35,6 +35,19 @@ import { transcribeVoiceNote } from "@/lib/speech/voice-note";
 import { getServerTranslator } from "@/i18n/server";
 import type { MessageKey, MessageValues } from "@/i18n/messages";
 import crypto from "node:crypto";
+
+// The draft's line for each kind of running tool, in the workspace's language.
+const DRAFT_ACTIVITY_KEYS: Record<DraftActivity, MessageKey> = {
+    search: "telegram.bot.draft.search",
+    page: "telegram.bot.draft.page",
+    files: "telegram.bot.draft.files",
+    command: "telegram.bot.draft.command",
+    helper: "telegram.bot.draft.helper",
+    service: "telegram.bot.draft.service",
+    image: "telegram.bot.draft.image",
+    send: "telegram.bot.draft.send",
+    work: "telegram.bot.draft.work",
+};
 
 // Leave headroom under Telegram's hard 4096 limit: HTML escaping expands the payload
 // (`&` becomes `&amp;`) and each chunk may gain a reopened code fence.
@@ -1023,6 +1036,10 @@ export async function processTelegramUpdate(
             chatId,
             send: (body) => callTelegramApi(botToken, "sendMessageDraft", body),
             format: markdownToTelegramHtml,
+            status: {
+                thinking: t("telegram.bot.draft.thinking"),
+                tool: (name) => t(DRAFT_ACTIVITY_KEYS[toolActivity(name)]),
+            },
             onUnavailable: () => {
                 fallbackNotifier.stop = startTelegramProgressNotifier({
                     botToken,

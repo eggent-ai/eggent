@@ -10,10 +10,14 @@
  * after stop() - including an update that was already on its way when stop()
  * was called, which would otherwise sit under the finished message - and a chat
  * where drafts are refused hands over to the old indicator exactly once.
+ *
+ * Given a status, the draft says what is happening until the answer starts -
+ * "Thinking…", or a line for the tool that is running - instead of the empty
+ * placeholder some clients draw as a tiny bubble of dots.
  */
 import assert from "node:assert/strict";
 
-const { startDraftStream, draftTail } = await import("../src/lib/telegram/draft-stream.ts");
+const { startDraftStream, draftTail, toolActivity } = await import("../src/lib/telegram/draft-stream.ts");
 
 let failed = 0;
 let ran = 0;
@@ -170,6 +174,114 @@ await check("a long answer shows the part being written", () => {
   assert.ok(tail.endsWith("END"));
   assert.ok(tail.length <= 3801);
   assert.equal(draftTail("  short"), "short");
+});
+
+const status = {
+  thinking: "Thinking…",
+  tool: (name: string) => ({ web_search: "Searching…", fetch_content: "Reading…" } as Record<string, string>)[name],
+};
+const tool = (name: string, phase: "start" | "end") => ({ type: "tool" as const, name, phase });
+const shown = (bodies: Body[]) => bodies.map((body) => String(body.text));
+
+await check("with a status, the first draft says Thinking in italics instead of being empty", async () => {
+  const { bodies, send } = recorder();
+  const draft = startDraftStream({ chatId: 7, send, format, status, throttleMs: 10, refreshMs: 10_000 });
+  await sleep(5);
+  await draft.stop();
+  assert.equal(bodies[0].text, "<i>Thinking…</i>");
+  assert.equal(bodies[0].parse_mode, "HTML");
+});
+
+await check("a running tool shows its line, and Thinking comes back when it ends", async () => {
+  const { bodies, send } = recorder();
+  const draft = startDraftStream({ chatId: 7, send, format, status, throttleMs: 10, refreshMs: 10_000 });
+  await sleep(20);
+  draft.onProgress(tool("web_search", "start"));
+  await sleep(40);
+  draft.onProgress(tool("web_search", "end"));
+  await sleep(40);
+  await draft.stop();
+  assert.deepEqual(shown(bodies), ["<i>Thinking…</i>", "<i>Searching…</i>", "<i>Thinking…</i>"]);
+  assert.ok(bodies.every((body) => body.draft_id === bodies[0].draft_id));
+});
+
+await check("with tools inside tools the latest shows, then the one before it", async () => {
+  const { bodies, send } = recorder();
+  const draft = startDraftStream({ chatId: 7, send, format, status, throttleMs: 10, refreshMs: 10_000 });
+  await sleep(20);
+  draft.onProgress(tool("web_search", "start"));
+  await sleep(40);
+  draft.onProgress(tool("fetch_content", "start"));
+  await sleep(40);
+  draft.onProgress(tool("fetch_content", "end"));
+  await sleep(40);
+  await draft.stop();
+  assert.deepEqual(shown(bodies), ["<i>Thinking…</i>", "<i>Searching…</i>", "<i>Reading…</i>", "<i>Searching…</i>"]);
+});
+
+await check("a tool with no line of its own keeps the line under it", async () => {
+  const { bodies, send } = recorder();
+  const draft = startDraftStream({ chatId: 7, send, format, status, throttleMs: 10, refreshMs: 10_000 });
+  await sleep(20);
+  draft.onProgress(tool("web_search", "start"));
+  await sleep(40);
+  draft.onProgress(tool("something_else", "start"));
+  await sleep(40);
+  await draft.stop();
+  assert.deepEqual(shown(bodies), ["<i>Thinking…</i>", "<i>Searching…</i>"]);
+});
+
+await check("once the answer starts, it is all the draft shows", async () => {
+  const { bodies, send } = recorder();
+  const draft = startDraftStream({ chatId: 7, send, format, status, throttleMs: 10, refreshMs: 10_000 });
+  await sleep(20);
+  draft.onProgress(text("Here is"));
+  await sleep(40);
+  draft.onProgress(tool("web_search", "start"));
+  await sleep(40);
+  draft.onProgress(tool("web_search", "end"));
+  draft.onProgress(text(" the answer"));
+  await sleep(40);
+  await draft.stop();
+  assert.deepEqual(shown(bodies), ["<i>Thinking…</i>", "<b>Here is</b>", "<b>Here is the answer</b>"]);
+});
+
+await check("whitespace before a tool call does not count as the answer starting", async () => {
+  const { bodies, send } = recorder();
+  const draft = startDraftStream({ chatId: 7, send, format, status, throttleMs: 10, refreshMs: 10_000 });
+  await sleep(20);
+  draft.onProgress(text("\n\n"));
+  draft.onProgress(tool("web_search", "start"));
+  await sleep(40);
+  await draft.stop();
+  assert.deepEqual(shown(bodies), ["<i>Thinking…</i>", "<i>Searching…</i>"]);
+});
+
+await check("a status line is escaped, and plain words stand in if Telegram refuses it", async () => {
+  const { bodies, send } = recorder((body) => {
+    if (body.parse_mode === "HTML" && String(body.text).includes("&lt;")) throw new Error("Bad Request: can't parse entities");
+  });
+  const odd = { thinking: "Thinking…", tool: () => "Reading <site> & more…" };
+  const draft = startDraftStream({ chatId: 7, send, format, status: odd, throttleMs: 10, refreshMs: 10_000 });
+  await sleep(20);
+  draft.onProgress(tool("anything", "start"));
+  await sleep(40);
+  await draft.stop();
+  assert.equal(bodies[1].text, "<i>Reading &lt;site&gt; &amp; more…</i>");
+  assert.equal(bodies[bodies.length - 1].text, "Reading <site> & more…");
+  assert.equal(bodies[bodies.length - 1].parse_mode, undefined);
+});
+
+await check("tools are grouped by what the person sees, whatever the case of the name", () => {
+  assert.equal(toolActivity("web_search"), "search");
+  assert.equal(toolActivity("fetch_content"), "page");
+  assert.equal(toolActivity("read"), "files");
+  assert.equal(toolActivity("bash"), "command");
+  assert.equal(toolActivity("Agent"), "helper");
+  assert.equal(toolActivity("mcp"), "service");
+  assert.equal(toolActivity("eggent_generate_image"), "image");
+  assert.equal(toolActivity("telegram_send_file"), "send");
+  assert.equal(toolActivity("eggent_memory_save"), "work");
 });
 
 console.log(`\n${ran - failed}/${ran} checks passed`);
