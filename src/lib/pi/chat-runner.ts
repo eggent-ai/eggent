@@ -10,7 +10,7 @@ import { clearActiveRun, getActiveRun, isStopRequest, registerActiveRun } from "
 import { attachToLiveRun, startLiveRun, type LiveRunSink } from "@/lib/pi/live-run";
 import { applySchedulingToolPolicy, hasScheduleIntent, hasScheduleManagementIntent } from "@/lib/pi/schedule-intent";
 import { describeProviderFailure, type ProviderFailure } from "@/lib/pi/provider-failure";
-import type { PiChatRunOptions, PiRuntimeStats, PiToolRecord } from "@/lib/pi/types";
+import type { AgentProgressEvent, PiChatRunOptions, PiRuntimeStats, PiToolRecord } from "@/lib/pi/types";
 import { getChat, saveChat } from "@/lib/storage/chat-store";
 import { clearUsageSnapshotCache } from "@/lib/usage/usage-provider";
 import type { ChatMessage, ChatMessagePart } from "@/lib/types";
@@ -621,7 +621,22 @@ export async function joinActiveRun(
   }
 }
 
-export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?: Record<string, unknown>; toolRuntimeData?: Record<string, unknown> }): Promise<string> {
+export async function runPiAgentText(options: PiChatRunOptions & {
+  runtimeData?: Record<string, unknown>;
+  toolRuntimeData?: Record<string, unknown>;
+  /** Told about each piece of the answer as it arrives; see AgentProgressEvent. */
+  onProgress?: (event: AgentProgressEvent) => void;
+}): Promise<string> {
+  // A listener that throws must not take the turn down with it: the answer is
+  // still delivered whole at the end.
+  const report = (event: AgentProgressEvent) => {
+    if (!options.onProgress) return;
+    try {
+      options.onProgress(event);
+    } catch (error) {
+      console.warn("A progress listener failed:", error);
+    }
+  };
   const userMessageId = crypto.randomUUID();
   const runId = options.runId ?? crypto.randomUUID();
   const prompt = options.runtimeData
@@ -682,6 +697,7 @@ export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?:
         assistantText += assistantEvent.delta;
         appendTimelineText(timelineParts, assistantEvent.delta);
         liveText(assistantEvent.delta);
+        report({ type: "text", delta: assistantEvent.delta });
       }
       return;
     }
@@ -722,6 +738,7 @@ export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?:
       upsertTimelineTool(timelineParts, toolRecord);
       liveCloseText();
       live?.push({ type: "tool-input-available", toolCallId, toolName, input, dynamic: true });
+      report({ type: "tool", name: toolName, phase: "start" });
       return;
     }
 
@@ -745,6 +762,7 @@ export async function runPiAgentText(options: PiChatRunOptions & { runtimeData?:
       }
       tools.set(toolCallId, toolRecord);
       upsertTimelineTool(timelineParts, toolRecord);
+      report({ type: "tool", name: toolName, phase: "end" });
       live?.push(
         toolRecord.status === "error"
           ? { type: "tool-output-error", toolCallId, errorText: stringifyForDisplay(output), dynamic: true }

@@ -3,6 +3,7 @@ import {
     ExternalMessageError,
 } from "@/lib/external/handle-external-message";
 import { agentFailureText } from "@/lib/telegram/failure-reply";
+import { startDraftStream } from "@/lib/telegram/draft-stream";
 import { redactSecrets } from "@/lib/pi/provider-failure";
 import {
     createDefaultTelegramSessionId,
@@ -1014,12 +1015,27 @@ export async function processTelegramUpdate(
             return { ok: true, ignored: true, reason: "non_text" };
         }
 
-        const stopProgressNotifier = startTelegramProgressNotifier({
-            botToken,
+        // The answer is written into a draft as it arrives. The old indicator -
+        // typing, then separate "still working" messages that stayed in the chat
+        // - runs only where Telegram refuses drafts.
+        const fallbackNotifier: { stop?: () => void } = {};
+        const draft = startDraftStream({
             chatId,
-            replyToMessageId: messageId,
-            t,
+            send: (body) => callTelegramApi(botToken, "sendMessageDraft", body),
+            format: markdownToTelegramHtml,
+            onUnavailable: () => {
+                fallbackNotifier.stop = startTelegramProgressNotifier({
+                    botToken,
+                    chatId,
+                    replyToMessageId: messageId,
+                    t,
+                });
+            },
         });
+        const stopProgressNotifier = async () => {
+            await draft.stop();
+            fallbackNotifier.stop?.();
+        };
 
         let result: Awaited<ReturnType<typeof handleExternalMessage>>;
         try {
@@ -1045,9 +1061,10 @@ export async function processTelegramUpdate(
                     },
                 },
                 telegramVia: "workspace-bot",
+                onProgress: (event) => draft.onProgress(event),
             });
         } catch (error) {
-            stopProgressNotifier();
+            await stopProgressNotifier();
             // A turn that failed is answered once, and the update counts as
             // handled. Rethrowing here made polling run the whole turn twice
             // more and then drop the update, and made a webhook answer 500 so
@@ -1069,7 +1086,7 @@ export async function processTelegramUpdate(
             return { ok: true, handledError: true, status: structured ? error.status : 500 };
         }
 
-        stopProgressNotifier();
+        await stopProgressNotifier();
         await sendTelegramMessage(
             botToken,
             chatId,

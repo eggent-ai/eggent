@@ -1,9 +1,11 @@
 import { NextRequest } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import {
+  describeExternalError,
   ExternalMessageError,
   handleExternalMessage,
 } from "@/lib/external/handle-external-message";
+import { externalTurnEventStream, wantsEventStream } from "@/lib/external/event-stream";
 import { getExternalApiToken } from "@/lib/storage/external-api-token-store";
 import { getServerTranslator } from "@/i18n/server";
 
@@ -70,7 +72,7 @@ export async function POST(req: NextRequest) {
     }
 
     const body = (await req.json()) as ExternalMessageBody;
-    const result = await handleExternalMessage({
+    const input: Parameters<typeof handleExternalMessage>[0] = {
       sessionId:
         typeof body.sessionId === "string" ? body.sessionId : "",
       message: typeof body.message === "string" ? body.message : "",
@@ -94,8 +96,16 @@ export async function POST(req: NextRequest) {
           ? body.toolRuntimeData as Record<string, unknown>
           : undefined,
       publicMode: body.publicMode === true,
-    });
+    };
 
+    if (wantsEventStream(req)) {
+      return externalTurnEventStream(
+        (onProgress) => handleExternalMessage({ ...input, onProgress }),
+        (error) => describeExternalError(error, t("api.error.internal"))
+      );
+    }
+
+    const result = await handleExternalMessage(input);
     return Response.json(result);
   } catch (error) {
     if (error instanceof ExternalMessageError) {

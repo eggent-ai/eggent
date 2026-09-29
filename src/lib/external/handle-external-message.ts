@@ -14,6 +14,7 @@ import {
 } from "@/lib/storage/external-session-store";
 import { getServerTranslator } from "@/i18n/server";
 import type { MessageKey } from "@/i18n/messages";
+import type { AgentProgressEvent } from "@/lib/pi/types";
 import type { ChatContextMode } from "@/lib/types";
 import type { ChatMessage } from "@/lib/types";
 import {
@@ -33,6 +34,8 @@ export interface HandleExternalMessageInput {
   publicMode?: boolean;
   /** Who owns the bot this message arrived through. Defaults to the relay. */
   telegramVia?: TelegramDestinationKind;
+  /** Told about the answer while it is being written, for a surface that shows it. */
+  onProgress?: (event: AgentProgressEvent) => void;
 }
 
 export interface HandleExternalMediaMessageInput extends HandleExternalMessageInput {
@@ -86,6 +89,17 @@ export class ExternalMessageError extends Error {
     this.status = status;
     this.payload = payload;
   }
+}
+
+/** The status and body the JSON routes answer a failed turn with. */
+export function describeExternalError(
+  error: unknown,
+  fallback: string
+): { status: number; payload: Record<string, unknown> } {
+  if (error instanceof ExternalMessageError) {
+    return { status: error.status, payload: error.payload };
+  }
+  return { status: 500, payload: { error: error instanceof Error ? error.message : fallback } };
 }
 
 function unwrapToolResultPayload(value: unknown): unknown {
@@ -452,6 +466,7 @@ export async function handleExternalMessage(
     runtimeData,
     toolRuntimeData: input.toolRuntimeData,
     enableEggentTools: input.publicMode ? false : undefined,
+    onProgress: input.onProgress,
   });
 
   const afterChat = await getChat(resolvedChatId);

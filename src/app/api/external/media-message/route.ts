@@ -1,9 +1,11 @@
 import { NextRequest } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import {
+  describeExternalError,
   ExternalMessageError,
   handleExternalMediaMessage,
 } from "@/lib/external/handle-external-message";
+import { externalTurnEventStream, wantsEventStream } from "@/lib/external/event-stream";
 import { getExternalApiToken } from "@/lib/storage/external-api-token-store";
 import { getServerTranslator } from "@/i18n/server";
 
@@ -88,7 +90,7 @@ export async function POST(req: NextRequest) {
     }
 
     const buffer = Buffer.from(await file.arrayBuffer());
-    const result = await handleExternalMediaMessage({
+    const input: Parameters<typeof handleExternalMediaMessage>[0] = {
       sessionId: formString(formData, "sessionId"),
       message: formString(formData, "message"),
       projectId: formString(formData, "projectId").trim() || undefined,
@@ -104,8 +106,18 @@ export async function POST(req: NextRequest) {
         mimeType: file.type || formString(formData, "mimeType") || undefined,
         kind: normalizeKind(formString(formData, "kind")),
       },
-    });
+    };
 
+    // A voice note is transcribed before the turn starts, which is time the
+    // person otherwise spends looking at nothing - the stream covers it too.
+    if (wantsEventStream(req)) {
+      return externalTurnEventStream(
+        (onProgress) => handleExternalMediaMessage({ ...input, onProgress }),
+        (error) => describeExternalError(error, t("api.error.internal"))
+      );
+    }
+
+    const result = await handleExternalMediaMessage(input);
     return Response.json(result);
   } catch (error) {
     if (error instanceof ExternalMessageError) {

@@ -40,6 +40,15 @@ export interface PiChatRunOptions extends PiSessionOptions {
   projectId?: string;
 }
 
+/**
+ * What a turn is doing while it runs, for a surface that shows the answer as
+ * it is written rather than when it is finished. `text` deltas concatenate to
+ * exactly the reply the turn returns.
+ */
+export type AgentProgressEvent =
+  | { type: "text"; delta: string }
+  | { type: "tool"; name: string; phase: "start" | "end" };
+
 export interface PiRuntimeStats {
   model?: {
     provider?: string;
