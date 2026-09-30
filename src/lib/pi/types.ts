@@ -47,7 +47,9 @@ export interface PiChatRunOptions extends PiSessionOptions {
  */
 export type AgentProgressEvent =
   | { type: "text"; delta: string }
-  | { type: "tool"; name: string; phase: "start" | "end" };
+  | { type: "tool"; name: string; phase: "start" | "end" }
+  /** Helpers started with the Agent tool: how many of this turn's are still working. */
+  | { type: "helpers"; running: number; total: number };
 
 export interface PiRuntimeStats {
   model?: {
@@ -75,6 +77,49 @@ export interface PiRuntimeStats {
     contextWindow: number;
     percent: number | null;
   };
+}
+
+/** Where a helper started by the Agent tool is. */
+export type SubagentStatus = "running" | "done" | "failed" | "stopped";
+
+/** One thing a helper did: the tool, and what it was pointed at. */
+export interface SubagentStep {
+  tool: string;
+  /** The query, page, file or command - clipped, with anything secret masked. */
+  target?: string;
+  failed?: boolean;
+}
+
+/**
+ * A helper as the chat shows it: what it is doing, what it has done, how it
+ * ended. Built on the server from the Agent tool's own progress reports and
+ * the helper's transcript, streamed while it works and kept with the stored
+ * message afterwards. What it was asked is the tool call's own input and what
+ * it found is the tool's result; neither is repeated here.
+ */
+export interface SubagentSnapshot {
+  toolCallId: string;
+  description: string;
+  agentType?: string;
+  model?: string;
+  status: SubagentStatus;
+  startedAt: string;
+  endedAt?: string;
+  /** What it is doing at this moment; only while it runs. */
+  now?: {
+    kind: "thinking" | "queued" | "tool" | "writing";
+    /** Runtime tool names, for kind "tool". */
+    tools?: string[];
+    /** The start of what it is writing, for kind "writing". */
+    text?: string;
+  };
+  toolUses: number;
+  turns?: number;
+  tokens?: number;
+  steps: SubagentStep[];
+  /** Steps left out of `steps` because there were too many to keep. */
+  earlierSteps?: number;
+  error?: string;
 }
 
 export type PiToolStatus = "running" | "completed" | "error";

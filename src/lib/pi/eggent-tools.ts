@@ -603,7 +603,7 @@ export async function createEggentPiTools(options: {
     defineTool({
       name: "list_projects",
       label: "List Eggent Projects",
-      description: "List Eggent projects. Each project is a directory-backed pi agent configuration with context.md, memory.md, skills/, .mcp.json, and model.json. Scheduled tasks are managed by pi-subagents.",
+      description: "List Eggent projects: the persistent workspaces of this Eggent, each a directory with its own context.md, memory.md, skills/, .mcp.json and model.json.",
       parameters: Type.Object({}),
       execute: async () => {
         const projects = await getAllProjects();
@@ -612,12 +612,14 @@ export async function createEggentPiTools(options: {
     }),
     defineTool({
       name: "create_project",
-      label: "Create Eggent Project / Pi Agent Config",
-      description: "Create a new Eggent project, which is a pi agent configuration.",
+      label: "Create Eggent Project",
+      // Worded against the one mistake it invites: asked for "five agents that
+      // read the news", a model reached for this and made five empty projects.
+      description: "Create a new Eggent project: a persistent workspace with its own instructions, memory, skills, files and MCP servers, for ongoing work the user will come back to. It does no work by itself. Not for helpers on the current task: to have several agents research or do something now, launch subagents with the Agent tool instead.",
       parameters: Type.Object({
-        name: Type.String({ description: "Project/agent name." }),
+        name: Type.String({ description: "Project name." }),
         description: Type.Optional(Type.String({ description: "Short description." })),
-        instructions: Type.Optional(Type.String({ description: "Agent context/instructions injected into pi." })),
+        instructions: Type.Optional(Type.String({ description: "Standing instructions for every chat in this project." })),
         memory_mode: Type.Optional(Type.Union([Type.Literal("global"), Type.Literal("isolated")], { description: "Memory namespace mode. Defaults to isolated." })),
       }),
       execute: async (_toolCallId, params) => {
@@ -640,8 +642,8 @@ export async function createEggentPiTools(options: {
     }),
     defineTool({
       name: "switch_project",
-      label: "Switch Eggent Project / Pi Agent Config",
-      description: "Switch the Eggent UI to another project/pi agent configuration, or to the orchestrator with project_id='none'.",
+      label: "Switch Eggent Project",
+      description: "Switch the Eggent UI to another project, or to the orchestrator with project_id='none'.",
       parameters: Type.Object({
         project_id: Type.String({ description: "Project id to switch to. Use 'none' for the orchestrator." }),
         current_path: Type.Optional(Type.String({ description: "Optional relative working directory inside the selected project or orchestrator root." })),

@@ -10,7 +10,9 @@ import { clearActiveRun, getActiveRun, isStopRequest, registerActiveRun } from "
 import { attachToLiveRun, startLiveRun, type LiveRunSink } from "@/lib/pi/live-run";
 import { applySchedulingToolPolicy, hasScheduleIntent, hasScheduleManagementIntent } from "@/lib/pi/schedule-intent";
 import { describeProviderFailure, type ProviderFailure } from "@/lib/pi/provider-failure";
-import type { AgentProgressEvent, PiChatRunOptions, PiRuntimeStats, PiToolRecord } from "@/lib/pi/types";
+import { isAgentToolName } from "@/lib/pi/subagent-format";
+import { SubagentProgressTracker } from "@/lib/pi/subagent-progress";
+import type { AgentProgressEvent, PiChatRunOptions, PiRuntimeStats, PiToolRecord, SubagentSnapshot } from "@/lib/pi/types";
 import { getChat, saveChat } from "@/lib/storage/chat-store";
 import { clearUsageSnapshotCache } from "@/lib/usage/usage-provider";
 import type { ChatMessage, ChatMessagePart } from "@/lib/types";
@@ -349,6 +351,38 @@ function completedTimelineParts(parts: ChatMessagePart[]): ChatMessagePart[] {
     .filter((part): part is ChatMessagePart => Boolean(part));
 }
 
+/**
+ * Keeps each helper's last known progress with its Agent call in the stored
+ * message, so a reloaded chat still shows what every helper did and how it
+ * ended. A helper still marked running when its turn is written down was cut
+ * off with it, and is stored as stopped: a stored spinner would spin forever.
+ */
+function attachSubagentSnapshots(
+  parts: ChatMessagePart[],
+  tracker: SubagentProgressTracker
+): ChatMessagePart[] {
+  for (const part of parts) {
+    if (part.type !== "tool" || !isAgentToolName(part.toolName)) continue;
+    const snapshot = tracker.get(part.toolCallId);
+    if (!snapshot) continue;
+    if (snapshot.status === "running") {
+      snapshot.status = "stopped";
+      snapshot.endedAt = new Date().toISOString();
+      delete snapshot.now;
+    }
+    part.subagent = snapshot;
+  }
+  return parts;
+}
+
+function subagentDataPart(snapshot: SubagentSnapshot) {
+  return {
+    type: "data-piSubagent" as const,
+    id: `pi-subagent-${snapshot.toolCallId}`,
+    data: snapshot,
+  };
+}
+
 function isEmptyZeroTokenTurn(
   assistantText: string,
   tools: Iterable<PiToolRecord>,
@@ -666,6 +700,21 @@ export async function runPiAgentText(options: PiChatRunOptions & {
   const timelineParts: ChatMessagePart[] = [];
   let mcpOAuthPending = false;
   let stopped = false;
+  // The web can watch a Telegram turn, so it gets each helper's progress too; a
+  // messenger only needs to know how many are still working.
+  let reportedHelpers = "";
+  const subagents = new SubagentProgressTracker({
+    sessionId: session.sessionId,
+    cwd: session.sessionManager.getCwd(),
+    onChange: (snapshot) => {
+      live?.push(subagentDataPart(snapshot));
+      const { running, total } = subagents.counts();
+      const key = `${running}/${total}`;
+      if (key === reportedHelpers) return;
+      reportedHelpers = key;
+      report({ type: "helpers", running, total });
+    },
+  });
 
   // A turn started in Telegram is the same turn as one started in the browser,
   // and the workspace's own chat window should be able to watch it happen
@@ -690,6 +739,7 @@ export async function runPiAgentText(options: PiChatRunOptions & {
   const unsubscribe = session.subscribe((event: unknown) => {
     const record = asRecord(event);
     if (!record) return;
+    subagents.handle(record);
 
     if (record.type === "message_update") {
       const assistantEvent = asRecord(record.assistantMessageEvent);
@@ -807,7 +857,7 @@ export async function runPiAgentText(options: PiChatRunOptions & {
       assistantText,
       tools: [...tools.values()],
       runtimeStats: buildPiRuntimeStats(session, currentPromptUsage, addUsage(baselineUsage, currentPromptUsage)),
-      parts: timelineParts,
+      parts: attachSubagentSnapshots(timelineParts, subagents),
     });
     return assistantText;
   } catch (error) {
@@ -822,6 +872,7 @@ export async function runPiAgentText(options: PiChatRunOptions & {
     clearActiveRun(options.chatId, runId);
     cancelPendingInteractionsForRun(runId);
     unsubscribe();
+    subagents.dispose();
     const retained = await retainPiScheduleSession({
       chatId: options.chatId,
       projectId: options.projectId,
@@ -920,6 +971,11 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
       const tools = new Map<string, PiToolRecord>();
       const timelineParts: ChatMessagePart[] = [];
       let mcpOAuthPending = false;
+      const subagents = new SubagentProgressTracker({
+        sessionId: session.sessionId,
+        cwd: session.sessionManager.getCwd(),
+        onChange: (snapshot) => safeWrite(subagentDataPart(snapshot)),
+      });
 
       const emitStats = (stats: PiRuntimeStats) => {
         safeWrite({
@@ -959,7 +1015,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
           assistantText,
           tools: [...tools.values()],
           runtimeStats,
-          parts: completedTimelineParts(timelineParts),
+          parts: completedTimelineParts(attachSubagentSnapshots(timelineParts, subagents)),
         });
       };
 
@@ -986,6 +1042,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
       const unsubscribe = session.subscribe((event: unknown) => {
         const record = asRecord(event);
         if (!record) return;
+        subagents.handle(record);
 
         if (record.type === "message_update") {
           const assistantEvent = asRecord(record.assistantMessageEvent);
@@ -1183,7 +1240,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
           assistantText,
           tools: [...tools.values()],
           runtimeStats: finalStats,
-          parts: timelineParts,
+          parts: attachSubagentSnapshots(timelineParts, subagents),
         });
         persisted = true;
       } catch (error) {
@@ -1220,7 +1277,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
           assistantText: errorText,
           tools: [...tools.values()],
           runtimeStats: errorStats,
-          parts: [...completedTimelineParts(timelineParts), { type: "text", text: errorText }],
+          parts: [...completedTimelineParts(attachSubagentSnapshots(timelineParts, subagents)), { type: "text", text: errorText }],
         });
         persisted = true;
         // Written into the buffer rather than rethrown: an exception out of
@@ -1232,6 +1289,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         clearActiveRun(options.chatId, runId);
         runAbort.signal.removeEventListener("abort", handleAbort);
         unsubscribe();
+        subagents.dispose();
         if (aborted) {
           cancelPendingInteractionsForRun(runId);
           session.dispose();

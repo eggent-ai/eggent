@@ -6,6 +6,7 @@ import { getAllProjects, getWorkDir } from "@/lib/storage/project-store";
 import type { ChatMessage } from "@/lib/types";
 import { resolveTelegramDestination, sendTelegramText } from "@/lib/telegram/outbound";
 import { detectSchedule, withScheduleExecutionDirective } from "@/lib/pi/schedule-policy";
+import { subagentMonitorFor } from "@/lib/pi/subagents";
 
 type ScheduleJobRecord = {
   id?: string;
@@ -219,13 +220,14 @@ async function hasEnabledSchedules(session: AgentSession): Promise<boolean> {
   }
 }
 
-function hasRunningSubagents(): boolean {
-  try {
-    const manager = (globalThis as any)[Symbol.for("pi-subagents:manager")];
-    return Boolean(manager?.hasRunning?.());
-  } catch {
-    return false;
-  }
+/**
+ * Whether this session still has a detached helper at work - a scheduled job
+ * that fired, typically. Read from the session's own lifecycle events: the
+ * extension's global registry belongs to whichever session in the process
+ * activated it first, so it answered for a stranger.
+ */
+function hasRunningSubagents(session: AgentSession): boolean {
+  return subagentMonitorFor(session)?.hasRunning() ?? false;
 }
 
 async function persistScheduledTurn(chatId: string, assistantText: string, tools: ToolRecord[]) {
@@ -373,7 +375,7 @@ async function maybeDisposeWhenDone(key: string) {
     return;
   }
 
-  if (!entry.session.isIdle || hasRunningSubagents()) {
+  if (!entry.session.isIdle || hasRunningSubagents(entry.session)) {
     entry.emptySince = undefined;
     return;
   }

@@ -6,6 +6,9 @@ import { Bot, User } from "lucide-react";
 import { CodeBlock } from "./code-block";
 import { ToolOutput } from "./tool-output";
 import { ToolGroup } from "./tool-group";
+import { SubagentGroup, type HelperItem } from "./subagent-group";
+import { isAgentToolName } from "@/lib/pi/subagent-format";
+import type { SubagentSnapshot } from "@/lib/pi/types";
 import { FileMention } from "./file-mention";
 import { embeddedAudioPath, embeddedImageUrl, fileMentionPath } from "@/lib/files/openable";
 import { useAppStore } from "@/store/app-store";
@@ -36,6 +39,7 @@ function toolPartInfo(part: UIMessage["parts"][number]): {
   state?: string;
   input?: unknown;
   output?: unknown;
+  errorText?: string;
 } | null {
   if (part.type === "dynamic-tool") {
     return part as {
@@ -44,6 +48,7 @@ function toolPartInfo(part: UIMessage["parts"][number]): {
       state?: string;
       input?: unknown;
       output?: unknown;
+      errorText?: string;
     };
   }
 
@@ -54,6 +59,7 @@ function toolPartInfo(part: UIMessage["parts"][number]): {
     state?: string;
     input?: unknown;
     output?: unknown;
+    errorText?: string;
   };
   return {
     toolName: typedPart.type.replace("tool-", ""),
@@ -61,6 +67,7 @@ function toolPartInfo(part: UIMessage["parts"][number]): {
     state: typedPart.state,
     input: typedPart.input,
     output: typedPart.output,
+    errorText: typedPart.errorText,
   };
 }
 
@@ -115,6 +122,10 @@ export function MessageBubble({ message }: MessageBubbleProps) {
   // unchanged; only the grouping around it is new.
   const renderedParts: ReactNode[] = [];
   let pendingTools: { node: ReactNode; name: string; running: boolean }[] = [];
+  // Helpers started with the Agent tool get their own group: each one is a whole
+  // agent at work, and what it is doing is the thing to show while it runs.
+  let pendingHelpers: HelperItem[] = [];
+  const helperProgress = subagentSnapshots(message.parts);
   // Which of the two the avatar has to line up with; decided by the first block
   // that actually renders, since an empty text part draws nothing.
   let opensWithToolCard = false;
@@ -126,7 +137,22 @@ export function MessageBubble({ message }: MessageBubbleProps) {
     opensWithToolCard = isToolCard;
   };
 
+  const flushHelpers = () => {
+    if (!pendingHelpers.length) return;
+    const group = pendingHelpers;
+    pendingHelpers = [];
+    noteOpeningBlock(true);
+    renderedParts.push(
+      <SubagentGroup
+        key={`helpers-${group[0].toolCallId}`}
+        items={group}
+        renderMarkdown={renderMarkdownBlock}
+      />
+    );
+  };
+
   const flushTools = () => {
+    flushHelpers();
     if (!pendingTools.length) return;
     const group = pendingTools;
     pendingTools = [];
@@ -164,6 +190,29 @@ export function MessageBubble({ message }: MessageBubbleProps) {
 
     const tool = toolPartInfo(part);
     if (!tool) return;
+
+    const input =
+      typeof tool.input === "object" && tool.input !== null
+        ? (tool.input as Record<string, unknown>)
+        : {};
+
+    // A scheduled Agent call registers a job and returns; it is not a helper
+    // at work in this message, so it stays an ordinary tool card.
+    if (isAgentToolName(tool.toolName) && !(typeof input.schedule === "string" && input.schedule.trim())) {
+      // At most one of the two groups is ever open: starting either closes the other.
+      if (pendingTools.length) flushTools();
+      pendingHelpers.push({
+        toolCallId: tool.toolCallId || `agent-${idx}`,
+        input,
+        toolState:
+          tool.state === "output-available" ? "output" : tool.state === "output-error" ? "error" : "running",
+        // A live failure carries its text in errorText; a stored one in output.
+        output: tool.output ?? tool.errorText,
+        snapshot: tool.toolCallId ? helperProgress.get(tool.toolCallId) : undefined,
+      });
+      return;
+    }
+    flushHelpers();
 
     if (tool.toolName === "response" && tool.state === "output-available") {
       flushTools();
@@ -216,6 +265,20 @@ export function MessageBubble({ message }: MessageBubbleProps) {
       </div>
     </div>
   );
+}
+
+/** The latest progress each helper reported, by the Agent call it belongs to. */
+function subagentSnapshots(parts: UIMessage["parts"]): Map<string, SubagentSnapshot> {
+  const snapshots = new Map<string, SubagentSnapshot>();
+  for (const part of parts) {
+    const candidate = part as { type?: string; data?: unknown };
+    if (candidate.type !== "data-piSubagent") continue;
+    const data = candidate.data as SubagentSnapshot | null | undefined;
+    if (data && typeof data === "object" && typeof data.toolCallId === "string") {
+      snapshots.set(data.toolCallId, data);
+    }
+  }
+  return snapshots;
 }
 
 function MarkdownContent({ content }: { content: string }) {

@@ -167,6 +167,15 @@ function chatMessagesToUIMessages(chatMessages: ChatMessage[]): UIMessage[] {
         for (const storedPart of m.parts) {
           const uiPart = storedPartToUIPart(storedPart);
           if (uiPart) parts.push(uiPart);
+          // A helper's progress travels as the same data part it streamed as, so
+          // a reloaded chat draws its helpers exactly as they were watched.
+          if (storedPart.type === "tool" && storedPart.subagent) {
+            parts.push({
+              type: "data-piSubagent",
+              id: `pi-subagent-${storedPart.toolCallId}`,
+              data: storedPart.subagent,
+            } as UIMessage["parts"][number]);
+          }
         }
       } else {
         // Legacy chats did not persist ordered parts. Keep the old fallback shape.

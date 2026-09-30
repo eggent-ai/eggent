@@ -53,6 +53,8 @@ interface LiveRunState {
   surface: LiveRunSurface;
   startedAt: number;
   chunks: LiveRunChunk[];
+  /** Where each keyed data part sits in `chunks`, so a newer copy replaces it. */
+  dataPositions: Map<string, number>;
   readers: Set<Reader>;
   /** Callers waiting for the turn to be over and written down, not watching it. */
   finishWaiters: Set<() => void>;
@@ -98,7 +100,25 @@ function record(run: LiveRunState, chunk: LiveRunChunk): void {
     run.chunks[run.chunks.length - 1] = { ...last, delta: last.delta + chunk.delta };
     return;
   }
+  // A data part with an id is a state, not an event: the client keeps only the
+  // latest copy of each id, so the buffer does too. A helper reporting progress
+  // twice a second for ten minutes is one chunk here, not twelve hundred.
+  const key = keyedDataPart(chunk);
+  if (key) {
+    const position = run.dataPositions.get(key);
+    if (position !== undefined) {
+      run.chunks[position] = chunk;
+      return;
+    }
+    run.dataPositions.set(key, run.chunks.length);
+  }
   run.chunks.push(chunk);
+}
+
+function keyedDataPart(chunk: LiveRunChunk): string | null {
+  if (typeof chunk.type !== "string" || !chunk.type.startsWith("data-")) return null;
+  const id = (chunk as { id?: unknown }).id;
+  return typeof id === "string" && id ? `${chunk.type}:${id}` : null;
 }
 
 export function startLiveRun(input: {
@@ -124,6 +144,7 @@ export function startLiveRun(input: {
     surface: input.surface,
     startedAt: Date.now(),
     chunks: [],
+    dataPositions: new Map<string, number>(),
     readers: new Set<Reader>(),
     finishWaiters: new Set<() => void>(),
     finished: false,
@@ -170,6 +191,7 @@ function finishState(state: LiveRunState): void {
   state.finishWaiters.clear();
   // The stored chat is the better copy from here, and it is already written.
   state.chunks = [];
+  state.dataPositions.clear();
 
   for (const reader of readers) {
     try {

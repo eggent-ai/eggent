@@ -2,7 +2,7 @@
 // Core type definitions for Eggent
 // ============================================================
 
-import type { PiRuntimeStats } from "@/lib/pi/types";
+import type { PiRuntimeStats, SubagentSnapshot } from "@/lib/pi/types";
 
 // --- Settings ---
 
@@ -78,6 +78,8 @@ export type ChatMessagePart =
       args: Record<string, unknown>;
       output?: unknown;
       status?: "running" | "completed" | "error";
+      /** For an Agent call: the helper's progress as it last stood. */
+      subagent?: SubagentSnapshot;
     };
 
 export interface ChatMessage {

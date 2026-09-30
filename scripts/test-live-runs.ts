@@ -242,6 +242,22 @@ check("a question already asked is replayed to whoever arrives next", () => {
   live.finish();
 });
 
+check("a progress part sent many times replays once, as its latest copy", () => {
+  const sink = startLiveRun({ chatId: "chat-progress", runId: "run-progress", surface: "web" });
+  sink.push({ type: "data-piSubagent", id: "pi-subagent-a", data: { step: 1 } } as LiveRunChunk);
+  sink.push({ type: "tool-input-available", toolCallId: "a", toolName: "Agent", input: {}, dynamic: true } as LiveRunChunk);
+  for (let step = 2; step <= 50; step += 1) {
+    sink.push({ type: "data-piSubagent", id: "pi-subagent-a", data: { step } } as LiveRunChunk);
+  }
+  sink.push({ type: "data-piSubagent", id: "pi-subagent-b", data: { step: 1 } } as LiveRunChunk);
+  const late = collector();
+  attachToLiveRun("chat-progress", late.reader);
+  const progress = late.chunks.filter((chunk) => chunk.type === "data-piSubagent") as Array<{ id: string; data: { step: number } }>;
+  assert.equal(late.chunks.length, 3);
+  assert.deepEqual(progress.map((chunk) => [chunk.id, chunk.data.step]), [["pi-subagent-a", 50], ["pi-subagent-b", 1]]);
+  sink.finish();
+});
+
 check("a chat that is not working has no run", () => {
   assert.equal(getLiveRun("nobody"), null);
   assert.equal(attachToLiveRun("nobody", collector().reader), null);

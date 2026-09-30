@@ -272,6 +272,53 @@ await check("a status line is escaped, and plain words stand in if Telegram refu
   assert.equal(bodies[bodies.length - 1].parse_mode, undefined);
 });
 
+const withHelpers = {
+  ...status,
+  helpers: (running: number, total: number) => `Helpers: ${running} of ${total} still going…`,
+};
+const helpers = (running: number, total: number) => ({ type: "helpers" as const, running, total });
+
+await check("while helpers work, the draft says how many are still going instead of one tool", async () => {
+  const { bodies, send } = recorder();
+  const draft = startDraftStream({ chatId: 7, send, format, status: withHelpers, throttleMs: 10, refreshMs: 10_000 });
+  await sleep(20);
+  draft.onProgress(tool("Agent", "start"));
+  draft.onProgress(helpers(2, 2));
+  await sleep(40);
+  draft.onProgress(helpers(1, 2));
+  await sleep(40);
+  draft.onProgress(helpers(0, 2));
+  draft.onProgress(tool("Agent", "end"));
+  await sleep(40);
+  await draft.stop();
+  assert.deepEqual(shown(bodies), [
+    "<i>Thinking…</i>",
+    "<i>Helpers: 2 of 2 still going…</i>",
+    "<i>Helpers: 1 of 2 still going…</i>",
+    "<i>Thinking…</i>",
+  ]);
+});
+
+await check("the helper line stays under an answer that has already started, and leaves with them", async () => {
+  const { bodies, send } = recorder();
+  const draft = startDraftStream({ chatId: 7, send, format, status: withHelpers, throttleMs: 10, refreshMs: 10_000 });
+  await sleep(20);
+  draft.onProgress(text("Asking two helpers"));
+  await sleep(40);
+  draft.onProgress(helpers(2, 2));
+  await sleep(40);
+  draft.onProgress(helpers(0, 2));
+  draft.onProgress(text(". Done"));
+  await sleep(40);
+  await draft.stop();
+  assert.deepEqual(shown(bodies), [
+    "<i>Thinking…</i>",
+    "<b>Asking two helpers</b>",
+    "<b>Asking two helpers</b>\n\n<i>Helpers: 2 of 2 still going…</i>",
+    "<b>Asking two helpers. Done</b>",
+  ]);
+});
+
 await check("tools are grouped by what the person sees, whatever the case of the name", () => {
   assert.equal(toolActivity("web_search"), "search");
   assert.equal(toolActivity("fetch_content"), "page");

@@ -1,4 +1,5 @@
 import type { AgentProgressEvent } from "@/lib/pi/types";
+import { toolActivity, type ToolActivity } from "@/lib/pi/tool-activity";
 
 /**
  * The answer shown in a Telegram chat while it is being written.
@@ -22,42 +23,21 @@ import type { AgentProgressEvent } from "@/lib/pi/types";
  */
 
 /** What a running tool is doing, as far as the person in the chat is concerned. */
-export type DraftActivity = "search" | "page" | "files" | "command" | "helper" | "service" | "image" | "send" | "work";
-
-const TOOL_ACTIVITIES: Record<string, DraftActivity> = {
-  web_search: "search",
-  source_check: "search",
-  web_enable: "search",
-  fetch_content: "page",
-  get_search_content: "page",
-  read: "files",
-  write: "files",
-  edit: "files",
-  ls: "files",
-  grep: "files",
-  find: "files",
-  bash: "command",
-  powershell: "command",
-  agent: "helper",
-  subagentworkflow: "helper",
-  get_subagent_result: "helper",
-  steer_subagent: "helper",
-  mcp: "service",
-  mcpscript: "service",
-  eggent_generate_image: "image",
-  telegram_send_message: "send",
-  telegram_send_file: "send",
-};
-
-export function toolActivity(toolName: string): DraftActivity {
-  return TOOL_ACTIVITIES[toolName.toLowerCase()] ?? "work";
-}
+export type DraftActivity = ToolActivity;
+export { toolActivity };
 
 export interface DraftStatus {
   /** Shown while the model works with no tool running. */
   thinking: string;
   /** The line for a running tool; nothing falls back to the tool before it, or to `thinking`. */
   tool: (toolName: string) => string | undefined;
+  /**
+   * The line while helpers started with the Agent tool are still working. It
+   * outranks the tool line, and it stays under the answer once the answer has
+   * started: a model says "I'll ask five helpers" and then waits for minutes,
+   * and a draft showing only that sentence reads as a bot that stopped.
+   */
+  helpers?: (running: number, total: number) => string;
 }
 
 export interface DraftStreamOptions {
@@ -125,8 +105,17 @@ export function startDraftStream(options: DraftStreamOptions): DraftStream {
   let timer: ReturnType<typeof setTimeout> | null = null;
   let inFlight: Promise<unknown> = Promise.resolve();
 
+  let helpers: { running: number; total: number } | null = null;
+
+  const helpersLine = (): string => {
+    if (!helpers || helpers.running <= 0 || !options.status?.helpers) return "";
+    return options.status.helpers(helpers.running, helpers.total);
+  };
+
   const statusLine = (): string => {
     if (!options.status) return "";
+    const helperLine = helpersLine();
+    if (helperLine) return helperLine;
     for (let index = running.length - 1; index >= 0; index -= 1) {
       const line = options.status.tool(running[index]);
       if (line) return line;
@@ -137,9 +126,14 @@ export function startDraftStream(options: DraftStreamOptions): DraftStream {
   // What should be on screen now: the answer once it has started, and until
   // then the status line. Keyed, so a status and an answer that happen to read
   // the same are still told apart.
-  const current = (): { key: string; plain: string; answer: boolean } | null => {
+  const current = (): { key: string; plain: string; answer: boolean; footer?: string } | null => {
     const visible = draftTail(text);
-    if (visible) return { key: `answer:${visible}`, plain: visible, answer: true };
+    if (visible) {
+      const footer = helpersLine();
+      return footer
+        ? { key: `answer:${visible}|helpers:${footer}`, plain: visible, answer: true, footer }
+        : { key: `answer:${visible}`, plain: visible, answer: true };
+    }
     const line = statusLine();
     return line ? { key: `status:${line}`, plain: line, answer: false } : null;
   };
@@ -181,18 +175,20 @@ export function startDraftStream(options: DraftStreamOptions): DraftStream {
     flushing = true;
     try {
       let html: string | null = null;
+      const footerHtml = next.footer ? `\n\n<i>${escapeHtml(next.footer)}</i>` : "";
       try {
         // A status is ours and reads as one; the answer is the model's markdown.
-        html = next.answer ? options.format(next.plain) : `<i>${escapeHtml(next.plain)}</i>`;
+        html = next.answer ? `${options.format(next.plain)}${footerHtml}` : `<i>${escapeHtml(next.plain)}</i>`;
       } catch {
         html = null;
       }
+      const plainText = next.footer ? `${next.plain}\n\n${next.footer}` : next.plain;
       const sent =
         (html !== null && (await deliver({ ...base, text: html, parse_mode: "HTML" }))) ||
         // Markup Telegram cannot parse - half a code block, say - is refused;
         // the same words as plain text never are. A rate limit is not retried
         // here: the pause set by deliver() covers it.
-        (!stopped && Date.now() >= pausedUntil && (await deliver({ ...base, text: next.plain })));
+        (!stopped && Date.now() >= pausedUntil && (await deliver({ ...base, text: plainText })));
       if (sent) shownKey = next.key;
     } finally {
       flushing = false;
@@ -246,6 +242,8 @@ export function startDraftStream(options: DraftStreamOptions): DraftStream {
         }
         // Once the answer has started it is all the draft shows.
         if (draftTail(text)) return;
+      } else if (event.type === "helpers") {
+        helpers = { running: event.running, total: event.total };
       } else {
         return;
       }

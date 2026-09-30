@@ -14,6 +14,7 @@ import { createEggentPiExtensionUIContext } from "@/lib/pi/interaction-ui-contex
 import { createEggentInteractiveBashTool } from "@/lib/pi/interactive-bash-tool";
 import { normalizePiScheduleStore } from "@/lib/pi/schedule-host";
 import { eggentSchedulePolicyExtension } from "@/lib/pi/schedule-policy";
+import { bindSubagentMonitor, createSubagentPolicyExtension, MAX_PARALLEL_SUBAGENTS, SubagentMonitor } from "@/lib/pi/subagents";
 import type { PiSessionOptions } from "@/lib/pi/types";
 import { getChatFiles } from "@/lib/storage/chat-files-store";
 import type { ChatContextMode, ChatFile, ProjectSkillMetadata } from "@/lib/types";
@@ -228,7 +229,7 @@ function buildEggentProjectContext(options: {
       ? "Mode: Project agent"
       : "Mode: Orchestrator",
     options.projectId
-      ? "This Eggent project is the configuration for the current pi agent."
+      ? "This chat runs inside an Eggent project: a persistent workspace with its own instructions, memory, skills and files."
       : "This orchestrator coordinates all Eggent projects. Each first-level subdirectory of the working directory is a project; the orchestrator's own context.md, memory.md, skills/ and .mcp.json sit next to them in that directory and belong to it, not to any project.",
     "Eggent is a universal AI assistant and automation workspace, not just a coding assistant.",
     "Do not introduce yourself as a coding assistant unless the user specifically asks for coding work. Code, files, and commands are capabilities, not Eggent's identity.",
@@ -258,6 +259,16 @@ function buildEggentProjectContext(options: {
     // itself, and these instructions only cover the tools. The docs are written
     // for agents as well as people: an index, and every page as plain Markdown.
     "Eggent's own documentation, written for agents as well as people: https://eggent.ai/docs/llms.txt (English) and https://eggent.ai/r/docs/llms.txt (Russian) list every page with a one-line summary, and every page is plain Markdown at its address with `.md` (for example https://eggent.ai/docs/schedules.md). When the user asks how something in Eggent works, where a setting lives or what Eggent can do, and these instructions do not already answer it, read the relevant page with fetch_content rather than guessing. When sending the user there, give the page itself without `.md`, in their language (https://eggent.ai/r/docs/<page>/ for Russian). Pages about plans, billing, file sync and sleep describe Eggent Cloud and do not apply to a self-hosted workspace.",
+    "",
+    // Asked for "five agents, the first reads IT news...", a model made five
+    // empty projects - the tool description called a project an agent - and,
+    // corrected, launched five helpers detached and told the user they were
+    // working while the chat had already stopped listening for them.
+    "Subagents and projects are different things; mixing them up is the most common mistake here:",
+    "- A subagent is a temporary helper for the task at hand, started with the Agent tool. It gets a self-contained prompt, works on its own - searching, reading, running commands - and reports back to you. Nothing about it is kept afterwards. When the user asks for several \"agents\" or \"helpers\" to research or do something now, or a task splits into independent parts, launch one subagent per part, all in one message, so they run at the same time.",
+    `- In Eggent every Agent call waits for its subagent and returns the subagent's full result to you in this same turn; run_in_background is ignored. Never tell the user you will report back later: when you write next, you already have the results. The user does not see a subagent's result unless you pass it on, so write the combined answer yourself. At most ${MAX_PARALLEL_SUBAGENTS} run at once; start more only after those have reported back.`,
+    "- The user watches each subagent work in the chat under the description you give it, so make the description a short name for the helper: 3-5 words, in the user's language.",
+    "- A project (create_project) is a persistent workspace with its own instructions, memory, files and schedules, for ongoing work the user will return to. It does no work by itself. Do not create projects when the user wants helpers for a task now. If they seem to want agents that keep working on a topic over time, offer a project with a schedule and ask before creating anything.",
     "",
     "Available Eggent bridge tools:",
     "- eggent_ask_user to ask the user a question as a card with buttons instead of plain text. Use it for setup choices and confirmations, especially inside skills: a questionnaire typed into chat loses people who do not know the answers, while buttons do not. Ask one question at a time and always include an option that lets the user hand the decision back to you.",
@@ -614,10 +625,13 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
   });
   const explicitContextFiles = liteMode ? [] : loadEggentContextFiles(cwd, agentDir);
 
+  // Helpers started with the Agent tool report back inside the turn that started
+  // them; see subagents.ts for why they cannot be left detached here.
+  const subagentMonitor = new SubagentMonitor();
   const resourceLoader = new DefaultResourceLoader({
     cwd,
     agentDir,
-    extensionFactories: [eggentSchedulePolicyExtension],
+    extensionFactories: [eggentSchedulePolicyExtension, createSubagentPolicyExtension({ monitor: subagentMonitor })],
     additionalSkillPaths: projectSkillPaths,
     noExtensions: corePiToolsOnly,
     noSkills: corePiToolsOnly,
@@ -747,6 +761,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     sessionManager: createSessionManager(options, cwd),
   });
   sessionRef = session;
+  bindSubagentMonitor(session, subagentMonitor);
   // Legacy schedules may predate the execution-only policy. Normalize them
   // before session_start lets pi-subagents read and arm the store.
   await normalizePiScheduleStore(session);
@@ -774,7 +789,17 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     void eggentTools.cleanup().catch((error) => {
       console.error("Failed to clean up Eggent/pi tools:", error);
     });
-    baseDispose();
+    // Anything still unfinished would go on working - and spending - for a
+    // session that no longer exists, and its result would reach nobody. The
+    // extension confirms a stop on this session's bus, so the session stays up
+    // until it has (or a second has passed).
+    const { count, settled } = subagentMonitor.stopAll();
+    if (count === 0) {
+      baseDispose();
+      return;
+    }
+    console.warn(`Stopping ${count} unfinished subagent(s) of a session being disposed`, { chatId: options.chatId });
+    void settled.finally(baseDispose);
   };
 
   return session;

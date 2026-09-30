@@ -1039,6 +1039,7 @@ export async function processTelegramUpdate(
             status: {
                 thinking: t("telegram.bot.draft.thinking"),
                 tool: (name) => t(DRAFT_ACTIVITY_KEYS[toolActivity(name)]),
+                helpers: (running, total) => t("telegram.bot.draft.helpers", { running, total }),
             },
             onUnavailable: () => {
                 fallbackNotifier.stop = startTelegramProgressNotifier({
