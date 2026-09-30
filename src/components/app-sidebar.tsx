@@ -349,7 +349,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             <SidebarMenuItem>
               <SidebarMenuButton asChild>
                 <a
-                  href="https://github.com/eggent-ai/eggent"
+                  href={t("nav.documentationUrl")}
                   target="_blank"
                   rel="noopener noreferrer"
                 >

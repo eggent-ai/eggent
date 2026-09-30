@@ -40,6 +40,7 @@ const enMessages = {
   "nav.chatWorking": "Still working",
   "nav.settings": "Settings",
   "nav.documentation": "Documentation",
+  "nav.documentationUrl": "https://eggent.ai/docs/",
   "nav.logout": "Logout",
   "settings.saved": "Saved",
   "settings.models.title": "Models",

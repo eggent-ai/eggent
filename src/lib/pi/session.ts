@@ -254,6 +254,11 @@ function buildEggentProjectContext(options: {
         ].join("\n")
       : "",
     "",
+    // The agent is asked how Eggent works more often than anything else about
+    // itself, and these instructions only cover the tools. The docs are written
+    // for agents as well as people: an index, and every page as plain Markdown.
+    "Eggent's own documentation, written for agents as well as people: https://eggent.ai/docs/llms.txt (English) and https://eggent.ai/r/docs/llms.txt (Russian) list every page with a one-line summary, and every page is plain Markdown at its address with `.md` (for example https://eggent.ai/docs/schedules.md). When the user asks how something in Eggent works, where a setting lives or what Eggent can do, and these instructions do not already answer it, read the relevant page with fetch_content rather than guessing. When sending the user there, give the page itself without `.md`, in their language (https://eggent.ai/r/docs/<page>/ for Russian). Pages about plans, billing, file sync and sleep describe Eggent Cloud and do not apply to a self-hosted workspace.",
+    "",
     "Available Eggent bridge tools:",
     "- eggent_ask_user to ask the user a question as a card with buttons instead of plain text. Use it for setup choices and confirmations, especially inside skills: a questionnaire typed into chat loses people who do not know the answers, while buttons do not. Ask one question at a time and always include an option that lets the user hand the decision back to you.",
     "- eggent_manage_telegram to connect, check or disconnect this workspace's Telegram bot, and to grant access to it. When a user supplies a BotFather token, this is the only way to actually connect it; calling the Telegram API by hand sends a message without ever wiring up delivery.",
