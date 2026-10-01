@@ -99,6 +99,8 @@ export interface ChatMessage {
   parts?: ChatMessagePart[];
   attachments?: Attachment[];
   piRuntimeStats?: PiRuntimeStats;
+  /** Written while the turn waits on a question; replaced when the turn ends. */
+  inProgress?: boolean;
 }
 
 export interface Attachment {

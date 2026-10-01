@@ -474,6 +474,11 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
   // while a turn is running - the question is stored when the turn starts, the
   // answer only when it ends.
   const historyEndsOnUserRef = useRef(false);
+  // A turn waiting on a question is written down as it stops to ask, so the
+  // stored chat ends on that half of the answer instead (see turn-checkpoint.ts).
+  // Attaching replays the whole turn from its start, so the stored half is
+  // taken off the screen first or it would show twice.
+  const historyCheckpointIdRef = useRef<string | null>(null);
   // Set from the moment stop is pressed until the server says the turn is over
   // and written down. Reloading the conversation inside that window reads the
   // chat before the half-written answer has landed in it, and the person who
@@ -695,6 +700,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         if (!chat?.messages) {
           setMessages([]);
           historyEndsOnUserRef.current = false;
+          historyCheckpointIdRef.current = null;
           setLoadedHistoryChatId(activeChatId);
           return;
         }
@@ -705,6 +711,8 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         }
         historyEndsOnUserRef.current =
           nextMessages[nextMessages.length - 1]?.role === "user";
+        const lastStored = [...chat.messages].reverse().find((message) => message.role !== "tool");
+        historyCheckpointIdRef.current = lastStored?.inProgress ? lastStored.id : null;
         setLoadedHistoryChatId(activeChatId);
       })
       .catch(() => {
@@ -758,9 +766,9 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     // Two reasons to attach, and the run list is only one of them. A
     // conversation that ends on the person's own message is one somebody was
     // answering, and that is worth acting on without waiting to be told -
-    // otherwise a stale list means the turn stays invisible, and a turn that is
-    // waiting on a question stays invisible for as long as it waits, because
-    // the question lives only in the stream and never in the stored chat.
+    // otherwise a stale list means the turn stays invisible. A turn waiting on a
+    // question is the exception: it is stored as it stops to ask, so its chat
+    // no longer ends on the person's message and only the run list attaches it.
     const attempt = activeRunForChat
       ? `${internalChatId}:${activeRunForChat.runId}:${activeRuns.version}`
       : historyEndsOnUserRef.current
@@ -768,6 +776,14 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         : null;
     if (!attempt || resumeAttemptRef.current === attempt) return;
     resumeAttemptRef.current = attempt;
+    // Only when the server says the run is alive: a checkpoint left by a run
+    // that is gone is the only copy of that turn, and taking it off the screen
+    // for an attach that finds nothing would hide the question it ends on.
+    const checkpointId = historyCheckpointIdRef.current;
+    if (activeRunForChat && checkpointId) {
+      historyCheckpointIdRef.current = null;
+      setMessages((current) => current.filter((message) => message.id !== checkpointId));
+    }
     void resumeStream();
   }, [
     activeChatId,
@@ -776,6 +792,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     internalChatId,
     loadedHistoryChatId,
     resumeStream,
+    setMessages,
     status,
   ]);
 

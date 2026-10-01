@@ -16,6 +16,12 @@ import type { AgentProgressEvent, PiChatRunOptions, PiRuntimeStats, PiToolRecord
 import { getChat, saveChat } from "@/lib/storage/chat-store";
 import { clearUsageSnapshotCache } from "@/lib/usage/usage-provider";
 import type { ChatMessage, ChatMessagePart } from "@/lib/types";
+import type { PiPendingInteraction } from "@/lib/pi/interaction-types";
+import {
+  checkpointToolMessageId,
+  describeInteractionForTranscript,
+  spliceAssistantTurn,
+} from "@/lib/pi/turn-checkpoint";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
   if (value == null || typeof value !== "object" || Array.isArray(value)) {
@@ -571,16 +577,22 @@ async function persistAssistantMessage(options: {
   tools: PiToolRecord[];
   runtimeStats?: PiRuntimeStats;
   parts?: ChatMessagePart[];
+  /** A checkpoint of this same turn to replace; see turn-checkpoint.ts. */
+  replaceMessageId?: string;
+  /** Set when this write is the checkpoint itself. */
+  checkpointId?: string;
 }) {
   const chat = await getChat(options.chatId);
   if (!chat) return;
 
   const now = new Date().toISOString();
   const completedTools = options.tools.filter((tool) => tool.status !== "running");
+  const written: ChatMessage[] = [];
 
   if (options.assistantText.trim() || completedTools.length > 0 || options.runtimeStats) {
-    const assistantMessage: ChatMessage = {
-      id: crypto.randomUUID(),
+    const assistantId = options.checkpointId ?? crypto.randomUUID();
+    written.push({
+      id: assistantId,
       role: "assistant",
       content: options.assistantText,
       createdAt: now,
@@ -591,12 +603,14 @@ async function persistAssistantMessage(options: {
       })),
       parts: completedTimelineParts(options.parts ?? []),
       piRuntimeStats: options.runtimeStats,
-    };
-    chat.messages.push(assistantMessage);
+      ...(options.checkpointId ? { inProgress: true } : {}),
+    });
 
     for (const tool of completedTools) {
-      chat.messages.push({
-        id: crypto.randomUUID(),
+      written.push({
+        id: options.checkpointId
+          ? checkpointToolMessageId(options.checkpointId, tool.toolCallId)
+          : crypto.randomUUID(),
         role: "tool",
         content: stringifyForDisplay(tool.output),
         createdAt: now,
@@ -607,6 +621,7 @@ async function persistAssistantMessage(options: {
     }
   }
 
+  chat.messages = spliceAssistantTurn(chat.messages, options.replaceMessageId, written);
   chat.updatedAt = now;
   await saveChat(chat);
 }
@@ -958,6 +973,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
             id: `pi-interaction-${interaction.id}`,
             data: interaction,
           });
+          if (interaction.status === "pending") checkpointBeforeQuestion(interaction);
         },
       });
 
@@ -1006,12 +1022,54 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         addUsage(baselineUsage, currentPromptUsage)
       );
 
+      // See turn-checkpoint.ts. Writes go through one chain so a checkpoint
+      // still being saved cannot land after the final message and undo it.
+      let checkpointId: string | undefined;
+      let persistChain: Promise<void> = Promise.resolve();
+      const queuePersist = (work: () => Promise<void>) => {
+        persistChain = persistChain.then(work).catch((error) => {
+          console.warn("Failed to save the turn so far:", error);
+        });
+        return persistChain;
+      };
+      const persistTurn = (message: Omit<Parameters<typeof persistAssistantMessage>[0], "chatId">) =>
+        queuePersist(() =>
+          persistAssistantMessage({ chatId: options.chatId, replaceMessageId: checkpointId, ...message })
+        );
+
+      function checkpointBeforeQuestion(interaction: PiPendingInteraction) {
+        if (persisted || aborted) return;
+        checkpointId ??= crypto.randomUUID();
+        const id = checkpointId;
+        const question = describeInteractionForTranscript(interaction);
+        // Copied now: by the time the write runs the turn may have moved on.
+        // Helper snapshots are left out on purpose - attaching them marks a
+        // helper that is still working as stopped.
+        const text = [assistantText, question].filter((part) => part.trim()).join("\n\n");
+        const parts: ChatMessagePart[] = [
+          ...completedTimelineParts(timelineParts).map((part) => ({ ...part })),
+          ...(question ? [{ type: "text" as const, text: question }] : []),
+        ];
+        const toolsSoFar = [...tools.values()];
+        const stats = currentStats();
+        void queuePersist(() =>
+          persistAssistantMessage({
+            chatId: options.chatId,
+            assistantText: text,
+            tools: toolsSoFar,
+            runtimeStats: stats,
+            parts,
+            replaceMessageId: id,
+            checkpointId: id,
+          })
+        );
+      }
+
       const persistPartialAssistant = async (runtimeStats: PiRuntimeStats = currentStats()) => {
         if (persisted) return;
         persisted = true;
         closeTextPart();
-        await persistAssistantMessage({
-          chatId: options.chatId,
+        await persistTurn({
           assistantText,
           tools: [...tools.values()],
           runtimeStats,
@@ -1235,14 +1293,13 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         const finalStats = buildPiRuntimeStats(session, currentPromptUsage, addUsage(baselineUsage, currentPromptUsage));
         emitStats(finalStats);
         closeTextPart();
-        await persistAssistantMessage({
-          chatId: options.chatId,
+        persisted = true;
+        await persistTurn({
           assistantText,
           tools: [...tools.values()],
           runtimeStats: finalStats,
           parts: attachSubagentSnapshots(timelineParts, subagents),
         });
-        persisted = true;
       } catch (error) {
         if (aborted || runAbort.signal.aborted) {
           aborted = true;
@@ -1272,14 +1329,13 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
           clearUsageSnapshotCache();
         }
         console.error("Pi chat stream execution error:", error);
-        await persistAssistantMessage({
-          chatId: options.chatId,
+        persisted = true;
+        await persistTurn({
           assistantText: errorText,
           tools: [...tools.values()],
           runtimeStats: errorStats,
           parts: [...completedTimelineParts(attachSubagentSnapshots(timelineParts, subagents)), { type: "text", text: errorText }],
         });
-        persisted = true;
         // Written into the buffer rather than rethrown: an exception out of
         // execute reaches only the response that started the run, and everyone
         // else watching would be left with a stream that simply stopped.
