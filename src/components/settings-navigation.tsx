@@ -1,5 +1,6 @@
 "use client";
 
+import { useEffect, useRef } from "react";
 import Link from "next/link";
 import { usePathname, useSearchParams } from "next/navigation";
 import {
@@ -46,9 +47,31 @@ export function SettingsNavigation() {
   // counts as looking at it.
   const scopeId = searchParams.get(SCOPE_PARAM) || projectIdFromPath(pathname);
 
+  // The strip scrolls sideways when it does not fit, which with the files panel
+  // open is most of the time, and every tab is a page of its own that arrives
+  // scrolled to the start: the tab you are on could be past the edge. Kept in
+  // view, again whenever the strip changes width. Only the strip moves - a
+  // scrollIntoView would move the page as well.
+  const stripRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    const strip = stripRef.current;
+    if (!strip) return;
+    const reveal = () => {
+      const active = strip.querySelector<HTMLElement>('[aria-current="page"]');
+      if (!active) return;
+      const tab = active.getBoundingClientRect();
+      const visible = strip.getBoundingClientRect();
+      if (tab.left < visible.left) strip.scrollLeft -= visible.left - tab.left;
+      else if (tab.right > visible.right) strip.scrollLeft += tab.right - visible.right;
+    };
+    const observer = new ResizeObserver(reveal);
+    observer.observe(strip);
+    return () => observer.disconnect();
+  }, [pathname]);
+
   return (
     <nav aria-label="Settings sections" className="rounded-xl border bg-card/80 p-1.5 shadow-sm backdrop-blur">
-      <div className="flex items-center gap-1 overflow-x-auto">
+      <div ref={stripRef} className="flex items-center gap-1 overflow-x-auto">
         {SETTINGS_SECTIONS.map(({ href, labelKey, icon: Icon, exact }) => {
           const active = exact
             ? pathname === href

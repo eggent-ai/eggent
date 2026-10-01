@@ -55,8 +55,10 @@ export function FilesPanel() {
           // Its own height, not the row's. On the chat screen the row is
           // exactly the viewport, but the file view scrolls with its content,
           // and there the panel ended wherever the text happened to stop.
-          // Sticky so it stays put while that content scrolls past it.
-          "sticky top-0 h-[calc(100svh-var(--header-height,3.5rem))] shrink-0 overflow-hidden border-l bg-sidebar",
+          // Sticky so it stays put while that content scrolls past it - and
+          // under the header, which is sticky too: stuck at the top instead,
+          // the panel slid beneath it and hid its own title and close button.
+          "sticky top-[var(--header-height,3.5rem)] h-[calc(100svh-var(--header-height,3.5rem))] shrink-0 overflow-hidden border-l bg-sidebar",
           "transition-[width,transform] duration-200 ease-out motion-reduce:transition-none",
           "max-md:fixed max-md:inset-y-0 max-md:right-0 max-md:z-50 max-md:h-auto max-md:w-80",
           "max-md:data-[state=closed]:translate-x-full max-md:data-[state=open]:translate-x-0",

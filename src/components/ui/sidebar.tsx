@@ -309,7 +309,12 @@ function SidebarInset({ className, ...props }: React.ComponentProps<"main">) {
     <main
       data-slot="sidebar-inset"
       className={cn(
-        "bg-background relative flex w-full flex-1 flex-col",
+        // min-w-0: a flex item will not shrink below its content's widest line,
+        // and the settings tab strip is one line of every tab. With the files
+        // panel open beside it, that pushed the panel off the right edge of the
+        // window; the strip scrolls on its own and should be the thing that
+        // gives way.
+        "bg-background relative flex w-full min-w-0 flex-1 flex-col",
         "md:peer-data-[variant=inset]:m-2 md:peer-data-[variant=inset]:ml-0 md:peer-data-[variant=inset]:rounded-xl md:peer-data-[variant=inset]:shadow-sm md:peer-data-[variant=inset]:peer-data-[state=collapsed]:ml-2",
         className
       )}
