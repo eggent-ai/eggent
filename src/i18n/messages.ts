@@ -186,6 +186,7 @@ const enMessages = {
   "chat.attachFilesDisabled": "Send a message first to attach files",
   "chat.dictate": "Dictate with microphone",
   "chat.stopDictation": "Stop dictation",
+  "chat.stopTurn": "Stop",
   "chat.placeholder": "Send a message or paste an image...",
   "chat.dropFiles": "Drop files here",
   "chat.dropFilesPlaceholder": "Drop files here...",

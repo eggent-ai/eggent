@@ -889,11 +889,30 @@ export function ChatInput({
               triggerClassName="inline-flex max-w-[9rem] shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
             />
 
+            {/* A turn waiting on a question is still a running turn, and the
+                question card was its only way out: everything typed here goes
+                to the card as an answer, so "stop" was read as one. Stop sits
+                beside the answer button; stopping cancels the question and
+                keeps what the turn did. */}
+            {isLoading && pendingInteraction ? (
+              <Button
+                variant="outline"
+                size="icon"
+                onClick={onStop}
+                aria-label={t("chat.stopTurn")}
+                title={t("chat.stopTurn")}
+                className="h-10 w-10 shrink-0 rounded-xl text-destructive hover:text-destructive"
+              >
+                <Square className="size-4" />
+              </Button>
+            ) : null}
             {isLoading && !pendingInteraction ? (
               <Button
                 variant="destructive"
                 size="icon"
                 onClick={onStop}
+                aria-label={t("chat.stopTurn")}
+                title={t("chat.stopTurn")}
                 className="h-10 w-10 shrink-0 rounded-xl"
               >
                 <Square className="size-4" />

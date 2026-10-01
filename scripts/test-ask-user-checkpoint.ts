@@ -106,6 +106,8 @@ fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ defaultP
 const { createPiChatUIMessageStream } = await import("../src/lib/pi/chat-runner.ts");
 const { listPendingInteractions, respondToPendingInteraction } = await import("../src/lib/pi/pending-interactions.ts");
 const { createChat, getChat } = await import("../src/lib/storage/chat-store.ts");
+const { stopActiveRun } = await import("../src/lib/pi/active-runs.ts");
+const { whenLiveRunFinished } = await import("../src/lib/pi/live-run.ts");
 
 const CHAT = "0000bbbb-1111-4222-8333-444455556666";
 const RUN = "run-ask-checkpoint";
@@ -164,6 +166,48 @@ await check("the finished turn replaces the checkpoint instead of landing beside
   assert.ok(assistants[0].content.includes(AFTER), "the end of the turn is missing");
   assert.ok(chat.messages.some((message) => message.role === "tool" && message.toolName === "eggent_ask_user"));
   assert.equal(chat.messages[0].role, "user");
+});
+
+// Stopping while the question waits: the composer offers Stop beside the
+// card now, and it goes through the same endpoint as any other stop.
+const STOPPED = "0000cccc-1111-4222-8333-444455556666";
+const STOP_RUN = "run-ask-stop";
+await createChat(STOPPED, "Statements, stopped");
+const stopReader = createPiChatUIMessageStream({
+  chatId: STOPPED,
+  userMessage: "Go through the statements",
+  cwd,
+  agentDir,
+  runId: STOP_RUN,
+}).getReader();
+const stopDrained = (async () => {
+  for (;;) {
+    const { done } = await stopReader.read();
+    if (done) return;
+  }
+})();
+await waitFor("the second question", () => listPendingInteractions(STOP_RUN)[0] ?? null);
+const stopped = await stopActiveRun(STOPPED);
+await Promise.race([
+  (async () => {
+    if (stopped) await whenLiveRunFinished(STOPPED);
+    await stopDrained;
+  })(),
+  new Promise((_, reject) => setTimeout(() => reject(new Error("the turn did not end after stop")), 15_000)),
+]).catch((error) => {
+  failed += 1;
+  console.log(`  FAIL  stopping a turn that waits on a question ends it: ${(error as Error).message}`);
+});
+
+await check("stop ends a turn that waits on a question and cancels the question", async () => {
+  assert.equal(stopped, true, "nothing was running to stop");
+  assert.equal(listPendingInteractions(STOP_RUN).length, 0, "the question is still waiting");
+  const chat = await getChat(STOPPED);
+  assert.ok(chat);
+  const assistants = chat.messages.filter((message) => message.role === "assistant");
+  assert.equal(assistants.length, 1, `expected one stored turn, found ${assistants.length}`);
+  assert.ok(!assistants[0].inProgress, "the stopped turn is still marked in progress");
+  assert.ok(assistants[0].content.includes(BEFORE), "what the turn did before the question was lost");
 });
 
 provider.close();
