@@ -1,9 +1,18 @@
 import {
     handleExternalMessage,
     ExternalMessageError,
+    isChatCommand,
 } from "@/lib/external/handle-external-message";
 import { agentFailureText } from "@/lib/telegram/failure-reply";
 import { startDraftStream, toolActivity, type DraftActivity } from "@/lib/telegram/draft-stream";
+import { markdownToTelegramHtml, projectKeyboard, sendTelegramMarkdown, withChatFooter } from "@/lib/telegram/format";
+import {
+    bindTelegramSession,
+    chatForTelegramMessage,
+    recordTelegramMessages,
+    telegramBotId,
+    telegramBotKey,
+} from "@/lib/telegram/conversation";
 import { redactSecrets } from "@/lib/pi/provider-failure";
 import {
     createDefaultTelegramSessionId,
@@ -33,7 +42,7 @@ import {
 import { getAllProjects } from "@/lib/storage/project-store";
 import { transcribeVoiceNote } from "@/lib/speech/voice-note";
 import { getServerTranslator } from "@/i18n/server";
-import type { MessageKey, MessageValues } from "@/i18n/messages";
+import type { MessageKey } from "@/i18n/messages";
 import crypto from "node:crypto";
 
 // The draft's line for each kind of running tool, in the workspace's language.
@@ -49,9 +58,6 @@ const DRAFT_ACTIVITY_KEYS: Record<DraftActivity, MessageKey> = {
     work: "telegram.bot.draft.work",
 };
 
-// Leave headroom under Telegram's hard 4096 limit: HTML escaping expands the payload
-// (`&` becomes `&amp;`) and each chunk may gain a reopened code fence.
-const TELEGRAM_CHUNK_LIMIT = 3500;
 const TELEGRAM_FILE_MAX_BYTES = 30 * 1024 * 1024;
 const TELEGRAM_TYPING_INTERVAL_MS = 4000;
 const TELEGRAM_PROGRESS_MESSAGES: Array<{ delayMs: number; key: MessageKey }> = [
@@ -73,6 +79,11 @@ export interface TelegramMessage {
     message_id?: unknown;
     text?: unknown;
     caption?: unknown;
+    reply_to_message?: {
+        message_id?: unknown;
+        text?: unknown;
+        caption?: unknown;
+    };
     from?: {
         id?: unknown;
         language_code?: unknown;
@@ -189,12 +200,6 @@ async function callTelegramApi(
         throw new Error(parseTelegramError(response.status, payload));
     }
     return payload;
-}
-
-function getBotId(botToken: string): string {
-    const [rawBotId] = botToken.trim().split(":", 1);
-    const botId = rawBotId?.trim() || "default";
-    return botId.replace(/[^a-zA-Z0-9._:-]/g, "_").slice(0, 128) || "default";
 }
 
 async function ensureTelegramExternalChatContext(params: {
@@ -464,175 +469,6 @@ function normalizeOutgoingText(text: string, t: (key: MessageKey) => string): st
     return text.trim() || t("telegram.bot.emptyAgentReply");
 }
 
-function splitOverlongLine(line: string, limit: number): string[] {
-    if (line.length <= limit) return [line];
-    const pieces: string[] = [];
-    for (let index = 0; index < line.length; index += limit) {
-        pieces.push(line.slice(index, index + limit));
-    }
-    return pieces;
-}
-
-/**
- * Split raw markdown into Telegram-sized chunks *before* it is rendered to HTML.
- *
- * Splitting after rendering can cut a message in the middle of a tag, which makes
- * Telegram reject the whole message with "Can't find end tag corresponding to
- * start tag". Fenced code blocks that straddle a boundary are closed at the end
- * of one chunk and reopened at the start of the next.
- */
-export function splitTelegramMarkdown(text: string): string[] {
-    const chunks: string[] = [];
-    let buffer: string[] = [];
-    let bufferLength = 0;
-    let openFence: string | null = null;
-
-    const flush = () => {
-        if (!buffer.length) return;
-        const parts = [...buffer];
-        if (openFence !== null) parts.push("```");
-        const chunk = parts.join("\n").trim();
-        if (chunk && chunk !== "```") chunks.push(chunk);
-        buffer = [];
-        bufferLength = 0;
-        if (openFence !== null) {
-            const reopened = `\`\`\`${openFence}`;
-            buffer.push(reopened);
-            bufferLength = reopened.length + 1;
-        }
-    };
-
-    for (const rawLine of text.split("\n")) {
-        for (const line of splitOverlongLine(rawLine, TELEGRAM_CHUNK_LIMIT)) {
-            if (bufferLength + line.length + 1 > TELEGRAM_CHUNK_LIMIT) flush();
-            buffer.push(line);
-            bufferLength += line.length + 1;
-
-            const fence = /^```(.*)$/.exec(line.trim());
-            if (fence) {
-                openFence = openFence === null ? (fence[1] || "") : null;
-            }
-        }
-    }
-
-    flush();
-    return chunks;
-}
-
-/**
- * Which project this chat is in, shown under the input field.
- *
- * Two messages after switching, the project is off the top of the screen and
- * the only way to find out was to ask - so the answer sits where it cannot
- * scroll away. In the workspace scope there is no button at all: the common
- * case stays uncluttered, and the button's presence is itself the signal.
- *
- * Derived from the session on every send rather than toggled when the project
- * changes. A keyboard set by an event drifts the moment anything else moves the
- * session - a container recreate, a project deleted while the user was inside
- * it, a switch made from the web UI - and a stale indicator is worse than none.
- * Computing it each time costs nothing: it rides on a request already going out.
- */
-function projectKeyboard(
-    projectName: string | null | undefined,
-    t: (key: MessageKey, values?: MessageValues) => string
-): Record<string, unknown> {
-    if (!projectName) return { remove_keyboard: true };
-    const label = t("telegram.bot.exitProject", { project: truncateProjectLabel(projectName) });
-    return {
-        keyboard: [[{ text: label }]],
-        is_persistent: true,
-        resize_keyboard: true,
-        one_time_keyboard: false,
-    };
-}
-
-/** Long names wrap onto a second line on a phone and push the input field down. */
-function truncateProjectLabel(name: string): string {
-    const trimmed = name.trim();
-    return trimmed.length <= 24 ? trimmed : `${trimmed.slice(0, 23)}…`;
-}
-
-async function callTelegramSendMessage(params: {
-    botToken: string;
-    chatId: number | string;
-    text: string;
-    parseMode: "HTML" | null;
-    replyToMessageId?: number;
-    replyMarkup?: Record<string, unknown>;
-}): Promise<{ ok: boolean; status: number; description?: string }> {
-    const response = await fetch(`https://api.telegram.org/bot${params.botToken}/sendMessage`, {
-        method: "POST",
-        headers: {
-            "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-            chat_id: params.chatId,
-            text: params.text,
-            ...(params.parseMode ? { parse_mode: params.parseMode } : {}),
-            ...(typeof params.replyToMessageId === "number"
-                ? { reply_to_message_id: params.replyToMessageId }
-                : {}),
-            ...(params.replyMarkup ? { reply_markup: params.replyMarkup } : {}),
-        }),
-    });
-
-    const payload = (await response.json().catch(() => null)) as
-        | { ok?: boolean; description?: string }
-        | null;
-
-    return {
-        ok: response.ok && Boolean(payload?.ok),
-        status: response.status,
-        description: payload?.description,
-    };
-}
-
-function escapeTelegramHtml(text: string): string {
-    return text
-        .replaceAll("&", "&amp;")
-        .replaceAll("<", "&lt;")
-        .replaceAll(">", "&gt;");
-}
-
-function escapeTelegramHtmlAttribute(text: string): string {
-    return escapeTelegramHtml(text).replaceAll('"', "&quot;");
-}
-
-function renderInlineTelegramMarkdown(text: string): string {
-    const placeholders: string[] = [];
-    const withCode = text.replace(/`([^`\n]+)`/g, (_match, code: string) => {
-        const token = `\u0000${placeholders.length}\u0000`;
-        placeholders.push(`<code>${escapeTelegramHtml(code)}</code>`);
-        return token;
-    });
-
-    let rendered = escapeTelegramHtml(withCode)
-        .replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>")
-        .replace(/__([^_\n]+)__/g, "<b>$1</b>")
-        .replace(/\[([^\]\n]+)]\((https?:\/\/[^)\s]+)\)/g, (_match, label: string, url: string) => {
-            return `<a href="${escapeTelegramHtmlAttribute(url)}">${label}</a>`;
-        });
-
-    for (let index = 0; index < placeholders.length; index += 1) {
-        rendered = rendered.replaceAll(`\u0000${index}\u0000`, placeholders[index]);
-    }
-    return rendered;
-}
-
-function markdownToTelegramHtml(text: string): string {
-    const parts = text.split(/```/);
-    return parts
-        .map((part, index) => {
-            if (index % 2 === 1) {
-                const code = part.replace(/^\w+\n/, "");
-                return `<pre>${escapeTelegramHtml(code.trim())}</pre>`;
-            }
-            return renderInlineTelegramMarkdown(part);
-        })
-        .join("");
-}
-
 export async function sendTelegramChatAction(
     botToken: string,
     chatId: number | string,
@@ -717,47 +553,14 @@ export async function sendTelegramMessage(
     // Rides on the last chunk only: Telegram keeps the most recent keyboard, so
     // repeating it on every piece of a long answer would redraw it needlessly.
     replyMarkup?: Record<string, unknown>
-): Promise<void> {
-    const normalized = normalizeOutgoingText(text, t || ((key) => key));
-    const chunks = splitTelegramMarkdown(normalized);
-    if (!chunks.length) return;
-
-    let isFirstChunk = true;
-    for (let index = 0; index < chunks.length; index += 1) {
-        const chunk = chunks[index];
-        const replyTo = isFirstChunk ? replyToMessageId : undefined;
-        isFirstChunk = false;
-        const markup = index === chunks.length - 1 ? replyMarkup : undefined;
-
-        const rendered = await callTelegramSendMessage({
-            botToken,
-            chatId,
-            text: markdownToTelegramHtml(chunk),
-            parseMode: "HTML",
-            replyToMessageId: replyTo,
-            replyMarkup: markup,
-        });
-        if (rendered.ok) continue;
-
-        // Telegram rejected the rendered markup. Retry this chunk as plain text so
-        // the user still receives the content instead of silence.
-        console.warn(
-            `[Telegram] Falling back to plain text (${rendered.status})${rendered.description ? `: ${rendered.description}` : ""}`
-        );
-        const plain = await callTelegramSendMessage({
-            botToken,
-            chatId,
-            text: chunk,
-            parseMode: null,
-            replyToMessageId: replyTo,
-            replyMarkup: markup,
-        });
-        if (!plain.ok) {
-            throw new Error(
-                `Telegram sendMessage failed (${plain.status})${plain.description ? `: ${plain.description}` : ""}`
-            );
-        }
-    }
+): Promise<number[]> {
+    return sendTelegramMarkdown({
+        botToken,
+        chatId,
+        text: normalizeOutgoingText(text, t || ((key) => key)),
+        replyToMessageId,
+        replyMarkup,
+    });
 }
 
 function helpText(t: (key: MessageKey, values?: Record<string, string | number | boolean | null | undefined>) => string, activeProject?: { id?: string; name?: string }): string {
@@ -773,6 +576,7 @@ function helpText(t: (key: MessageKey, values?: Record<string, string | number |
         t("telegram.bot.help.help"),
         t("telegram.bot.help.code"),
         t("telegram.bot.help.new"),
+        t("telegram.bot.help.chats"),
         "",
         t("telegram.bot.help.text"),
         t("telegram.bot.help.voice"),
@@ -801,7 +605,7 @@ export async function processTelegramUpdate(
         throw new Error("Invalid update_id");
     }
 
-    const botId = getBotId(botToken);
+    const botId = telegramBotId(botToken);
     const isNewUpdate = await claimTelegramUpdate(botId, updateId);
     if (!isNewUpdate) {
         return { ok: true, duplicate: true };
@@ -929,6 +733,26 @@ export async function processTelegramUpdate(
             return { ok: true, command };
         }
 
+        // A reply continues the chat the replied-to message came from. Moved
+        // before anything is saved, so a file sent as a reply lands there too.
+        const botKey = telegramBotKey(botToken);
+        const previousChatId = sessionChatId(await getOrCreateExternalSession(sessionId));
+        const repliedTo = message?.reply_to_message;
+        const repliedToMessageId =
+            typeof repliedTo?.message_id === "number" ? repliedTo.message_id : undefined;
+        if (repliedToMessageId !== undefined) {
+            const replyChatId = await chatForTelegramMessage({
+                botKey,
+                telegramChatId: chatId,
+                messageId: repliedToMessageId,
+            });
+            if (replyChatId) await bindTelegramSession(sessionId, replyChatId);
+        }
+        // What was replied to, so "this" in the reply has something to point at.
+        const repliedToText = typeof repliedTo?.text === "string"
+            ? repliedTo.text
+            : typeof repliedTo?.caption === "string" ? repliedTo.caption : "";
+
         let incomingSavedFile: {
             name: string;
             path: string;
@@ -1032,7 +856,9 @@ export async function processTelegramUpdate(
         // typing, then separate "still working" messages that stayed in the chat
         // - runs only where Telegram refuses drafts.
         const fallbackNotifier: { stop?: () => void } = {};
-        const draft = startDraftStream({
+        // /chats and /c_ are answered without the model, at once; a "Thinking…"
+        // draft there would only flicker.
+        const draft = isChatCommand(effectiveIncomingText) ? { onProgress: () => {}, stop: async () => {} } : startDraftStream({
             chatId,
             send: (body) => callTelegramApi(botToken, "sendMessageDraft", body),
             format: markdownToTelegramHtml,
@@ -1069,6 +895,9 @@ export async function processTelegramUpdate(
                     telegram: {
                         chatId,
                         replyToMessageId: messageId ?? null,
+                        ...(repliedToText.trim()
+                            ? { inReplyTo: repliedToText.trim().slice(0, 500) }
+                            : {}),
                     },
                 },
                 toolRuntimeData: {
@@ -1079,6 +908,8 @@ export async function processTelegramUpdate(
                     },
                 },
                 telegramVia: "workspace-bot",
+                telegramBotKey: botKey,
+                previousChatId,
                 onProgress: (event) => draft.onProgress(event),
             });
         } catch (error) {
@@ -1105,14 +936,22 @@ export async function processTelegramUpdate(
         }
 
         await stopProgressNotifier();
-        await sendTelegramMessage(
+        const sentIds = await sendTelegramMessage(
             botToken,
             chatId,
-            result.reply,
+            // When the conversation moved, the answer says where to: the
+            // person has no chat list to look at.
+            result.chatChanged ? withChatFooter(result.reply, result.context.activeChatTitle) : result.reply,
             messageId,
             t,
             projectKeyboard(result.context.activeProjectName, t)
         );
+        await recordTelegramMessages({
+            botKey,
+            telegramChatId: chatId,
+            messageIds: sentIds,
+            chatId: result.context.activeChatId,
+        });
         return { ok: true };
     } catch (error) {
         await releaseTelegramUpdate(botId, updateId);

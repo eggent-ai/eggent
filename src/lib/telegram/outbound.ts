@@ -1,6 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
 import { getTelegramIntegrationRuntimeConfig } from "@/lib/storage/telegram-integration-store";
+import { sendTelegramMarkdown } from "@/lib/telegram/format";
 
 /**
  * Outgoing Telegram delivery for this workspace.
@@ -47,6 +48,8 @@ interface StoredOutbox {
   replyToMessageId?: number | null;
   /** Which channel last spoke to this workspace: its own bot, or the relay. */
   via?: TelegramDestinationKind;
+  /** The conversation that wrote, so a later delivery can move it. */
+  sessionId?: string;
   updatedAt?: string;
 }
 
@@ -84,12 +87,14 @@ export async function rememberTelegramDestination(input: {
   chatId: string | number;
   replyToMessageId?: number | null;
   via: TelegramDestinationKind;
+  sessionId?: string;
 }): Promise<void> {
   const filePath = outboxPath();
   const record: StoredOutbox = {
     chatId: input.chatId,
     replyToMessageId: input.replyToMessageId ?? null,
     via: input.via,
+    ...(input.sessionId ? { sessionId: input.sessionId } : {}),
     updatedAt: new Date().toISOString(),
   };
   try {
@@ -135,7 +140,7 @@ function isChatNotFound(description?: string): boolean {
   return /chat not found|chat_id is empty|peer_id_invalid/i.test(description || "");
 }
 
-type BotApiOutcome = { ok: boolean; status: number; description?: string };
+type BotApiOutcome = { ok: boolean; status: number; description?: string; messageId?: number };
 
 /**
  * Call one Bot API method, retrying the alternate channel-id form once if the
@@ -151,8 +156,13 @@ async function callBotApi(
   for (const candidate of chatIdCandidates(chatId)) {
     const { body, headers } = build(candidate);
     const response = await fetch(`https://api.telegram.org/bot${token}/${method}`, { method: "POST", headers, body });
-    const payload = (await response.json().catch(() => null)) as { ok?: boolean; description?: string } | null;
-    if (response.ok && payload?.ok) return { ok: true, status: response.status };
+    const payload = (await response.json().catch(() => null)) as
+      | { ok?: boolean; description?: string; result?: { message_id?: unknown } }
+      | null;
+    if (response.ok && payload?.ok) {
+      const messageId = payload.result?.message_id;
+      return { ok: true, status: response.status, messageId: typeof messageId === "number" ? messageId : undefined };
+    }
     last = { ok: false, status: response.status, description: payload?.description };
     if (!isChatNotFound(payload?.description)) break;
   }
@@ -228,6 +238,28 @@ export interface TelegramSendResult {
   success: boolean;
   error?: string;
   via?: TelegramDestinationKind;
+  /** What Telegram numbered the messages, so a reply to one can be traced back. */
+  messageIds?: number[];
+  /** The relay's word on which conversation the person is in. */
+  sessionId?: string;
+}
+
+/**
+ * What the relay says it sent. A relay older than these fields answers
+ * `{success: true}` alone, which reads as nothing known.
+ */
+async function relayOutcome(response: Response): Promise<Pick<TelegramSendResult, "messageIds" | "sessionId">> {
+  const payload = await response.json().catch(() => null) as { messageIds?: unknown; sessionId?: unknown } | null;
+  const messageIds = Array.isArray(payload?.messageIds)
+    ? payload.messageIds.filter((id): id is number => typeof id === "number" && Number.isInteger(id))
+    : undefined;
+  const sessionId = typeof payload?.sessionId === "string" && payload.sessionId.trim() ? payload.sessionId.trim() : undefined;
+  return { ...(messageIds?.length ? { messageIds } : {}), ...(sessionId ? { sessionId } : {}) };
+}
+
+/** The session that last wrote to this workspace through Telegram, if it said. */
+export async function rememberedTelegramSessionId(): Promise<string | null> {
+  return (await readOutbox())?.sessionId?.trim() || null;
 }
 
 export async function sendTelegramText(
@@ -254,7 +286,7 @@ export async function sendTelegramText(
           error: `Telegram sendMessage failed (${outcome.status})${outcome.description ? `: ${outcome.description}` : ""}`,
         };
       }
-      return { success: true, via: destination.kind };
+      return { success: true, via: destination.kind, ...(outcome.messageId ? { messageIds: [outcome.messageId] } : {}) };
     }
 
     const response = await relayFetch("/message", { chatId: destination.chatId, text: trimmed });
@@ -262,7 +294,61 @@ export async function sendTelegramText(
       const payload = await response.json().catch(() => null) as { error?: string } | null;
       return { success: false, via: "relay", error: payload?.error || `Relay returned ${response.status}` };
     }
-    return { success: true, via: "relay" };
+    return { success: true, via: "relay", ...(await relayOutcome(response)) };
+  } catch (error) {
+    return {
+      success: false,
+      via: destination.kind,
+      error: error instanceof Error ? error.message : "Failed to send the Telegram message.",
+    };
+  }
+}
+
+/**
+ * Send what the agent wrote, rendered the way its answers are.
+ *
+ * For results the host delivers on the agent's behalf. The agent's own
+ * telegram_send_message stays plain text, as its description promises.
+ */
+export async function sendTelegramMarkdownText(
+  destination: TelegramDestination,
+  text: string,
+  options: {
+    /** The keyboard to leave under the input field; this bot only. */
+    replyMarkup?: Record<string, unknown>;
+    /**
+     * The project the conversation is now in, for the relay to draw the same
+     * keyboard. Null means none; left out, the relay leaves the keyboard alone.
+     */
+    projectName?: string | null;
+  } = {}
+): Promise<TelegramSendResult> {
+  const trimmed = text.trim();
+  if (!trimmed) return { success: false, error: "Message text is empty." };
+
+  try {
+    if (destination.botToken) {
+      const messageIds = await sendTelegramMarkdown({
+        botToken: destination.botToken,
+        chatId: destination.chatId,
+        text: trimmed,
+        replyToMessageId: destination.replyToMessageId ?? undefined,
+        replyMarkup: options.replyMarkup,
+      });
+      return { success: true, via: destination.kind, messageIds };
+    }
+
+    const response = await relayFetch("/message", {
+      chatId: destination.chatId,
+      text: trimmed,
+      format: "markdown",
+      ...(options.projectName !== undefined ? { projectName: options.projectName } : {}),
+    });
+    if (!response.ok) {
+      const payload = await response.json().catch(() => null) as { error?: string } | null;
+      return { success: false, via: "relay", error: payload?.error || `Relay returned ${response.status}` };
+    }
+    return { success: true, via: "relay", ...(await relayOutcome(response)) };
   } catch (error) {
     return {
       success: false,
@@ -292,7 +378,7 @@ export async function sendTelegramDocument(
           error: `Telegram sendDocument failed (${outcome.status})${outcome.description ? `: ${outcome.description}` : ""}`,
         };
       }
-      return { success: true, via: destination.kind };
+      return { success: true, via: destination.kind, ...(outcome.messageId ? { messageIds: [outcome.messageId] } : {}) };
     }
 
     if (file.buffer.byteLength > RELAY_DOCUMENT_MAX_BYTES) {
@@ -312,7 +398,7 @@ export async function sendTelegramDocument(
       const payload = await response.json().catch(() => null) as { error?: string } | null;
       return { success: false, via: "relay", error: payload?.error || `Relay returned ${response.status}` };
     }
-    return { success: true, via: "relay" };
+    return { success: true, via: "relay", ...(await relayOutcome(response)) };
   } catch (error) {
     return {
       success: false,
@@ -359,7 +445,7 @@ export async function sendTelegramPhoto(
         error: `Telegram sendPhoto failed (${outcome.status})${outcome.description ? `: ${outcome.description}` : ""}`,
       };
     }
-    return { success: true, via: destination.kind };
+    return { success: true, via: destination.kind, ...(outcome.messageId ? { messageIds: [outcome.messageId] } : {}) };
   } catch (error) {
     return {
       success: false,
@@ -384,7 +470,8 @@ export async function hasTelegramDestination(): Promise<boolean> {
  */
 export async function rememberTelegramDestinationFromRuntime(
   toolRuntimeData: Record<string, unknown> | undefined,
-  via: TelegramDestinationKind
+  via: TelegramDestinationKind,
+  sessionId?: string
 ): Promise<void> {
   const raw = toolRuntimeData?.telegram;
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return;
@@ -392,5 +479,5 @@ export async function rememberTelegramDestinationFromRuntime(
   const chatId = record.chatId;
   if (typeof chatId !== "string" && typeof chatId !== "number") return;
   const replyToMessageId = typeof record.replyToMessageId === "number" ? record.replyToMessageId : null;
-  await rememberTelegramDestination({ chatId, replyToMessageId, via });
+  await rememberTelegramDestination({ chatId, replyToMessageId, via, sessionId });
 }

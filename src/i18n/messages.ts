@@ -35,6 +35,7 @@ const enMessages = {
   "nav.files": "Files",
   "nav.chats": "Chats",
   "nav.noChats": "No chats yet",
+  "nav.scheduledChat": "Report from the scheduled task “{job}”",
   // Read out for the mark on a chat whose turn is still running. Sighted users
   // get a pulsing dot; this is the same sentence in words.
   "nav.chatWorking": "Still working",
@@ -877,6 +878,7 @@ const enMessages = {
   "telegram.bot.help.help": "/help - show this help",
   "telegram.bot.help.code": "/code <access_code> - activate access for your Telegram user",
   "telegram.bot.help.new": "/new - start a new conversation (reset context)",
+  "telegram.bot.help.chats": "/chats - recent chats; tap one to continue it",
   "telegram.bot.help.text": "Text messages are sent to the agent.",
   "telegram.bot.help.voice": "Voice messages are transcribed locally and sent to the agent.",
   "telegram.bot.help.files": "File uploads are saved into chat files.",
@@ -907,6 +909,26 @@ const enMessages = {
   "telegram.command.help": "Show available commands",
   "telegram.command.code": "Activate access with a code",
   "telegram.command.new": "Start a new conversation",
+  "telegram.command.chats": "Recent chats",
+
+  // A messenger has no chat list, so /chats is one. Each line ends with the
+  // command that opens that chat, which Telegram turns into a tap target.
+  "telegram.chats.title": "Recent chats:",
+  "telegram.chats.current": "← you are here",
+  "telegram.chats.empty": "There are no chats yet.",
+  "telegram.chats.hint": "Tap a chat's /c_ command to continue it. /new starts a new one.",
+  "telegram.chats.notFound": "No chat matches that. /chats lists the recent ones.",
+  "telegram.chats.opened": "Now in “{title}”. Your next message continues this chat.",
+  "telegram.chats.lastMessage": "Last message: {text}",
+  "telegram.chats.justNow": "just now",
+  "telegram.chats.minutesAgo": "{count} min ago",
+  "telegram.chats.hoursAgo": "{count} h ago",
+  "telegram.chats.daysAgo": "{count} d ago",
+
+  // The chat a scheduled task reports into: one per task and day.
+  "schedules.runChatTitle": "{job} · {month} {day}",
+  "schedules.runFallbackName": "Scheduled task",
+  "date.monthsShort": "Jan,Feb,Mar,Apr,May,Jun,Jul,Aug,Sep,Oct,Nov,Dec",
 } as const;
 
 export type MessageKey = keyof typeof enMessages;

@@ -13,6 +13,7 @@ import { createEggentPiTools } from "@/lib/pi/eggent-tools";
 import { createEggentPiExtensionUIContext } from "@/lib/pi/interaction-ui-context";
 import { createEggentInteractiveBashTool } from "@/lib/pi/interactive-bash-tool";
 import { normalizePiScheduleStore } from "@/lib/pi/schedule-host";
+import { openChatSessionManager } from "@/lib/pi/session-files";
 import { eggentSchedulePolicyExtension } from "@/lib/pi/schedule-policy";
 import { bindSubagentMonitor, createSubagentPolicyExtension, MAX_PARALLEL_SUBAGENTS, SubagentMonitor } from "@/lib/pi/subagents";
 import type { PiSessionOptions } from "@/lib/pi/types";
@@ -306,6 +307,9 @@ function buildEggentProjectContext(options: {
     "- Use pi-web-access tools (web_search, fetch_content, get_search_content) for internet access when available.",
     "- When installing project skills with the `skills` CLI from a non-interactive web run, pass `-y`/`--yes` (for example `npx skills add owner/repo -y`) to avoid terminal selection prompts that cannot be reliably controlled from chat.",
     "- eggent_manage_schedules for listing, updating, or clearing existing pi-subagents scheduled tasks. Never edit .pi/subagent-schedules files with edit, write, or bash, and do not use Agent.schedule to manage an existing task.",
+    // Each run of a scheduled task reports into a chat of its own, so "what did
+    // this morning's report say" is a question about another chat.
+    "- eggent_manage_chats to look through this workspace's other chats - list, search, read - and to move the conversation into another chat or a new one. Every run of a scheduled task reports into a chat of its own, named after the task and the day.",
     "- eggent_generate_image for image generation/editing/restyling requests. Use reference_image_paths from uploaded chat files when the user asks to edit or use an attached picture. Images are configured separately from the text model: the included Eggent AI model covers both, while a workspace on its own provider needs its own image provider and model chosen in Settings. When the tool reports that no image backend is available, say so in one line and offer the two real options - pick an image provider and model in Settings, or switch back to Eggent AI, which turns text and images on together. Never claim an image was produced when it was not.",
     options.usageToolAvailable
       ? "- eggent_usage_status for any question about balance, remaining credits/tokens, quota, limits, plan or trial. Call it and answer with the real numbers; never guess and never tell the user this information is unavailable to you."
@@ -458,29 +462,11 @@ function buildLiteSystemPrompt(options: {
   ].join("\n");
 }
 
-function getEggentPiSessionDir(): string {
-  return path.join(process.cwd(), "data", "pi-sessions");
-}
-
 function createSessionManager(options: PiSessionOptions, cwd: string): SessionManager {
   if (!options.chatId) {
     return SessionManager.inMemory(cwd);
   }
-
-  const sessionDir = getEggentPiSessionDir();
-  fs.mkdirSync(sessionDir, { recursive: true });
-  const safeChatId = options.chatId.replace(/[^A-Za-z0-9._-]/g, "-");
-  const existingSessions = fs
-    .readdirSync(sessionDir)
-    .filter((file) => file.endsWith(`_${safeChatId}.jsonl`))
-    .sort();
-  const existing = existingSessions[existingSessions.length - 1];
-
-  if (existing) {
-    return SessionManager.open(path.join(sessionDir, existing), sessionDir, cwd);
-  }
-
-  return SessionManager.create(cwd, sessionDir, { id: safeChatId });
+  return openChatSessionManager(options.chatId, cwd);
 }
 
 /**

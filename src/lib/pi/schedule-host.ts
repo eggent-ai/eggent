@@ -1,10 +1,12 @@
 import fs from "fs/promises";
 import path from "path";
-import type { AgentSession } from "@earendil-works/pi-coding-agent";
+import { createHash } from "node:crypto";
+import type { AgentSession, SessionManager } from "@earendil-works/pi-coding-agent";
 import { getChat, saveChat } from "@/lib/storage/chat-store";
 import { getAllProjects, getWorkDir } from "@/lib/storage/project-store";
-import type { ChatMessage } from "@/lib/types";
-import { resolveTelegramDestination, sendTelegramText } from "@/lib/telegram/outbound";
+import type { Chat, ChatMessage } from "@/lib/types";
+import { deliverChatToTelegram } from "@/lib/telegram/conversation";
+import { getActiveRun } from "@/lib/pi/active-runs";
 import { detectSchedule, withScheduleExecutionDirective } from "@/lib/pi/schedule-policy";
 import { subagentMonitorFor } from "@/lib/pi/subagents";
 
@@ -230,12 +232,161 @@ function hasRunningSubagents(session: AgentSession): boolean {
   return subagentMonitorFor(session)?.hasRunning() ?? false;
 }
 
-async function persistScheduledTurn(chatId: string, assistantText: string, tools: ToolRecord[]) {
-  const chat = await getChat(chatId);
-  if (!chat) return;
+/**
+ * A scheduled run in progress, from the moment its turn starts.
+ *
+ * Every run used to report into the chat the task was set up in, so a month of
+ * mornings sat in one conversation and the report arrived in Telegram from a
+ * chat the person was no longer in: their answer to it went somewhere else.
+ * Each run now has a chat of its own - one per task and day - that holds what
+ * the run did, and answering the report continues there.
+ */
+interface ScheduledRun {
+  ownerChatId: string;
+  projectId?: string | null;
+  /**
+   * Where the session stood before the run, so only the run is copied out;
+   * null for a session that was empty, undefined when the start was missed.
+   */
+  startLeafId: string | null | undefined;
+  /** What the finished job was called in its notification. */
+  description?: string;
+  /** Made on first need: by a tool sending to Telegram, or at the end. */
+  chat?: Promise<Chat>;
+  /** The agent already wrote to the person's own Telegram chat itself. */
+  reachedTelegram: boolean;
+}
 
+const scheduledRuns = new WeakMap<AgentSession, ScheduledRun>();
+
+/** Runs of one task on one day share a chat: a task firing every half hour must not make a chat each time. */
+function runChatId(ownerChatId: string, jobKey: string, day: string): string {
+  const hash = createHash("sha256").update(`${ownerChatId}|${jobKey}|${day}`).digest("hex");
+  return `${hash.slice(0, 8)}-${hash.slice(8, 12)}-${hash.slice(12, 16)}-${hash.slice(16, 20)}-${hash.slice(20, 32)}`;
+}
+
+/**
+ * Which job this run was. The scheduler stamps `lastRun` when a job's helper
+ * finishes, which is just before its notification starts this turn; the
+ * description the notification carries settles a tie.
+ */
+async function firedJob(session: AgentSession, description?: string): Promise<{ id?: string; name: string } | null> {
+  let jobs: ScheduleJobRecord[] = [];
+  try {
+    jobs = (JSON.parse(await fs.readFile(scheduleStorePath(session), "utf-8")) as ScheduleStoreFile).jobs ?? [];
+  } catch {
+    jobs = [];
+  }
+  const recent = jobs
+    .filter((job) => job.lastRun && Date.now() - Date.parse(job.lastRun) < 6 * 60 * 60_000)
+    .sort((a, b) => Date.parse(b.lastRun!) - Date.parse(a.lastRun!));
+  const job = (description ? recent.find((candidate) => candidate.description === description) : undefined) ?? recent[0];
+  const name = job?.name?.trim() || job?.description?.trim() || description?.trim();
+  return name ? { id: job?.id, name } : null;
+}
+
+/** Loaded on use: the translator reaches into Next, which this module otherwise does not need. */
+async function translator() {
+  return (await import("@/i18n/server")).getServerTranslator();
+}
+
+async function runChatTitle(jobName: string, day: string): Promise<string> {
+  const t = await translator();
+  const [, month, date] = day.split("-").map((part) => Number(part));
+  const months = t("date.monthsShort").split(",");
+  return t("schedules.runChatTitle", {
+    job: jobName.length > 60 ? `${jobName.slice(0, 59)}…` : jobName,
+    month: months[month - 1] ?? String(month),
+    day: date,
+  });
+}
+
+function ensureRunChat(session: AgentSession, run: ScheduledRun): Promise<Chat> {
+  run.chat ??= (async () => {
+    const owner = await getChat(run.ownerChatId);
+    const t = await translator();
+    const job = await firedJob(session, run.description);
+    const jobName = job?.name || t("schedules.runFallbackName");
+    const day = new Date().toISOString().slice(0, 10);
+    const id = runChatId(run.ownerChatId, job?.id || jobName, day);
+    const existing = await getChat(id);
+    if (existing) return existing;
+
+    const now = new Date().toISOString();
+    const projectId = owner ? owner.projectId : run.projectId ?? undefined;
+    const chat: Chat = {
+      id,
+      title: await runChatTitle(jobName, day),
+      ...(projectId ? { projectId } : {}),
+      scheduledRun: { ...(job?.id ? { jobId: job.id } : {}), jobName, ownerChatId: run.ownerChatId, day },
+      messages: [],
+      createdAt: now,
+      updatedAt: now,
+    };
+    await saveChat(chat);
+    return chat;
+  })();
+  return run.chat;
+}
+
+/**
+ * The chat the scheduled run now going on in this session reports into, or
+ * null when nothing scheduled is running there. Tools that reach Telegram use
+ * it, so a reply to what they sent continues the run, not the setup chat.
+ */
+export async function scheduledRunChatFor(session: AgentSession | null | undefined): Promise<Chat | null> {
+  const run = session ? scheduledRuns.get(session) : undefined;
+  return run ? ensureRunChat(session!, run) : null;
+}
+
+/** The run already wrote to the person, so its last words need not go out again. */
+export function noteScheduledRunReachedTelegram(session: AgentSession | null | undefined): void {
+  const run = session ? scheduledRuns.get(session) : undefined;
+  if (run) run.reachedTelegram = true;
+}
+
+/**
+ * Give the run's chat its own context: what the run did, and nothing before it.
+ *
+ * The screen shows a chat from the stored copy, but the agent answering in it
+ * reads the runtime's record, and a new chat starts that record empty. Without
+ * this, a reply to the report would reach an agent that had never seen it.
+ */
+async function copyRunIntoChatContext(session: AgentSession, run: ScheduledRun, chatId: string): Promise<void> {
+  // Two writers on one record would tangle it; the next run's copy adds what this one skipped.
+  if (run.startLeafId === undefined || getActiveRun(chatId)) return;
+  const branch = session.sessionManager.getBranch();
+  const startIndex = run.startLeafId === null
+    ? 0
+    : branch.findIndex((entry) => entry.id === run.startLeafId) + 1;
+  // The start fell out of the branch, so the run's edges are unknown: copy
+  // nothing rather than the whole history.
+  if (run.startLeafId !== null && startIndex === 0) return;
+  const entries = branch.slice(startIndex);
+  if (!entries.some((entry) => entry.type === "message" && entry.message.role === "assistant")) return;
+
+  const { openChatSessionManager } = await import("@/lib/pi/session-files");
+  const target = openChatSessionManager(chatId, session.sessionManager.getCwd());
+  for (const entry of entries) {
+    if (entry.type === "message") {
+      target.appendMessage(entry.message as Parameters<SessionManager["appendMessage"]>[0]);
+    } else if (entry.type === "custom_message") {
+      target.appendCustomMessageEntry(entry.customType, entry.content, entry.display, entry.details);
+    }
+  }
+}
+
+async function finishScheduledRun(
+  session: AgentSession,
+  run: ScheduledRun,
+  assistantText: string,
+  tools: ToolRecord[]
+) {
   const completedTools = tools.filter((tool) => tool.status !== "running");
   if (!assistantText.trim() && completedTools.length === 0) return;
+
+  const runChat = await ensureRunChat(session, run);
+  const chat = (await getChat(runChat.id)) ?? runChat;
 
   const now = new Date().toISOString();
   const assistantMessage: ChatMessage = {
@@ -266,28 +417,21 @@ async function persistScheduledTurn(chatId: string, assistantText: string, tools
   chat.updatedAt = now;
   await saveChat(chat);
 
-  await deliverScheduledTurnToTelegram(assistantText);
-}
+  await copyRunIntoChatContext(session, run, chat.id).catch((error) => {
+    console.warn("Could not give the scheduled run's chat its context:", error);
+  });
 
-/**
- * Push the result of a scheduled run to Telegram, when this workspace has a
- * chat to push to.
- *
- * The delivery deliberately does not depend on the agent calling a tool. A
- * scheduled job runs as a subagent with its own tool list, which is why every
- * "write to me at 07:00" ever asked for here produced the same answer: the task
- * fired, and then reported that it had nothing to send with. The host knows
- * both the result and the destination, so it does the sending itself.
- */
-async function deliverScheduledTurnToTelegram(assistantText: string): Promise<void> {
-  const text = assistantText.trim();
-  if (!text) return;
-
+  // The delivery deliberately does not depend on the agent calling a tool. A
+  // scheduled job runs as a subagent with its own tool list, which is why every
+  // "write to me at 07:00" ever asked for here produced the same answer: the
+  // task fired, and then reported that it had nothing to send with. The host
+  // knows both the result and the destination, so it does the sending itself -
+  // unless the agent already wrote to the person, when its closing remark
+  // ("the reminder is sent") would only arrive as a second, emptier message.
+  if (run.reachedTelegram) return;
   try {
-    const destination = await resolveTelegramDestination(null);
-    if (!destination) return;
-    const result = await sendTelegramText(destination, text);
-    if (!result.success) {
+    const result = await deliverChatToTelegram({ chatId: chat.id, text: assistantText, title: chat.title });
+    if (result && !result.success) {
       console.warn("Scheduled Telegram delivery failed:", result.error);
     }
   } catch (error) {
@@ -295,13 +439,38 @@ async function deliverScheduledTurnToTelegram(assistantText: string): Promise<vo
   }
 }
 
-function subscribeForScheduledOutput(session: AgentSession, chatId: string): () => void {
+function subscribeForScheduledOutput(session: AgentSession, chatId: string, projectId?: string | null): () => void {
   let assistantText = "";
   const tools = new Map<string, ToolRecord>();
 
   return session.subscribe((event: unknown) => {
     const record = asRecord(event);
     if (!record) return;
+
+    // Only a background turn reaches this listener - a foreground one takes the
+    // session out of retention first - and in this session that is a schedule.
+    // A retried turn starts again inside the same run, so keep the first start.
+    if (record.type === "agent_start") {
+      if (!scheduledRuns.has(session)) {
+        scheduledRuns.set(session, {
+          ownerChatId: chatId,
+          projectId,
+          startLeafId: session.sessionManager.getLeafId(),
+          reachedTelegram: false,
+        });
+      }
+      return;
+    }
+
+    if (record.type === "message_end") {
+      const message = asRecord(record.message);
+      const details = asRecord(message?.details);
+      const run = scheduledRuns.get(session);
+      if (run && message?.role === "custom" && message.customType === "subagent-notification" && typeof details?.description === "string") {
+        run.description ??= details.description;
+      }
+      return;
+    }
 
     if (record.type === "message_update") {
       const assistantEvent = asRecord(record.assistantMessageEvent);
@@ -342,7 +511,14 @@ function subscribeForScheduledOutput(session: AgentSession, chatId: string): () 
       const completed = [...tools.values()];
       assistantText = "";
       tools.clear();
-      void persistScheduledTurn(chatId, text, completed).catch((error) => {
+      const run = scheduledRuns.get(session) ?? {
+        ownerChatId: chatId,
+        projectId,
+        startLeafId: undefined,
+        reachedTelegram: false,
+      };
+      scheduledRuns.delete(session);
+      void finishScheduledRun(session, run, text, completed).catch((error) => {
         console.error("Failed to persist scheduled pi turn:", error);
       });
     }
@@ -425,7 +601,7 @@ export async function retainPiScheduleSession(options: {
     disposeRetained(key, previous);
   }
 
-  const unsubscribe = subscribeForScheduledOutput(options.session, options.chatId);
+  const unsubscribe = subscribeForScheduledOutput(options.session, options.chatId, options.projectId);
   const interval = setInterval(() => {
     void maybeDisposeWhenDone(key).catch((error) => {
       console.error("Failed to monitor retained pi schedule session:", error);

@@ -15,7 +15,7 @@ import {
 } from "@/lib/pi/config-store";
 import { getPipelineDefinitions, upsertPipelineDefinition } from "@/lib/pipelines/store";
 import { startPipelineRunInBackground } from "@/lib/pipelines/runner";
-import { managePiSchedules } from "@/lib/pi/schedule-host";
+import { managePiSchedules, noteScheduledRunReachedTelegram, scheduledRunChatFor } from "@/lib/pi/schedule-host";
 import { formatUsageMeter, getUsageSnapshot, isUsageProviderConfigured } from "@/lib/usage/usage-provider";
 import { createPendingInteraction } from "@/lib/pi/pending-interactions";
 import { DEFER_INTERACTION_ANSWER, type PiPendingInteraction } from "@/lib/pi/interaction-types";
@@ -25,7 +25,14 @@ import {
   sendTelegramDocument,
   sendTelegramPhoto,
   sendTelegramText,
+  type TelegramDestination,
+  type TelegramSendResult,
 } from "@/lib/telegram/outbound";
+import { afterTelegramDelivery } from "@/lib/telegram/conversation";
+import { withChatFooter } from "@/lib/telegram/format";
+import { createChat, getChat } from "@/lib/storage/chat-store";
+import { listChatSummaries, readChatConversation, searchChats } from "@/lib/storage/chat-browse";
+import { chatPath } from "@/lib/dashboard-routes";
 import {
   createProject,
   createSkill,
@@ -1131,6 +1138,24 @@ export async function createEggentPiTools(options: {
   );
   // Naming a chat fails for its own reasons, and "no chat to send to" would send
   // the user off connecting a bot they already have.
+  // A message to the person's own chat is remembered with the chat it came
+  // from - the scheduled run's chat when one is going on - so that answering it
+  // continues there, and the conversation moves there. A post to a channel is
+  // neither, so it is left alone.
+  //
+  // Only a text counts as the run having spoken for itself: after a file alone
+  // the host still sends the run's closing words, as it always has.
+  const afterOwnChatDelivery = async (
+    destination: TelegramDestination,
+    result: TelegramSendResult,
+    kind: "text" | "file"
+  ) => {
+    if (!result.success) return;
+    const session = options.getAgentSession?.();
+    const runChat = await scheduledRunChatFor(session);
+    if (runChat && kind === "text") noteScheduledRunReachedTelegram(session);
+    await afterTelegramDelivery({ destination, result, chatId: runChat?.id ?? options.chatId });
+  };
   const noDestinationResult = (chat?: string) => textResult(JSON.stringify(
     chat
       ? {
@@ -1158,8 +1183,12 @@ export async function createEggentPiTools(options: {
       execute: async (_toolCallId, params) => {
         const destination = await telegramDestination(params.chat);
         if (!destination) return noDestinationResult(params.chat);
-        const result = await sendTelegramText(destination, params.text);
-        return textResult(JSON.stringify(result, null, 2), { via: result.via });
+        // A scheduled run's message says which chat it comes from, as the
+        // host's own delivery of a run does.
+        const runChat = params.chat ? null : await scheduledRunChatFor(options.getAgentSession?.());
+        const result = await sendTelegramText(destination, runChat ? withChatFooter(params.text, runChat.title) : params.text);
+        if (!params.chat) await afterOwnChatDelivery(destination, result, "text");
+        return textResult(JSON.stringify({ success: result.success, via: result.via, ...(result.error ? { error: result.error } : {}) }, null, 2), { via: result.via });
       },
   }));
 
@@ -1192,8 +1221,11 @@ export async function createEggentPiTools(options: {
           const result = asPhoto
             ? await sendTelegramPhoto(destination, payload)
             : await sendTelegramDocument(destination, payload);
+          if (!params.chat) await afterOwnChatDelivery(destination, result, "file");
           return textResult(JSON.stringify({
-            ...result,
+            success: result.success,
+            via: result.via,
+            ...(result.error ? { error: result.error } : {}),
             path: resolvedPath,
             name,
             size: stat.size,
@@ -1202,6 +1234,78 @@ export async function createEggentPiTools(options: {
         } catch (error) {
           return textResult(JSON.stringify({ success: false, error: error instanceof Error ? error.message : "Failed to send file to Telegram." }, null, 2));
         }
+      },
+  }));
+
+  tools.push(defineTool({
+      name: "eggent_manage_chats",
+      label: "Browse Chats",
+      description: "Look through this workspace's other chats, and move the conversation to one. list = recent chats; search = where something was said; read = one chat's messages; switch = continue another chat; new = start a fresh chat. Use it when the user refers to another or an earlier conversation, asks what was said or done elsewhere - a scheduled task's report included - or asks to go back to, continue or start a chat. switch and new take effect from the user's next message in Telegram; in the web interface give the user the chat's link instead.",
+      parameters: Type.Object({
+        action: Type.Union([
+          Type.Literal("list"),
+          Type.Literal("search"),
+          Type.Literal("read"),
+          Type.Literal("switch"),
+          Type.Literal("new"),
+        ]),
+        query: Type.Optional(Type.String({ description: "search: the words to look for." })),
+        chat_id: Type.Optional(Type.String({ description: "read, switch: a chat id from list or search." })),
+        project_id: Type.Optional(Type.String({ description: "list: only this project's chats, or 'none' for the orchestrator's." })),
+        before: Type.Optional(Type.Number({ description: "read: the `earlier` index a previous read returned, to page back." })),
+        limit: Type.Optional(Type.Number({ description: "How many chats or messages to return." })),
+      }),
+      execute: async (_toolCallId, params) => {
+        const json = (value: Record<string, unknown>) => textResult(JSON.stringify(value, null, 2));
+        const limit = typeof params.limit === "number" && params.limit > 0 ? Math.floor(params.limit) : undefined;
+        if (params.action === "list") {
+          const chats = await listChatSummaries({
+            projectId: params.project_id === undefined ? undefined : params.project_id === "none" ? null : params.project_id,
+            limit,
+          });
+          return json({
+            success: true,
+            chats: chats.map((chat) => ({ ...chat, link: chatPath(chat.id), ...(chat.id === options.chatId ? { current: true } : {}) })),
+          });
+        }
+        if (params.action === "search") {
+          if (!params.query?.trim()) return json({ success: false, error: "search needs a query." });
+          return json({ success: true, hits: await searchChats(params.query, limit ?? 10) });
+        }
+        if (params.action === "new") {
+          const t = await (await import("@/i18n/server")).getServerTranslator();
+          const chat = await createChat(crypto.randomUUID(), t("api.chat.newTitle"), options.projectId);
+          return json({
+            success: true,
+            action: "switch_chat",
+            chatId: chat.id,
+            title: chat.title,
+            link: chatPath(chat.id),
+            note: "In Telegram the user's next message starts this new chat. In the web interface give them the link.",
+          });
+        }
+
+        const chatId = params.chat_id?.trim() || "";
+        if (!chatId) return json({ success: false, error: `${params.action} needs chat_id; list or search first.` });
+        if (params.action === "read") {
+          const page = await readChatConversation(chatId, { limit, before: params.before });
+          return page
+            ? json({ success: true, ...page })
+            : json({ success: false, error: `No chat ${chatId}. List or search first.` });
+        }
+
+        const chat = await getChat(chatId);
+        if (!chat) return json({ success: false, error: `No chat ${chatId}. List or search first.` });
+        if (chat.id === options.chatId) return json({ success: true, alreadyHere: true, chatId, title: chat.title });
+        return json({
+          success: true,
+          action: "switch_chat",
+          chatId: chat.id,
+          title: chat.title,
+          projectId: chat.projectId ?? null,
+          link: chatPath(chat.id),
+          note: "In Telegram the user's next message continues that chat, in its project; say which chat in one line. In the web interface nothing moves by itself: give the user the link.",
+        });
       },
   }));
 

@@ -14,6 +14,7 @@ function isPublicApi(req: NextRequest, pathname: string): boolean {
   if (pathname === "/api/auth/handoff/redeem") return true;
   if (pathname === "/api/external/message") return true;
   if (pathname === "/api/external/media-message") return true;
+  if (pathname === "/api/external/telegram/sent" && req.method === "POST") return true;
   if (pathname === "/api/integrations/telegram" && req.method === "POST") {
     return true;
   }

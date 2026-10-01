@@ -127,9 +127,26 @@ export interface Chat {
   projectId?: string;
   /** Absent on every chat made before light modes existed, and read as "full". */
   contextMode?: ChatContextMode;
+  /** Set on a chat a scheduled task wrote its report into. */
+  scheduledRun?: ScheduledRunInfo;
   messages: ChatMessage[];
   createdAt: string;
   updatedAt: string;
+}
+
+/**
+ * Which scheduled task wrote a chat, and where that task was set up.
+ *
+ * Each run reports into a chat of its own - one per task and day - rather than
+ * into the chat the task was created in, so answering a report continues that
+ * report instead of a conversation from weeks ago.
+ */
+export interface ScheduledRunInfo {
+  jobId?: string;
+  jobName: string;
+  ownerChatId: string;
+  /** The UTC day the runs in this chat belong to, YYYY-MM-DD. */
+  day: string;
 }
 
 export interface ChatListItem {
@@ -137,6 +154,8 @@ export interface ChatListItem {
   title: string;
   projectId?: string;
   contextMode?: ChatContextMode;
+  /** The scheduled task that wrote this chat, when one did. */
+  scheduledJob?: string;
   createdAt: string;
   updatedAt: string;
   messageCount: number;

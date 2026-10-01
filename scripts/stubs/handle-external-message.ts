@@ -44,3 +44,7 @@ export async function handleExternalMessage(
 }
 
 export const handleExternalMediaMessage = handleExternalMessage;
+
+export function isChatCommand(message: string): boolean {
+  return /^\/(chats|c_[a-z0-9]{4,32})(@\w+)?(\s|$)/i.test(message.trim());
+}

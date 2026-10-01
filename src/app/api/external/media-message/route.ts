@@ -100,6 +100,7 @@ export async function POST(req: NextRequest) {
       runtimeData: parseJsonObjectField(formData, "runtimeData"),
       toolRuntimeData: parseJsonObjectField(formData, "toolRuntimeData"),
       publicMode: formString(formData, "publicMode") === "true",
+      telegramReplyToMessageId: Number.parseInt(formString(formData, "telegramReplyToMessageId"), 10) || undefined,
       file: {
         buffer,
         filename: file.name || formString(formData, "filename") || "telegram-file",

@@ -21,6 +21,17 @@ import {
   rememberTelegramDestinationFromRuntime,
   type TelegramDestinationKind,
 } from "@/lib/telegram/outbound";
+import {
+  chatForTelegramMessage,
+  moveSessionToChat,
+  RELAY_BOT_KEY,
+} from "@/lib/telegram/conversation";
+import {
+  chatShortId,
+  findChatByShortId,
+  lastConversationLine,
+  listChatSummaries,
+} from "@/lib/storage/chat-browse";
 
 export interface HandleExternalMessageInput {
   sessionId: string;
@@ -34,6 +45,18 @@ export interface HandleExternalMessageInput {
   publicMode?: boolean;
   /** Who owns the bot this message arrived through. Defaults to the relay. */
   telegramVia?: TelegramDestinationKind;
+  /**
+   * The Telegram message this one replies to. The reply goes to the chat that
+   * message came from, whichever chat the conversation was in.
+   */
+  telegramReplyToMessageId?: number;
+  /** Which bot numbered that message; the deployment's relay unless said. */
+  telegramBotKey?: string;
+  /**
+   * The chat the conversation was in before this message, for a caller that
+   * moved it first - so the answer can still say that it moved.
+   */
+  previousChatId?: string | null;
   /** Told about the answer while it is being written, for a surface that shows it. */
   onProgress?: (event: AgentProgressEvent) => void;
 }
@@ -56,6 +79,10 @@ interface CreateProjectSignal {
   projectId: string;
 }
 
+interface SwitchChatSignal {
+  chatId: string;
+}
+
 export interface ExternalMessageResult {
   success: true;
   sessionId: string;
@@ -64,8 +91,16 @@ export interface ExternalMessageResult {
     activeProjectId: string | null;
     activeProjectName: string | null;
     activeChatId: string;
+    /** What the chat is called, for a surface that has to say where it is. */
+    activeChatTitle: string | null;
     currentPath: string;
   };
+  /**
+   * The conversation is in a different chat from the one it was in before this
+   * message: a reply reached back to an older one, or the agent moved it.
+   * A messenger has no chat list, so the answer should say where it now is.
+   */
+  chatChanged: boolean;
   switchedProject: {
     toProjectId: string | null;
     toProjectName: string | null;
@@ -198,6 +233,30 @@ function parseCreateProjectSignal(
   return { projectId };
 }
 
+function parseToolPayload(message: ChatMessage): Record<string, unknown> | null {
+  let parsed: unknown = unwrapToolResultPayload(message.toolResult) ?? message.content;
+  if (typeof parsed === "string") {
+    const trimmed = parsed.trim();
+    if (!trimmed.startsWith("{") || !trimmed.endsWith("}")) return null;
+    try {
+      parsed = JSON.parse(trimmed);
+    } catch {
+      return null;
+    }
+  }
+  return parsed && typeof parsed === "object" && !Array.isArray(parsed)
+    ? parsed as Record<string, unknown>
+    : null;
+}
+
+function parseSwitchChatSignal(message: ChatMessage): SwitchChatSignal | null {
+  if (message.role !== "tool" || message.toolName !== "eggent_manage_chats") return null;
+  const record = parseToolPayload(message);
+  if (!record || record.success !== true || record.action !== "switch_chat") return null;
+  const chatId = typeof record.chatId === "string" ? record.chatId.trim() : "";
+  return chatId ? { chatId } : null;
+}
+
 function normalizeProjectLookup(value: string): string {
   return value.trim().toLowerCase();
 }
@@ -248,6 +307,8 @@ async function ensureSessionChat(
 
 interface ResolvedExternalMessageRunContext {
   session: ExternalSession;
+  /** The chat the conversation was in when this message arrived. */
+  previousChatId: string | null;
   resolvedProjectId?: string;
   currentPath: string;
   resolvedChatId: string;
@@ -274,6 +335,29 @@ async function resolveExternalMessageRunContext(
   }
 
   const session = await getOrCreateExternalSession(sessionId);
+  const previousChatId = input.previousChatId !== undefined ? input.previousChatId : sessionChatId(session);
+
+  // A reply continues the chat the replied-to message came from - this
+  // morning's report, or an answer from last week - and the conversation stays
+  // there afterwards, together with that chat's project. Saved at once: a file
+  // that arrives with the reply re-reads the session before it runs.
+  if (!explicitChatId && input.telegramReplyToMessageId) {
+    const telegramChatId = telegramChatIdOf(input.toolRuntimeData);
+    const replyChatId = telegramChatId === null
+      ? null
+      : await chatForTelegramMessage({
+          botKey: input.telegramBotKey || RELAY_BOT_KEY,
+          telegramChatId,
+          messageId: input.telegramReplyToMessageId,
+        });
+    const replyChat = replyChatId ? await getChat(replyChatId) : null;
+    if (replyChat && replyChat.id !== sessionChatId(session)) {
+      moveSessionToChat(session, replyChat);
+      session.updatedAt = new Date().toISOString();
+      await saveExternalSession(session);
+    }
+  }
+
   const projects = await getAllProjects();
   const projectById = new Map(projects.map((project) => [project.id, project]));
   if (session.activeProjectId && !projectById.has(session.activeProjectId)) {
@@ -351,12 +435,126 @@ async function resolveExternalMessageRunContext(
 
   return {
     session,
+    previousChatId,
     resolvedProjectId,
     currentPath,
     resolvedChatId,
     beforeCount,
     runtimeData,
     chatContextMode: beforeChat?.contextMode,
+  };
+}
+
+function telegramChatIdOf(toolRuntimeData: Record<string, unknown> | undefined): string | number | null {
+  const raw = toolRuntimeData?.telegram;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
+  const chatId = (raw as Record<string, unknown>).chatId;
+  return typeof chatId === "string" || typeof chatId === "number" ? chatId : null;
+}
+
+/** Whether this message came in through a Telegram bot, ours or the deployment's. */
+function isTelegramMessage(input: HandleExternalMessageInput): boolean {
+  return Boolean(input.telegramVia) || telegramChatIdOf(input.toolRuntimeData) !== null;
+}
+
+async function chatTitle(chatId: string): Promise<string | null> {
+  return (await getChat(chatId))?.title ?? null;
+}
+
+type ChatCommand = { kind: "list" } | { kind: "open"; shortId: string };
+
+/**
+ * The two chat commands a messenger needs, since it has no chat list: /chats
+ * shows the recent ones, each with a /c_<id> command that opens it.
+ *
+ * Answered here rather than by the model, for the same reasons the project
+ * button is: instant, free, and not dependent on the model choosing a tool.
+ */
+export function isChatCommand(message: string): boolean {
+  return parseChatCommand(message) !== null;
+}
+
+function parseChatCommand(message: string): ChatCommand | null {
+  const first = message.trim().split(/\s+/, 1)[0]?.toLowerCase() ?? "";
+  const command = first.split("@", 1)[0];
+  if (command === "/chats") return { kind: "list" };
+  const open = /^\/c_([a-z0-9]{4,32})$/.exec(command);
+  return open ? { kind: "open", shortId: open[1] } : null;
+}
+
+function formatAgo(
+  iso: string,
+  t: (key: MessageKey, values?: Record<string, string | number | boolean | null | undefined>) => string
+): string {
+  const minutes = Math.max(0, Math.round((Date.now() - Date.parse(iso)) / 60_000));
+  if (!Number.isFinite(minutes)) return "";
+  if (minutes < 1) return t("telegram.chats.justNow");
+  if (minutes < 60) return t("telegram.chats.minutesAgo", { count: minutes });
+  const hours = Math.round(minutes / 60);
+  if (hours < 24) return t("telegram.chats.hoursAgo", { count: hours });
+  return t("telegram.chats.daysAgo", { count: Math.round(hours / 24) });
+}
+
+async function answerChatCommand(
+  command: ChatCommand,
+  context: ResolvedExternalMessageRunContext
+): Promise<ExternalMessageResult> {
+  const t = await getServerTranslator();
+  const { session } = context;
+  let reply: string;
+  let activeChatId = context.resolvedChatId;
+  let activeProjectId = context.resolvedProjectId ?? null;
+
+  if (command.kind === "list") {
+    const chats = await listChatSummaries({ limit: 10 });
+    reply = chats.length === 0
+      ? t("telegram.chats.empty")
+      : [
+          t("telegram.chats.title"),
+          "",
+          ...chats.map((chat) => {
+            const where = [chat.projectName, formatAgo(chat.updatedAt, t)].filter(Boolean).join(" · ");
+            const title = chat.title.length > 60 ? `${chat.title.slice(0, 59)}…` : chat.title;
+            const current = chat.id === context.resolvedChatId ? ` ${t("telegram.chats.current")}` : "";
+            return `${chat.scheduledJob ? "🕒" : "💬"} ${title}${current}\n   ${where ? `${where} · ` : ""}/c_${chatShortId(chat.id)}`;
+          }),
+          "",
+          t("telegram.chats.hint"),
+        ].join("\n");
+  } else {
+    const chat = await findChatByShortId(command.shortId);
+    if (!chat) {
+      reply = t("telegram.chats.notFound");
+    } else {
+      moveSessionToChat(session, chat);
+      activeChatId = chat.id;
+      activeProjectId = chat.projectId ?? null;
+      const last = lastConversationLine(chat);
+      reply = [
+        t("telegram.chats.opened", { title: chat.title }),
+        last ? t("telegram.chats.lastMessage", { text: last }) : "",
+      ].filter(Boolean).join("\n\n");
+    }
+  }
+
+  session.updatedAt = new Date().toISOString();
+  await saveExternalSession(session);
+  const activeProject = activeProjectId ? await getProject(activeProjectId) : null;
+  return {
+    success: true,
+    sessionId: session.id,
+    reply,
+    context: {
+      activeProjectId,
+      activeProjectName: activeProject?.name ?? null,
+      activeChatId,
+      activeChatTitle: await chatTitle(activeChatId),
+      currentPath: session.currentPaths[contextKey(activeProjectId)] ?? "",
+    },
+    // The command's own answer already names the chat.
+    chatChanged: false,
+    switchedProject: null,
+    createdProject: null,
   };
 }
 
@@ -389,15 +587,17 @@ export async function handleExternalMessage(
     throw new ExternalMessageError(400, { error: t("api.error.messageRequired") });
   }
 
+  const runContext = await resolveExternalMessageRunContext(input);
   const {
     session,
+    previousChatId,
     resolvedProjectId,
     currentPath,
     resolvedChatId,
     beforeCount,
     runtimeData,
     chatContextMode,
-  } = await resolveExternalMessageRunContext(input);
+  } = runContext;
 
   // Leaving a project is a state change in the interface, so it is answered
   // here rather than by running the model: it should be instant, it should not
@@ -417,8 +617,10 @@ export async function handleExternalMessage(
         activeProjectId: null,
         activeProjectName: null,
         activeChatId: resolvedChatId,
+        activeChatTitle: await chatTitle(resolvedChatId),
         currentPath: "",
       },
+      chatChanged: false,
       switchedProject: { toProjectId: null, toProjectName: null },
       createdProject: null,
     };
@@ -427,11 +629,16 @@ export async function handleExternalMessage(
   // Remember where this came from, so a schedule or a later background run can
   // still reach the user once this request is over. A message forwarded by the
   // deployment's bot has to go back out through the relay, because its token
-  // does not belong to this workspace.
+  // does not belong to this workspace. The session goes with it, so a delivery
+  // knows which conversation to move.
   await rememberTelegramDestinationFromRuntime(
     input.toolRuntimeData,
-    input.telegramVia ?? "relay"
+    input.telegramVia ?? "relay",
+    session.id
   );
+
+  const chatCommand = isTelegramMessage(input) ? parseChatCommand(message) : null;
+  if (chatCommand) return answerChatCommand(chatCommand, runContext);
 
   // A message sent while this chat is already working belongs to that run, not
   // to a second agent of its own. Over a messenger there is no stop button, so
@@ -447,8 +654,10 @@ export async function handleExternalMessage(
         activeProjectId: resolvedProjectId || null,
         activeProjectName: null,
         activeChatId: resolvedChatId,
+        activeChatTitle: await chatTitle(resolvedChatId),
         currentPath: currentPath || "",
       },
+      chatChanged: Boolean(previousChatId) && resolvedChatId !== previousChatId,
       switchedProject: { toProjectId: null, toProjectName: null },
       createdProject: null,
     };
@@ -474,7 +683,11 @@ export async function handleExternalMessage(
 
   let switchSignal: SwitchProjectSignal | null = null;
   let createSignal: CreateProjectSignal | null = null;
+  let chatSignal: SwitchChatSignal | null = null;
   for (let i = newMessages.length - 1; !input.publicMode && i >= 0; i -= 1) {
+    if (!chatSignal) {
+      chatSignal = parseSwitchChatSignal(newMessages[i]);
+    }
     if (!switchSignal) {
       const parsedSwitch = parseSwitchProjectSignal(newMessages[i]);
       if (parsedSwitch) {
@@ -501,8 +714,18 @@ export async function handleExternalMessage(
   let activeChatId = resolvedChatId;
   let activeCurrentPath = currentPath;
   const contextId = contextKey(resolvedProjectId);
+  // The agent moved the conversation to another chat: the person's next
+  // message continues there, in that chat's project. It outranks a project
+  // switch in the same turn, which a chat already implies.
+  const switchedChat = chatSignal ? await getChat(chatSignal.chatId) : null;
 
-  if (switchSignal && (switchSignal.projectId === null || projectByIdAfter.has(switchSignal.projectId))) {
+  if (switchedChat) {
+    session.currentPaths[contextId] = currentPath;
+    moveSessionToChat(session, switchedChat);
+    activeChatId = switchedChat.id;
+    activeProjectId = switchedChat.projectId ?? null;
+    activeCurrentPath = session.currentPaths[contextKey(activeProjectId)] ?? "";
+  } else if (switchSignal && (switchSignal.projectId === null || projectByIdAfter.has(switchSignal.projectId))) {
     activeProjectId = switchSignal.projectId;
     session.activeProjectId = switchSignal.projectId;
     const switchedContextKey = contextKey(switchSignal.projectId);
@@ -542,10 +765,12 @@ export async function handleExternalMessage(
       activeProjectId,
       activeProjectName: activeProject?.name ?? null,
       activeChatId,
+      activeChatTitle: await chatTitle(activeChatId),
       currentPath: activeCurrentPath,
     },
+    chatChanged: Boolean(previousChatId) && activeChatId !== previousChatId,
     switchedProject:
-      switchSignal && (switchSignal.projectId === null || projectByIdAfter.has(switchSignal.projectId))
+      !switchedChat && switchSignal && (switchSignal.projectId === null || projectByIdAfter.has(switchSignal.projectId))
         ? {
             toProjectId: switchSignal.projectId,
             toProjectName: switchSignal.projectId
@@ -554,7 +779,7 @@ export async function handleExternalMessage(
           }
         : null,
     createdProject:
-      createSignal && projectByIdAfter.has(createSignal.projectId)
+      !switchedChat && createSignal && projectByIdAfter.has(createSignal.projectId)
         ? {
             id: createSignal.projectId,
             name: projectByIdAfter.get(createSignal.projectId)?.name ?? null,
@@ -598,6 +823,7 @@ export async function handleExternalMediaMessage(
       projectId: context.resolvedProjectId,
       chatId: context.resolvedChatId,
       currentPath: context.currentPath,
+      previousChatId: context.previousChatId,
     });
   }
 
@@ -618,8 +844,10 @@ export async function handleExternalMediaMessage(
       activeProjectId,
       activeProjectName: activeProject?.name ?? null,
       activeChatId: context.resolvedChatId,
+      activeChatTitle: await chatTitle(context.resolvedChatId),
       currentPath: context.currentPath,
     },
+    chatChanged: Boolean(context.previousChatId) && context.resolvedChatId !== context.previousChatId,
     switchedProject: null,
     createdProject: null,
   };

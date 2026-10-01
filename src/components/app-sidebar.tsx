@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
 import {
   Bot,
+  CalendarClock,
   FolderOpen,
   LifeBuoy,
   LogOut,
@@ -289,7 +290,13 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 <SidebarMenuButton
                   isActive={activeChatId === chat.id}
                   onClick={() => handleChatClick(chat.id)}
+                  title={chat.scheduledJob ? t("nav.scheduledChat", { job: chat.scheduledJob }) : undefined}
                 >
+                  {/* A scheduled task reports into a chat a day, so these
+                      would otherwise read as conversations nobody started. */}
+                  {chat.scheduledJob ? (
+                    <CalendarClock aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+                  ) : null}
                   <span className="truncate">{chat.title}</span>
                 </SidebarMenuButton>
                 {/* The mark and the delete button share the right edge, so the
