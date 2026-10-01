@@ -443,7 +443,7 @@ function subscribeForScheduledOutput(session: AgentSession, chatId: string, proj
   let assistantText = "";
   const tools = new Map<string, ToolRecord>();
 
-  return session.subscribe((event: unknown) => {
+  const unsubscribe = session.subscribe((event: unknown) => {
     const record = asRecord(event);
     if (!record) return;
 
@@ -523,6 +523,14 @@ function subscribeForScheduledOutput(session: AgentSession, chatId: string, proj
       });
     }
   });
+
+  // A run this listener stops hearing - the session taken for a foreground turn
+  // midway - must not outlive it: the next run would start from its leaf, and
+  // a foreground send would count as the run's.
+  return () => {
+    unsubscribe();
+    scheduledRuns.delete(session);
+  };
 }
 
 function disposeRetained(key: string, entry: RetainedSession) {
