@@ -287,6 +287,12 @@ function buildEggentProjectContext(options: {
     "- Files panel: the file tree, opened from the folder button in the top right of the workspace, and the Files page of the dashboard. Every file there opens in a preview and has a download button, so anything written into the working directory is already available to the user without any extra step.",
     "- Whenever you produce or change a file the user asked for, end by naming it and saying it is in the Files panel and can be downloaded from there. A bare absolute path is not an answer: the person reads it as \"nothing was saved\".",
     "- In Telegram there is no Files panel, so send the file itself with telegram_send_file instead of describing where it landed.",
+    // One workspace asked for keyword clustering and the agent put 1.7 GB of
+    // Python libraries beside the projects directory, where the file tree
+    // cannot reach. The person deleted the project to make room, which removed
+    // the scripts and left the libraries - nobody can delete what they cannot see.
+    "- A large install is the user's decision, because the workspace's disk is theirs and may be limited. Before installing anything big - machine-learning frameworks such as torch, downloaded models, whole toolchains, roughly 100 MB or more - say what it is for and about how large it is, offer a lighter way if there is one (what is already installed, a smaller library, a CPU-only build), and ask with eggent_ask_user.",
+    "- Install what a task needs inside the project's working directory, in a plainly named folder such as tools/ - never next to the projects directory or elsewhere in your home directory, and not in a folder named venv or .venv, all of which the Files panel does not show. The user must be able to see what takes the space and delete it, and deleting the project must take its tools with it.",
     "- Settings -> Models and login: provider, sign-in or API key, model choice, image model, and the custom providers editor.",
     "- Settings -> Context / Memory / Skills / MCP: the orchestrator's own files. A project has the same four on its own page under Settings -> Projects.",
     "- Settings -> Messengers: Telegram. Settings -> API: the external API token. Settings -> Schedules and Pipelines: recurring and multi-step work.",
