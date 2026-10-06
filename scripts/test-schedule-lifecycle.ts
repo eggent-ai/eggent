@@ -67,7 +67,7 @@ function extensionCandidates(): string[] {
     .filter(Boolean);
   if (fromEnv.length) return fromEnv;
   return [
-    "/opt/eggent-pi-seed/node_modules/@tintinweb/pi-subagents",
+    "/opt/eggent-pi-seed/npm/node_modules/@tintinweb/pi-subagents",
     path.join(os.homedir(), ".pi", "agent", "npm", "node_modules", "@tintinweb", "pi-subagents"),
   ].filter((candidate) => fs.existsSync(path.join(candidate, "package.json"))).slice(0, 1);
 }
@@ -138,6 +138,12 @@ const onStray = (reason: unknown) => {
 };
 process.on("uncaughtException", onStray);
 process.on("unhandledRejection", onStray);
+// The handlers above keep the process alive through an orphan's errors, and the
+// stub provider keeps it alive anyway; a run that stalls must still end.
+setTimeout(() => {
+  console.log(`  FAIL  the run did not finish within two minutes (${ran} checks so far)`);
+  process.exit(1);
+}, 120_000).unref();
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 async function waitFor(predicate: () => boolean, timeoutMs: number): Promise<boolean> {
@@ -175,6 +181,19 @@ const storeFile = (session: AgentSession) =>
 function writeStore(session: AgentSession, jobs: Array<ReturnType<typeof job>>): void {
   fs.mkdirSync(path.dirname(storeFile(session)), { recursive: true });
   fs.writeFileSync(storeFile(session), JSON.stringify({ version: 1, jobs }, null, 2));
+}
+
+/**
+ * The store once a firing that began before the session ended has recorded
+ * its outcome. Since 0.19 a spawn fails asynchronously, so that last write can
+ * land just after the session is gone, and it is not a new firing.
+ */
+async function settledStore(session: AgentSession): Promise<string> {
+  await waitFor(() => {
+    const jobs = (JSON.parse(fs.readFileSync(storeFile(session), "utf-8")) as { jobs?: Array<{ lastStatus?: string }> }).jobs ?? [];
+    return jobs.every((entry) => entry.lastStatus !== "running");
+  }, 3_000);
+  return fs.readFileSync(storeFile(session), "utf-8");
 }
 
 async function openSession(
@@ -224,64 +243,74 @@ if (!candidates.length) {
 }
 
 for (const extensionDir of candidates) {
+  if (!fs.existsSync(path.join(extensionDir, "package.json"))) {
+    check(`a copy of pi-subagents is at ${extensionDir}`, () => assert.fail("no package.json there"));
+    continue;
+  }
   const version = (JSON.parse(fs.readFileSync(path.join(extensionDir, "package.json"), "utf-8")) as { version?: string }).version;
-  console.log(`Schedule lifecycle, pi-subagents ${version ?? "?"}\n`);
+  try {
+    console.log(`Schedule lifecycle, pi-subagents ${version ?? "?"}\n`);
 
-  // A clear takes one job out of the store and reloads the session that armed it.
-  const kept = await openSession(extensionDir, `kept-${version}`, [job("k-1"), job("k-2")], "eggent");
-  const bothFired = await waitFor(() => firingsOf(`kept-${version}`, "k-1") > 0 && firingsOf(`kept-${version}`, "k-2") > 0, 5_000);
-  check("both jobs of a session fire", () => assert.ok(bothFired, JSON.stringify(firings)));
-  writeStore(kept, [job("k-2")]);
-  await kept.reload();
-  const afterReload = Date.now();
-  await sleep(WATCH_MS);
-  check("after the reload the job taken out of the store is silent", () => {
-    assert.equal(firingsOf(`kept-${version}`, "k-1", afterReload), 0);
-  });
-  check("...and the job left in it goes on firing", () => {
-    assert.ok(firingsOf(`kept-${version}`, "k-2", afterReload) >= 2, String(firingsOf(`kept-${version}`, "k-2", afterReload)));
-  });
-  await shutdownSessionExtensions(kept);
-  kept.dispose();
+    // A clear takes one job out of the store and reloads the session that armed it.
+    const kept = await openSession(extensionDir, `kept-${version}`, [job("k-1"), job("k-2")], "eggent");
+    const bothFired = await waitFor(() => firingsOf(`kept-${version}`, "k-1") > 0 && firingsOf(`kept-${version}`, "k-2") > 0, 5_000);
+    check("both jobs of a session fire", () => assert.ok(bothFired, JSON.stringify(firings)));
+    writeStore(kept, [job("k-2")]);
+    await kept.reload();
+    const afterReload = Date.now();
+    await sleep(WATCH_MS);
+    check("after the reload the job taken out of the store is silent", () => {
+      assert.equal(firingsOf(`kept-${version}`, "k-1", afterReload), 0);
+    });
+    check("...and the job left in it goes on firing", () => {
+      assert.ok(firingsOf(`kept-${version}`, "k-2", afterReload) >= 2, String(firingsOf(`kept-${version}`, "k-2", afterReload)));
+    });
+    await shutdownSessionExtensions(kept);
+    kept.dispose();
 
-  // Why session.ts binds an error listener: with `mode` alone the SDK does not
-  // emit session_start again after a reload, and nothing re-arms the schedule.
-  const bare = await openSession(extensionDir, `bare-${version}`, [job("b-1")], "mode-only");
-  const bareFired = await waitFor(() => firingsOf(`bare-${version}`, "b-1") > 0, 5_000);
-  check("a session bound with mode alone fires before a reload", () => assert.ok(bareFired));
-  await bare.reload();
-  const afterBareReload = Date.now();
-  await sleep(WATCH_MS);
-  check("...and nothing after it: a reload re-arms only a session with more bindings", () => {
-    assert.equal(firingsOf(`bare-${version}`, "b-1", afterBareReload), 0);
-  });
-  bare.dispose();
+    // Why session.ts binds an error listener: with `mode` alone the SDK does not
+    // emit session_start again after a reload, and nothing re-arms the schedule.
+    const bare = await openSession(extensionDir, `bare-${version}`, [job("b-1")], "mode-only");
+    const bareFired = await waitFor(() => firingsOf(`bare-${version}`, "b-1") > 0, 5_000);
+    check("a session bound with mode alone fires before a reload", () => assert.ok(bareFired));
+    await bare.reload();
+    const afterBareReload = Date.now();
+    await sleep(WATCH_MS);
+    check("...and nothing after it: a reload re-arms only a session with more bindings", () => {
+      assert.equal(firingsOf(`bare-${version}`, "b-1", afterBareReload), 0);
+    });
+    bare.dispose();
 
-  // Shut down first, as session.ts now does for a session that owns a store.
-  const released = await openSession(extensionDir, `released-${version}`, [job("r-1")], "eggent");
-  await waitFor(() => firingsOf(`released-${version}`, "r-1") > 0, 5_000);
-  check("a session that owns a schedule is recognised as one", () => assert.ok(ownsScheduleStore(released)));
-  await shutdownSessionExtensions(released);
-  released.dispose();
-  const afterRelease = Date.now();
-  const storeAtRelease = fs.readFileSync(storeFile(released), "utf-8");
-  await sleep(WATCH_MS);
-  check("shut down first, the schedule stops with the session", () => {
-    assert.equal(staleSince(afterRelease), 0, "an orphaned timer went off");
-    assert.equal(fs.readFileSync(storeFile(released), "utf-8"), storeAtRelease, "the store was rewritten after the session ended");
-  });
+    // Shut down first, as session.ts now does for a session that owns a store.
+    const released = await openSession(extensionDir, `released-${version}`, [job("r-1")], "eggent");
+    await waitFor(() => firingsOf(`released-${version}`, "r-1") > 0, 5_000);
+    check("a session that owns a schedule is recognised as one", () => assert.ok(ownsScheduleStore(released)));
+    await shutdownSessionExtensions(released);
+    released.dispose();
+    const afterRelease = Date.now();
+    const storeAtRelease = await settledStore(released);
+    await sleep(WATCH_MS);
+    check("shut down first, the schedule stops with the session", () => {
+      assert.equal(staleSince(afterRelease), 0, "an orphaned timer went off");
+      assert.equal(fs.readFileSync(storeFile(released), "utf-8"), storeAtRelease, "the store was rewritten after the session ended");
+    });
 
-  // The fault itself, last: the orphan goes on firing until the process ends.
-  const orphaned = await openSession(extensionDir, `orphaned-${version}`, [job("o-1")], "eggent");
-  await waitFor(() => firingsOf(`orphaned-${version}`, "o-1") > 0, 5_000);
-  orphaned.dispose();
-  const afterDispose = Date.now();
-  const storeAtDispose = fs.readFileSync(storeFile(orphaned), "utf-8");
-  await sleep(WATCH_MS);
-  check("disposed alone, the timer goes on firing into the dead session", () => {
-    assert.ok(staleSince(afterDispose) >= 1, "no stale-context error after dispose");
-    assert.notEqual(fs.readFileSync(storeFile(orphaned), "utf-8"), storeAtDispose, "the orphan did not touch its store");
-  });
+    // The fault itself, last: the orphan goes on firing until the process ends.
+    const orphaned = await openSession(extensionDir, `orphaned-${version}`, [job("o-1")], "eggent");
+    await waitFor(() => firingsOf(`orphaned-${version}`, "o-1") > 0, 5_000);
+    orphaned.dispose();
+    const afterDispose = Date.now();
+    const storeAtDispose = await settledStore(orphaned);
+    await sleep(WATCH_MS);
+    check("disposed alone, the timer goes on firing into the dead session", () => {
+      assert.ok(staleSince(afterDispose) >= 1, "no stale-context error after dispose");
+      assert.notEqual(fs.readFileSync(storeFile(orphaned), "utf-8"), storeAtDispose, "the orphan did not touch its store");
+    });
+  } catch (error) {
+    check(`the run against pi-subagents ${version} went through`, () => {
+      throw error;
+    });
+  }
 }
 
 check("nothing else went wrong", () => assert.deepEqual(otherErrors, []));

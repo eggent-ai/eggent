@@ -65,7 +65,7 @@ function extensionCandidates(): string[] {
   if (fromEnv.length) return fromEnv;
   // The image's own seed first: that is the copy a new workspace gets.
   return [
-    "/opt/eggent-pi-seed/node_modules/@tintinweb/pi-subagents",
+    "/opt/eggent-pi-seed/npm/node_modules/@tintinweb/pi-subagents",
     path.join(process.cwd(), "data", "pi-agent", "npm", "node_modules", "@tintinweb", "pi-subagents"),
     path.join(os.homedir(), ".pi", "agent", "npm", "node_modules", "@tintinweb", "pi-subagents"),
   ].filter((candidate) => fs.existsSync(path.join(candidate, "package.json"))).slice(0, 1);
