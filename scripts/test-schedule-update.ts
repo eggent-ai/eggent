@@ -25,7 +25,7 @@ const workDir = await fs.mkdtemp(path.join(os.tmpdir(), "eggent-schedule-update-
 await fs.mkdir(path.join(workDir, "data", "projects"), { recursive: true });
 process.chdir(workDir);
 
-const { managePiSchedules } = await import("../src/lib/pi/schedule-host.ts");
+const { managePiSchedules, retainPiScheduleSession, takeRetainedPiScheduleSession } = await import("../src/lib/pi/schedule-host.ts");
 const { SCHEDULE_EXECUTION_MARKER } = await import("../src/lib/pi/schedule-policy.ts");
 
 const storeDir = path.join(workDir, ".pi", "subagent-schedules");
@@ -160,6 +160,141 @@ await check("the directive is not stacked when text is edited twice", async () =
   const occurrences = job.prompt.split(SCHEDULE_EXECUTION_MARKER).length - 1;
   assert.equal(occurrences, 1, `directive repeated ${occurrences} times`);
   assert.match(job.prompt, /Second rewrite/);
+});
+
+await check("clearing with a job id removes that job only", async () => {
+  await fs.mkdir(storeDir, { recursive: true });
+  const other = { ...BASE, id: "job-2", name: "Weekly cleanup" };
+  await fs.writeFile(storePath, JSON.stringify({ jobs: [{ ...BASE }, other] }, null, 2));
+  const result = await managePiSchedules({
+    action: "clear", scope: "current", cwd: workDir, jobId: "job-1", currentSession: fakeSession() as never,
+  });
+  assert.equal((result as { count?: number }).count, 1, JSON.stringify(result));
+  const jobs = JSON.parse(await fs.readFile(storePath, "utf-8")).jobs;
+  assert.deepEqual(jobs.map((job: { id: string }) => job.id), ["job-2"]);
+});
+
+await check("clearing an unknown job id removes nothing and says so", async () => {
+  await seed({ ...BASE });
+  const result = await managePiSchedules({
+    action: "clear", scope: "current", cwd: workDir, jobId: "nope", currentSession: fakeSession() as never,
+  });
+  assert.equal((result as { count?: number }).count, 0);
+  assert.match(String((result as { error?: string }).error), /not found/);
+  assert.equal((await readJob()).id, "job-1");
+});
+
+await check("clearing without a job id still removes everything in scope", async () => {
+  await seed({ ...BASE });
+  await managePiSchedules({ action: "clear", scope: "current", cwd: workDir, currentSession: fakeSession() as never });
+  assert.deepEqual(JSON.parse(await fs.readFile(storePath, "utf-8")).jobs, []);
+});
+
+// What the live schedulers are told after a clear. Every chat's schedules
+// share their project's directory - on one workspace all nine chats sat in the
+// orchestrator's - and the Delete button clears with scope=all and no session
+// of its own. A clear used to dispose every retained session in the directory:
+// the other chats' jobs stayed listed and never fired again.
+// process.cwd(), not workDir: the temporary directory is a symlink on some
+// systems, and the host compares the directory the project store reports.
+const orchestratorDir = path.join(process.cwd(), "data", "projects");
+const orchestratorStores = path.join(orchestratorDir, ".pi", "subagent-schedules");
+
+function retainedSession(sessionId: string) {
+  const state = { reloads: 0, disposed: 0 };
+  return {
+    state,
+    sessionId,
+    isIdle: true,
+    sessionManager: {
+      getSessionId: () => sessionId,
+      getCwd: () => orchestratorDir,
+      getLeafId: () => null,
+    },
+    subscribe: () => () => undefined,
+    async reload() {
+      state.reloads += 1;
+    },
+    dispose() {
+      state.disposed += 1;
+    },
+  };
+}
+
+async function seedChat(sessionId: string, ids: string[]): Promise<void> {
+  await fs.mkdir(orchestratorStores, { recursive: true });
+  const jobs = ids.map((id) => ({ ...BASE, id, name: `Job ${id}` }));
+  await fs.writeFile(path.join(orchestratorStores, `${sessionId}.json`), JSON.stringify({ version: 1, jobs }, null, 2));
+}
+
+const chatJobs = async (sessionId: string) =>
+  (JSON.parse(await fs.readFile(path.join(orchestratorStores, `${sessionId}.json`), "utf-8")).jobs as Array<{ id: string }>)
+    .map((job) => job.id);
+
+const pressDelete = (jobId: string) => managePiSchedules({ action: "clear", scope: "all", jobId });
+
+await check("the Delete button re-arms the chat that held the job and leaves the others alone", async () => {
+  await seedChat("chat-a", ["a-1", "a-2"]);
+  await seedChat("chat-b", ["b-1"]);
+  const a = retainedSession("chat-a");
+  const b = retainedSession("chat-b");
+  assert.equal(await retainPiScheduleSession({ chatId: "chat-a", session: a as never }), true);
+  assert.equal(await retainPiScheduleSession({ chatId: "chat-b", session: b as never }), true);
+
+  const result = await pressDelete("a-1");
+  assert.equal((result as { count?: number }).count, 1, JSON.stringify(result));
+  assert.deepEqual(await chatJobs("chat-a"), ["a-2"]);
+  assert.deepEqual(await chatJobs("chat-b"), ["b-1"], "another chat's job must survive");
+  assert.deepEqual(a.state, { reloads: 1, disposed: 0 }, "the chat that held it re-reads its store");
+  assert.deepEqual(b.state, { reloads: 0, disposed: 0 }, "the other chat's scheduler is not touched");
+});
+
+await check("a chat whose last job goes is let go", async () => {
+  await seedChat("chat-c", ["c-1"]);
+  await seedChat("chat-d", ["d-1"]);
+  const c = retainedSession("chat-c");
+  const d = retainedSession("chat-d");
+  await retainPiScheduleSession({ chatId: "chat-c", session: c as never });
+  await retainPiScheduleSession({ chatId: "chat-d", session: d as never });
+  await pressDelete("c-1");
+  assert.deepEqual(await chatJobs("chat-c"), []);
+  assert.deepEqual(c.state, { reloads: 0, disposed: 1 });
+  assert.deepEqual(d.state, { reloads: 0, disposed: 0 });
+});
+
+await check("the turn that asked is re-armed when it ends, not under itself", async () => {
+  await seedChat("chat-e", ["e-1", "e-2"]);
+  const e = retainedSession("chat-e");
+  await managePiSchedules({ action: "clear", scope: "all", jobId: "e-1", currentSession: e as never });
+  assert.equal(e.state.reloads, 0);
+  await retainPiScheduleSession({ chatId: "chat-e", session: e as never });
+  assert.equal(e.state.reloads, 1);
+  assert.deepEqual(await chatJobs("chat-e"), ["e-2"]);
+});
+
+await check("a chat in the middle of its own turn is re-armed when that turn ends", async () => {
+  await seedChat("chat-f", ["f-1", "f-2"]);
+  const f = retainedSession("chat-f");
+  await retainPiScheduleSession({ chatId: "chat-f", session: f as never });
+  assert.equal(takeRetainedPiScheduleSession("chat-f"), f as never);
+  await pressDelete("f-1");
+  assert.equal(f.state.reloads, 0, "not from under the turn");
+  await retainPiScheduleSession({ chatId: "chat-f", session: f as never });
+  assert.equal(f.state.reloads, 1);
+});
+
+await check("a scheduled run in progress is not cut off: the reload waits for it", async () => {
+  await seedChat("chat-g", ["g-1", "g-2"]);
+  const g = retainedSession("chat-g");
+  await retainPiScheduleSession({ chatId: "chat-g", session: g as never });
+  g.isIdle = false;
+  await pressDelete("g-1");
+  assert.equal(g.state.reloads, 0);
+  g.isIdle = true;
+  // The retained session is looked after every five seconds.
+  await new Promise((resolve) => setTimeout(resolve, 5_600));
+  assert.equal(g.state.reloads, 1);
+  assert.equal(g.state.disposed, 0);
 });
 
 console.log(`\n${ran} checks, ${failed} failed`);

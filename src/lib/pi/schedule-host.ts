@@ -8,6 +8,7 @@ import type { Chat, ChatMessage } from "@/lib/types";
 import { deliverChatToTelegram } from "@/lib/telegram/conversation";
 import { getActiveRun } from "@/lib/pi/active-runs";
 import { detectSchedule, withScheduleExecutionDirective } from "@/lib/pi/schedule-policy";
+import { piScheduleStorePath } from "@/lib/pi/session-lifecycle";
 import { subagentMonitorFor } from "@/lib/pi/subagents";
 
 type ScheduleJobRecord = {
@@ -56,9 +57,16 @@ type RetainedSession = {
   interval: NodeJS.Timeout;
   emptySince?: number;
   expiresAt?: number;
+  reloading?: boolean;
 };
 
 const retained = new Map<string, RetainedSession>();
+/**
+ * Retained sessions lent to a turn of their own chat. Their schedules stay
+ * armed while they are out, so a change to the store has to find them too.
+ */
+const lent = new Map<string, AgentSession>();
+/** Sessions whose scheduler must re-read its store once they are idle. */
 const pendingScheduleReloads = new WeakSet<AgentSession>();
 const POLL_MS = 5_000;
 const EMPTY_GRACE_MS = 10 * 60_000;
@@ -179,14 +187,7 @@ function stringifyForDisplay(value: unknown): string {
   }
 }
 
-function scheduleStorePath(session: AgentSession): string {
-  return path.join(
-    session.sessionManager.getCwd(),
-    ".pi",
-    "subagent-schedules",
-    `${session.sessionId}.json`
-  );
-}
+const scheduleStorePath = piScheduleStorePath;
 
 function scheduleStoreDir(cwd: string): string {
   return path.join(cwd, ".pi", "subagent-schedules");
@@ -542,7 +543,21 @@ function disposeRetained(key: string, entry: RetainedSession) {
 
 async function maybeDisposeWhenDone(key: string) {
   const entry = retained.get(key);
-  if (!entry) return;
+  if (!entry || entry.reloading) return;
+
+  // The store changed while this session was busy. Reload it now that it is
+  // not: reloading stops every helper the session has running, and one of
+  // those may be a scheduled run.
+  if (pendingScheduleReloads.has(entry.session)) {
+    if (!entry.session.isIdle || hasRunningSubagents(entry.session)) return;
+    pendingScheduleReloads.delete(entry.session);
+    entry.reloading = true;
+    try {
+      await entry.session.reload();
+    } finally {
+      entry.reloading = false;
+    }
+  }
 
   const enabled = await hasEnabledSchedules(entry.session);
   if (enabled) {
@@ -582,6 +597,7 @@ export function takeRetainedPiScheduleSession(chatId: string): AgentSession | un
   clearInterval(entry.interval);
   entry.unsubscribe();
   retained.delete(key);
+  lent.set(key, entry.session);
   return entry.session;
 }
 
@@ -595,6 +611,8 @@ export async function retainPiScheduleSession(options: {
   projectId?: string | null;
   session: AgentSession;
 }): Promise<boolean> {
+  const key = keyFor(options.chatId);
+  if (lent.get(key) === options.session) lent.delete(key);
   const promptsNormalized = await normalizePiScheduleStore(options.session);
   const reloadRequested = pendingScheduleReloads.delete(options.session);
   if (promptsNormalized || reloadRequested) {
@@ -603,7 +621,6 @@ export async function retainPiScheduleSession(options: {
 
   if (!(await hasEnabledSchedules(options.session))) return false;
 
-  const key = keyFor(options.chatId);
   const previous = retained.get(key);
   if (previous && previous.session !== options.session) {
     disposeRetained(key, previous);
@@ -711,18 +728,57 @@ async function readScheduleStores(cwd: string) {
   return stores;
 }
 
-function disposeRetainedForCwds(cwds: string[]) {
-  const normalized = new Set(cwds.map((cwd) => path.resolve(cwd)));
-  for (const [key, entry] of retained) {
-    if (normalized.has(path.resolve(entry.session.sessionManager.getCwd()))) {
-      disposeRetained(key, entry);
-    }
-  }
-}
-
 function isScheduleSession(session: AgentSession, cwd: string, sessionId: string): boolean {
   return session.sessionId === sessionId
     && path.resolve(session.sessionManager.getCwd()) === path.resolve(cwd);
+}
+
+/**
+ * Make the scheduler that armed a store agree with what a clear left in it.
+ *
+ * The scheduler keeps its own copy of the jobs, so a job taken out of the file
+ * still fires until the session holding it re-reads the store - which is what
+ * a reload does. Only that one session is touched. This used to dispose every
+ * retained session in the directory, and every chat's schedules share the
+ * directory of its project: deleting one reminder stopped every other job
+ * there, while the list still showed them waiting.
+ */
+async function rearmAfterClear(
+  store: { cwd: string; sessionId: string; remaining: number },
+  currentSession?: AgentSession | null
+): Promise<void> {
+  // The turn that asked, and a turn running in the store's own chat, cannot be
+  // reloaded from under themselves; theirs happens when the turn ends.
+  if (currentSession && isScheduleSession(currentSession, store.cwd, store.sessionId)) {
+    pendingScheduleReloads.add(currentSession);
+    return;
+  }
+  for (const session of lent.values()) {
+    if (isScheduleSession(session, store.cwd, store.sessionId)) {
+      pendingScheduleReloads.add(session);
+      return;
+    }
+  }
+  for (const [key, entry] of retained) {
+    if (!isScheduleSession(entry.session, store.cwd, store.sessionId)) continue;
+    if (!entry.session.isIdle || hasRunningSubagents(entry.session) || entry.reloading) {
+      pendingScheduleReloads.add(entry.session);
+      return;
+    }
+    if (store.remaining === 0) {
+      disposeRetained(key, entry);
+      return;
+    }
+    entry.reloading = true;
+    try {
+      await entry.session.reload();
+    } catch (error) {
+      console.error(`[Schedules] Could not re-arm ${store.sessionId} after a clear:`, error);
+    } finally {
+      entry.reloading = false;
+    }
+    return;
+  }
 }
 
 function findLiveScheduleSession(options: {
@@ -761,6 +817,8 @@ export async function managePiSchedules(options: {
     job: ScheduleJobRecord;
   }> = [];
   let removed = 0;
+  const cleared: Array<{ cwd: string; sessionId: string; remaining: number }> = [];
+  const clearId = options.jobId?.trim();
 
   for (const context of contexts) {
     const stores = await readScheduleStores(context.cwd);
@@ -782,18 +840,36 @@ export async function managePiSchedules(options: {
         locations.push({ context, store, job });
       }
 
-      if (options.action === "clear" && jobs.length > 0) {
-        removed += await mutateScheduleStore(store.filePath, (data) => {
-          const count = data.jobs?.length ?? 0;
-          data.jobs = [];
-          return { changed: count > 0, result: count };
+      // With a job id only that job goes; without one the whole scope does.
+      // The id used to be ignored here, so "delete this reminder" - from the
+      // agent and from the Delete button alike - emptied every store in scope.
+      if (options.action === "clear" && jobs.length > 0 && (!clearId || jobs.some((job) => job.id === clearId))) {
+        const outcome = await mutateScheduleStore(store.filePath, (data) => {
+          const before = data.jobs?.length ?? 0;
+          data.jobs = clearId ? (data.jobs ?? []).filter((job) => job.id !== clearId) : [];
+          const count = before - data.jobs.length;
+          const remaining = data.jobs.filter((job) => job.enabled !== false).length;
+          return { changed: count > 0, result: { count, remaining } };
         });
+        removed += outcome.count;
+        if (outcome.count > 0) {
+          cleared.push({ cwd: context.cwd, sessionId: store.sessionId, remaining: outcome.remaining });
+        }
       }
     }
   }
 
-  if (options.action === "clear" && removed > 0) {
-    disposeRetainedForCwds(contexts.map((context) => context.cwd));
+  if (options.action === "clear") {
+    for (const store of cleared) await rearmAfterClear(store, options.currentSession);
+    if (clearId && removed === 0) {
+      return {
+        action: options.action,
+        scope: options.scope ?? "current",
+        count: 0,
+        schedules: [],
+        error: `Scheduled job ${clearId} was not found in this scope; nothing was removed. List schedules with scope=all and use the exact job id.`,
+      };
+    }
   }
 
   if (options.action === "update") {

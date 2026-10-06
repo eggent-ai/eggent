@@ -528,7 +528,8 @@ function preparePromptForRuntime(text: string): string {
       "- Do not create a new scheduled Agent for this request and never edit .pi/subagent-schedules files directly.",
       "- Use eggent_manage_schedules with action=\"list\", action=\"update\", or action=\"clear\".",
       "- To change a task, list with scope=\"all\", wait for the result, then call update with the exact job_id. Pass schedule to change when it runs, prompt to change what it does, or both - do not tell the user that only the timing can be changed.",
-      "- For a request to remove everything scheduled, call clear with scope=\"all\" unless the user explicitly says current project only.",
+      "- To remove one task, list with scope=\"all\", then call clear with its exact job_id: only that task is removed.",
+      "- For a request to remove everything scheduled, call clear with scope=\"all\" and no job_id, unless the user explicitly says current project only.",
       "",
       "User request:",
       text,
@@ -1348,15 +1349,17 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         subagents.dispose();
         if (aborted) {
           cancelPendingInteractionsForRun(runId);
-          session.dispose();
-          return;
+          await abortPromise;
         }
+        // A stopped turn still goes through retention: the chat's schedules
+        // live in this session too, and disposing it here ended every one of
+        // them until the next restart.
         const retained = await retainPiScheduleSession({
           chatId: options.chatId,
           projectId: options.projectId,
           session,
         });
-        const retainedForMcpOAuth = !retained && mcpOAuthPending
+        const retainedForMcpOAuth = !retained && !aborted && mcpOAuthPending
           ? retainPiMcpOAuthSession({
               chatId: options.chatId,
               projectId: options.projectId,

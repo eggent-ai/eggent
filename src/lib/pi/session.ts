@@ -14,6 +14,7 @@ import { createEggentPiExtensionUIContext } from "@/lib/pi/interaction-ui-contex
 import { createEggentInteractiveBashTool } from "@/lib/pi/interactive-bash-tool";
 import { normalizePiScheduleStore } from "@/lib/pi/schedule-host";
 import { openChatSessionManager } from "@/lib/pi/session-files";
+import { logExtensionError, ownsScheduleStore, shutdownSessionExtensions } from "@/lib/pi/session-lifecycle";
 import { eggentSchedulePolicyExtension } from "@/lib/pi/schedule-policy";
 import { bindSubagentMonitor, createSubagentPolicyExtension, MAX_PARALLEL_SUBAGENTS, SubagentMonitor } from "@/lib/pi/subagents";
 import type { PiSessionOptions } from "@/lib/pi/types";
@@ -763,7 +764,10 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
   // pi-subagents initialize their per-session managers on session_start. When a
   // run id is present, expose a small RPC-style UI bridge so extensions can
   // pause for user input through Eggent's web chat instead of throwing away the
-  // prompt or blocking invisibly.
+  // prompt or blocking invisibly. The error listener is a binding as well, and
+  // that is what makes a reload start the extensions again: the SDK re-emits
+  // session_start only to a session bound beyond `mode`, and a session restored
+  // at boot has no run to give it a UI bridge.
   await session.bindExtensions({
     mode: "rpc",
     uiContext: options.runId
@@ -773,6 +777,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
           onInteraction: options.onPiInteraction,
         })
       : undefined,
+    onError: logExtensionError,
   });
 
   const baseDispose = session.dispose.bind(session);
@@ -786,12 +791,26 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     // extension confirms a stop on this session's bus, so the session stays up
     // until it has (or a second has passed).
     const { count, settled } = subagentMonitor.stopAll();
-    if (count === 0) {
+    // A session that owns a schedule has timers armed by pi-subagents, which
+    // stops them on session_shutdown and on nothing else: disposed alone, it
+    // left them firing into a session that no longer existed.
+    const ownsSchedule = ownsScheduleStore(session);
+    if (count === 0 && !ownsSchedule) {
       baseDispose();
       return;
     }
-    console.warn(`Stopping ${count} unfinished subagent(s) of a session being disposed`, { chatId: options.chatId });
-    void settled.finally(baseDispose);
+    if (count > 0) {
+      console.warn(`Stopping ${count} unfinished subagent(s) of a session being disposed`, { chatId: options.chatId });
+    }
+    void (async () => {
+      try {
+        if (count > 0) await settled;
+      } catch {
+        // A stop that failed still leaves the session to be let go.
+      }
+      if (ownsSchedule) await shutdownSessionExtensions(session);
+      baseDispose();
+    })();
   };
 
   return session;

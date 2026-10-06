@@ -108,6 +108,7 @@ const { listPendingInteractions, respondToPendingInteraction } = await import(".
 const { createChat, getChat } = await import("../src/lib/storage/chat-store.ts");
 const { stopActiveRun } = await import("../src/lib/pi/active-runs.ts");
 const { whenLiveRunFinished } = await import("../src/lib/pi/live-run.ts");
+const { listRetainedPiScheduleSessions } = await import("../src/lib/pi/schedule-host.ts");
 
 const CHAT = "0000bbbb-1111-4222-8333-444455556666";
 const RUN = "run-ask-checkpoint";
@@ -208,6 +209,51 @@ await check("stop ends a turn that waits on a question and cancels the question"
   assert.equal(assistants.length, 1, `expected one stored turn, found ${assistants.length}`);
   assert.ok(!assistants[0].inProgress, "the stopped turn is still marked in progress");
   assert.ok(assistants[0].content.includes(BEFORE), "what the turn did before the question was lost");
+});
+
+// Stopping a turn in a chat that owns a schedule. The session holds the chat's
+// schedules as well as the turn, and a stop used to dispose it: the job stayed
+// listed and never fired again until the next restart.
+const SCHEDULED = "0000dddd-1111-4222-8333-444455556666";
+const SCHEDULED_RUN = "run-ask-stop-scheduled";
+await createChat(SCHEDULED, "Statements, every morning");
+fs.mkdirSync(path.join(cwd, ".pi", "subagent-schedules"), { recursive: true });
+fs.writeFileSync(path.join(cwd, ".pi", "subagent-schedules", `${SCHEDULED}.json`), JSON.stringify({
+  version: 1,
+  jobs: [{
+    id: "daily-1",
+    name: "Morning statements",
+    schedule: "0 0 9 * * *",
+    scheduleType: "cron",
+    subagent_type: "general-purpose",
+    prompt: "Go through the statements.",
+    enabled: true,
+    createdAt: new Date().toISOString(),
+    runCount: 0,
+  }],
+}, null, 2));
+const scheduledReader = createPiChatUIMessageStream({
+  chatId: SCHEDULED,
+  userMessage: "Go through the statements",
+  cwd,
+  agentDir,
+  runId: SCHEDULED_RUN,
+}).getReader();
+const scheduledDrained = (async () => {
+  for (;;) {
+    const { done } = await scheduledReader.read();
+    if (done) return;
+  }
+})();
+await waitFor("the third question", () => listPendingInteractions(SCHEDULED_RUN)[0] ?? null);
+const scheduledStopped = await stopActiveRun(SCHEDULED);
+if (scheduledStopped) await whenLiveRunFinished(SCHEDULED);
+await scheduledDrained;
+
+await check("a stopped turn leaves the chat's schedule armed", async () => {
+  assert.equal(scheduledStopped, true, "nothing was running to stop");
+  await waitFor("the session to be kept", () =>
+    listRetainedPiScheduleSessions().some((entry) => entry.chatId === SCHEDULED) || null, 5_000);
 });
 
 provider.close();
