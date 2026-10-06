@@ -245,7 +245,7 @@ export async function createEggentPiTools(options: {
         ),
         options: Type.Optional(
           Type.Array(Type.String(), {
-            description: "Answer choices for kind=choice, 2 to 6 of them, each a short label in the user's language.",
+            description: "Answer choices for kind=choice, 2 to 6 of them, each a short label in the user's language. With kind=confirm the first option means yes and the rest mean no.",
           })
         ),
         placeholder: Type.Optional(Type.String({ description: "Hint shown in the input field for kind=free_text." })),

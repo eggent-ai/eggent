@@ -1,4 +1,4 @@
-import type { PiInteractionResponse, PiPendingInteraction } from "@/lib/pi/interaction-types";
+import { DEFER_INTERACTION_ANSWER, type PiInteractionResponse, type PiPendingInteraction } from "@/lib/pi/interaction-types";
 import { AFFIRMATIVES, alternation } from "@/i18n/vocabulary";
 
 interface PendingInteractionEntry {
@@ -121,7 +121,19 @@ export function respondToPendingInteraction(
 
   let value: string | boolean | undefined;
   if (entry.interaction.kind === "confirm") {
-    if (typeof response.value === "string") {
+    const options = entry.interaction.options;
+    const picked = typeof response.value === "string" ? response.value.trim() : "";
+    const optionIndex = options?.findIndex((option) => option.trim() === picked) ?? -1;
+    if (response.value === DEFER_INTERACTION_ANSWER) {
+      // "Decide for me" is a marker for the tool, not an answer. Read as text
+      // it is no affirmative either, so handing the decision back said no.
+      value = DEFER_INTERACTION_ANSWER;
+    } else if (optionIndex >= 0) {
+      // A confirm card that carries its own buttons ("Go" / "Not now") reads
+      // them as yes then no; matching the label against a list of English
+      // affirmatives turned the first button into a refusal.
+      value = optionIndex === 0;
+    } else if (typeof response.value === "string") {
       value = new RegExp(`^(?:${alternation(AFFIRMATIVES)})$`, "i").test(response.value.trim());
     } else {
       value = response.value === true;
