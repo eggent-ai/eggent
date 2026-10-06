@@ -138,8 +138,17 @@ RUN find /app/node_modules -path '*pi-ai/dist/providers/data/*.json' -exec touch
 # from the context rather than the build output, so this layer is rebuilt only
 # when the script or the dependencies change. The npm cache and temp files are
 # kept out of /app/data, which is a mount at runtime and would hide them anyway.
+#
+# The versions are pinned here and only here. Unpinned, the seed took whatever
+# was newest whenever package.json changed - a new npm script was enough - so
+# new workspaces moved to a new major of an extension as a side effect of an
+# unrelated commit. Raise a version in its own commit, after trying it. The
+# workspace's settings still name the packages without versions, as before, so
+# nothing already installed is touched by a change here.
+ARG EGGENT_SEED_PI_PACKAGES="npm:pi-web-access@0.35.0 npm:pi-mcp-adapter@4.0.0 npm:@tintinweb/pi-subagents@0.19.0"
 COPY scripts/ensure-pi-packages.mjs ./scripts/ensure-pi-packages.mjs
 RUN PI_CODING_AGENT_DIR=/opt/eggent-pi-seed TMPDIR=/tmp npm_config_cache=/tmp/eggent-pi-seed-npm-cache \
+    EGGENT_PI_PACKAGES="$EGGENT_SEED_PI_PACKAGES" \
     node ./scripts/ensure-pi-packages.mjs \
   && rm -rf /tmp/eggent-pi-seed-npm-cache \
   && chown -R node:node /opt/eggent-pi-seed
