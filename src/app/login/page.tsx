@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { useI18n } from "@/i18n/provider";
+import { parseFirstTask, rememberFirstTask } from "@/lib/first-task";
 
 function normalizeNextPath(value: string | null): string {
   if (!value) return "/dashboard";
@@ -61,6 +62,9 @@ function LoginPageClient() {
     const token = readHandoffToken();
     if (!token) return;
     handoffStarted.current = true;
+    // Read before the fragment goes: a first task chosen at signup rides in
+    // the same link, and it counts only if this sign-in succeeds.
+    const firstTask = parseFirstTask(window.location.hash);
     // Out of the address bar before anything else, so the link is not left in
     // history or copied onward; it has done its job either way.
     window.history.replaceState(null, "", `${window.location.pathname}${window.location.search}`);
@@ -76,6 +80,7 @@ function LoginPageClient() {
           | { mustChangeCredentials?: boolean }
           | null;
         if (!response.ok) throw new Error("handoff refused");
+        if (firstTask) rememberFirstTask(firstTask);
         router.replace(payload?.mustChangeCredentials ? "/dashboard/onboarding" : nextPath);
         router.refresh();
       } catch {

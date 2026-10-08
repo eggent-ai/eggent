@@ -43,7 +43,8 @@
     "test:auth-handoff": "EGGENT_TEST_STUBS=i18n/server node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-auth-handoff.ts",
     "test:agent-turn": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/test-agent-turn.ts",
     "test:agent-turn-responses": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/test-agent-turn-responses.ts",
-    "test:subagents": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-subagents.ts"
+    "test:subagents": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-subagents.ts",
+    "test:first-task": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-first-task.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.37",

@@ -440,10 +440,11 @@ export async function createEggentPiTools(options: {
             Type.Literal("disconnect"),
             Type.Literal("allow_user"),
             Type.Literal("access_code"),
+            Type.Literal("link_shared"),
           ],
           {
             description:
-              "status = report the current connection, connect = register a bot, disconnect = remove it, allow_user = let a Telegram account talk to this workspace, access_code = issue a one-time code the user sends to the bot themselves.",
+              "status = report the current connection, connect = register a bot, disconnect = remove it, allow_user = let a Telegram account talk to this workspace, access_code = issue a one-time code the user sends to the bot themselves, link_shared = link the user's Telegram to this workspace through the deployment's shared bot (only when status says sharedBotAvailable): returns a link for the user to open, or confirms the link is in place and makes it the delivery target.",
           }
         ),
         bot_token: Type.Optional(
@@ -545,6 +546,79 @@ export async function createEggentPiTools(options: {
                   alreadyAllowed: added.length === 0,
                   allowedUserIds,
                   note: "Access is granted. Tell the user to write to the bot - no code needed. Do not send them to the settings screen for this.",
+                },
+                null,
+                2
+              )
+            );
+          }
+
+          // Somebody who signed up on the web has no Telegram chat with the
+          // shared bot, so nothing sent from here could reach them. The
+          // deployment hands out a link that binds their account to this
+          // workspace; once it is used, the same call says so and remembers
+          // the chat, which is what a scheduled run delivers to.
+          if (params.action === "link_shared") {
+            const { getTelegramRelayConfig, rememberTelegramDestination } = await import("@/lib/telegram/outbound");
+            const relay = getTelegramRelayConfig();
+            if (!relay) {
+              return textResult(
+                JSON.stringify(
+                  {
+                    success: false,
+                    error: "This workspace has no shared bot.",
+                    note: "Connect a bot of the workspace's own with action=connect instead.",
+                  },
+                  null,
+                  2
+                )
+              );
+            }
+            const response = await fetch(`${relay.url}/link`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                ...(relay.token ? { Authorization: `Bearer ${relay.token}` } : {}),
+              },
+              body: "{}",
+              signal: AbortSignal.timeout(15_000),
+            });
+            const payload = (await response.json().catch(() => null)) as {
+              linked?: boolean;
+              chatId?: string | number;
+              url?: string;
+              error?: string;
+            } | null;
+            if (!response.ok || !payload) {
+              return textResult(
+                JSON.stringify(
+                  { success: false, error: payload?.error || `The shared bot answered ${response.status}.` },
+                  null,
+                  2
+                )
+              );
+            }
+            if (payload.linked && (typeof payload.chatId === "number" || typeof payload.chatId === "string")) {
+              await rememberTelegramDestination({ chatId: payload.chatId, via: "relay" });
+              return textResult(
+                JSON.stringify(
+                  {
+                    success: true,
+                    linked: true,
+                    note: "The user's Telegram is linked. telegram_send_message without chat now reaches them, from this run and from scheduled runs.",
+                  },
+                  null,
+                  2
+                )
+              );
+            }
+            return textResult(
+              JSON.stringify(
+                {
+                  success: true,
+                  linked: false,
+                  url: payload.url || null,
+                  note: "Give the user this link as a link: opening it and pressing Start in Telegram links their account to this workspace. Then call link_shared again to confirm before sending anything.",
                 },
                 null,
                 2

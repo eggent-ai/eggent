@@ -16,6 +16,7 @@ import { useActiveRuns } from "@/hooks/use-active-runs";
 import { useI18n } from "@/i18n/provider";
 import type { MessageKey } from "@/i18n/messages";
 import { DASHBOARD_CHAT_ROOT, chatPath } from "@/lib/dashboard-routes";
+import { takeFirstTask } from "@/lib/first-task";
 import { generateClientId } from "@/lib/utils";
 
 /** Convert stored ChatMessage to UIMessage (parts format for useChat) */
@@ -1015,7 +1016,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
 
   // No target is sent on purpose: the server gives the skill its home, and the
   // response says which one so the chat can follow it there.
-  const launchBundledSkill = useCallback(async (skillName: string) => {
+  const launchBundledSkill = useCallback(async (skillName: string, brief?: string) => {
     if (isLoading || launchingSkill) return;
     try {
       setLaunchingSkill(skillName);
@@ -1035,7 +1036,9 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
       }
 
       const projectId = payload.projectId ?? null;
-      const messageText = payload.initialMessage;
+      // What the person already said about the task goes after the command,
+      // where the runtime hands it to the skill as its first instruction.
+      const messageText = brief?.trim() ? `${payload.initialMessage} ${brief.trim()}` : payload.initialMessage;
       stopRequestedRef.current = false;
       submissionStartCountRef.current = messagesRef.current.length;
       handledSwitchToolCallsRef.current.clear();
@@ -1061,6 +1064,19 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
       setLaunchingSkill(null);
     }
   }, [isLoading, launchingSkill, refreshProjects, registerOutgoingChat, sendMessage, setActiveProjectId, setCurrentPath]);
+
+  // A first task chosen at signup (lib/first-task.ts) starts once, the way its
+  // quick-start card would, with what the person wrote as the first thing said
+  // to the skill. Only on the new-chat screen: anywhere else it would take over
+  // a conversation the person deliberately opened.
+  const firstTaskCheckedRef = useRef(false);
+  useEffect(() => {
+    if (firstTaskCheckedRef.current) return;
+    if (activeChatId !== null || activeProjectId) return;
+    firstTaskCheckedRef.current = true;
+    const task = takeFirstTask();
+    if (task) void launchBundledSkill(task.skill, task.brief);
+  }, [activeChatId, activeProjectId, launchBundledSkill]);
 
   // A card is an offer to start something, so it starts it. Asking which
   // project to install into put a decision in front of people who had nothing
