@@ -18,6 +18,9 @@ import type { MessageKey } from "@/i18n/messages";
 import { DASHBOARD_CHAT_ROOT, chatPath } from "@/lib/dashboard-routes";
 import { takeFirstTask } from "@/lib/first-task";
 import { generateClientId } from "@/lib/utils";
+import { parseShellInput } from "@/lib/terminal/format";
+import { useShellRuns } from "@/store/shell-runs";
+import { ShellActionsProvider, type ShellActions } from "@/components/chat/shell-actions";
 
 /** Convert stored ChatMessage to UIMessage (parts format for useChat) */
 function isPiRuntimeStats(value: unknown): value is PiRuntimeStats {
@@ -983,13 +986,35 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
   }, []);
 
   const onSubmit = useCallback((messageOverride?: string) => {
-    const messageText = messageOverride ?? input;
+    const typed = messageOverride ?? input;
     if (pendingInteraction) {
-      const trimmed = messageText.trim();
+      const trimmed = typed.trim();
       if (!trimmed && pendingInteraction.kind !== "confirm") return;
       void respondToInteraction(pendingInteraction, trimmed);
       return;
     }
+
+    // A message that starts with `!` is for the shell, not the agent: it runs
+    // here, in the folder the agent works in, and the result stands in the
+    // conversation as a card. Only what was typed counts - text handed in by a
+    // button ("show to the agent") is a message whatever it starts with - and
+    // it works while a turn is running, because it has nothing to do with one.
+    const shellInput = messageOverride === undefined ? parseShellInput(typed) : null;
+    if (shellInput?.kind === "command") {
+      if (!shellInput.command) return;
+      useShellRuns.getState().addCard({
+        chatId: activeChatId || internalChatId,
+        anchorId: messagesRef.current[messagesRef.current.length - 1]?.id ?? null,
+        command: shellInput.command,
+        projectId: activeProjectId,
+        cwd: currentPath,
+      });
+      setInput("");
+      return;
+    }
+    // `!!hello` is a message that really starts with an exclamation mark.
+    const messageText = shellInput?.kind === "literal" ? shellInput.text : typed;
+
     if (!messageText.trim() || isLoading) return;
     setChatError(null);
     stopRequestedRef.current = false;
@@ -1009,10 +1034,23 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     pendingInteraction,
     respondToInteraction,
     isLoading,
+    activeChatId,
+    internalChatId,
     activeProjectId,
+    currentPath,
     sendMessage,
     registerOutgoingChat,
   ]);
+
+  // What a command card may ask of the conversation around it.
+  const shellActions = useMemo<ShellActions>(
+    () => ({
+      chatId: activeChatId || internalChatId,
+      canAsk: !isLoading && !pendingInteraction,
+      ask: (text: string) => onSubmit(text),
+    }),
+    [activeChatId, internalChatId, isLoading, pendingInteraction, onSubmit]
+  );
 
   // No target is sent on purpose: the server gives the skill its home, and the
   // response says which one so the chat can follow it there.
@@ -1122,6 +1160,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
   const showQuickSkills = !activeProjectId && activeChatId === null && messages.length === 0 ? quickSkills : [];
 
   return (
+    <ShellActionsProvider value={shellActions}>
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       <ChatMessages
         messages={messages}
@@ -1156,5 +1195,6 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         contextModeLocked={messages.length > 0 || isLoading}
       />
     </div>
+    </ShellActionsProvider>
   );
 }

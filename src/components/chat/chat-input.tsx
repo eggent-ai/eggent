@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useCallback, useState, useEffect, useMemo } from "react";
-import { Send, Square, Paperclip, X, FileIcon, ImageIcon, Mic, MicOff, Loader2, Sparkles, Check, Gauge } from "lucide-react";
+import { Send, Square, Paperclip, X, FileIcon, ImageIcon, Mic, MicOff, Loader2, Sparkles, Check, Gauge, SquareTerminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -17,6 +17,7 @@ import type { MessageKey } from "@/i18n/messages";
 import type { ChatContextMode, ChatFile } from "@/lib/types";
 import type { PiRuntimeStats } from "@/lib/pi/types";
 import type { PiPendingInteraction } from "@/lib/pi/interaction-types";
+import { parseShellInput } from "@/lib/terminal/format";
 
 function formatTokenCount(value?: number | null) {
   if (value === undefined || value === null) return "—";
@@ -388,15 +389,18 @@ export function ChatInput({
   const canSubmit = pendingInteraction
     ? Boolean(input.trim()) || pendingInteraction.kind === "confirm"
     : Boolean(input.trim()) || uploadedFiles.length > 0;
+  // `!command` runs in the shell and has nothing to do with the agent's turn,
+  // so it may be sent while one is going.
+  const shellMode = !pendingInteraction && parseShellInput(input)?.kind === "command";
   const submitCurrentMessage = useCallback(() => {
     if (!canSubmit) return;
-    if (!pendingInteraction && isLoading) return;
+    if (!pendingInteraction && isLoading && !shellMode) return;
     if (pendingInteraction) {
       onSubmit();
       return;
     }
     onSubmit(input.trim() ? undefined : t("chat.attachmentOnlyPrompt"));
-  }, [canSubmit, input, isLoading, onSubmit, pendingInteraction, t]);
+  }, [canSubmit, input, isLoading, onSubmit, pendingInteraction, shellMode, t]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -836,7 +840,26 @@ export function ChatInput({
             onChange={handleFileSelect}
           />
 
-          <div className="flex items-center gap-2 rounded-2xl border border-border/80 bg-background px-2 py-1.5 shadow-sm transition-colors focus-within:border-primary/40 focus-within:ring-4 focus-within:ring-primary/10">
+          {/* The mode is announced the moment the first character makes it one:
+              a message that is about to run in a shell must not look like one
+              that is about to be sent to the agent. */}
+          {shellMode ? (
+            <div
+              className="mb-1.5 flex items-center gap-1.5 px-1 text-xs text-muted-foreground"
+              role="status"
+              title={t("terminal.shellMode.escape")}
+            >
+              <SquareTerminal className="size-3.5 shrink-0" aria-hidden />
+              <span className="truncate">{t("terminal.shellMode.hint")}</span>
+            </div>
+          ) : null}
+          <div
+            className={`flex items-center gap-2 rounded-2xl border bg-background px-2 py-1.5 shadow-sm transition-colors focus-within:ring-4 focus-within:ring-primary/10 ${
+              shellMode
+                ? "border-primary/50 focus-within:border-primary/60"
+                : "border-border/80 focus-within:border-primary/40"
+            }`}
+          >
             <Button
               variant="ghost"
               size="icon"
@@ -877,7 +900,7 @@ export function ChatInput({
                 : isDragging ? t("chat.dropFilesPlaceholder") : t("chat.placeholder")}
               disabled={disabled}
               rows={1}
-              className="min-h-[30px] max-h-[200px] w-full translate-y-px resize-none border-0 bg-transparent px-1 pt-2.5 pb-1.5 text-sm leading-5 placeholder:text-muted-foreground focus:outline-none disabled:opacity-50"
+              className={`min-h-[30px] max-h-[200px] w-full translate-y-px resize-none border-0 bg-transparent px-1 pt-2.5 pb-1.5 text-sm leading-5 placeholder:text-muted-foreground focus:outline-none disabled:opacity-50 ${shellMode ? "font-mono" : ""}`}
             />
           </div>
 

@@ -7,7 +7,7 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { SiteHeader } from "@/components/site-header";
 import { SettingsNavigation } from "@/components/settings-navigation";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
-import { FilesPanel } from "@/components/files-panel";
+import { SidePanels } from "@/components/side-panels";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -202,7 +202,7 @@ export default function ProjectDetailsPage() {
               </section>
             </div>
           </SidebarInset>
-          <FilesPanel />
+          <SidePanels />
         </div>
       </SidebarProvider>
     </div>

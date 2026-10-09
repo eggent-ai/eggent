@@ -58,6 +58,19 @@ interface AppState {
   setFilesPanelOpen: (open: boolean) => void;
   toggleFilesPanel: () => void;
   /**
+   * The terminal, in a panel of its own beside the file tree.
+   *
+   * Remembered per browser like the tree, and for the same reason: it is
+   * something you open when you have work for it and close when you do not.
+   * Its width is remembered too, because how wide a terminal should be is a
+   * decision about a screen and a font, made once.
+   */
+  terminalPanelOpen: boolean;
+  terminalPanelWidth: number;
+  setTerminalPanelOpen: (open: boolean) => void;
+  toggleTerminalPanel: () => void;
+  setTerminalPanelWidth: (width: number, remember?: boolean) => void;
+  /**
    * The folders open in the file tree, per project.
    *
    * Kept here rather than in each folder, because every page mounts a panel
@@ -73,6 +86,44 @@ interface AppState {
 }
 
 const FILES_PANEL_KEY = "eggent.filesPanelOpen";
+const TERMINAL_PANEL_KEY = "eggent.terminalPanelOpen";
+const TERMINAL_WIDTH_KEY = "eggent.terminalPanelWidth";
+
+export const TERMINAL_PANEL_MIN_WIDTH = 320;
+export const TERMINAL_PANEL_MAX_WIDTH = 960;
+export const TERMINAL_PANEL_DEFAULT_WIDTH = 480;
+
+/** Below this width a second panel has no room beside the chat and covers it. */
+const MOBILE_BREAKPOINT_PX = 768;
+function isNarrowScreen(): boolean {
+  return typeof window !== "undefined" && window.innerWidth < MOBILE_BREAKPOINT_PX;
+}
+
+export function clampTerminalPanelWidth(width: number): number {
+  if (!Number.isFinite(width)) return TERMINAL_PANEL_DEFAULT_WIDTH;
+  return Math.min(TERMINAL_PANEL_MAX_WIDTH, Math.max(TERMINAL_PANEL_MIN_WIDTH, Math.round(width)));
+}
+
+export function readTerminalPanelPreference(): { open: boolean; width: number } {
+  if (typeof window === "undefined") return { open: false, width: TERMINAL_PANEL_DEFAULT_WIDTH };
+  try {
+    const stored = Number.parseInt(window.localStorage.getItem(TERMINAL_WIDTH_KEY) ?? "", 10);
+    return {
+      open: window.localStorage.getItem(TERMINAL_PANEL_KEY) === "1",
+      width: Number.isFinite(stored) ? clampTerminalPanelWidth(stored) : TERMINAL_PANEL_DEFAULT_WIDTH,
+    };
+  } catch {
+    return { open: false, width: TERMINAL_PANEL_DEFAULT_WIDTH };
+  }
+}
+
+function rememberTerminalPanel(key: string, value: string): void {
+  try {
+    window.localStorage.setItem(key, value);
+  } catch {
+    // Not worth an error: the panel still works for this page.
+  }
+}
 
 /**
  * Read back last session's choice.
@@ -104,14 +155,44 @@ export const useAppStore = create<AppState>((set) => ({
   filesPanelOpen: false,
   setFilesPanelOpen: (open) => {
     rememberFilesPanel(open);
-    set({ filesPanelOpen: open });
+    if (open && isNarrowScreen()) rememberTerminalPanel(TERMINAL_PANEL_KEY, "0");
+    set((state) => ({
+      filesPanelOpen: open,
+      terminalPanelOpen: open && isNarrowScreen() ? false : state.terminalPanelOpen,
+    }));
   },
   toggleFilesPanel: () =>
     set((state) => {
       const next = !state.filesPanelOpen;
       rememberFilesPanel(next);
-      return { filesPanelOpen: next };
+      // On a phone the two panels would be one on top of the other.
+      const closeTerminal = next && isNarrowScreen();
+      if (closeTerminal) rememberTerminalPanel(TERMINAL_PANEL_KEY, "0");
+      return { filesPanelOpen: next, terminalPanelOpen: closeTerminal ? false : state.terminalPanelOpen };
     }),
+  terminalPanelOpen: false,
+  terminalPanelWidth: TERMINAL_PANEL_DEFAULT_WIDTH,
+  setTerminalPanelOpen: (open) => {
+    rememberTerminalPanel(TERMINAL_PANEL_KEY, open ? "1" : "0");
+    if (open && isNarrowScreen()) rememberFilesPanel(false);
+    set((state) => ({
+      terminalPanelOpen: open,
+      filesPanelOpen: open && isNarrowScreen() ? false : state.filesPanelOpen,
+    }));
+  },
+  toggleTerminalPanel: () =>
+    set((state) => {
+      const next = !state.terminalPanelOpen;
+      rememberTerminalPanel(TERMINAL_PANEL_KEY, next ? "1" : "0");
+      const closeFiles = next && isNarrowScreen();
+      if (closeFiles) rememberFilesPanel(false);
+      return { terminalPanelOpen: next, filesPanelOpen: closeFiles ? false : state.filesPanelOpen };
+    }),
+  setTerminalPanelWidth: (width, remember = true) => {
+    const next = clampTerminalPanelWidth(width);
+    if (remember) rememberTerminalPanel(TERMINAL_WIDTH_KEY, String(next));
+    set({ terminalPanelWidth: next });
+  },
   expandedFolders: {},
   setFolderExpanded: (projectId, path, expanded) =>
     set((state) => {

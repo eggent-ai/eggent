@@ -9,7 +9,7 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { SiteHeader } from "@/components/site-header";
 import { Button } from "@/components/ui/button";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
-import { FilesPanel } from "@/components/files-panel";
+import { SidePanels } from "@/components/side-panels";
 import { Textarea } from "@/components/ui/textarea";
 import { useI18n } from "@/i18n/provider";
 import { fileDownloadUrl, isOpenableFile } from "@/lib/files/openable";
@@ -222,7 +222,7 @@ export default function GenericFileEditorPage() {
               </section>
             </div>
           </SidebarInset>
-          <FilesPanel />
+          <SidePanels />
         </div>
       </SidebarProvider>
     </div>

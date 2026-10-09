@@ -9,7 +9,7 @@ import { SiteHeader } from "@/components/site-header";
 import { SettingsNavigation } from "@/components/settings-navigation";
 import { Button } from "@/components/ui/button";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
-import { FilesPanel } from "@/components/files-panel";
+import { SidePanels } from "@/components/side-panels";
 import { useBackgroundSync } from "@/hooks/use-background-sync";
 import type { PipelineRun } from "@/lib/pipelines/types";
 import { useI18n } from "@/i18n/provider";
@@ -164,7 +164,7 @@ export default function PipelineRunPage() {
               ) : null}
             </div>
           </SidebarInset>
-          <FilesPanel />
+          <SidePanels />
         </div>
       </SidebarProvider>
     </div>

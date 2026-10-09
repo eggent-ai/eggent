@@ -44,6 +44,8 @@
     "test:agent-turn": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/test-agent-turn.ts",
     "test:agent-turn-responses": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/test-agent-turn-responses.ts",
     "test:subagents": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-subagents.ts",
+    "test:terminal": "EGGENT_TEST_STUBS=i18n/server,lib/storage/project-store,lib/terminal/run-shell node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-terminal.ts",
+    "test:terminal-client": "EGGENT_TEST_STUBS=i18n/server,lib/storage/project-store,lib/terminal/run-shell node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-terminal-client.ts",
     "test:first-task": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-first-task.ts"
   },
   "dependencies": {
@@ -55,6 +57,8 @@
     "@modelcontextprotocol/sdk": "^1.26.0",
     "@radix-ui/react-label": "^2.1.7",
     "@radix-ui/react-slot": "^1.2.3",
+    "@xterm/addon-fit": "0.11.0",
+    "@xterm/xterm": "6.0.0",
     "ai": "^6.0.73",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",

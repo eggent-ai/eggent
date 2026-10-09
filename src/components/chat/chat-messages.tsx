@@ -1,10 +1,10 @@
 "use client";
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { MessageBubble } from "./message-bubble";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
-import { ArrowRight, CheckCircle2, ExternalLink, Loader2, MessageCircle, Sparkle, Sparkles, TriangleAlert } from "lucide-react";
+import { ArrowRight, CheckCircle2, ExternalLink, Loader2, MessageCircle, Sparkle, Sparkles, SquareTerminal, TriangleAlert } from "lucide-react";
 import type { UIMessage } from "ai";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -13,6 +13,9 @@ import { useI18n } from "@/i18n/provider";
 import type { MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/utils";
 import { DEFER_INTERACTION_ANSWER, type PiPendingInteraction } from "@/lib/pi/interaction-types";
+import { ShellRunView } from "@/components/chat/shell-run";
+import { useShellActions } from "@/components/chat/shell-actions";
+import { useShellRuns, type ShellCard } from "@/store/shell-runs";
 
 export interface QuickSkillAction {
   name: string;
@@ -185,12 +188,42 @@ function InteractionCard({
   );
 }
 
+const NO_CARDS: ShellCard[] = [];
+
+/** A command typed behind `!`: it stands in the conversation where it was typed. */
+function ShellCardRow({ card }: { card: ShellCard }) {
+  return (
+    <div className="flex items-start gap-3 py-2" data-message-role="shell">
+      <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-secondary text-secondary-foreground">
+        <SquareTerminal className="size-4" />
+      </div>
+      <div className="min-w-0 flex-1 pt-0.5">
+        <ShellRunView runKey={card.key} showCommand alwaysDismissible />
+      </div>
+    </div>
+  );
+}
+
 export function ChatMessages({ messages, isLoading, errorMessage, compactionStatus, actionNotice, pendingInteraction, onRespondToInteraction, quickSkills = [], onLaunchSkill, launchingSkill, awaitingHistory = false }: ChatMessagesProps) {
   const { t } = useI18n();
   const scrollRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollRef = useRef(true);
   const AUTO_SCROLL_THRESHOLD_PX = 96;
+  const { chatId } = useShellActions();
+  const cards = useShellRuns((state) => state.cards[chatId]) ?? NO_CARDS;
+  // Where each command stands: after the message it was typed under. One whose
+  // message is not in the list (a chat that was trimmed, or a conversation that
+  // has not loaded yet) goes last rather than disappearing.
+  const cardsByAnchor = useMemo(() => {
+    const known = new Set(messages.map((message) => message.id));
+    const grouped = new Map<string | null, ShellCard[]>();
+    for (const card of cards) {
+      const anchor = card.anchorId && known.has(card.anchorId) ? card.anchorId : card.anchorId === null ? null : "__end__";
+      grouped.set(anchor, [...(grouped.get(anchor) ?? []), card]);
+    }
+    return grouped;
+  }, [cards, messages]);
 
   const updateShouldAutoScroll = useCallback(() => {
     const container = scrollRef.current;
@@ -207,11 +240,25 @@ export function ChatMessages({ messages, isLoading, errorMessage, compactionStat
       behavior: isLoading ? "auto" : "smooth",
       block: "end",
     });
-  }, [messages, isLoading]);
+  }, [messages, isLoading, cards.length]);
 
   useEffect(() => {
     updateShouldAutoScroll();
   }, [updateShouldAutoScroll]);
+
+  // The transcript also grows without a new message: a command card fills in
+  // as its output arrives, well after the card itself was added. Following only
+  // the message list left the output below the fold on the very screen that
+  // had just been asked to show it.
+  const [transcript, setTranscript] = useState<HTMLDivElement | null>(null);
+  useEffect(() => {
+    if (!transcript || typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(() => {
+      if (shouldAutoScrollRef.current) endRef.current?.scrollIntoView({ block: "end" });
+    });
+    observer.observe(transcript);
+    return () => observer.disconnect();
+  }, [transcript]);
 
   // A conversation whose messages are still on their way is not an empty one.
   // Switching chats put the new-chat screen on the screen for the half second
@@ -228,7 +275,7 @@ export function ChatMessages({ messages, isLoading, errorMessage, compactionStat
     );
   }
 
-  if (messages.length === 0 && !isLoading) {
+  if (messages.length === 0 && !isLoading && cards.length === 0) {
     return (
       // Scrolls instead of clipping: the quick-start row is taller than a short
       // viewport, and `m-auto` still centres the block when there is room.
@@ -315,9 +362,26 @@ export function ChatMessages({ messages, isLoading, errorMessage, compactionStat
       onScroll={updateShouldAutoScroll}
       className="flex-1 overflow-y-auto px-4 md:px-6"
     >
-      <div className="max-w-3xl mx-auto py-4 space-y-1">
-        {messages.map((message) => (
-          <MessageBubble key={message.id} message={message} />
+      <div ref={setTranscript} className="max-w-3xl mx-auto py-4 space-y-1">
+        {(cardsByAnchor.get(null) ?? NO_CARDS).map((card) => (
+          <ShellCardRow key={card.key} card={card} />
+        ))}
+        {messages.map((message, index) => (
+          <Fragment key={message.id}>
+            <MessageBubble
+              message={message}
+              // A block still being written is not a command yet: the first
+              // lines of a script are a different script. Run appears once the
+              // message is complete.
+              shellScope={chatId && !(isLoading && index === messages.length - 1) ? `${chatId}:${index}` : undefined}
+            />
+            {(cardsByAnchor.get(message.id) ?? NO_CARDS).map((card) => (
+              <ShellCardRow key={card.key} card={card} />
+            ))}
+          </Fragment>
+        ))}
+        {(cardsByAnchor.get("__end__") ?? NO_CARDS).map((card) => (
+          <ShellCardRow key={card.key} card={card} />
         ))}
 
 

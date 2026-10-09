@@ -11,12 +11,19 @@ import { isAgentToolName } from "@/lib/pi/subagent-format";
 import type { SubagentSnapshot } from "@/lib/pi/types";
 import { FileMention } from "./file-mention";
 import { embeddedAudioPath, embeddedImageUrl, fileMentionPath } from "@/lib/files/openable";
+import { hashText, runnableCommand } from "@/lib/terminal/format";
 import { useAppStore } from "@/store/app-store";
 import { useMemo, type ReactNode } from "react";
 import type { UIMessage } from "ai";
 
 interface MessageBubbleProps {
   message: UIMessage;
+  /**
+   * Names this message within its conversation, so a code block's run is still
+   * the same run after the chat redraws. Absent where a message is shown out of
+   * context and its blocks should not offer to run.
+   */
+  shellScope?: string;
 }
 
 function normalizeVisibleText(text: string): string {
@@ -71,7 +78,7 @@ function toolPartInfo(part: UIMessage["parts"][number]): {
   };
 }
 
-function renderMarkdownBlock(content: string, key: string) {
+function renderMarkdownBlock(content: string, key: string, scope?: string) {
   const visible = normalizeVisibleText(content);
   if (!visible) return null;
   return (
@@ -79,7 +86,7 @@ function renderMarkdownBlock(content: string, key: string) {
       key={key}
       className="prose prose-sm dark:prose-invert max-w-none text-inherit [&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
     >
-      <MarkdownContent content={visible} />
+      <MarkdownContent content={visible} scope={scope} />
     </div>
   );
 }
@@ -92,7 +99,7 @@ function renderMarkdownBlock(content: string, key: string) {
 // message opens with.
 const AVATAR_TOOL_CARD_OFFSET = "mt-[5px]";
 
-export function MessageBubble({ message }: MessageBubbleProps) {
+export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
   const isUser = message.role === "user";
 
   if (isUser) {
@@ -130,6 +137,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
   // that actually renders, since an empty text part draws nothing.
   let opensWithToolCard = false;
   let openingBlockDecided = false;
+  const renderBlock = (content: string, key: string) => renderMarkdownBlock(content, key, shellScope);
 
   const noteOpeningBlock = (isToolCard: boolean) => {
     if (openingBlockDecided) return;
@@ -146,7 +154,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
       <SubagentGroup
         key={`helpers-${group[0].toolCallId}`}
         items={group}
-        renderMarkdown={renderMarkdownBlock}
+        renderMarkdown={renderBlock}
       />
     );
   };
@@ -180,7 +188,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
   message.parts.forEach((part, idx) => {
     if (part.type === "text") {
       flushTools();
-      const block = renderMarkdownBlock(part.text, `text-${idx}`);
+      const block = renderBlock(part.text, `text-${idx}`);
       if (block) {
         renderedParts.push(block);
         noteOpeningBlock(false);
@@ -216,7 +224,7 @@ export function MessageBubble({ message }: MessageBubbleProps) {
 
     if (tool.toolName === "response" && tool.state === "output-available") {
       flushTools();
-      const block = renderMarkdownBlock(valueToText(tool.output), `response-${tool.toolCallId || idx}`);
+      const block = renderBlock(valueToText(tool.output), `response-${tool.toolCallId || idx}`);
       if (block) {
         renderedParts.push(block);
         noteOpeningBlock(false);
@@ -281,7 +289,7 @@ function subagentSnapshots(parts: UIMessage["parts"]): Map<string, SubagentSnaps
   return snapshots;
 }
 
-function MarkdownContent({ content }: { content: string }) {
+function MarkdownContent({ content, scope }: { content: string; scope?: string }) {
   // The orchestrator is a project like any other on the file API; the store
   // spells it null and the API spells it "none".
   const projectId = useAppStore((state) => state.activeProjectId) ?? "none";
@@ -318,10 +326,17 @@ function MarkdownContent({ content }: { content: string }) {
           </code>
         );
       }
+      const code = String(children).replace(/\n$/, "");
+      // A shell block in an answer can be run from here; anything else is
+      // shown, not offered. The key is the block's own, within this message,
+      // so the run is still there when the history sync redraws the chat.
+      const command = scope ? runnableCommand(code, match[1]) : null;
       return (
         <CodeBlock
-          code={String(children).replace(/\n$/, "")}
+          code={code}
           language={match[1]}
+          command={command}
+          runKey={command && scope ? `blk:${scope}:${hashText(command)}` : undefined}
         />
       );
     },
@@ -451,7 +466,7 @@ function MarkdownContent({ content }: { content: string }) {
         </td>
       );
     },
-  }), [projectId]);
+  }), [projectId, scope]);
 
   return (
     <ReactMarkdown remarkPlugins={[remarkGfm]} components={components}>

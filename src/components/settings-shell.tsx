@@ -5,7 +5,7 @@ import { AppSidebar } from "@/components/app-sidebar";
 import { SettingsNavigation } from "@/components/settings-navigation";
 import { SiteHeader } from "@/components/site-header";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
-import { FilesPanel } from "@/components/files-panel";
+import { SidePanels } from "@/components/side-panels";
 
 /**
  * The frame every settings tab shares.
@@ -28,7 +28,7 @@ export function SettingsShell({ title, children }: { title: string; children: Re
               {children}
             </div>
           </SidebarInset>
-          <FilesPanel />
+          <SidePanels />
         </div>
       </SidebarProvider>
     </div>
