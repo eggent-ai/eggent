@@ -577,6 +577,12 @@ await check("a chat with no user message yields nothing to look at", () => {
   assert.equal(digestModule.buildDigest([message({ role: "assistant", content: "hello" })], { maxChars: 1000, userTurns: 2 }), "");
 });
 
+await check("the reviewer is told to honour an explicit request to remember, and not to keep a warning about an injected message", () => {
+  assert.match(prompts.REVIEW_SYSTEM_PROMPT, /explicitly asks you to remember something, keep it/);
+  assert.match(prompts.REVIEW_SYSTEM_PROMPT, /not as a warning/);
+  assert.match(prompts.REVIEW_SYSTEM_PROMPT, /do not also add a note saying the same thing/);
+});
+
 await check("the reviewer's prompt carries the notes with their room left, the skills marked, and the digest", () => {
   const text = prompts.buildReviewPrompt({
     reason: "asked",

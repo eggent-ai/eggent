@@ -21,6 +21,7 @@ import type { LearnedChange } from "@/lib/learning/types";
 import { noteSkillsUsed, runCurator } from "@/lib/learning/usage";
 import { fallbackRuntimeModel, getPiModelRegistry, getPiModelRuntime } from "@/lib/pi/config-store";
 import type { PiToolRecord } from "@/lib/pi/types";
+import { redactSecrets } from "@/lib/pi/provider-failure";
 import { getChat } from "@/lib/storage/chat-store";
 import { currentBudgetLevel } from "@/lib/usage/budget-level";
 
@@ -241,9 +242,12 @@ async function processTurn(turn: LearningTurn): Promise<void> {
 
   await noteReviewStarted(turn.chatId);
   const outcome = await runReview(turn, { ...decision, run: true, reason: decision.reason, focus: decision.focus }, counters.sinceReview);
-  if (outcome.error) {
-    console.warn("A learning review did not finish:", outcome.error);
-  }
+  // One line per look-back, so what the agent decided can be read back from the
+  // container log. The verdict is its own closing line, a few words, masked.
+  const said = redactSecrets(outcome.verdict).replace(/\s+/g, " ").slice(0, 80);
+  console.info(
+    `[learning] ${decision.reason} look-back on chat ${turn.chatId.slice(0, 8)}: ${outcome.changes.length} saved, ${outcome.toolCalls} tool call(s)${said ? `, said "${said}"` : ""}${outcome.error ? `, ended with: ${outcome.error}` : ""}`
+  );
   if (outcome.changes.length === 0) return;
 
   await attachLearnedNotice({ chatId: turn.chatId, since: turn.startedAt, changes: outcome.changes });
