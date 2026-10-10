@@ -45,7 +45,7 @@ type RawSkill = Record<string, unknown>;
 
 /**
  * License and compatibility are whatever the skill's author wrote, and a skill
- * made for Anthropic's format often carries a sentence there. A badge never
+ * made for the Agent Skills format often carries a sentence there. A badge never
  * wraps by default, so one such sentence pushed the whole page wider than a
  * phone; these let it wrap inside the row instead.
  */
