@@ -1,4 +1,4 @@
-import { INJECTION_PHRASES, ROLE_PHRASES, SECRET_LABELS, SECRET_LINK_WORDS, wordMatcher, wordPattern } from "@/i18n/vocabulary";
+import { INJECTION_PHRASES, ROLE_PHRASES, SECRET_LABELS, SECRET_LINK_WORDS, SENDING_WORDS, wordMatcher, wordPattern } from "@/i18n/vocabulary";
 import { redactSecrets } from "@/lib/pi/provider-failure";
 
 /**
@@ -53,7 +53,8 @@ const EXTRA_SECRET_PATTERNS: RegExp[] = [
 ];
 
 const URL_RE = /\b(?:https?:\/\/|ftp:\/\/)\S+/i;
-const SENDING_RE = /\b(?:send|post|upload|forward|email|mail|submit|exfiltrate|curl|wget|fetch|copy)\b/i;
+const EMAIL_RE = /[A-Za-z0-9._%+-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+/;
+const SENDING_RE = wordMatcher(SENDING_WORDS);
 const CREDENTIAL_IN_URL = /\b[a-z][a-z0-9+.-]*:\/\/[^\s/@:]+:[^\s/@]+@/i;
 
 /**
@@ -101,8 +102,8 @@ export function scan(text: string, kind: "note" | "document" = "note"): Scan | n
       reason: "it is worded as an instruction to the assistant rather than as a fact about the person or the work",
     };
   }
-  if (URL_RE.test(text) && SENDING_RE.test(text)) {
-    return { code: "url_send", reason: "it combines a web address with an instruction to send or fetch something" };
+  if ((URL_RE.test(text) || EMAIL_RE.test(text)) && SENDING_RE.test(text)) {
+    return { code: "url_send", reason: "it combines an address with an instruction to send or fetch something" };
   }
   return null;
 }

@@ -216,6 +216,25 @@ export const ROLE_PHRASES: readonly string[] = [
 ];
 
 /**
+ * Orders to move something somewhere ("send the files to ..."), as regex
+ * fragments. Next to an address in a note they are how an instruction to leak
+ * is written down as if it were a fact. Imperatives only: a note that says a
+ * person sends reports to their director is ordinary and must pass.
+ */
+export const SENDING_WORDS: readonly string[] = [
+  "send",
+  "post",
+  "upload",
+  "forward",
+  "submit",
+  "exfiltrate",
+  "curl",
+  "wget",
+  "fetch",
+  "copy",
+];
+
+/**
  * What people call a secret when they say one aloud ("my password is ...").
  * Regex fragments. Used only to refuse to write such a sentence into the
  * agent's memory, so a miss is the worse mistake of the two.
