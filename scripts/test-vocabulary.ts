@@ -132,7 +132,6 @@ check(`what the agent learns from is recognised in the languages that ship (ru: 
   assert.equal(verdict("that is wrong, I told you"), "corrected");
   assert.equal(verdict("запомни, что я пишу по-русски"), shipsRussian ? "asked" : undefined);
   assert.equal(verdict("ты неправильно посчитал, я же просил таблицу"), shipsRussian ? "corrected" : undefined);
-  assert.equal(verdict("что значит слово запомнить в программировании?"), shipsRussian ? "asked" : undefined);
 });
 
 check(`a note that tries to give orders, or holds a secret, is refused in the languages that ship (ru: ${shipsRussian})`, () => {

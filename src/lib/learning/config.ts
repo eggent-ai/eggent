@@ -47,7 +47,7 @@ export function reviewLimits() {
     /** A conversation nobody corrected is still looked at this often. */
     everyTurns: intFromEnv("EGGENT_LEARNING_EVERY_TURNS", 6, 2, 100),
     /** Tool calls in a turn before it counts as work worth turning into a skill. */
-    effortToolCalls: intFromEnv("EGGENT_LEARNING_EFFORT_TOOL_CALLS", 4, 2, 50),
+    effortToolCalls: intFromEnv("EGGENT_LEARNING_EFFORT_TOOL_CALLS", 6, 2, 50),
     /** What a review may do before it is stopped. */
     maxToolCalls: 8,
     timeoutMs: intFromEnv("EGGENT_LEARNING_TIMEOUT_SECONDS", 120, 10, 900) * 1000,

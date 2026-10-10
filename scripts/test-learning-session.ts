@@ -194,6 +194,25 @@ await check("a project's own skill wins when the agent wrote one of the same nam
   assert.doesNotMatch(rows[0], /\[learned\]/);
 });
 
+await check("editing a skill through the settings path keeps the mark that says the agent wrote it", async () => {
+  const before = fs.readFileSync(path.join(projectsDir, "skills", "weekly-report-from-spreadsheet", "SKILL.md"), "utf-8");
+  assert.match(before, /origin: learned/);
+  const updated = await projectStore.updateSkill("none", {
+    skill_name: "weekly-report-from-spreadsheet",
+    description: "Builds the weekly report from the sales spreadsheet and the returns sheet.",
+  });
+  assert.equal(updated.success, true);
+  const after = fs.readFileSync(path.join(projectsDir, "skills", "weekly-report-from-spreadsheet", "SKILL.md"), "utf-8");
+  assert.match(after, /origin: learned/);
+  assert.match(after, /learned_at: /);
+  assert.match(after, /and the returns sheet/);
+});
+
+await check("the notes file name cannot be taken by a project", () => {
+  assert.equal(projectStore.isReservedProjectId("learned.md"), true);
+  assert.equal(projectStore.isReservedProjectId("learned"), false);
+});
+
 await check("a light chat carries none of it", async () => {
   const system = await promptSeenBy({ chatContextMode: "plain" });
   assert.doesNotMatch(system, /What Eggent has learned here/);
