@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
-import { BookText, Loader2, PackagePlus, Puzzle, Upload } from "lucide-react";
+import { BookText, Loader2, PackagePlus, Puzzle, Trash2, Upload } from "lucide-react";
 import { SettingsScopeSelect, useSettingsScope } from "@/components/settings-scope";
 import { SettingsPageHeader, SettingsShell } from "@/components/settings-shell";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -42,6 +42,14 @@ interface InstalledSkillItem {
 }
 
 type RawSkill = Record<string, unknown>;
+
+/**
+ * License and compatibility are whatever the skill's author wrote, and a skill
+ * made for Anthropic's format often carries a sentence there. A badge never
+ * wraps by default, so one such sentence pushed the whole page wider than a
+ * phone; these let it wrap inside the row instead.
+ */
+const FREE_TEXT_BADGE = "max-w-full whitespace-normal break-words rounded-md text-left";
 
 function optionalText(value: unknown): string | undefined {
   return typeof value === "string" ? value : undefined;
@@ -86,6 +94,7 @@ export default function SkillsPage() {
   const [loading, setLoading] = useState(true);
   const [reloadTick, setReloadTick] = useState(0);
   const [installingSkill, setInstallingSkill] = useState<string | null>(null);
+  const [deletingSkill, setDeletingSkill] = useState<string | null>(null);
   const [search, setSearch] = useState("");
   const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [selectedSkill, setSelectedSkill] = useState<InstalledSkillItem | null>(null);
@@ -140,6 +149,41 @@ export default function SkillsPage() {
       setStatusMessage(t("skills.errors.install"));
     } finally {
       setInstallingSkill(null);
+    }
+  }
+
+  async function handleDelete(skill: InstalledSkillItem) {
+    if (!window.confirm(t("skills.deleteConfirm", { name: skill.name }))) return;
+    setStatusMessage(null);
+    setDeletingSkill(skill.name);
+
+    try {
+      const res = await fetch(`/api/projects/${encodeURIComponent(scopeId)}/skills`, {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name: skill.name }),
+      });
+      const payload = await res.json().catch(() => null);
+      if (!res.ok) {
+        // A skill that is already gone is a stale row, not a failure to repeat.
+        if (res.status === 404) setReloadTick((tick) => tick + 1);
+        setStatusMessage(
+          res.status === 401 || res.status === 403
+            ? t("skills.upload.error.notAllowed")
+            : typeof payload?.error === "string"
+              ? payload.error
+              : t("skills.errors.delete")
+        );
+        return;
+      }
+      // The sheet may be open on the skill that just went.
+      if (selectedSkill?.name === skill.name) setIsSkillSheetOpen(false);
+      setReloadTick((tick) => tick + 1);
+      setStatusMessage(t("skills.deletedMessage", { skill: skill.name, project: scope.scopeName }));
+    } catch {
+      setStatusMessage(t("skills.errors.delete"));
+    } finally {
+      setDeletingSkill(null);
     }
   }
 
@@ -215,32 +259,45 @@ export default function SkillsPage() {
         ) : (
           <div className="divide-y">
             {filteredInstalledSkills.map((skill) => (
-              <button
-                key={skill.name}
-                type="button"
-                className="flex w-full items-start gap-3 p-3 text-left transition-colors hover:bg-muted/40"
-                onClick={() => handleOpenSkill(skill)}
-              >
-                <div className="mt-0.5 shrink-0 rounded bg-primary/10 p-2">
-                  <BookText className="size-4 text-primary" />
-                </div>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-sm font-medium">{skill.name}</p>
-                  <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
-                    {skill.description || t("skills.noDescription")}
-                  </p>
-                  <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
-                    {skill.learned ? <Badge variant="secondary">{t("skills.learnedBadge")}</Badge> : null}
-                    {skill.stale ? <Badge variant="outline">{t("skills.staleBadge")}</Badge> : null}
-                    {skill.license ? (
-                      <Badge variant="outline">{t("skills.license", { license: skill.license })}</Badge>
-                    ) : null}
-                    {skill.compatibility ? (
-                      <Badge variant="outline">{t("skills.compatibility", { compatibility: skill.compatibility })}</Badge>
-                    ) : null}
+              <div key={skill.name} className="flex items-start gap-1 pr-2 transition-colors hover:bg-muted/40">
+                <button
+                  type="button"
+                  className="flex min-w-0 flex-1 items-start gap-3 p-3 text-left"
+                  onClick={() => handleOpenSkill(skill)}
+                >
+                  <div className="mt-0.5 shrink-0 rounded bg-primary/10 p-2">
+                    <BookText className="size-4 text-primary" />
                   </div>
-                </div>
-              </button>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-sm font-medium">{skill.name}</p>
+                    <p className="mt-1 line-clamp-2 text-xs text-muted-foreground">
+                      {skill.description || t("skills.noDescription")}
+                    </p>
+                    <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                      {skill.learned ? <Badge variant="secondary">{t("skills.learnedBadge")}</Badge> : null}
+                      {skill.stale ? <Badge variant="outline">{t("skills.staleBadge")}</Badge> : null}
+                      {skill.license ? (
+                        <Badge variant="outline" className={FREE_TEXT_BADGE}>{t("skills.license", { license: skill.license })}</Badge>
+                      ) : null}
+                      {skill.compatibility ? (
+                        <Badge variant="outline" className={FREE_TEXT_BADGE}>{t("skills.compatibility", { compatibility: skill.compatibility })}</Badge>
+                      ) : null}
+                    </div>
+                  </div>
+                </button>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="mt-2 shrink-0 text-muted-foreground hover:text-destructive"
+                  aria-label={t("skills.deleteLabel", { name: skill.name })}
+                  title={t("skills.deleteLabel", { name: skill.name })}
+                  disabled={deletingSkill !== null}
+                  onClick={() => handleDelete(skill)}
+                >
+                  {deletingSkill === skill.name ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+                </Button>
+              </div>
             ))}
           </div>
         )}
@@ -279,10 +336,10 @@ export default function SkillsPage() {
                 </p>
                 <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
                   {skill.license ? (
-                    <Badge variant="outline">{t("skills.license", { license: skill.license })}</Badge>
+                    <Badge variant="outline" className={FREE_TEXT_BADGE}>{t("skills.license", { license: skill.license })}</Badge>
                   ) : null}
                   {skill.compatibility ? (
-                    <Badge variant="outline">{t("skills.compatibility", { compatibility: skill.compatibility })}</Badge>
+                    <Badge variant="outline" className={FREE_TEXT_BADGE}>{t("skills.compatibility", { compatibility: skill.compatibility })}</Badge>
                   ) : null}
                 </div>
               </div>

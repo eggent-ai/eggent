@@ -14,6 +14,7 @@
 import { randomBytes } from "node:crypto";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { SKILL_REPLACED_DIRNAME } from "@/lib/skills/limits";
 import type { CheckedSkill } from "@/lib/skills/upload-check";
 import { ensureProjectSkillsDir, findProjectSkillDir } from "@/lib/storage/project-store";
 
@@ -22,7 +23,7 @@ const STAGING_PREFIX = ".incoming-";
 const STAGING_MAX_AGE_MS = 15 * 60 * 1000;
 
 /** Where a skill goes when a new file takes its place. */
-export const REPLACED_DIRNAME = ".replaced";
+export const REPLACED_DIRNAME = SKILL_REPLACED_DIRNAME;
 
 export type SkillInstall =
   | {

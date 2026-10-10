@@ -37,6 +37,12 @@ export const SKILL_COMPATIBILITY_MAX = 500;
  */
 export const SKILL_NAME_PATTERN = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
 
+/**
+ * Where a replaced skill's earlier version is kept, inside the skills folder.
+ * The installer writes it and deleting the skill clears it, so both name it.
+ */
+export const SKILL_REPLACED_DIRNAME = ".replaced";
+
 export type SkillUploadKind = "markdown" | "archive";
 
 /** How an uploaded file is to be read, from its name; null when it is neither. */

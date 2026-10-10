@@ -638,6 +638,14 @@ const enMessages = {
   "skills.noContent": "No skill content.",
   "skills.errors.install": "Failed to install skill",
   "skills.installedMessage": "Installed \"{skill}\" into workspace \"{project}\".",
+  "skills.deleteLabel": "Delete {name}",
+  "skills.deleteConfirm": "Delete the skill “{name}”? Its folder and everything in it will be removed, along with any earlier versions kept when it was replaced. This cannot be undone.",
+  "skills.deletedMessage": "Deleted “{skill}” from workspace “{project}”.",
+  "skills.errors.delete": "Failed to delete skill",
+  "skills.delete.error.noName": "Say which skill to delete.",
+  "skills.delete.error.invalidName": "“{name}” is not a skill name.",
+  "skills.delete.error.notFound": "There is no skill named “{skill}” in this workspace.",
+  "skills.delete.error.failed": "The skill could not be deleted.",
 
   // Uploading a skill from a file.
   "skills.upload.button": "Upload skill",

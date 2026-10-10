@@ -13,7 +13,7 @@ import { clearMemoryCache } from "@/lib/memory/memory";
 import { publishUiSyncEvent } from "@/lib/realtime/event-bus";
 import { LEARNED_FILENAME } from "@/lib/learning/paths";
 import { readFrontmatterStrings } from "@/lib/skills/frontmatter";
-import { SKILL_NAME_PATTERN } from "@/lib/skills/limits";
+import { SKILL_NAME_PATTERN, SKILL_REPLACED_DIRNAME } from "@/lib/skills/limits";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const PROJECTS_DIR = path.join(DATA_DIR, "projects");
@@ -1391,25 +1391,69 @@ export async function updateSkill(
   return { success: true, skillFilePath };
 }
 
+/**
+ * The earlier versions of a skill that replacing it put aside: the entries of
+ * `.replaced/` named `<skill>-<yyyymmdd>`, with a short counter when there were
+ * several in a day. A longer tail is another skill's name, not a counter - a
+ * skill called `notes-20261010` has backups of its own, and they are not these.
+ */
+async function removeReplacedVersions(skillsDir: string, skillName: string): Promise<number> {
+  const folder = path.join(skillsDir, SKILL_REPLACED_DIRNAME);
+  const pattern = new RegExp(`^${skillName.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}-\\d{8}(?:-\\d{1,3})?$`);
+  const entries = await fs.readdir(folder, { withFileTypes: true }).catch(() => []);
+  let removed = 0;
+  for (const entry of entries) {
+    if (!entry.isDirectory() || !pattern.test(entry.name)) continue;
+    await fs.rm(path.join(folder, entry.name), { recursive: true, force: true });
+    removed += 1;
+  }
+  // An empty folder is only clutter; rmdir refuses one that still holds another
+  // skill's versions.
+  if (removed > 0) await fs.rmdir(folder).catch(() => undefined);
+  return removed;
+}
+
+/**
+ * Delete a skill: its folder, wherever the workspace keeps it, and the earlier
+ * versions an upload set aside when it replaced the skill.
+ *
+ * The name is checked before it is used for anything: it becomes a path, and
+ * this used to accept `../notes` and remove whatever that was. Case is kept
+ * as the listing shows it - a folder written by hand may have capitals, which
+ * the list accepts - and only the shape is judged without it.
+ */
 export async function deleteSkill(
   projectId: string,
   skillName: string
-): Promise<{ success: true; skillDir: string } | { success: false; error: string }> {
-  const normalizedName = skillName.trim().toLowerCase();
-  if (!normalizedName) return { success: false, error: "Skill name is required." };
+): Promise<
+  | { success: true; skillDir: string; versionsRemoved: number }
+  | { success: false; error: string; code: "invalid-name" | "not-found" | "failed" }
+> {
+  const exact = skillName.trim();
+  const lower = exact.toLowerCase();
+  const nameError = validateSkillName(lower);
+  if (nameError) return { success: false, error: nameError, code: "invalid-name" };
 
-  const skillDir = await findProjectSkillDir(projectId, normalizedName);
-  if (!skillDir) {
-    return { success: false, error: `Skill "${normalizedName}" not found.` };
+  const found: string[] = [];
+  for (const baseDir of await getProjectSkillDirs(projectId)) {
+    for (const candidate of new Set([exact, lower])) {
+      const dir = path.join(baseDir, candidate);
+      if (await dirExists(dir)) found.push(dir);
+    }
   }
+  if (found.length === 0) return { success: false, error: `Skill "${lower}" not found.`, code: "not-found" };
 
   try {
-    await fs.rm(skillDir, { recursive: true, force: false });
-    return { success: true, skillDir };
+    // `force` because on a filesystem that ignores case the two spellings are
+    // one folder, and the second removal finds it already gone.
+    for (const dir of found) await fs.rm(dir, { recursive: true, force: true });
+    const versionsRemoved = await removeReplacedVersions(getProjectSkillsDir(projectId), lower);
+    return { success: true, skillDir: found[0], versionsRemoved };
   } catch (error) {
     return {
       success: false,
       error: error instanceof Error ? error.message : "Failed to delete skill.",
+      code: "failed",
     };
   }
 }
