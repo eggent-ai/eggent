@@ -49,7 +49,8 @@
     "test:first-task": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-first-task.ts",
     "test:learning": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-learning.ts",
     "test:learning-review": "EGGENT_TEST_STUBS=i18n/server node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-learning-review.ts",
-    "test:learning-session": "EGGENT_TEST_STUBS=i18n/server node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-learning-session.ts"
+    "test:learning-session": "EGGENT_TEST_STUBS=i18n/server node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-learning-session.ts",
+    "test:skill-upload": "EGGENT_TEST_STUBS=i18n/server node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-skill-upload.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.37",
@@ -84,6 +85,7 @@
     "tesseract.js": "^7.0.0",
     "typebox": "^1.3.4",
     "uuid": "^13.0.0",
+    "yaml": "2.9.0",
     "zod": "^4.3.6",
     "zustand": "^5.0.11"
   },

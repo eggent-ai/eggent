@@ -1,7 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { BookText, Loader2, PackagePlus, Puzzle } from "lucide-react";
+import Link from "next/link";
+import { BookText, Loader2, PackagePlus, Puzzle, Upload } from "lucide-react";
 import { SettingsScopeSelect, useSettingsScope } from "@/components/settings-scope";
 import { SettingsPageHeader, SettingsShell } from "@/components/settings-shell";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -18,6 +19,7 @@ import {
 } from "@/components/ui/sheet";
 import { SkeletonList } from "@/components/ui/skeleton-list";
 import { useI18n } from "@/i18n/provider";
+import { settingsScopeHref } from "@/lib/orchestrator-scope";
 
 interface BundledSkillItem {
   name: string;
@@ -163,6 +165,14 @@ export default function SkillsPage() {
       <SettingsPageHeader
         title={t("skills.title")}
         description={t("skills.description", { path: "skills/" })}
+        actions={
+          <Button asChild variant="outline" className="gap-2">
+            <Link href={settingsScopeHref("/dashboard/skills/upload", scopeId)}>
+              <Upload className="size-4" />
+              {t("skills.upload.button")}
+            </Link>
+          </Button>
+        }
         scope={<SettingsScopeSelect scope={scope} />}
       />
 

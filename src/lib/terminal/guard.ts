@@ -22,6 +22,7 @@ import { AUTH_COOKIE_NAME, verifySessionToken } from "@/lib/auth/session";
 import { TERMINAL_JOB_ID_PATTERN } from "@/lib/terminal/protocol";
 import { getTerminalRegistry, type TerminalRegistry } from "@/lib/terminal/registry";
 
+/** `json` is a body of a kind the route does not read, whatever kind that is. */
 export type GuardFailure = "unauthorized" | "origin" | "json";
 
 export function jsonError(error: string, status: number): Response {
@@ -49,10 +50,14 @@ export function requestComesFromThisSite(req: NextRequest): boolean {
 /**
  * Null when the request may go on, otherwise the failure to name in the answer.
  * `write` is for anything that changes a process: starting, typing, stopping.
+ * A write is JSON unless the route says it takes a file: an upload is a
+ * `multipart/form-data` form, which a foreign page *can* send without a
+ * preflight, so for those the same-site check above is the whole defence and the
+ * body type only keeps a route from parsing what it was not meant to.
  */
 export async function checkTerminalRequest(
   req: NextRequest,
-  options: { write: boolean }
+  options: { write: boolean; body?: "json" | "multipart" }
 ): Promise<GuardFailure | null> {
   const cookie = req.cookies.get(AUTH_COOKIE_NAME)?.value || "";
   const session = cookie ? await verifySessionToken(cookie) : null;
@@ -62,7 +67,8 @@ export async function checkTerminalRequest(
   if (!requestComesFromThisSite(req)) return "origin";
   if (options.write) {
     const type = req.headers.get("content-type") || "";
-    if (!/^application\/json\b/i.test(type)) return "json";
+    const expected = options.body === "multipart" ? /^multipart\/form-data\b/i : /^application\/json\b/i;
+    if (!expected.test(type)) return "json";
   }
   return null;
 }

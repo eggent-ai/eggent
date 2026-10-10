@@ -12,6 +12,8 @@ import { deleteChatsByProjectId } from "@/lib/storage/chat-store";
 import { clearMemoryCache } from "@/lib/memory/memory";
 import { publishUiSyncEvent } from "@/lib/realtime/event-bus";
 import { LEARNED_FILENAME } from "@/lib/learning/paths";
+import { readFrontmatterStrings } from "@/lib/skills/frontmatter";
+import { SKILL_NAME_PATTERN } from "@/lib/skills/limits";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const PROJECTS_DIR = path.join(DATA_DIR, "projects");
@@ -447,7 +449,7 @@ export async function ensureProjectMcpAdapterConfig(
 const SKILL_FILE = "SKILL.md";
 
 /** Agent Skills spec: lowercase, numbers, hyphens; no leading/trailing/consecutive hyphens (e.g. pdf, pdf-parsing) */
-const NAME_REGEX = /^[a-z0-9]+(?:-[a-z0-9]+)*$/;
+const NAME_REGEX = SKILL_NAME_PATTERN;
 const GITHUB_API_BASE = "https://api.github.com";
 const GITHUB_MAX_SKILL_FILES = 600;
 const GITHUB_MAX_TOTAL_BYTES = 30 * 1024 * 1024;
@@ -534,7 +536,8 @@ async function getProjectSkillDirs(projectId: string): Promise<string[]> {
   return dirs;
 }
 
-async function findProjectSkillDir(
+/** Where a skill of this name is installed in the scope, legacy locations included. */
+export async function findProjectSkillDir(
   projectId: string,
   skillName: string
 ): Promise<string | null> {
@@ -544,6 +547,17 @@ async function findProjectSkillDir(
     if (await dirExists(skillDir)) return skillDir;
   }
   return null;
+}
+
+/**
+ * The scope's skills directory, ready to be written to: a legacy `.meta` one is
+ * moved into place first, and the directory is created if it is not there.
+ */
+export async function ensureProjectSkillsDir(projectId: string): Promise<string> {
+  await migrateLegacySkillsDir(projectId);
+  const baseDir = getProjectSkillsDir(projectId);
+  await ensureDir(baseDir);
+  return baseDir;
 }
 
 /** Validate skill name per Agent Skills spec. Returns error message or null if valid. */
@@ -567,8 +581,16 @@ function parseFrontmatter(raw: string): {
   const endIdx = rest.indexOf("\n---");
   const frontmatterBlock = endIdx >= 0 ? rest.slice(0, endIdx) : "";
   const body = endIdx >= 0 ? rest.slice(endIdx + 4).trim() : rest.trim();
+  // Real YAML first, so a description written as a folded or literal block, or a
+  // value with a trailing comment, reads as it was meant. A header that is not
+  // YAML - an unquoted `description: Use when: ...` - is still read line by
+  // line, as it always was, because skills in that shape are in use.
+  return { frontmatter: readFrontmatterStrings(frontmatterBlock) ?? readFrontmatterLines(frontmatterBlock), body };
+}
+
+function readFrontmatterLines(block: string): Record<string, string> {
   const frontmatter: Record<string, string> = {};
-  for (const line of frontmatterBlock.split(/\r?\n/)) {
+  for (const line of block.split(/\r?\n/)) {
     const match = line.match(/^([a-zA-Z][a-zA-Z0-9_-]*):\s*(.*)$/);
     if (match) {
       let value = match[2].trim();
@@ -578,7 +600,16 @@ function parseFrontmatter(raw: string): {
       frontmatter[match[1].toLowerCase()] = value;
     }
   }
-  return { frontmatter, body };
+  return frontmatter;
+}
+
+/**
+ * A description on one line, as the runtime's skills table and the skills list
+ * both want it: a literal block keeps its newlines, and a newline inside a
+ * table row ends the row.
+ */
+function skillDescription(frontmatter: Record<string, string>): string {
+  return (frontmatter.description ?? "").replace(/\s+/g, " ").trim().slice(0, 1024);
 }
 
 /**
@@ -614,7 +645,7 @@ export async function loadProjectSkillsMetadata(
         const dirNameLower = entry.name.toLowerCase();
         if (entry.name.length > 64 || !NAME_REGEX.test(dirNameLower) || dirNameLower.includes("--")) continue;
         const name = (frontmatter.name ?? entry.name).trim().toLowerCase();
-        const description = (frontmatter.description ?? "").trim().slice(0, 1024);
+        const description = skillDescription(frontmatter);
         if (!name || !description) continue;
         if (name !== dirNameLower) continue;
 
@@ -1397,7 +1428,7 @@ export async function loadSkillInstructions(
     const content = await fs.readFile(skillFilePath, "utf-8");
     const { frontmatter, body } = parseFrontmatter(content);
     const name = (frontmatter.name ?? skillName).trim().toLowerCase();
-    const description = (frontmatter.description ?? "").trim().slice(0, 1024);
+    const description = skillDescription(frontmatter);
     if (name !== skillName.toLowerCase()) return null;
     return {
       name: skillName,
