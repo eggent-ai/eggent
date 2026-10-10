@@ -212,6 +212,15 @@ function chatMessagesToUIMessages(chatMessages: ChatMessage[]): UIMessage[] {
         } as UIMessage["parts"][number]);
       }
 
+      // What the agent saved after this answer, once it had looked back over it.
+      if (m.learned?.items?.length) {
+        parts.push({
+          type: "data-eggentLearned",
+          id: `learned-${m.id}`,
+          data: m.learned,
+        } as UIMessage["parts"][number]);
+      }
+
       // Only add message if it has content
       if (parts.length > 0) {
         result.push({

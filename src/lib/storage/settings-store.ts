@@ -53,6 +53,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
     darkMode: false,
     language: normalizeLocalePreference(process.env.EGGENT_DEFAULT_LANGUAGE),
   },
+  learning: {
+    enabled: true,
+  },
   auth: {
     enabled: true,
     username: DEFAULT_AUTH_USERNAME,

@@ -33,6 +33,10 @@ interface InstalledSkillItem {
   content: string;
   license?: string;
   compatibility?: string;
+  /** Written by the agent itself. */
+  learned?: boolean;
+  /** Written by the agent and unused for a long time. */
+  stale?: boolean;
 }
 
 type RawSkill = Record<string, unknown>;
@@ -66,6 +70,8 @@ async function loadInstalledSkills(scopeId: string): Promise<InstalledSkillItem[
     content: optionalText(item.content) ?? "",
     license: optionalText(item.license),
     compatibility: optionalText(item.compatibility),
+    learned: item.learned === true,
+    stale: item.stale === true,
   }));
 }
 
@@ -214,6 +220,8 @@ export default function SkillsPage() {
                     {skill.description || t("skills.noDescription")}
                   </p>
                   <div className="mt-2 flex flex-wrap gap-2 text-xs text-muted-foreground">
+                    {skill.learned ? <Badge variant="secondary">{t("skills.learnedBadge")}</Badge> : null}
+                    {skill.stale ? <Badge variant="outline">{t("skills.staleBadge")}</Badge> : null}
                     {skill.license ? (
                       <Badge variant="outline">{t("skills.license", { license: skill.license })}</Badge>
                     ) : null}

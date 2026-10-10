@@ -134,6 +134,106 @@ export const RELATIVE_DELAY_PATTERNS: readonly string[] = [];
 export const DEFAULT_CHAT_TITLES: readonly string[] = ["New Chat", "New chat"];
 
 /**
+ * Ways a person asks for something to be kept or taken into account from now
+ * on, matched inside a message.
+ *
+ * They decide only whether the agent looks back over a conversation sooner
+ * than it otherwise would, so a miss costs a little delay and a false match
+ * costs one cheap look. Phrases that are ordinary in an ordinary sentence
+ * ("always", "never") are left out on purpose.
+ */
+export const MEMORY_REQUEST_PHRASES: readonly string[] = [
+  "remember",
+  "keep in mind",
+  "from now on",
+  "going forward",
+  "in the future",
+  "for the future",
+  "don't forget",
+  "do not forget",
+  "every time",
+  "i prefer",
+  "my name is",
+  "call me",
+];
+
+/**
+ * Ways a person says the last answer missed, matched inside a message. A
+ * correction is the best evidence there is that something is worth learning,
+ * and the same wording turns up in praise rarely enough not to matter.
+ */
+export const CORRECTION_PHRASES: readonly string[] = [
+  "that's wrong",
+  "that is wrong",
+  "that's not right",
+  "that is not right",
+  "this is wrong",
+  "you got it wrong",
+  "not what i asked",
+  "not what i meant",
+  "not what i wanted",
+  "you misunderstood",
+  "you forgot",
+  "i told you",
+  "i asked you",
+  "i said",
+  "don't do that",
+  "do not do that",
+  "stop doing",
+  "incorrect",
+];
+
+/**
+ * Wording that tries to take the assistant's instructions away or to keep the
+ * person from knowing what it does. A note or a skill is read by the agent at
+ * the start of every conversation as if it were part of its instructions, so
+ * anything like this is refused before it is written, wherever it appears.
+ * Regex fragments, not words.
+ */
+export const INJECTION_PHRASES: readonly string[] = [
+  "ignore (?:all |any |the |your )?(?:previous|prior|above|earlier|preceding) (?:instructions|rules|messages|prompts?)",
+  "disregard (?:all |any |the |your )?(?:previous|prior|above|earlier|preceding)",
+  "forget (?:all |any |the |your )?(?:previous|prior|above|earlier|preceding) (?:instructions|rules|messages)",
+  "do not (?:tell|inform|mention|reveal|show)(?: this| that| it)? (?:to )?(?:the )?user",
+  "(?:without|before) (?:telling|informing|asking|notifying) the user",
+  "do not ask (?:the user|for confirmation|for permission)",
+  "hide (?:this|that|it) from the user",
+  "jailbreak",
+];
+
+/**
+ * Wording that gives the assistant a new role. Harmless in a skill that
+ * teaches how to write a prompt, and a sign of tampering in a one-line note
+ * about a person - so it is refused in notes only.
+ */
+export const ROLE_PHRASES: readonly string[] = [
+  "you are now",
+  "new instructions",
+  "system prompt",
+  "developer message",
+  "act as if you (?:are|were)",
+  "pretend (?:to be|you are)",
+];
+
+/**
+ * What people call a secret when they say one aloud ("my password is ...").
+ * Regex fragments. Used only to refuse to write such a sentence into the
+ * agent's memory, so a miss is the worse mistake of the two.
+ */
+export const SECRET_LABELS: readonly string[] = [
+  "password",
+  "passwd",
+  "passphrase",
+  "secret",
+  "token",
+  "api[ _-]?key",
+  "private[ _-]?key",
+];
+
+/** Words that join such a label to its value: "password is hunter2". */
+export const SECRET_LINK_WORDS: readonly string[] = ["is", "are"];
+
+/**
  * Extra characters a slug may keep beyond `a-z0-9`.
  *
  * A pipeline named in this build's language should still produce a readable

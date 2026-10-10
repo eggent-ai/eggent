@@ -2,6 +2,7 @@
 // Core type definitions for Eggent
 // ============================================================
 
+import type { LearnedNotice } from "@/lib/learning/types";
 import type { PiRuntimeStats, SubagentSnapshot } from "@/lib/pi/types";
 
 // --- Settings ---
@@ -57,6 +58,10 @@ export interface AppSettings {
     darkMode: boolean;
     language: string;
   };
+  /** Whether the agent keeps notes and skills from what it is told and does. On unless false. */
+  learning?: {
+    enabled: boolean;
+  };
   auth: {
     enabled: boolean;
     username: string;
@@ -101,6 +106,8 @@ export interface ChatMessage {
   piRuntimeStats?: PiRuntimeStats;
   /** Written while the turn waits on a question; replaced when the turn ends. */
   inProgress?: boolean;
+  /** What the agent saved after this answer, once it had looked back over it. */
+  learned?: LearnedNotice;
 }
 
 export interface Attachment {
@@ -207,6 +214,8 @@ export interface ProjectSkillMetadata {
   name: string;
   description: string;
   skillDir: string;
+  /** Written by the agent itself rather than installed or made by the person. */
+  learned?: boolean;
 }
 
 // --- Memory ---

@@ -4,6 +4,7 @@ import type { UIMessage } from "ai";
 import { createEggentPiSession } from "@/lib/pi/session";
 import { diagnoseCurrentProvider, getPiModelsState, managedCredentialRecoverable } from "@/lib/pi/config-store";
 import { getServerTranslator } from "@/i18n/server";
+import { learnFromTurn } from "@/lib/learning/review";
 import { cancelPendingInteractionsForRun } from "@/lib/pi/pending-interactions";
 import { retainPiMcpOAuthSession, retainPiScheduleSession, takeRetainedPiScheduleSession } from "@/lib/pi/schedule-host";
 import { clearActiveRun, getActiveRun, isStopRequest, registerActiveRun } from "@/lib/pi/active-runs";
@@ -687,6 +688,7 @@ export async function runPiAgentText(options: PiChatRunOptions & {
       console.warn("A progress listener failed:", error);
     }
   };
+  const turnStartedAt = new Date().toISOString();
   const userMessageId = crypto.randomUUID();
   const runId = options.runId ?? crypto.randomUUID();
   const prompt = options.runtimeData
@@ -875,6 +877,21 @@ export async function runPiAgentText(options: PiChatRunOptions & {
       runtimeStats: buildPiRuntimeStats(session, currentPromptUsage, addUsage(baselineUsage, currentPromptUsage)),
       parts: attachSubagentSnapshots(timelineParts, subagents),
     });
+    if (!stopped) {
+      learnFromTurn({
+        chatId: options.chatId,
+        projectId: options.projectId,
+        contextMode: options.chatContextMode,
+        // The host switches the Eggent tools off for a public share.
+        isPublicShare: options.enableEggentTools === false,
+        userMessage: options.userMessage,
+        assistantText,
+        tools: tools.values(),
+        model: session.model,
+        startedAt: turnStartedAt,
+        toolRuntimeData: options.toolRuntimeData,
+      });
+    }
     return assistantText;
   } catch (error) {
     // The caller of this path answers the messenger it came from; anyone
@@ -906,6 +923,7 @@ export async function runPiAgentText(options: PiChatRunOptions & {
 }
 
 export function createPiChatUIMessageStream(options: PiChatRunOptions) {
+  const turnStartedAt = new Date().toISOString();
   const userMessageId = crypto.randomUUID();
   const runId = options.runId ?? crypto.randomUUID();
 
@@ -1300,6 +1318,16 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
           tools: [...tools.values()],
           runtimeStats: finalStats,
           parts: attachSubagentSnapshots(timelineParts, subagents),
+        });
+        learnFromTurn({
+          chatId: options.chatId,
+          projectId: options.projectId,
+          contextMode: options.chatContextMode,
+          userMessage: options.userMessage,
+          assistantText,
+          tools: tools.values(),
+          model: session.model,
+          startedAt: turnStartedAt,
         });
       } catch (error) {
         if (aborted || runAbort.signal.aborted) {

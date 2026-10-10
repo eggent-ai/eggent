@@ -11,6 +11,7 @@ import type {
 import { deleteChatsByProjectId } from "@/lib/storage/chat-store";
 import { clearMemoryCache } from "@/lib/memory/memory";
 import { publishUiSyncEvent } from "@/lib/realtime/event-bus";
+import { LEARNED_FILENAME } from "@/lib/learning/paths";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const PROJECTS_DIR = path.join(DATA_DIR, "projects");
@@ -40,6 +41,7 @@ export function isReservedProjectId(projectId: string): boolean {
     id === PROJECT_SKILLS_DIRNAME ||
     id === PROJECT_CONTEXT_FILENAME ||
     id === PROJECT_MEMORY_FILENAME ||
+    id === LEARNED_FILENAME ||
     id === PROJECT_MCP_FILENAME
   );
 }
@@ -617,7 +619,12 @@ export async function loadProjectSkillsMetadata(
         if (name !== dirNameLower) continue;
 
         seen.add(key);
-        list.push({ name: entry.name, description, skillDir });
+        list.push({
+          name: entry.name,
+          description,
+          skillDir,
+          ...(frontmatter.origin === "learned" ? { learned: true } : {}),
+        });
       }
     } catch {
       // directory missing or not readable
@@ -1328,12 +1335,21 @@ export async function updateSkill(
     ? `compatibility: ${escapeYamlValue(compatibility)}`
     : "";
 
+  // Anything else in the front matter is not ours to drop. `origin: learned`
+  // is what marks a skill the agent wrote, and an edit from the settings page
+  // used to take it off without anyone meaning to.
+  const known = new Set(["name", "description", "license", "compatibility"]);
+  const keptLines = Object.entries(frontmatter)
+    .filter(([key, value]) => !known.has(key) && value.trim() !== "")
+    .map(([key, value]) => `${key}: ${value.includes(":") || value.includes("#") ? JSON.stringify(value) : value}`);
+
   const frontmatterLines = [
     "---",
     nameLine,
     descriptionLine,
     ...(licenseLine ? [licenseLine] : []),
     ...(compatibilityLine ? [compatibilityLine] : []),
+    ...keptLines,
     "---",
   ];
   const nextContent = nextBody

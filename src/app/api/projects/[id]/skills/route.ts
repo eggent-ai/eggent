@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getProject, isOrchestratorScope, loadProjectSkills } from "@/lib/storage/project-store";
+import { learnedSkillsView } from "@/lib/learning/usage";
+import { getProject, isOrchestratorScope, loadProjectSkillsMetadata, loadProjectSkills } from "@/lib/storage/project-store";
 
 export async function GET(
   _req: NextRequest,
@@ -15,6 +16,13 @@ export async function GET(
 
   try {
     const skills = await loadProjectSkills(id);
+    // Which of them the agent wrote itself, and which it has stopped using.
+    const learned = new Set((await loadProjectSkillsMetadata(id)).filter((skill) => skill.learned).map((skill) => skill.name));
+    const stale = new Set(
+      learned.size > 0 && isOrchestratorScope(id)
+        ? (await learnedSkillsView()).skills.filter((skill) => skill.state === "stale").map((skill) => skill.name)
+        : []
+    );
     return NextResponse.json(
       skills.map((skill) => ({
         name: skill.name,
@@ -22,6 +30,8 @@ export async function GET(
         content: skill.body,
         license: skill.license,
         compatibility: skill.compatibility,
+        ...(learned.has(skill.name) ? { learned: true } : {}),
+        ...(stale.has(skill.name) ? { stale: true } : {}),
       }))
     );
   } catch {

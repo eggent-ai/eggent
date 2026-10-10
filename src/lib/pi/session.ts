@@ -9,6 +9,8 @@ import {
   SessionManager,
   type ToolDefinition,
 } from "@earendil-works/pi-coding-agent";
+import { learningAvailable } from "@/lib/learning/config";
+import { formatLearnedForPrompt, learnedSnapshot } from "@/lib/learning/notes";
 import { createEggentPiTools } from "@/lib/pi/eggent-tools";
 import { createEggentPiExtensionUIContext } from "@/lib/pi/interaction-ui-context";
 import { createEggentInteractiveBashTool } from "@/lib/pi/interactive-bash-tool";
@@ -34,31 +36,8 @@ import {
 import { deploymentContext, ensureWebSearchWorkflow, fallbackRuntimeModel, getEggentAiModelLockState, getManagedProviderId, getPiModelRegistry, getPiModelRuntime, getPiSettingsManager, isManagedProviderId } from "@/lib/pi/config-store";
 import { managedDefaultTextModel, readManagedCatalog } from "@/lib/pi/managed-models";
 import { pickManagedRuntimeModel } from "@/lib/pi/project-model-choice";
-import { getUsageSnapshot, isUsageProviderConfigured } from "@/lib/usage/usage-provider";
-
-/**
- * How much of the included balance is spent, as a level.
- *
- * Read from the snapshot the sidebar already polls, so this costs nothing on a
- * warm cache and degrades to "say nothing" when no provider is configured or
- * the provider is unreachable. A meter the provider marked agentOnly still
- * counts: a workspace on its own model is not spending this balance, and the
- * provider hides the meter for exactly that reason.
- */
-async function currentBudgetLevel(): Promise<"ok" | "half" | "low"> {
-  try {
-    if (!isUsageProviderConfigured()) return "ok";
-    const snapshot = await getUsageSnapshot();
-    const meter = snapshot?.meters?.find((item) => item.id === "ai" && item.visibility !== "agentOnly");
-    if (!meter || !(meter.limit > 0)) return "ok";
-    const ratio = meter.used / meter.limit;
-    if (ratio >= 0.75) return "low";
-    if (ratio >= 0.5) return "half";
-    return "ok";
-  } catch {
-    return "ok";
-  }
-}
+import { currentBudgetLevel } from "@/lib/usage/budget-level";
+import { isUsageProviderConfigured } from "@/lib/usage/usage-provider";
 import { getServerTranslator } from "@/i18n/server";
 
 const EGGENT_CONTEXT_FILE_CANDIDATES = [
@@ -164,7 +143,9 @@ function formatProjectSkillsContext(options: { projectId?: string; cwd: string; 
       const cwdRelative = relative && !relative.startsWith("..") && !path.isAbsolute(relative)
         ? `./${relative}`
         : skillFile;
-      return `| ${skill.name} | ${cwdRelative} | ${skillFile} | ${skill.description} |`;
+      // The agent's own skills are shared by every project, so one seen from a
+      // project says where it comes from.
+      return `| ${skill.name} | ${cwdRelative} | ${skillFile} | ${skill.description}${skill.learned ? " [learned]" : ""} |`;
     })
     .join("\n");
   return [
@@ -198,6 +179,8 @@ function buildEggentProjectContext(options: {
   cwd: string;
   chatFiles?: ChatFile[];
   projectSkills?: ProjectSkillMetadata[];
+  /** Notes the agent kept from earlier conversations, ready to print. */
+  learnedNotes?: string[];
   mcpServerIds?: string[];
   runtimeModel?: {
     provider?: string;
@@ -390,6 +373,9 @@ function buildEggentProjectContext(options: {
       || (options.projectId
         ? "No project-specific instructions configured."
         : "No orchestrator-specific instructions configured."),
+    // After the person's own instructions and before the lists that change with
+    // the chat: it is the part of this tail that changes least often.
+    ...(options.learnedNotes ?? []),
     ...formatProjectSkillsContext({ projectId: options.projectId, cwd: options.cwd, skills: options.projectSkills ?? [] }),
     ...formatChatFilesContext(options.chatFiles ?? []),
     options.projectSkills?.length
@@ -574,7 +560,15 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     : project
       ? project.instructions
       : await readProjectContext(scopeId);
-  const projectSkills = liteMode ? [] : await loadProjectSkillsMetadata(scopeId);
+  const ownSkills = liteMode ? [] : await loadProjectSkillsMetadata(scopeId);
+  // What the agent has learned is learned for the person, not for one project,
+  // so a project sees those skills too. Its own skills win a clash of names.
+  const sharedLearnedSkills = liteMode || !projectId
+    ? []
+    : (await loadProjectSkillsMetadata(GLOBAL_PROJECT_ID)).filter(
+        (skill) => skill.learned && !ownSkills.some((own) => own.name.toLowerCase() === skill.name.toLowerCase())
+      );
+  const projectSkills = [...ownSkills, ...sharedLearnedSkills];
   const projectSkillPaths = projectSkills.map((skill) => path.join(skill.skillDir, "SKILL.md"));
   // Read the scope's own file rather than the session cwd: an orchestrator run
   // started inside a project directory would otherwise report that project's
@@ -592,6 +586,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     cwd,
     chatFiles,
     projectSkills,
+    learnedNotes: learningAvailable() ? formatLearnedForPrompt(await learnedSnapshot()) : [],
     mcpServerIds,
     // On the included model the provider is reported by its label - the run is
     // on Eggent AI whether the whole workspace is or only this project chose it

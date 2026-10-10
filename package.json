@@ -46,7 +46,10 @@
     "test:subagents": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-subagents.ts",
     "test:terminal": "EGGENT_TEST_STUBS=i18n/server,lib/storage/project-store,lib/terminal/run-shell node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-terminal.ts",
     "test:terminal-client": "EGGENT_TEST_STUBS=i18n/server,lib/storage/project-store,lib/terminal/run-shell node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-terminal-client.ts",
-    "test:first-task": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-first-task.ts"
+    "test:first-task": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-first-task.ts",
+    "test:learning": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-learning.ts",
+    "test:learning-review": "EGGENT_TEST_STUBS=i18n/server node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-learning-review.ts",
+    "test:learning-session": "EGGENT_TEST_STUBS=i18n/server node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-learning-session.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.37",
