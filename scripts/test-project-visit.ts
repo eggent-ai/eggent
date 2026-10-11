@@ -449,6 +449,50 @@ await check("a visit that takes too long is stopped, and the chat is told", asyn
   }
 });
 
+await check("a visit that will not stop is let go of, and neither its place nor the asking chat is held for ever", async () => {
+  // The project's session is stuck where nothing can reach it: a hook that never answers.
+  await projectStore.createProject({ id: "wedge", name: "Wedge", description: "Stuck", instructions: "x", memoryMode: "isolated" } as never);
+  const extensions = path.join(root, "data", "projects", "wedge", ".pi", "extensions");
+  fs.mkdirSync(extensions, { recursive: true });
+  fs.writeFileSync(path.join(extensions, "hang.ts"), [
+    "export default function (pi) {",
+    '  pi.on("before_agent_start", async () => {',
+    '    if (process.env.EGGENT_TEST_HANG_WEDGE === "1") await new Promise(() => undefined);',
+    "  });",
+    "}",
+    "",
+  ].join("\n"));
+  process.env.EGGENT_TEST_HANG_WEDGE = "1";
+  process.env.EGGENT_VISIT_TIMEOUT_MINUTES = "0.03";
+  process.env.EGGENT_VISIT_STOP_GRACE_SECONDS = "2";
+  process.env.EGGENT_VISITS_MAX = "1";
+  try {
+    const stuck = await newChat("Stuck visit");
+    const started = Date.now();
+    const outcome = await Promise.race([
+      runPiAgentText({ chatId: stuck, userMessage: "@wedge anything at all" }),
+      sleep(20_000).then(() => "STILL-WAITING"),
+    ]);
+    assert.notEqual(outcome, "STILL-WAITING", "the asking chat was held for ever by a visit that would not stop");
+    assert.match(String(outcome), /relayed: /);
+    assert.ok(Date.now() - started < 15_000, `${Date.now() - started} ms`);
+    // Its place is free: with room for one visit, another one runs at once.
+    const next = await newChat("After the stuck one");
+    const nextStarted = Date.now();
+    const nextOutcome = await Promise.race([
+      runPiAgentText({ chatId: next, userMessage: "@shop VISIT-SLOW after" }),
+      sleep(10_000).then(() => "STILL-WAITING"),
+    ]);
+    assert.notEqual(nextOutcome, "STILL-WAITING", "the place was never given back");
+    assert.ok(Date.now() - nextStarted < 8_000, `${Date.now() - nextStarted} ms to get a place`);
+  } finally {
+    delete process.env.EGGENT_TEST_HANG_WEDGE;
+    delete process.env.EGGENT_VISIT_TIMEOUT_MINUTES;
+    delete process.env.EGGENT_VISIT_STOP_GRACE_SECONDS;
+    delete process.env.EGGENT_VISITS_MAX;
+  }
+});
+
 console.log("\nHow many at once\n");
 
 await check("visits beyond the limit wait their turn", async () => {

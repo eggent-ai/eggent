@@ -148,6 +148,58 @@ check("a tool starting and ending moves the phase, and any other event is speech
   assert.equal(t.stalls.length, 0);
 });
 
+check("two commands side by side: the quick one ending does not shorten the slow one's allowance", () => {
+  const t = make();
+  noteSessionEvent(t.watchdog, { type: "agent_start" });
+  noteSessionEvent(t.watchdog, { type: "tool_execution_start", toolCallId: "quick" });
+  noteSessionEvent(t.watchdog, { type: "tool_execution_start", toolCallId: "build" });
+  noteSessionEvent(t.watchdog, { type: "tool_execution_end", toolCallId: "quick" });
+  t.advance(7 * MIN);
+  assert.equal(t.stalls.length, 0, "a silent build was given up on as a model that had gone quiet");
+  t.advance(12 * MIN);
+  assert.equal(t.stalls.length, 0, "...and it still has the tool allowance");
+  noteSessionEvent(t.watchdog, { type: "tool_execution_end", toolCallId: "build" });
+  t.advance(5 * MIN);
+  assert.equal(t.stalls.length, 0, "with no tool left the model has its own allowance, from this moment");
+  t.advance(2 * MIN);
+  assert.deepEqual(t.stalls.map((stall) => stall.phase), ["model"]);
+});
+
+check("a tool that began is waited for even when it began after the first one ended", () => {
+  const t = make();
+  noteSessionEvent(t.watchdog, { type: "tool_execution_start", toolCallId: "a" });
+  noteSessionEvent(t.watchdog, { type: "tool_execution_end", toolCallId: "a" });
+  noteSessionEvent(t.watchdog, { type: "tool_execution_start", toolCallId: "b" });
+  t.advance(10 * MIN);
+  assert.equal(t.stalls.length, 0);
+});
+
+check("commands that do not say which they are are counted all the same", () => {
+  const t = make();
+  noteSessionEvent(t.watchdog, { type: "tool_execution_start" });
+  noteSessionEvent(t.watchdog, { type: "tool_execution_start" });
+  noteSessionEvent(t.watchdog, { type: "tool_execution_end" });
+  t.advance(8 * MIN);
+  assert.equal(t.stalls.length, 0, "one is still running");
+  noteSessionEvent(t.watchdog, { type: "tool_execution_end" });
+  t.advance(5 * MIN);
+  assert.equal(t.stalls.length, 0);
+  t.advance(2 * MIN);
+  assert.equal(t.stalls.length, 1);
+});
+
+check("an end with no start does not strand the turn in its tool phase, and a new turn forgets a tool that never ended", () => {
+  const t = make();
+  noteSessionEvent(t.watchdog, { type: "tool_execution_end", toolCallId: "stray" });
+  t.advance(7 * MIN);
+  assert.equal(t.stalls.length, 1, "the stray end left the turn waiting on a tool that was never running");
+  const u = make();
+  noteSessionEvent(u.watchdog, { type: "tool_execution_start", toolCallId: "lost" });
+  noteSessionEvent(u.watchdog, { type: "turn_start" });
+  u.advance(7 * MIN);
+  assert.equal(u.stalls.length, 1, "a tool whose end never came kept the next model call on the tool allowance");
+});
+
 check("the limits come from the environment, and the watchdog can be switched off", () => {
   assert.deepEqual(watchdogThresholds({}), { softMs: 90_000, startingMs: 180_000, modelMs: 360_000, toolMs: 1_200_000 });
   assert.equal(watchdogThresholds({ EGGENT_TURN_SILENCE_MODEL_SECONDS: "600" })?.modelMs, 600_000);

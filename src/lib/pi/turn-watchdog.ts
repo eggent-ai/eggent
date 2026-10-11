@@ -73,8 +73,12 @@ export interface StalledTurn {
 export interface TurnWatchdog {
   /** Something happened: the session spoke. */
   touch(): void;
-  /** What the turn is doing now; also counts as speech. */
+  /** What the turn is doing now; also counts as speech. Moving to "model" forgets any tool still marked as running. */
   setPhase(phase: TurnPhase): void;
+  /** A tool began. The turn is in its tool phase until every tool that began has ended. */
+  toolStarted(id?: string): void;
+  /** A tool ended; only the last one running takes the turn back to waiting for the model. */
+  toolEnded(id?: string): void;
   /** Look now rather than at the next tick. For tests. */
   check(): void;
   /** Where the turn was given up on, once it was. */
@@ -98,6 +102,11 @@ export function startTurnWatchdog(options: {
 }): TurnWatchdog {
   const now = options.now ?? Date.now;
   let phase: TurnPhase = "starting";
+  // Tools can run side by side: the model asked for two commands in one message, and the
+  // quick one ending says nothing about the slow one. The turn waits on the model only
+  // when no tool is left running.
+  const running = new Set<string>();
+  let unnamed = 0;
   let lastSpoke = now();
   let softSent = false;
   let stalled: StalledTurn | null = null;
@@ -151,6 +160,22 @@ export function startTurnWatchdog(options: {
     touch: spoke,
     setPhase(next) {
       phase = next;
+      if (next === "model") {
+        running.clear();
+        unnamed = 0;
+      }
+      spoke();
+    },
+    toolStarted(id) {
+      if (id === undefined) unnamed += 1;
+      else running.add(id);
+      phase = "tool";
+      spoke();
+    },
+    toolEnded(id) {
+      if (id === undefined) unnamed = Math.max(0, unnamed - 1);
+      else running.delete(id);
+      if (running.size + unnamed === 0) phase = "model";
       spoke();
     },
     check,
@@ -165,13 +190,13 @@ export function startTurnWatchdog(options: {
  * Feed a session event to the watchdog: which phase it moves the turn into, and
  * that the session spoke at all.
  */
-export function noteSessionEvent(watchdog: TurnWatchdog, record: { type?: unknown }): void {
+export function noteSessionEvent(watchdog: TurnWatchdog, record: { type?: unknown; toolCallId?: unknown }): void {
   switch (record.type) {
     case "tool_execution_start":
-      watchdog.setPhase("tool");
+      watchdog.toolStarted(typeof record.toolCallId === "string" ? record.toolCallId : undefined);
       return;
     case "tool_execution_end":
-      watchdog.setPhase("model");
+      watchdog.toolEnded(typeof record.toolCallId === "string" ? record.toolCallId : undefined);
       return;
     case "agent_start":
     case "turn_start":

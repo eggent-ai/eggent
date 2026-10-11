@@ -50,9 +50,10 @@ export function createEggentPiExtensionUIContext(
   // Telegram turn held the turn, and the person's own words queued behind it.
   // They are dismissed at once instead, which is what an extension is told
   // when a person closes the dialog.
-  const interactive = Boolean(options.onInteraction);
+  // Asked each time, not once: a session kept for its schedules is lent to one turn after another,
+  // and what can be shown to the person changes with the turn (see rebindSessionTurn).
   const request = (interaction: Omit<PiPendingInteraction, "id" | "runId" | "status" | "createdAt" | "updatedAt">, dialogOptions?: ExtensionUIDialogOptions) =>
-    interactive
+    options.onInteraction
       ? createPendingInteraction({
         runId: options.runId,
         ...interaction,

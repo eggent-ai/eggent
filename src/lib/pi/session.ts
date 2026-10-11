@@ -20,6 +20,7 @@ import { logExtensionError, ownsScheduleStore, shutdownSessionExtensions } from 
 import { createSchedulePolicyExtension } from "@/lib/pi/schedule-policy";
 import { isScheduledRunSessionId, SCHEDULED_RUN_REFUSAL } from "@/lib/pi/scheduled-run-state";
 import { bindSubagentMonitor, createSubagentPolicyExtension, MAX_PARALLEL_SUBAGENTS, SubagentMonitor, VISIT_MAX_PARALLEL_SUBAGENTS } from "@/lib/pi/subagents";
+import type { PiPendingInteraction } from "@/lib/pi/interaction-types";
 import type { PiSessionOptions } from "@/lib/pi/types";
 import { getChatFiles } from "@/lib/storage/chat-files-store";
 import type { ChatContextMode, ChatFile, ProjectSkillMetadata } from "@/lib/types";
@@ -474,6 +475,36 @@ function createSessionManager(options: PiSessionOptions, cwd: string): SessionMa
   return openChatSessionManager(options.chatId, cwd);
 }
 
+/** What belongs to the turn a session is serving. */
+export interface TurnBinding {
+  runId?: string;
+  abortSignal?: AbortSignal;
+  onPiInteraction?: (interaction: PiPendingInteraction) => void;
+}
+
+const turnBindings = new WeakMap<object, TurnBinding>();
+
+/**
+ * Points a session at the turn it is serving now.
+ *
+ * A session that owns a schedule is kept alive after its turn and lent to the
+ * next turn of the same chat, but its tools were built for the turn before: they
+ * held that turn's run id, its stop signal and its way of putting a question on
+ * the screen. A question asked in the next turn went to a stream nobody was
+ * reading, and a turn that had been stopped left its aborted signal behind for
+ * the scheduled runs that came after it. The tools read these when they run, so
+ * changing them here is all it takes; a turn that ends passes nothing, and the
+ * session goes back to serving no one in particular.
+ */
+export function rebindSessionTurn(session: object, next: TurnBinding): void {
+  const binding = turnBindings.get(session);
+  if (binding) {
+    binding.runId = next.runId;
+    binding.abortSignal = next.abortSignal;
+    binding.onPiInteraction = next.onPiInteraction;
+  }
+}
+
 /**
  * Creates a pi SDK AgentSession for Eggent.
  *
@@ -708,6 +739,10 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
   // creating them starts MCP watchers and registers a UI context this chat has
   // no use for. "files" needs switch_project and list_projects from the set,
   // and the allowlist below decides which of them the model is shown.
+  // What belongs to the turn this session is serving, read by the tools when they run rather than when
+  // they were built: a session kept for its schedules is lent to the chat's next turn, and must show
+  // that turn's questions and obey that turn's stop.
+  const turn: TurnBinding = { runId: options.runId, abortSignal: options.abortSignal, onPiInteraction: options.onPiInteraction };
   const eggentTools = options.enableEggentTools === false || liteMode === "plain"
     ? { tools: [], cleanup: async () => {} }
     : await createEggentPiTools({
@@ -719,14 +754,14 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
         toolRuntimeData: options.toolRuntimeData,
         onMcpConfigChanged: queueMcpRuntimeReload,
         getAgentSession: () => sessionRef,
-        runId: options.runId,
-        abortSignal: options.abortSignal,
-        onPiInteraction: options.onPiInteraction,
+        get runId() { return turn.runId; },
+        get abortSignal() { return turn.abortSignal; },
+        get onPiInteraction() { return turn.onPiInteraction; },
         visit: options.visit,
         // A UI context is registered for every run, but only a run that streams
         // interactions back has someone able to answer them. Telegram and the
         // external API do not, so asking there would block until timeout.
-        interactive: Boolean(options.onPiInteraction),
+        get interactive() { return Boolean(turn.onPiInteraction); },
       });
   const customTools = [
     ...eggentTools.tools,
@@ -740,11 +775,11 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     ...(options.runId && !liteMode
       ? [createEggentInteractiveBashTool({
           cwd,
-          runId: options.runId,
-          abortSignal: options.abortSignal,
+          get runId() { return turn.runId as string; },
+          get abortSignal() { return turn.abortSignal; },
           commandPrefix: settingsManager.getShellCommandPrefix(),
           shellPath: settingsManager.getShellPath(),
-          onInteraction: options.onPiInteraction,
+          get onInteraction() { return turn.onPiInteraction; },
         })]
       : []),
   ];
@@ -769,6 +804,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     sessionManager: createSessionManager(options, cwd),
   });
   sessionRef = session;
+  turnBindings.set(session, turn);
   bindSubagentMonitor(session, subagentMonitor);
   // Legacy schedules may predate the execution-only policy. Normalize them
   // before session_start lets pi-subagents read and arm the store.
@@ -787,9 +823,9 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     mode: "rpc",
     uiContext: options.runId
       ? createEggentPiExtensionUIContext({
-          runId: options.runId,
-          abortSignal: options.abortSignal,
-          onInteraction: options.onPiInteraction,
+          get runId() { return turn.runId as string; },
+          get abortSignal() { return turn.abortSignal; },
+          get onInteraction() { return turn.onPiInteraction; },
         })
       : undefined,
     onError: logExtensionError,

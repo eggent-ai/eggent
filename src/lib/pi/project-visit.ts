@@ -47,6 +47,17 @@ export function visitTimeoutMs(env: Record<string, string | undefined> = process
   return positiveNumber(env.EGGENT_VISIT_TIMEOUT_MINUTES, 10) * 60_000;
 }
 
+/**
+ * How long a visit that has been told to stop is given to do so before it is let go of.
+ *
+ * A stop is a request. A turn stuck where nothing can reach it - an extension waiting for an answer
+ * that never comes - would hold the visit's place and the asking chat's tool call for ever, and two
+ * such visits would close `@project` for the whole workspace until it restarted.
+ */
+export function visitStopGraceMs(env: Record<string, string | undefined> = process.env): number {
+  return positiveNumber(env.EGGENT_VISIT_STOP_GRACE_SECONDS, 20) * 1000;
+}
+
 /** One chat per conversation and project, so asking again continues the work. Same shape as a chat id. */
 export function visitChatIdFor(parentChatId: string, projectId: string): string {
   const hash = createHash("sha256").update(`visit|${parentChatId}|${projectId}`).digest("hex");
@@ -393,7 +404,20 @@ export async function runProjectVisit(request: {
       const outcome: { stopped?: boolean; finalText?: string; files?: ProducedGroup[] } = {};
       let timedOut = false;
       let finished = false;
-      const stop = () => void stopVisitTurn(chatId, () => finished);
+      // Told to stop, and not stopping: after the grace the visit is let go of, so its place and the
+      // asking chat's tool call are released whatever the turn does from here.
+      let letGo: () => void = () => undefined;
+      const letGoSignal = new Promise<void>((resolve) => {
+        letGo = resolve;
+      });
+      let graceTimer: ReturnType<typeof setTimeout> | undefined;
+      const stop = () => {
+        void stopVisitTurn(chatId, () => finished);
+        if (!graceTimer) {
+          graceTimer = setTimeout(letGo, visitStopGraceMs());
+          (graceTimer as { unref?: () => void }).unref?.();
+        }
+      };
       const timer = setTimeout(() => {
         timedOut = true;
         stop();
@@ -437,7 +461,7 @@ export async function runProjectVisit(request: {
       try {
         // Loaded here: the runner builds sessions that carry the tool that calls this.
         const { runPiAgentText } = await import("@/lib/pi/chat-runner");
-        text = await runPiAgentText({
+        const turn = runPiAgentText({
           chatId,
           // A task that opens with @ would be read as a mention of its own.
           userMessage: request.task.trimStart().startsWith("@") ? `Task: ${request.task}` : request.task,
@@ -446,11 +470,20 @@ export async function runProjectVisit(request: {
           outcome,
           onSessionEvent,
         });
+        // Whatever the turn does after it was let go of is of no interest to anyone.
+        void turn.catch(() => undefined);
+        const settled = await Promise.race([
+          turn.then((value) => ({ value }) as const),
+          letGoSignal.then(() => null),
+        ]);
+        if (settled) text = settled.value;
+        else console.warn(`[visit] ${project.id} did not stop when asked; let go of it after ${Math.round(visitStopGraceMs() / 1000)}s`);
       } catch (caught) {
         error = caught instanceof Error ? caught.message : String(caught);
       } finally {
         finished = true;
         clearTimeout(timer);
+        clearTimeout(graceTimer);
         request.signal?.removeEventListener("abort", stop);
       }
 

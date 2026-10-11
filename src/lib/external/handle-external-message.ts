@@ -519,9 +519,15 @@ export function isFilesCommand(message: string): boolean {
 
 /**
  * `/reset`: stop a turn that seems stuck and keep the conversation. A messenger
- * has no stop button, and over polling or behind a queue the word "stop" can sit
- * waiting behind the turn it is meant to stop; this is the way out that does not
- * depend on the model understanding it.
+ * has no stop button, and behind a queue the word "stop" can sit waiting behind
+ * the turn it is meant to stop; this is the way out that does not depend on the
+ * model understanding it.
+ *
+ * It reaches a running turn wherever messages are handled side by side: through
+ * the deployment's shared bot and through a webhook. A workspace's own bot in
+ * polling mode - a self-hosted one - takes its messages one after another, so
+ * anything sent during a turn is read when that turn ends; there the watchdog
+ * (turn-watchdog.ts) is what ends a turn that has gone quiet.
  */
 export function isResetCommand(message: string): boolean {
   const first = message.trim().split(/\s+/, 1)[0]?.toLowerCase() ?? "";

@@ -11,7 +11,7 @@ import assert from "node:assert/strict";
 import { clearActiveRun, getActiveRun, registerActiveRun } from "../src/lib/pi/active-runs.ts";
 import { getLiveRun, startLiveRun } from "../src/lib/pi/live-run.ts";
 import { createPendingInteraction, listPendingInteractions } from "../src/lib/pi/pending-interactions.ts";
-import { createStartingRun, raceAbort, resetChatTurn, TurnAbortedError } from "../src/lib/pi/turn-control.ts";
+import { createStartingRun, raceAbort, resetChatTurn, TurnAbortedError, undoFailedSetup, type TurnSetupScope } from "../src/lib/pi/turn-control.ts";
 
 let failed = 0;
 let ran = 0;
@@ -51,13 +51,60 @@ await check("what is said to it before it can hear is kept, and handed over once
   assert.deepEqual(starting.takeQueuedSteers(), []);
 });
 
-await check("once the session exists, a steer goes straight to it", async () => {
+await check("a steer waits until the agent runs, and then goes straight to the session", async () => {
   const starting = createStartingRun(() => undefined);
   const heard: string[] = [];
-  starting.attach({ steer: async (text: string) => void heard.push(text) });
+  starting.attach({ steer: async (text: string) => void heard.push(text), isStreaming: false });
+  // The session exists but is still getting ready to ask the model: nobody can hear yet.
+  await starting.run.steer("early");
+  assert.deepEqual(heard, []);
+  assert.deepEqual(starting.takeQueuedSteers(), ["early"]);
+  starting.markStarted();
   await starting.run.steer("now");
   assert.deepEqual(heard, ["now"]);
   assert.deepEqual(starting.takeQueuedSteers(), []);
+});
+
+await check("the turn is going from before its session exists until the agent has finished", () => {
+  const starting = createStartingRun(() => undefined);
+  let streaming = false;
+  const session = { steer: async () => undefined, get isStreaming() { return streaming; } };
+  assert.equal(starting.run.isStreaming, true, "while the session is built");
+  starting.attach(session);
+  assert.equal(starting.run.isStreaming, true, "while the session gets ready to ask the model (compaction, hooks)");
+  starting.markStarted();
+  streaming = true;
+  assert.equal(starting.run.isStreaming, true, "while the agent runs");
+  streaming = false;
+  assert.equal(starting.run.isStreaming, false, "once the agent has finished it is not held up as a run to join");
+});
+
+await check("so the registry keeps a turn that is getting ready, and lets go of one that has finished", () => {
+  let streaming = false;
+  const starting = createStartingRun(() => undefined);
+  starting.attach({ steer: async () => undefined, get isStreaming() { return streaming; } });
+  registerActiveRun("chat-ready", { session: starting.run, runId: "run-ready", surface: "external" });
+  assert.ok(getActiveRun("chat-ready"), "a turn getting ready was dropped from the registry");
+  starting.markStarted();
+  streaming = true;
+  assert.ok(getActiveRun("chat-ready"));
+  streaming = false;
+  assert.equal(getActiveRun("chat-ready"), undefined);
+});
+
+await check("what a turn set up before it failed is undone, once", async () => {
+  const calls: string[] = [];
+  const scope: TurnSetupScope = { abandon: (error) => void calls.push(String(error)) };
+  await undoFailedSetup(scope, "disk full");
+  await undoFailedSetup(scope, "again");
+  assert.deepEqual(calls, ["disk full"]);
+  // A turn whose own cleanup took over is not undone by its caller.
+  const handedOver: TurnSetupScope = { abandon: () => void calls.push("never") };
+  handedOver.abandon = undefined;
+  await undoFailedSetup(handedOver, "late");
+  assert.deepEqual(calls, ["disk full"]);
+  // And an undo that itself fails does not hide the failure that came first.
+  await undoFailedSetup({ abandon: () => { throw new Error("undo failed"); } }, "first");
 });
 
 console.log("\nWaiting for a session, unless told to stop\n");

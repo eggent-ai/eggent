@@ -14,18 +14,26 @@ import { cancelPendingInteractionsForRun, listPendingInteractions } from "@/lib/
  * once there is one.
  */
 
-/** What stands in for a session that is still being built. */
+/** What stands in for a session that is still being built, and then for its turn until the agent is running. */
 export interface StartingRun {
-  /** Registered while the session is built; stop works at once, a steer waits for the session. */
+  /**
+   * Registered from the first line of the turn. Stop works at once; a steer waits
+   * until the agent is running; and it reports the turn as going from before the
+   * session exists until the agent has finished, so the registry never drops it
+   * as one that has stopped streaming.
+   */
   readonly run: AbortableRun;
-  /** The session exists: later calls go straight to it. */
-  attach(session: Pick<AbortableRun, "steer">): void;
+  /** The session exists: once the agent is running, calls go straight to it. */
+  attach(session: Pick<AbortableRun, "steer" | "isStreaming">): void;
+  /** The agent has begun its loop (the session's own `agent_start`). */
+  markStarted(): void;
   /** What was said to the turn before it could hear it, handed over once. */
   takeQueuedSteers(): string[];
 }
 
 export function createStartingRun(onStop: () => void): StartingRun {
-  let target: Pick<AbortableRun, "steer"> | null = null;
+  let target: Pick<AbortableRun, "steer" | "isStreaming"> | null = null;
+  let started = false;
   const queued: string[] = [];
   return {
     run: {
@@ -33,22 +41,57 @@ export function createStartingRun(onStop: () => void): StartingRun {
         onStop();
       },
       async steer(text: string) {
-        if (target) await target.steer(text);
+        // Before the loop there is nothing to steer: the words wait, and the turn
+        // hands them over when it begins.
+        if (target && started) await target.steer(text);
         else queued.push(text);
       },
-      // A turn that is starting is going: it must not be dropped from the
-      // registry as one that has stopped streaming.
+      // A turn that is starting is going. That covers the time the session is
+      // built and the time the session spends getting ready to ask the model -
+      // compaction, hooks of extensions - when it does not yet report streaming
+      // and a registry that believed it would drop the turn and let a second
+      // message start a rival beside it. Once the loop runs, the session says.
       get isStreaming() {
-        return true;
+        return !started || !target || target.isStreaming;
       },
     },
     attach(session) {
       target = session;
     },
+    markStarted() {
+      started = true;
+    },
     takeQueuedSteers() {
       return queued.splice(0, queued.length);
     },
   };
+}
+
+/**
+ * What a runner has registered before its own cleanup takes over.
+ *
+ * A turn is registered from its first line, ahead of everything that can fail:
+ * saving the person's message, reading the projects, building the session. A throw
+ * in that stretch used to leave the chat registered as running for ever - nothing
+ * was running, the stand-in always says it is, and every later message was "added
+ * to the running turn". The runner records here how to undo what it has registered
+ * and takes the record back when its own cleanup begins; a runner that throws in
+ * between is undone by whoever called it.
+ */
+export interface TurnSetupScope {
+  abandon?: (error: unknown) => Promise<void> | void;
+}
+
+/** Undoes what a turn registered, when it failed before its own cleanup could. Safe to call twice. */
+export async function undoFailedSetup(scope: TurnSetupScope, error: unknown): Promise<void> {
+  const abandon = scope.abandon;
+  scope.abandon = undefined;
+  if (!abandon) return;
+  try {
+    await abandon(error);
+  } catch (failure) {
+    console.warn("Could not undo a turn that failed to start:", failure);
+  }
 }
 
 /** The turn was stopped before its session existed. */
