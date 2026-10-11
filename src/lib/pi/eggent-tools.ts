@@ -1208,14 +1208,17 @@ export async function createEggentPiTools(options: {
   // arrives there; the web one goes cold, and a cold call costs about three
   // times a warm one. One list keeps both on the same warm prefix, and a run
   // with no Telegram channel simply says so when the tool is called.
-  const telegramRuntime = getTelegramRuntimeData(options.toolRuntimeData);
   // Where this run can reach the user. A run answering a Telegram message has
   // its chat; anything else falls back to what the workspace remembers, so a
-  // schedule or a web turn can still deliver.
-  const telegramDestination = (chat?: string) => resolveTelegramDestination(
-    telegramRuntime ? { chatId: telegramRuntime.chatId, botToken: telegramRuntime.botToken } : null,
-    chat ? { chat } : {}
-  );
+  // schedule or a web turn can still deliver. Read when the tool runs, not when it
+  // was built: a session kept for its schedules serves one turn after another.
+  const telegramDestination = (chat?: string) => {
+    const telegramRuntime = getTelegramRuntimeData(options.toolRuntimeData);
+    return resolveTelegramDestination(
+      telegramRuntime ? { chatId: telegramRuntime.chatId, botToken: telegramRuntime.botToken } : null,
+      chat ? { chat } : {}
+    );
+  };
   // Naming a chat fails for its own reasons, and "no chat to send to" would send
   // the user off connecting a bot they already have.
   // A message to the person's own chat is remembered with the chat it came

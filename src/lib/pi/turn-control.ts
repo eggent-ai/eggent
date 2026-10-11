@@ -27,6 +27,13 @@ export interface StartingRun {
   attach(session: Pick<AbortableRun, "steer" | "isStreaming">): void;
   /** The agent has begun its loop (the session's own `agent_start`). */
   markStarted(): void;
+  /**
+   * A stop was asked for. A turn that is stopped before its agent runs is no longer one to join:
+   * it reports itself as not going and refuses a steer, so whatever the person says next starts a
+   * turn of its own instead of being "added" to one that is about to end (or never will - a hook
+   * that does not return holds it for ever). It still ends at its agent's first moment.
+   */
+  markStopped(): void;
   /** What was said to the turn before it could hear it, handed over once. */
   takeQueuedSteers(): string[];
 }
@@ -34,6 +41,7 @@ export interface StartingRun {
 export function createStartingRun(onStop: () => void): StartingRun {
   let target: Pick<AbortableRun, "steer" | "isStreaming"> | null = null;
   let started = false;
+  let stopped = false;
   const queued: string[] = [];
   return {
     run: {
@@ -41,6 +49,7 @@ export function createStartingRun(onStop: () => void): StartingRun {
         onStop();
       },
       async steer(text: string) {
+        if (stopped && !started) throw new Error("The turn was stopped before it began.");
         // Before the loop there is nothing to steer: the words wait, and the turn
         // hands them over when it begins.
         if (target && started) await target.steer(text);
@@ -52,6 +61,7 @@ export function createStartingRun(onStop: () => void): StartingRun {
       // and a registry that believed it would drop the turn and let a second
       // message start a rival beside it. Once the loop runs, the session says.
       get isStreaming() {
+        if (stopped && !started) return false;
         return !started || !target || target.isStreaming;
       },
     },
@@ -60,6 +70,9 @@ export function createStartingRun(onStop: () => void): StartingRun {
     },
     markStarted() {
       started = true;
+    },
+    markStopped() {
+      stopped = true;
     },
     takeQueuedSteers() {
       return queued.splice(0, queued.length);

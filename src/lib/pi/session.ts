@@ -480,6 +480,8 @@ export interface TurnBinding {
   runId?: string;
   abortSignal?: AbortSignal;
   onPiInteraction?: (interaction: PiPendingInteraction) => void;
+  /** Where the turn came from (the Telegram chat it answers); the tools deliver by it. */
+  toolRuntimeData?: Record<string, unknown>;
 }
 
 const turnBindings = new WeakMap<object, TurnBinding>();
@@ -502,6 +504,21 @@ export function rebindSessionTurn(session: object, next: TurnBinding): void {
     binding.runId = next.runId;
     binding.abortSignal = next.abortSignal;
     binding.onPiInteraction = next.onPiInteraction;
+    binding.toolRuntimeData = next.toolRuntimeData;
+  }
+}
+
+/**
+ * A turn is over and its session is kept for the schedules it owns: it holds no run, no stop and
+ * no way to show a question any more. Where the turn came from stays - a scheduled run delivers to
+ * whoever last used this chat, which is what it did before the bindings could change at all.
+ */
+export function releaseSessionTurn(session: object): void {
+  const binding = turnBindings.get(session);
+  if (binding) {
+    binding.runId = undefined;
+    binding.abortSignal = undefined;
+    binding.onPiInteraction = undefined;
   }
 }
 
@@ -742,7 +759,12 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
   // What belongs to the turn this session is serving, read by the tools when they run rather than when
   // they were built: a session kept for its schedules is lent to the chat's next turn, and must show
   // that turn's questions and obey that turn's stop.
-  const turn: TurnBinding = { runId: options.runId, abortSignal: options.abortSignal, onPiInteraction: options.onPiInteraction };
+  const turn: TurnBinding = {
+    runId: options.runId,
+    abortSignal: options.abortSignal,
+    onPiInteraction: options.onPiInteraction,
+    toolRuntimeData: options.toolRuntimeData,
+  };
   const eggentTools = options.enableEggentTools === false || liteMode === "plain"
     ? { tools: [], cleanup: async () => {} }
     : await createEggentPiTools({
@@ -751,9 +773,9 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
         scopeId,
         cwd,
         memorySubdir,
-        toolRuntimeData: options.toolRuntimeData,
         onMcpConfigChanged: queueMcpRuntimeReload,
         getAgentSession: () => sessionRef,
+        get toolRuntimeData() { return turn.toolRuntimeData; },
         get runId() { return turn.runId; },
         get abortSignal() { return turn.abortSignal; },
         get onPiInteraction() { return turn.onPiInteraction; },

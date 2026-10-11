@@ -411,7 +411,12 @@ export async function runProjectVisit(request: {
         letGo = resolve;
       });
       let graceTimer: ReturnType<typeof setTimeout> | undefined;
+      // Handed to the project's turn as its own stop: unlike a reset asked of a turn that has to be
+      // found first, it is read when the turn starts, so a stop that comes before the turn has
+      // registered anywhere, or while its session is still being built, is not lost.
+      const childAbort = new AbortController();
       const stop = () => {
+        childAbort.abort();
         void stopVisitTurn(chatId, () => finished);
         if (!graceTimer) {
           graceTimer = setTimeout(letGo, visitStopGraceMs());
@@ -467,6 +472,7 @@ export async function runProjectVisit(request: {
           userMessage: request.task.trimStart().startsWith("@") ? `Task: ${request.task}` : request.task,
           projectId: project.id,
           visit: { parentChatId: parent.chatId, ...(parent.title ? { parentTitle: parent.title } : {}) },
+          abortSignal: childAbort.signal,
           outcome,
           onSessionEvent,
         });

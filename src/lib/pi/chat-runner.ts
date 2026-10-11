@@ -1,7 +1,7 @@
 import { DEFAULT_CHAT_TITLES } from "@/i18n/vocabulary";
 import { createUIMessageStream } from "ai";
 import type { UIMessage, UIMessageStreamWriter } from "ai";
-import { createEggentPiSession, rebindSessionTurn } from "@/lib/pi/session";
+import { createEggentPiSession, rebindSessionTurn, releaseSessionTurn } from "@/lib/pi/session";
 import { diagnoseCurrentProvider, getPiModelsState, managedCredentialRecoverable } from "@/lib/pi/config-store";
 import { getServerTranslator } from "@/i18n/server";
 import { learnFromTurn } from "@/lib/learning/review";
@@ -793,6 +793,8 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
   const turn: { stalled: StalledTurn | null; session: Awaited<ReturnType<typeof createEggentPiSession>> | null } = { stalled: null, session: null };
   const requestStop = () => {
     stopped = true;
+    // Not a turn to join any more, whatever its session is still doing: see markStopped.
+    starting.markStopped();
     runAbort.abort();
     // A stop discards what was waiting to be added to the turn: left queued, it
     // would start the loop again the moment the abort let go of it.
@@ -820,8 +822,9 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
     })
     : null;
 
-  // Declared here, not where it is first used: the undo below has to be able to see it.
+  // Declared here, not where it is first used: the undo below has to be able to see them.
   let live: LiveRunSink | null = null;
+  const teardown: Array<() => void> = [];
   scope.abandon = async (error) => {
     watchdog?.stop();
     clearActiveRun(options.chatId, runId);
@@ -830,11 +833,19 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
       live.push({ type: "error", errorText: streamErrorText(error) });
       live.finish();
     }
+    for (const undo of teardown.splice(0)) {
+      try {
+        undo();
+      } catch {
+        // Letting go of a listener must not hide the failure that came first.
+      }
+    }
     // A session built for this turn that nothing took over: back to where it came from, or let go.
     const built = turn.session;
     if (built) {
       const retained = await retainPiScheduleSession({ chatId: options.chatId, projectId: options.projectId, session: built });
-      if (!retained) built.dispose();
+      if (retained) releaseSessionTurn(built);
+      else built.dispose();
     }
   };
 
@@ -850,7 +861,7 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
   try {
     // A session kept for its schedules is built for the turn that made them: it serves this one now.
     const lent = takeRetainedPiScheduleSession(options.chatId);
-    if (lent) rebindSessionTurn(lent, { runId, abortSignal: runAbort.signal });
+    if (lent) rebindSessionTurn(lent, { runId, abortSignal: runAbort.signal, toolRuntimeData: options.toolRuntimeData });
     session = lent ?? await raceAbort(
       createEggentPiSession({
         cwd: options.cwd,
@@ -941,6 +952,7 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
   // finished: the answer is the last, not everything said on the way to it.
   let messageText = "";
   let lastMessageText = "";
+  teardown.push(() => subagents.dispose());
   const unsubscribe = session.subscribe((event: unknown) => {
     const record = asRecord(event);
     if (!record) return;
@@ -1050,6 +1062,7 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
     }
   });
 
+  teardown.push(unsubscribe);
   live = startLiveRun({
     chatId: options.chatId,
     runId,
@@ -1155,7 +1168,7 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
       session,
     });
     // Kept for its schedules, it must not go on holding this turn's stop signal and question stream.
-    if (retained) rebindSessionTurn(session, {});
+    if (retained) releaseSessionTurn(session);
     const retainedForMcpOAuth = !retained && mcpOAuthPending
       ? retainPiMcpOAuthSession({
           chatId: options.chatId,
@@ -1224,6 +1237,9 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
       // Reachable while the session is still being built, so a stop - the
       // button, a stop word, /reset - finds a turn stuck there.
       const starting = createStartingRun(() => runAbort.abort());
+      // A stop, from any source, makes the turn one that is not joined any more (see markStopped).
+      if (runAbort.signal.aborted) starting.markStopped();
+      else runAbort.signal.addEventListener("abort", () => starting.markStopped(), { once: true });
       registerActiveRun(options.chatId, {
         session: starting.run,
         runId,
@@ -1248,6 +1264,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
 
       // How to undo the registration above if the turn fails before its own cleanup begins.
       let built: Awaited<ReturnType<typeof createEggentPiSession>> | null = null;
+      const teardown: Array<() => void> = [];
       scope.abandon = async (error) => {
         watchdog?.stop();
         clearActiveRun(options.chatId, runId);
@@ -1256,10 +1273,18 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
           live.push({ type: "error", errorText: streamErrorText(error) });
           live.finish();
         }
+        for (const undo of teardown.splice(0)) {
+          try {
+            undo();
+          } catch {
+            // Letting go of a listener must not hide the failure that came first.
+          }
+        }
         // A session built for this turn that nothing took over: back to where it came from, or let go.
         if (built) {
           const retained = await retainPiScheduleSession({ chatId: options.chatId, projectId: options.projectId, session: built });
-          if (!retained) built.dispose();
+          if (retained) releaseSessionTurn(built);
+          else built.dispose();
         }
       };
 
@@ -1456,6 +1481,11 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
       };
 
       runAbort.signal.addEventListener("abort", handleAbort, { once: true });
+      teardown.push(() => runAbort.signal.removeEventListener("abort", handleAbort), () => subagents.dispose());
+      // A stop that came while the turn was getting set up - reading the projects of an @ message,
+      // say - fired before this listener existed, and a session lent from its schedules has no
+      // build to race it against: without this the stop is acknowledged and never acted on.
+      if (runAbort.signal.aborted) handleAbort();
 
       const unsubscribe = session.subscribe((event: unknown) => {
         const record = asRecord(event);
@@ -1620,6 +1650,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
       // response is simply the first thing reading it. A second tab, or the same
       // tab coming back to the chat, attaches to the same buffer and sees the
       // turn from the beginning.
+      teardown.push(unsubscribe);
       live = startLiveRun({
         chatId: options.chatId,
         runId,
@@ -1753,7 +1784,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
           session,
         });
         // Kept for its schedules, it must not go on holding this turn's stop signal and question stream.
-        if (retained) rebindSessionTurn(session, {});
+        if (retained) releaseSessionTurn(session);
         const retainedForMcpOAuth = !retained && !aborted && mcpOAuthPending
           ? retainPiMcpOAuthSession({
               chatId: options.chatId,

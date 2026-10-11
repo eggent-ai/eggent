@@ -48,6 +48,7 @@ const sockets = new Set<import("node:net").Socket>();
 // What reached the model: how many requests, and the person's words in the last one.
 let modelCalls = 0;
 let lastUserTexts: string[] = [];
+const allUserTexts: string[][] = [];
 const provider = http.createServer((req, res) => {
   if (req.method === "GET") {
     res.writeHead(200, { "content-type": "application/json" });
@@ -63,6 +64,7 @@ const provider = http.createServer((req, res) => {
     const messages = payload.messages ?? [];
     modelCalls += 1;
     lastUserTexts = messages.filter((message) => message.role === "user").map((message) => JSON.stringify(message.content ?? ""));
+    allUserTexts.push(lastUserTexts);
     const last = [...messages].reverse().find((message) => message.role === "user");
     const text = JSON.stringify(last?.content ?? "");
     const toolAnswered = messages[messages.length - 1]?.role === "tool";
@@ -136,7 +138,7 @@ fs.writeFileSync(path.join(extensions, "preflight.ts"), [
 
 const { runPiAgentText, joinActiveRun, createPiChatUIMessageStream } = await import("../src/lib/pi/chat-runner.ts");
 const { createChat, getChat } = await import("../src/lib/storage/chat-store.ts");
-const { getActiveRun } = await import("../src/lib/pi/active-runs.ts");
+const { getActiveRun, stopActiveRun } = await import("../src/lib/pi/active-runs.ts");
 const { getLiveRun } = await import("../src/lib/pi/live-run.ts");
 const { resetChatTurn } = await import("../src/lib/pi/turn-control.ts");
 import type { AgentProgressEvent } from "../src/lib/pi/types.ts";
@@ -260,6 +262,49 @@ await check("/reset stops it for real, and says so only if it did", () => {
 });
 process.env.EGGENT_TEST_PREFLIGHT_MS = "0";
 
+// A turn that has been told to stop is not one to join: what the person says next is a turn of its own.
+const CHAT_CORRECT = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+const CHAT_WEDGE = "cccccccc-cccc-4ccc-8ccc-cccccccccccc";
+await createChat(CHAT_CORRECT, "Stop, then correct");
+await createChat(CHAT_WEDGE, "Wedged");
+
+process.env.EGGENT_TEST_PREFLIGHT_MS = "2500";
+allUserTexts.length = 0;
+const correctedFirst = runPiAgentText({ chatId: CHAT_CORRECT, userMessage: "FIRST-REQUEST do the first thing" });
+await sleep(1000);
+const stopOne = await joinActiveRun(CHAT_CORRECT, "stop");
+const correction = await joinActiveRun(CHAT_CORRECT, "no, do the OTHER-THING instead");
+let correctedReply = "";
+if (correction === null) correctedReply = await runPiAgentText({ chatId: CHAT_CORRECT, userMessage: "no, do the OTHER-THING instead" });
+await correctedFirst;
+await check("what is said right after a stop is not added to the turn that is ending: it starts one of its own", () => {
+  assert.equal(stopOne, "stopped");
+  assert.equal(correction, null, `answered ${correction}: the person was told it was added to a turn that was about to end`);
+  assert.equal(correctedReply, "all done");
+});
+await check("...and the model hears the correction, and never the request that was stopped", () => {
+  assert.ok(allUserTexts.some((texts) => texts.some((text) => text.includes("OTHER-THING"))), JSON.stringify(allUserTexts));
+  assert.ok(allUserTexts.every((texts) => texts.every((text) => !text.includes("FIRST-REQUEST"))), "the stopped request reached the model");
+});
+
+process.env.EGGENT_TEST_PREFLIGHT_MS = "100000000";
+let wedgeSettled = false;
+void runPiAgentText({ chatId: CHAT_WEDGE, userMessage: "first request" }).then(() => { wedgeSettled = true; }, () => { wedgeSettled = true; });
+await sleep(1000);
+const wedgeStop = await joinActiveRun(CHAT_WEDGE, "stop");
+process.env.EGGENT_TEST_PREFLIGHT_MS = "0";
+const afterWedge = await joinActiveRun(CHAT_WEDGE, "hello? please answer me");
+const freshReply = afterWedge === null
+  ? await Promise.race([runPiAgentText({ chatId: CHAT_WEDGE, userMessage: "hello? please answer me" }), sleep(15_000).then(() => "NO-ANSWER")])
+  : "";
+await check("a turn stuck where nothing can reach it does not swallow what the person says next", () => {
+  assert.equal(wedgeStop, "stopped");
+  assert.equal(wedgeSettled, false, "the test needs a turn that really does not return");
+  assert.equal(afterWedge, null, `answered ${afterWedge}: every later message was added to a turn that will never answer`);
+  assert.equal(freshReply, "all done");
+});
+process.env.EGGENT_TEST_PREFLIGHT_MS = "2500";
+
 console.log("\nA turn that fails before it begins\n");
 
 const chatFile = (id: string) => path.join(root, "data", "chats", `${id}.json`);
@@ -311,6 +356,48 @@ await check("a turn stopped before it began says it was stopped, the way a stop 
   assert.equal(outcome.stopped, true, "the caller cannot tell it was stopped, and says so a second time");
   assert.equal(reply, "", "the stop word's own answer is not said twice");
   assert.equal(getActiveRun(CHAT_EARLY), undefined);
+});
+
+console.log("\nA stop on a session kept for its schedules\n");
+
+await check("a stop that comes while the turn is still reading the projects is acted on, not just acknowledged", async () => {
+  process.env.EGGENT_TEST_PREFLIGHT_MS = "0";
+  // Many projects, so that an @ message takes a moment to read them.
+  const projectsDir = path.join(root, "data", "projects");
+  for (let index = 0; index < 1200; index += 1) {
+    const dir = path.join(projectsDir, `proj-${index}`);
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, "project.json"), JSON.stringify({ id: `proj-${index}`, name: `Project ${index}`, description: "x", instructions: "", memoryMode: "isolated", createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() }));
+  }
+  const CHAT_LENT = "dddddddd-dddd-4ddd-8ddd-dddddddddddd";
+  await createChat(CHAT_LENT, "Chat with a schedule");
+  // The store pi-subagents keeps for this chat's session: one enabled job, far in the future.
+  const storeDir = path.join(projectsDir, ".pi", "subagent-schedules");
+  fs.mkdirSync(storeDir, { recursive: true });
+  fs.writeFileSync(path.join(storeDir, `${CHAT_LENT}.json`), JSON.stringify({ version: 1, jobs: [{ id: "job-1", name: "Far", description: "far", prompt: "do it", schedule: "0 0 6 1 1 *", scheduleType: "cron", enabled: true }] }, null, 2));
+  await runPiAgentText({ chatId: CHAT_LENT, userMessage: "hello first" });
+  const { listRetainedPiScheduleSessions } = await import("../src/lib/pi/schedule-host.ts");
+  assert.ok(listRetainedPiScheduleSessions().some((entry: { chatId: string }) => entry.chatId === CHAT_LENT), "the session was not kept for its schedule");
+
+  modelCalls = 0;
+  const stream = createPiChatUIMessageStream({ chatId: CHAT_LENT, userMessage: "@proj-7 please say hi" } as never);
+  const reader = stream.getReader();
+  const drained = (async () => {
+    try {
+      for (;;) {
+        const { done } = await reader.read();
+        if (done) break;
+      }
+    } catch {
+      // The stream ending in an error is not what is judged here.
+    }
+  })();
+  for (let waited = 0; !getActiveRun(CHAT_LENT) && waited < 2000; waited += 1) await sleep(1);
+  assert.equal(await stopActiveRun(CHAT_LENT), true);
+  await Promise.race([drained, sleep(8000)]);
+  assert.equal(modelCalls, 0, `the model was called ${modelCalls} time(s) after the stop was acknowledged`);
+  assert.equal(getActiveRun(CHAT_LENT), undefined);
+  assert.equal(getLiveRun(CHAT_LENT), null);
 });
 
 console.log("\nNothing else changes\n");

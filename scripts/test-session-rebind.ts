@@ -41,7 +41,7 @@ fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ defaultP
 process.env.PI_CODING_AGENT_DIR = agentDir;
 process.env.EGGENT_LEARNING = "off";
 
-const { createEggentPiSession, rebindSessionTurn } = await import("../src/lib/pi/session.ts");
+const { createEggentPiSession, rebindSessionTurn, releaseSessionTurn } = await import("../src/lib/pi/session.ts");
 const { listPendingInteractions, cancelPendingInteractionsForRun } = await import("../src/lib/pi/pending-interactions.ts");
 import type { PiPendingInteraction } from "../src/lib/pi/interaction-types.ts";
 
@@ -140,6 +140,24 @@ await check("a session kept for its schedules serves no one, and nothing it hold
   const asked = text(await tool("eggent_ask_user").execute("q4", { question: "Anyone?", options: ["a", "b"] }));
   assert.match(asked, /No interactive UI/i);
   assert.equal(second.length, before, "a card was raised for a turn that is over");
+});
+
+console.log("\nWhere the turn came from\n");
+
+const fromTelegram = async (): Promise<boolean> => {
+  const status = JSON.parse(text(await tool("eggent_manage_telegram").execute("t", { action: "status" }))) as { thisRunFromTelegram?: boolean };
+  return Boolean(status.thisRunFromTelegram);
+};
+
+await check("a tool delivers by the chat of the turn it serves now, and a finished turn leaves it as it was for the schedules", async () => {
+  assert.equal(await fromTelegram(), false, "the session was built for a turn from the web");
+  rebindSessionTurn(session, { runId: "run-7", toolRuntimeData: { telegram: { chatId: "4242" } } });
+  assert.equal(await fromTelegram(), true, "a tool still thought the turn came from where the session was built for");
+  // The turn ends: no run, no stop, no card - but a scheduled run delivers to whoever last used the chat.
+  releaseSessionTurn(session);
+  assert.equal(await fromTelegram(), true);
+  rebindSessionTurn(session, { runId: "run-8" });
+  assert.equal(await fromTelegram(), false, "a web turn kept the Telegram chat of the one before");
 });
 
 session.dispose();
