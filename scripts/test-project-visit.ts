@@ -117,7 +117,9 @@ const provider = http.createServer((req, res) => {
     const directive = /call eggent_ask_project with project="([^"]+)"/.exec(lastUser);
     if (directive && lastRole !== "tool") {
       const task = lastUser.includes("Task for the project:\n") ? lastUser.split("Task for the project:\n")[1].split("\n\nRuntime data:")[0].trim() : "";
-      return call("eggent_ask_project", { project: directive[1], task });
+      // A model that writes the project's name where the id was asked for.
+      const byName = lastUser.includes("BY-NAME");
+      return call("eggent_ask_project", { project: byName ? "Shop" : directive[1], task });
     }
     // ...and back with the answer: say where it came from.
     if (lastToolResult.startsWith("Project ")) {
@@ -313,6 +315,21 @@ await check("naming one project does not let the model ask another", async () =>
   assert.equal(granted("some-chat", "blog"), false);
   visit.revokeVisits("some-chat");
   assert.equal(granted("some-chat", "shop"), false);
+});
+await check("a model that writes the project's name instead of its id is understood, for the project the person named", async () => {
+  const chat = await newChat("By name");
+  seen.length = 0;
+  const reply = await runPiAgentText({ chatId: chat, userMessage: "@shop BY-NAME how many orders came back?" });
+  assert.match(reply, /relayed: /);
+  assert.ok(seen.some((request) => request.system.includes("SHOP-MARKER")), "the project was not reached");
+});
+await check("...and the name of a project nobody named is still refused", async () => {
+  const chat = await newChat("Wrong name");
+  seen.length = 0;
+  // The stub calls "Shop" for any directive; the person named the blog.
+  const reply = await runPiAgentText({ chatId: chat, userMessage: "@blog BY-NAME write a headline" });
+  assert.equal(reply, "refused by the tool");
+  assert.equal(seen.filter((request) => request.system.includes("SHOP-MARKER")).length, 0);
 });
 await check("the permission ends with the turn", async () => {
   assert.equal(visit.visitGranted(parentChat, "shop"), false);

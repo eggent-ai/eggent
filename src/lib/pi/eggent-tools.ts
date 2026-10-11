@@ -31,6 +31,7 @@ import {
 import { afterTelegramDelivery } from "@/lib/telegram/conversation";
 import { withChatFooter } from "@/lib/telegram/format";
 import { createChat, getChat } from "@/lib/storage/chat-store";
+import { squashName } from "@/lib/pi/project-mention";
 import { describeVisitResult, runProjectVisit, visitChatIdFor, visitGranted, visitProgressDetails } from "@/lib/pi/project-visit";
 import { listChatSummaries, readChatConversation, searchChats } from "@/lib/storage/chat-browse";
 import { chatPath } from "@/lib/dashboard-routes";
@@ -1403,8 +1404,11 @@ export async function createEggentPiTools(options: {
         task: Type.String({ description: "What the project should do, in the person's words." }),
       }),
       execute: async (_toolCallId, params, signal, onUpdate) => {
-        const target = askableProjects.find((project) => project.id === (params.project?.trim() ?? ""));
-        if (!target || !visitGranted(options.chatId, target.id)) {
+        // The id the instructions gave; a model that writes the name instead is understood too.
+        const wanted = params.project?.trim() ?? "";
+        const target = askableProjects.find((project) => project.id === wanted)
+          ?? askableProjects.find((project) => squashName(project.id) === squashName(wanted) || squashName(project.name) === squashName(wanted));
+        if (!wanted || !target || !visitGranted(options.chatId, target.id)) {
           return textResult(JSON.stringify({
             success: false,
             error: "A project can be asked only by the person, by starting a message with @ and its name.",
