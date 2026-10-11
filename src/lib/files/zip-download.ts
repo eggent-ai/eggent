@@ -12,7 +12,7 @@ export interface ZipCheck {
   files: number;
   bytes: number;
   /** What was left out, by reason: files that hold credentials, links, dependencies and the like. */
-  skipped: { secrets: number; links: number; hidden: number };
+  skipped: { secrets: number; links: number; hidden: number; unreadable?: number };
 }
 
 export function zipUrl(projectId: string, paths: readonly string[], extra: Record<string, string> = {}): string {

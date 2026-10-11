@@ -270,6 +270,71 @@ await check("groups from several folders stay apart, and the same file is not li
   assert.deepEqual(merged.map((group) => [group.project, group.items.map((item) => item.path), group.total]), [["shop", ["a.md", "b.md"], 2], ["blog", ["post.md"], 1]]);
 });
 
+
+console.log("\nIn the orchestrator's folder\n");
+
+// There the first part of a path is a project, and the folder is shared by every chat and by
+// whatever the sync brings in from the person's computer.
+const projectsDir = path.join(root, "data", "projects");
+const orchestratorCollect = (input: Partial<Parameters<typeof produced.collectProducedFiles>[0]>) =>
+  produced.collectProducedFiles({ tools: [], startedAt: now() - 1000, cwd: projectsDir, projectId: "none", assistantText: "", ...input } as never);
+
+await check("a project's own housekeeping is not a result there either", async () => {
+  work("skills/x/SKILL.md"); work("memory.md"); work("context.md"); work("uploads/in.png"); work("final/deck.pptx");
+  const writes = ["shop/skills/x/SKILL.md", "shop/memory.md", "shop/context.md", "shop/uploads/in.png", "shop/final/deck.pptx"];
+  const group = await orchestratorCollect({
+    tools: writes.map((target) => ({ toolName: "write", input: { path: target }, status: "completed" })),
+    assistantText: "Saved `shop/skills/x/SKILL.md` and `shop/final/deck.pptx`.",
+  });
+  assert.deepEqual(group?.items.map((item) => item.path), ["shop/final/deck.pptx"]);
+  assert.equal(group?.project, "none");
+});
+await check("the scan there looks at what lies in the folder itself, not at every project's new files", async () => {
+  // Another chat, or the sync, made this in a project during the turn; the turn made the other.
+  work("arrived-from-laptop.docx");
+  fs.writeFileSync(path.join(projectsDir, "turn-result.md"), "x");
+  const group = await orchestratorCollect({ tools: [{ toolName: "bash", input: { command: "make" }, status: "completed" }] });
+  assert.deepEqual(group?.items.map((item) => item.path), ["turn-result.md"], JSON.stringify(group));
+  fs.rmSync(path.join(projectsDir, "turn-result.md"));
+});
+await check("a file with another name elsewhere is not a result", async () => {
+  const elsewhere = path.join(root, "elsewhere.txt");
+  fs.writeFileSync(elsewhere, "NOT-FOR-THE-CARD");
+  fs.linkSync(elsewhere, path.join(shopDir, "twin.md"));
+  assert.equal(await collect({ tools: [{ toolName: "write", input: { path: "twin.md" }, status: "completed" }], assistantText: "Saved `twin.md`." }), null);
+});
+await check("a project whose folder is a link to somewhere else has no results, and serves nothing", async () => {
+  fs.writeFileSync(path.join(root, "data", "hostfile.md"), "x");
+  const linked = path.join(projectsDir, "linkedproj");
+  fs.symlinkSync(path.join(root, "data"), linked);
+  try {
+    const group = await produced.collectProducedFiles({
+      tools: [{ toolName: "write", input: { path: "hostfile.md" }, status: "completed" }],
+      startedAt: now() - 60_000, cwd: linked, projectId: "linkedproj", assistantText: "Saved `hostfile.md`.",
+    } as never);
+    assert.equal(group, null);
+    const { resolveWorkspaceFile } = await import("../src/lib/files/telegram-send.ts");
+    assert.equal(await resolveWorkspaceFile("linkedproj", "hostfile.md"), null);
+    assert.equal(await resolveWorkspaceFile("..", "x"), null);
+  } finally {
+    fs.rmSync(linked);
+  }
+});
+await check("what a stored message says about its files is checked before anything draws or sends from it", async () => {
+  const { cleanProducedGroups } = await import("../src/lib/files/produced-shape.ts");
+  assert.deepEqual(cleanProducedGroups(undefined), []);
+  assert.deepEqual(cleanProducedGroups("files"), []);
+  assert.deepEqual(cleanProducedGroups([null, 5, "x", {}, { project: 4, items: [] }, { project: "shop" }, { project: "shop", items: [] }]), []);
+  const cleaned = cleanProducedGroups([
+    { project: "shop", total: 9, items: [{ path: 5 }, null, { path: "" }, { path: "ok.md", size: "big" }, { path: "a/b.md", size: 12, source: "tool" }, { path: "nul\0.md" }] },
+    { project: "blog", items: [{ path: "p.md", size: -3, source: "weird" }] },
+  ]);
+  assert.deepEqual(cleaned, [
+    { project: "shop", total: 9, items: [{ path: "ok.md", size: 0, source: "answer" }, { path: "a/b.md", size: 12, source: "tool" }] },
+    { project: "blog", total: 1, items: [{ path: "p.md", size: 0, source: "answer" }] },
+  ]);
+});
+
 console.log("\nIn a real turn\n");
 
 let chatNumber = 0;
@@ -377,6 +442,32 @@ await check("more than three files go as one archive", async () => {
   assert.match(result.reply, /Sent 5 files as one archive/);
   assert.equal(delivered.length, 1);
   assert.equal(delivered[0].name, "files.zip");
+});
+await check("an archive of the few a message keeps says how many there were", async () => {
+  const chat = await newChat("Forty", "shop");
+  const stored = await getChat(chat);
+  assert.ok(stored);
+  const items = Array.from({ length: 5 }, (_, index) => {
+    work(`forty/f${index}.md`, `file ${index}`);
+    return { path: `forty/f${index}.md`, size: 8, source: "tool" as const };
+  });
+  stored.messages.push({ id: "m3", role: "assistant", content: "Made forty files.", createdAt: new Date().toISOString(), files: [{ project: "shop", items, total: 40 }] });
+  const { saveChat } = await import("../src/lib/storage/chat-store.ts");
+  await saveChat(stored);
+  delivered.length = 0;
+  const result = await handleExternalMessage({ sessionId: "tg-forty", message: "/files", chatId: chat, projectId: "shop", toolRuntimeData: { telegram: { chatId: 4242 } } } as never);
+  assert.match(result.reply, /Sent 5 of 40 files as one archive/);
+  assert.equal(delivered.length, 1);
+});
+await check("a message whose files are not the shape of files does not stop /files", async () => {
+  const chat = await newChat("Odd", "shop");
+  const stored = await getChat(chat);
+  assert.ok(stored);
+  stored.messages.push({ id: "m4", role: "assistant", content: "Made one.", createdAt: new Date().toISOString(), files: [{ project: "shop", items: [{ path: 7 }], total: 1 }] as never });
+  const { saveChat } = await import("../src/lib/storage/chat-store.ts");
+  await saveChat(stored);
+  const result = await handleExternalMessage({ sessionId: "tg-odd", message: "/files", chatId: chat, projectId: "shop", toolRuntimeData: { telegram: { chatId: 4242 } } } as never);
+  assert.match(result.reply, /There are no files from the last answer/);
 });
 await check("a file that is gone is said to be gone, not sent as nothing", async () => {
   const chat = await newChat("Gone", "shop");

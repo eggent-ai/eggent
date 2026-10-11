@@ -1,4 +1,7 @@
-import { createReadStream } from "node:fs";
+import { constants as fsConstants } from "node:fs";
+import fs from "node:fs/promises";
+import type { FileHandle } from "node:fs/promises";
+import path from "node:path";
 import { Readable, Transform, pipeline } from "node:stream";
 import zlib from "node:zlib";
 
@@ -17,7 +20,9 @@ import zlib from "node:zlib";
  * 4 GiB and 65 535 files), encryption, and anything that is not a plain file.
  * A file that changes while it is read is written as far as the size it had
  * when it was listed, so the archive is always consistent with its own
- * directory.
+ * directory. A file that cannot be opened when its turn comes - gone, unreadable,
+ * or replaced by a link to somewhere else while the archive was being sent - is
+ * left out rather than ending the archive.
  */
 
 const LOCAL_SIGNATURE = 0x04034b50;
@@ -153,7 +158,38 @@ function endRecord(count: number, directorySize: number, directoryOffset: number
   return record;
 }
 
-async function* writeArchive(files: readonly ZipFile[], signal?: AbortSignal): AsyncGenerator<Buffer> {
+// O_NOFOLLOW is missing where there are no such links to follow.
+const OPEN_FLAGS = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0);
+
+/**
+ * Opens a file for the archive, or says why it must not go in.
+ *
+ * The plan was made some time ago - for a large folder, minutes - and the folder
+ * belongs to an agent with a shell. So the file is checked again when it is
+ * opened: not a link, one name only, and the thing opened is the thing that the
+ * path leads to inside the folder.
+ */
+async function openForArchive(file: ZipFile, root: string | undefined): Promise<FileHandle | null> {
+  let handle: FileHandle | null = null;
+  try {
+    handle = await fs.open(file.filePath, OPEN_FLAGS);
+    const opened = await handle.stat();
+    if (!opened.isFile() || opened.nlink > 1) throw new Error("not a plain file");
+    if (root) {
+      const real = await fs.realpath(file.filePath);
+      if (!real.startsWith(root + path.sep)) throw new Error("outside the folder");
+      const there = await fs.stat(real);
+      if (there.ino !== opened.ino || there.dev !== opened.dev) throw new Error("replaced");
+    }
+    return handle;
+  } catch {
+    await handle?.close().catch(() => undefined);
+    return null;
+  }
+}
+
+async function* writeArchive(files: readonly ZipFile[], options: ZipStreamOptions): AsyncGenerator<Buffer> {
+  const { signal, onActivity } = options;
   if (files.length > MAX_ENTRIES) throw new Error("Too many files for one archive.");
   const finished: Finished[] = [];
   let offset = 0;
@@ -161,11 +197,16 @@ async function* writeArchive(files: readonly ZipFile[], signal?: AbortSignal): A
   for (const file of files) {
     if (signal?.aborted) throw new Error("The archive was cancelled.");
     if (offset > MAX_OFFSET) throw new Error("The archive is too large.");
+    onActivity?.();
+    // Before the header, so a file that cannot be had leaves no trace in the archive.
+    const handle = file.size > 0 ? await openForArchive(file, options.root) : null;
+    if (file.size > 0 && !handle) continue;
     const name = Buffer.from(file.name, "utf8");
     const { time, date } = dosDateTime(file.mtime);
     const header = localHeader(name, time, date);
     const entryOffset = offset;
     yield header;
+    onActivity?.();
     offset += header.length;
 
     let crc = 0;
@@ -180,8 +221,8 @@ async function* writeArchive(files: readonly ZipFile[], signal?: AbortSignal): A
     });
     const deflate = zlib.createDeflateRaw({ level: isAlreadyCompressed(file.name) ? 0 : 6 });
     // An empty file has no bytes to read, and a range of [0, -1] is an error.
-    const input = file.size > 0
-      ? createReadStream(file.filePath, { start: 0, end: file.size - 1 })
+    const input = handle
+      ? handle.createReadStream({ start: 0, end: file.size - 1, autoClose: true })
       : Readable.from([]);
     const flow = pipeline(input, counter, deflate, () => undefined);
     try {
@@ -190,11 +231,13 @@ async function* writeArchive(files: readonly ZipFile[], signal?: AbortSignal): A
         compressed += piece.length;
         offset += piece.length;
         yield piece;
+        onActivity?.();
       }
     } finally {
       input.destroy();
       counter.destroy();
       deflate.destroy();
+      await handle?.close().catch(() => undefined);
     }
 
     const entry: Finished = { name, time, date, crc, compressed, size, mode: file.mode, offset: entryOffset };
@@ -214,10 +257,21 @@ async function* writeArchive(files: readonly ZipFile[], signal?: AbortSignal): A
   yield endRecord(finished.length, directorySize, directoryOffset);
 }
 
+export interface ZipStreamOptions {
+  signal?: AbortSignal;
+  /**
+   * The real path of the folder the files came from. With it, each file is checked
+   * again when it is opened - see openForArchive.
+   */
+  root?: string;
+  /** Called whenever the archive moves: a file opened, a piece written, a piece taken by the reader. */
+  onActivity?: () => void;
+}
+
 /**
  * The archive as a byte stream. Destroy it to stop: reading and compressing
  * stop with it and every file handle is let go.
  */
-export function zipStream(files: readonly ZipFile[], options: { signal?: AbortSignal } = {}): Readable {
-  return Readable.from(writeArchive(files, options.signal), { objectMode: false });
+export function zipStream(files: readonly ZipFile[], options: ZipStreamOptions = {}): Readable {
+  return Readable.from(writeArchive(files, options), { objectMode: false });
 }

@@ -1,7 +1,8 @@
+import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { getWorkDir } from "@/lib/storage/project-store";
-import { isSecretFileName } from "@/lib/files/zip-walk";
+import { isSecretFileName, planZip, ZipLimitError } from "@/lib/files/zip-walk";
+import { projectFolderIsLink, workDirOrNull } from "@/lib/files/workspace-root";
 import {
   looksLikePhoto,
   resolveTelegramDestination,
@@ -10,7 +11,6 @@ import {
   type TelegramDestination,
 } from "@/lib/telegram/outbound";
 import { afterTelegramDelivery } from "@/lib/telegram/conversation";
-import { planZip, ZipLimitError } from "@/lib/files/zip-walk";
 import { zipStream } from "@/lib/files/zip-writer";
 
 /**
@@ -38,12 +38,15 @@ export async function resolveWorkspaceFile(
   project: string,
   relativePath: string
 ): Promise<{ absolute: string; name: string; size: number } | null> {
-  const workDir = path.resolve(getWorkDir(project));
+  const folder = workDirOrNull(project);
+  if (!folder || (await projectFolderIsLink(project))) return null;
+  const workDir = path.resolve(folder);
   const absolute = path.resolve(workDir, relativePath);
   if (absolute === workDir || !absolute.startsWith(workDir + path.sep)) return null;
   try {
     const stat = await fs.lstat(absolute);
-    if (!stat.isFile()) return null;
+    // A file with a second name somewhere else may be a door to a file that is not in this folder.
+    if (!stat.isFile() || stat.nlink > 1) return null;
     const [realWork, realFile] = await Promise.all([fs.realpath(workDir), fs.realpath(absolute)]);
     if (!realFile.startsWith(realWork + path.sep)) return null;
     const name = path.basename(absolute);
@@ -51,6 +54,27 @@ export async function resolveWorkspaceFile(
     return { absolute, name, size: stat.size };
   } catch {
     return null;
+  }
+}
+
+// O_NOFOLLOW is missing where there are no such links to follow.
+const OPEN_FLAGS = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0);
+
+/**
+ * The bytes of a file, read through the handle it was checked on. The path was
+ * judged a moment ago; a link put in its place since is not followed.
+ */
+async function readPlainFile(absolute: string): Promise<Buffer | null> {
+  let handle;
+  try {
+    handle = await fs.open(absolute, OPEN_FLAGS);
+    const info = await handle.stat();
+    if (!info.isFile() || info.nlink > 1 || info.size > TELEGRAM_FILE_MAX_BYTES) return null;
+    return await handle.readFile();
+  } catch {
+    return null;
+  } finally {
+    await handle?.close().catch(() => undefined);
   }
 }
 
@@ -70,7 +94,9 @@ export async function sendWorkspaceFileToTelegram(input: {
   const destination = input.destination ?? (await resolveTelegramDestination(input.run ?? null));
   if (!destination) return { ok: false, reason: "no-destination" };
 
-  const payload = { buffer: await fs.readFile(file.absolute), name: file.name };
+  const buffer = await readPlainFile(file.absolute);
+  if (!buffer) return { ok: false, reason: "not-found" };
+  const payload = { buffer, name: file.name };
   const asPhoto = looksLikePhoto(file.name);
   const result = asPhoto ? await sendTelegramPhoto(destination, payload) : await sendTelegramDocument(destination, payload);
   if (!result.success) return { ok: false, reason: "failed", error: result.error };
@@ -94,17 +120,18 @@ export async function sendWorkspaceFilesAsArchive(input: {
 }): Promise<SendFileOutcome> {
   const destination = await resolveTelegramDestination(input.run ?? null);
   if (!destination) return { ok: false, reason: "no-destination" };
-  const workDir = path.resolve(getWorkDir(input.project));
+  const folder = workDirOrNull(input.project);
+  if (!folder || (await projectFolderIsLink(input.project))) return { ok: false, reason: "not-found" };
   let plan;
   try {
-    plan = await planZip(workDir, input.paths, { maxBytes: ARCHIVE_MAX_BYTES * 2 });
+    plan = await planZip(path.resolve(folder), input.paths, { maxBytes: ARCHIVE_MAX_BYTES * 2 });
   } catch (error) {
     if (error instanceof ZipLimitError && error.kind === "bytes") return { ok: false, reason: "too-large" };
     return { ok: false, reason: "not-found" };
   }
   const chunks: Buffer[] = [];
   let size = 0;
-  for await (const chunk of zipStream(plan.files)) {
+  for await (const chunk of zipStream(plan.files, { root: plan.root })) {
     size += (chunk as Buffer).length;
     if (size > ARCHIVE_MAX_BYTES) return { ok: false, reason: "too-large" };
     chunks.push(chunk as Buffer);

@@ -68,9 +68,9 @@ write("other/readme.md", "other folder");
 fs.symlinkSync(path.join(outside, "private.txt"), path.join(project, "report", "link-to-private.txt"));
 fs.symlinkSync(outside, path.join(project, "link-to-outside"));
 
-const { GET } = await import("../src/app/api/files/zip/route.ts");
+const { GET, HEAD } = await import("../src/app/api/files/zip/route.ts");
 const { listZip, readZipEntry } = await import("../src/lib/skills/zip-reader.ts");
-const { planZip, ZipLimitError, ZipPathError } = await import("../src/lib/files/zip-walk.ts");
+const { planZip, isSecretFileName, ZipLimitError, ZipPathError } = await import("../src/lib/files/zip-walk.ts");
 const { zipStream } = await import("../src/lib/files/zip-writer.ts");
 
 const call = (query: string) => GET(new NextRequest(`http://localhost/api/files/zip?${query}`));
@@ -78,6 +78,12 @@ async function archive(query: string): Promise<{ buffer: Buffer; headers: Header
   const response = await call(query);
   assert.equal(response.status, 200, await response.clone().text());
   return { buffer: Buffer.from(await response.arrayBuffer()), headers: response.headers };
+}
+/** What the archive says when it is unpacked: entries are compressed, so the raw bytes cannot show a leak. */
+async function unpacked(buffer: Buffer): Promise<string> {
+  const parts: string[] = [];
+  for (const entry of listZip(buffer)) parts.push((await readZipEntry(buffer, entry)).toString("utf8"));
+  return parts.join("\n");
 }
 const openFiles = () => {
   try {
@@ -268,7 +274,9 @@ await check("one archive is made at a time", async () => {
   assert.equal(second.status, 429);
   await reader.cancel();
   await new Promise((resolve) => setTimeout(resolve, 200));
-  assert.equal((await call("project=p1&path=report")).status, 200);
+  const after = await call("project=p1&path=report");
+  assert.equal(after.status, 200);
+  await after.arrayBuffer();
 });
 await check("a file that shrinks while it is read leaves a consistent archive", async () => {
   const target = path.join(project, "shrinks.bin");
@@ -282,6 +290,194 @@ await check("a file that shrinks while it is read leaves a consistent archive", 
   // The directory says what was actually written, and what was written checks.
   assert.equal(entry.size, 1000);
   assert.equal((await readZipEntry(buffer, entry)).length, 1000);
+});
+
+console.log("\nWhat holds credentials\n");
+
+await check("the names that hold credentials are all recognised, and ordinary names are not", () => {
+  const holds = [
+    ".env", ".env.local", "prod.env", ".envrc", ".mcp.json", "auth.json", "token.json", ".npmrc", ".netrc", ".pgpass", ".pypirc", ".htpasswd",
+    ".git-credentials", "id_rsa", "id_ed25519.pub", "id_dsa", "server.pem", "cert.p12", "store.jks", "putty.ppk", "AuthKey_ABC.p8", "vault.kdbx",
+    "credentials", "credentials.json", "client_secret_123.apps.example.json", "my-service-account.json", "serviceAccount.json",
+    "kubeconfig", "secrets.yaml", "secret.json", "terraform.tfstate", "terraform.tfstate.backup", "prod.tfvars", "wp-config.php",
+  ];
+  for (const name of holds) assert.ok(isSecretFileName(name), `${name} was not recognised`);
+  const ordinary = [
+    "README.md", "report.docx", "environment.ts", "credentials-policy.md", "secrets-of-success.txt", "keyboard.txt", "tokens.csv",
+    "service.json", "client.json", "env.md", "notes.env.md", "key-points.pdf", "monkey.png",
+  ];
+  for (const name of ordinary) assert.ok(!isSecretFileName(name), `${name} was taken for a secret`);
+});
+await check("folders made to hold credentials are left out whole, even when they are named", async () => {
+  write("creds/.ssh/id_known", "x");
+  write("creds/.ssh/config", "Host x");
+  write("creds/.aws/credentials", "[default]");
+  write("creds/.git/config", "x");
+  write("creds/readme.txt", "hello");
+  const info = await (await call("project=p1&path=creds&check=1")).json() as { files: number; skipped: { secrets: number; hidden: number } };
+  assert.equal(info.files, 1);
+  assert.equal(info.skipped.secrets, 2, "the two folders, counted once each");
+  assert.equal(info.skipped.hidden, 1, "git");
+  for (const named of ["creds/.ssh", "creds/.aws", "creds/.git"]) {
+    const response = await call(`project=p1&path=${named}`);
+    assert.equal(response.status, 404, `${named} -> ${response.status}`);
+  }
+});
+await check("a file with another name elsewhere is not packed: it may be a door to a file that is not here", async () => {
+  fs.linkSync(path.join(outside, "private.txt"), path.join(project, "creds", "innocent-notes.txt"));
+  const info = await (await call("project=p1&path=creds&check=1")).json() as { files: number; skipped: { links: number } };
+  assert.equal(info.files, 1);
+  assert.equal(info.skipped.links, 1);
+  const { buffer } = await archive("project=p1&path=creds");
+  assert.ok(!(await unpacked(buffer)).includes("NOT-FOR-THE-ARCHIVE"));
+});
+
+console.log("\nNames, and what is not there any more\n");
+
+await check("a backslash in a name does not become a way out of the folder it is unpacked into", async () => {
+  write("names/..\\..\\evil.txt", "x");
+  write("names/..dotted", "kept");
+  const { buffer } = await archive("project=p1&path=names");
+  const found = listZip(buffer).map((entry) => entry.path).sort();
+  assert.deepEqual(found, ["names/.._.._evil.txt", "names/..dotted"]);
+});
+await check("a file that is gone by the time it is looked at is counted, not the end of the archive", async () => {
+  write("vanish/keep.txt", "kept");
+  write("vanish/ghost.txt", "gone soon");
+  const realLstat = fs.promises.lstat;
+  const patched = async (target: fs.PathLike, ...rest: unknown[]): Promise<fs.Stats> => {
+    if (String(target).endsWith("ghost.txt")) throw Object.assign(new Error("ENOENT: no such file"), { code: "ENOENT" });
+    return (realLstat as unknown as (...args: unknown[]) => Promise<fs.Stats>)(target, ...rest);
+  };
+  Object.assign(fs.promises, { lstat: patched });
+  try {
+    const plan = await planZip(project, ["vanish"]);
+    assert.deepEqual(plan.files.map((file) => file.name), ["vanish/keep.txt"]);
+    assert.equal(plan.skipped.unreadable, 1);
+  } finally {
+    Object.assign(fs.promises, { lstat: realLstat });
+  }
+});
+await check("a folder that cannot be opened is counted and the rest is packed", async () => {
+  if (process.getuid?.() === 0) {
+    console.log("        (running as root: permissions do not apply, skipped)");
+    return;
+  }
+  write("locked/inside.txt", "x");
+  write("locked/fine.txt", "x");
+  const folder = path.join(project, "locked", "sealed");
+  fs.mkdirSync(folder);
+  fs.writeFileSync(path.join(folder, "secret.txt"), "x");
+  fs.chmodSync(folder, 0o000);
+  try {
+    const plan = await planZip(project, ["locked"]);
+    assert.deepEqual(plan.files.map((file) => file.name).sort(), ["locked/fine.txt", "locked/inside.txt"]);
+    assert.equal(plan.skipped.unreadable, 1);
+  } finally {
+    fs.chmodSync(folder, 0o755);
+  }
+});
+
+console.log("\nA folder that changes while it is sent\n");
+
+const sealed = async (files: Awaited<ReturnType<typeof planZip>>) => {
+  const chunks: Buffer[] = [];
+  for await (const chunk of zipStream(files.files, { root: files.root })) chunks.push(chunk as Buffer);
+  return Buffer.concat(chunks);
+};
+
+await check("a file replaced by a link to somewhere else after the plan is not followed", async () => {
+  write("swap/a.txt", "first");
+  write("swap/b.txt", "second");
+  const plan = await planZip(project, ["swap"]);
+  fs.rmSync(path.join(project, "swap", "b.txt"));
+  fs.symlinkSync(path.join(outside, "private.txt"), path.join(project, "swap", "b.txt"));
+  const buffer = await sealed(plan);
+  assert.deepEqual(listZip(buffer).map((entry) => entry.path), ["swap/a.txt"]);
+  assert.ok(!(await unpacked(buffer)).includes("NOT-FOR-THE-ARCHIVE"));
+});
+await check("a folder replaced by a link to somewhere else after the plan is not entered", async () => {
+  write("swapdir/inner/data.txt", "mine");
+  const plan = await planZip(project, ["swapdir"]);
+  const elsewhere = path.join(outside, "inner");
+  fs.mkdirSync(elsewhere);
+  fs.writeFileSync(path.join(elsewhere, "data.txt"), "NOT-FOR-THE-ARCHIVE too");
+  fs.rmSync(path.join(project, "swapdir", "inner"), { recursive: true });
+  fs.symlinkSync(elsewhere, path.join(project, "swapdir", "inner"));
+  const buffer = await sealed(plan);
+  assert.deepEqual(listZip(buffer), []);
+  assert.ok(!(await unpacked(buffer)).includes("NOT-FOR-THE-ARCHIVE"));
+});
+await check("a file given a second name after the plan is not packed", async () => {
+  // As long as what it will be swapped for, or the archive could only ever hold part of it.
+  write("relink/plain.txt", "p".repeat(64));
+  const plan = await planZip(project, ["relink"]);
+  fs.linkSync(path.join(outside, "private.txt"), path.join(outside, "twin.txt"));
+  fs.rmSync(path.join(project, "relink", "plain.txt"));
+  fs.linkSync(path.join(outside, "twin.txt"), path.join(project, "relink", "plain.txt"));
+  const buffer = await sealed(plan);
+  assert.ok(!(await unpacked(buffer)).includes("NOT-FOR-THE-ARCHIVE"), "the other name's contents were packed");
+  assert.deepEqual(listZip(buffer), []);
+});
+await check("a file that is gone after the plan leaves a good archive of the rest", async () => {
+  write("gone/one.txt", "one");
+  write("gone/two.txt", "two");
+  const plan = await planZip(project, ["gone"]);
+  fs.rmSync(path.join(project, "gone", "one.txt"));
+  const buffer = await sealed(plan);
+  const file = path.join(root, "gone.zip");
+  fs.writeFileSync(file, buffer);
+  assert.deepEqual(listZip(buffer).map((entry) => entry.path), ["gone/two.txt"]);
+  const result = spawnSync("unzip", ["-t", file], { encoding: "utf8" });
+  if (!result.error) assert.equal(result.status, 0, result.stdout + result.stderr);
+});
+await check("the archive says when it moves, so a stalled one can be told from a slow one", async () => {
+  const plan = await planZip(project, ["report"]);
+  let moves = 0;
+  for await (const _chunk of zipStream(plan.files, { root: plan.root, onActivity: () => { moves += 1; } })) void _chunk;
+  assert.ok(moves >= plan.files.length, `${moves} signs of life for ${plan.files.length} files`);
+});
+
+console.log("\nThe place, and who may hold it\n");
+
+await check("asking for the headers holds no place and sends no body", async () => {
+  const head = await HEAD(new NextRequest("http://localhost/api/files/zip?project=p1&path=bulk", { method: "HEAD" }));
+  assert.equal(head.status, 200);
+  assert.equal(head.headers.get("content-type"), "application/zip");
+  assert.match(head.headers.get("content-disposition") ?? "", /bulk\.zip/);
+  assert.equal(head.body, null);
+  // Never read, never cancelled - as a client that only wanted the headers leaves it.
+  const next = await call("project=p1&path=report");
+  assert.equal(next.status, 200, "a header request kept the place");
+  await next.arrayBuffer();
+  assert.equal((await HEAD(new NextRequest("http://localhost/api/files/zip?project=p1&path=nothing", { method: "HEAD" }))).status, 404);
+});
+await check("an archive nobody is taking is let go, and the place is free again", async () => {
+  process.env.EGGENT_ZIP_IDLE_SECONDS = "1";
+  try {
+    const stalled = await call("project=p1&path=bulk");
+    assert.equal(stalled.status, 200);
+    const reader = stalled.body!.getReader();
+    await reader.read();
+    // The reader now stops: no more reads, no cancel, the connection simply goes quiet.
+    assert.equal((await call("project=p1&path=report")).status, 429, "the place was not held while the archive was moving");
+    await new Promise((resolve) => setTimeout(resolve, 2500));
+    const after = await call("project=p1&path=report");
+    assert.equal(after.status, 200, "a stalled archive kept the place");
+    await after.arrayBuffer();
+    await reader.cancel().catch(() => undefined);
+  } finally {
+    delete process.env.EGGENT_ZIP_IDLE_SECONDS;
+  }
+});
+await check("a project id that is not a name is refused, and so is a project whose folder is a link", async () => {
+  assert.equal((await call("project=..%2F..%2Fetc&path=")).status, 403);
+  assert.equal((await call("project=..&path=")).status, 403);
+  fs.symlinkSync(path.join(root, "data"), path.join(root, "data", "projects", "linked"));
+  const linked = await call("project=linked");
+  assert.equal(linked.status, 403, "a folder that is a link to the data directory was packed");
+  assert.equal((await HEAD(new NextRequest("http://localhost/api/files/zip?project=linked", { method: "HEAD" }))).status, 403);
+  fs.rmSync(path.join(root, "data", "projects", "linked"));
 });
 
 fs.rmSync(outside, { recursive: true, force: true });

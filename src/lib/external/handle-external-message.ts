@@ -27,7 +27,7 @@ import {
   RELAY_BOT_KEY,
 } from "@/lib/telegram/conversation";
 import { resetChatTurn } from "@/lib/pi/turn-control";
-import type { ProducedGroup } from "@/lib/files/produced";
+import { cleanProducedGroups, type ProducedGroup } from "@/lib/files/produced-shape";
 import { sendWorkspaceFileToTelegram, sendWorkspaceFilesAsArchive } from "@/lib/files/telegram-send";
 import {
   chatShortId,
@@ -663,7 +663,9 @@ async function answerReset(context: ResolvedExternalMessageRunContext): Promise<
 function lastFileGroups(chat: Awaited<ReturnType<typeof getChat>>): ProducedGroup[] {
   for (let index = (chat?.messages.length ?? 0) - 1; index >= 0; index -= 1) {
     const message = chat!.messages[index];
-    if (message.role === "assistant" && message.files?.length) return message.files;
+    // Read back through the shape check: a chat is a file other computers write to as well.
+    const files = message.role === "assistant" ? cleanProducedGroups(message.files) : [];
+    if (files.length > 0) return files;
   }
   return [];
 }
@@ -708,7 +710,7 @@ async function answerFiles(
       reply = sent > 0 ? [t("external.files.sent", { names }), problem].filter(Boolean).join("\n") : problem ?? t("external.files.gone");
     } else {
       // Several groups can only be one archive per folder; the common case is one.
-      const outcomes = [];
+      const outcomes: Awaited<ReturnType<typeof sendWorkspaceFilesAsArchive>>[] = [];
       for (const group of groups) {
         outcomes.push(await sendWorkspaceFilesAsArchive({
           project: group.project,
@@ -717,10 +719,15 @@ async function answerFiles(
           run,
         }));
       }
-      const sent = outcomes.filter((outcome) => outcome.ok).length;
       const bad = outcomes.find((outcome) => !outcome.ok);
-      reply = sent > 0
-        ? t("external.files.sentArchive", { count: files.length })
+      // What went is what the archives held: a message keeps its first few files and counts the rest.
+      const delivered = groups.filter((_, index) => outcomes[index]?.ok);
+      const sentCount = delivered.reduce((sum, group) => sum + group.items.length, 0);
+      const totalCount = delivered.reduce((sum, group) => sum + group.total, 0);
+      reply = delivered.length > 0
+        ? totalCount > sentCount
+          ? t("external.files.sentArchivePart", { count: sentCount, total: totalCount })
+          : t("external.files.sentArchive", { count: sentCount })
         : bad && !bad.ok ? failure(bad) : t("external.files.gone");
     }
   }

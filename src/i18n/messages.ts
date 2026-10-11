@@ -314,6 +314,7 @@ const enMessages = {
   "external.files.more": "and {count} more",
   "external.files.sent": "Sent: {names}.",
   "external.files.sentArchive": "Sent {count} files as one archive.",
+  "external.files.sentArchivePart": "Sent {count} of {total} files as one archive. The rest are in the Files panel.",
   "external.files.tooLarge": "These files are too large for Telegram. Open the Files panel in the browser to download them.",
   "external.files.gone": "Those files are no longer there.",
   "external.run.stalled": "I stopped this: nothing had happened for {minutes} min, and a model that has gone quiet this long is not coming back. Your messages are saved - write again to carry on, or send /new for a fresh start.",

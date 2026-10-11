@@ -34,10 +34,33 @@ export function zipLimits(env: Record<string, string | undefined> = process.env)
 
 /** Folders nobody wants in a download: dependencies, caches and the runtime's own state. */
 const SKIPPED_DIRECTORIES = new Set(["node_modules", ".git", "__pycache__", ".pi", ".cache", ".next"]);
+/** Folders that exist to hold credentials: left out whole, and counted with the files that hold them. */
+const CREDENTIAL_DIRECTORIES = new Set([".ssh", ".aws", ".gnupg", ".kube", ".docker", ".azure", ".gcloud"]);
 const SKIPPED_FILES = new Set([".ds_store", "thumbs.db"]);
 
-/** Files that hold credentials. They are left out of an archive, and the person is told so. */
-const SECRET_FILE = /^(\.env(\..*)?|\.mcp\.json|mcp\.json|auth\.json|\.npmrc|\.netrc|\.pgpass|id_rsa.*|id_ed25519.*|id_ecdsa.*|.*\.(pem|p12|pfx|key|keystore))$/i;
+/**
+ * Files that hold credentials. They are left out of an archive, and the person is told so.
+ *
+ * Names, not contents: reading every file for something that looks like a key would
+ * be slow and would still miss most. A file that is left out by mistake costs one
+ * click in the Files panel, where it can be taken on its own.
+ */
+const SECRET_FILE = new RegExp(
+  `^(?:${[
+    "\\.env(?:\\..*)?", ".*\\.env", "\\.env~", "\\.envrc",
+    "\\.mcp\\.json", "mcp\\.json", "auth\\.json", "tokens?\\.json",
+    "\\.npmrc", "\\.netrc", "_netrc", "\\.pgpass", "\\.pypirc", "\\.htpasswd", "htpasswd",
+    "\\.git-credentials", "\\.dockercfg", "\\.s3cfg", "\\.boto", "\\.vault[-_]?pass.*",
+    "id_(?:rsa|dsa|ecdsa|ed25519).*",
+    ".*\\.(?:pem|p12|pfx|key|keystore|jks|ppk|p8|kdbx|gpg)",
+    "credentials(?:\\.(?:json|ya?ml|toml|ini|txt|csv|xml))?",
+    "client_secrets?.*\\.json", ".*service[-_]?account.*\\.json", "firebase-adminsdk.*\\.json",
+    "kubeconfig(?:\\..*)?",
+    "secrets?\\.(?:json|ya?ml|toml|env|ini|txt)",
+    ".*\\.tfstate(?:\\..*)?", ".*\\.tfvars(?:\\..*)?", "wp-config\\.php",
+  ].join("|")})$`,
+  "i"
+);
 
 export function isSecretFileName(name: string): boolean {
   return SECRET_FILE.test(name);
@@ -68,8 +91,10 @@ export class ZipPathError extends Error {
 export interface ZipPlan {
   files: ZipFile[];
   bytes: number;
+  /** The real path of the folder the files are in; the writer checks each file against it when it opens it. */
+  root: string;
   /** What was left out, by reason. */
-  skipped: { secrets: number; links: number; hidden: number };
+  skipped: { secrets: number; links: number; hidden: number; unreadable: number };
 }
 
 export interface ZipLimits {
@@ -83,7 +108,9 @@ function inside(root: string, candidate: string): boolean {
 
 function archiveName(base: string, absolute: string): string {
   const relative = path.relative(base, absolute);
-  return relative.split(path.sep).join("/");
+  // A backslash is a path separator to the tools that unpack on Windows: a file called
+  // `..\\..\\x` would leave the folder it is unpacked into. It stays a file, with another name.
+  return relative.split(path.sep).join("/").replace(/\\/g, "_");
 }
 
 /**
@@ -102,14 +129,26 @@ export async function planZip(
   const maxFiles = options.maxFiles ?? limits.maxFiles;
   const rootReal = await fs.realpath(path.resolve(workDir));
   const base = options.base ? path.resolve(rootReal, options.base) : rootReal;
-  const plan: ZipPlan = { files: [], bytes: 0, skipped: { secrets: 0, links: 0, hidden: 0 } };
+  const plan: ZipPlan = { files: [], bytes: 0, root: rootReal, skipped: { secrets: 0, links: 0, hidden: 0, unreadable: 0 } };
   const seen = new Set<string>();
 
   const add = async (absolute: string): Promise<void> => {
-    const stat = await fs.lstat(absolute);
+    let stat;
+    try {
+      stat = await fs.lstat(absolute);
+    } catch {
+      // Gone since it was listed, or a name the system cannot give back (bytes that are not text).
+      plan.skipped.unreadable += 1;
+      return;
+    }
     if (!stat.isFile()) return;
+    // A file with a second name somewhere else may be a door to a file that is not in this folder.
+    if (stat.nlink > 1) {
+      plan.skipped.links += 1;
+      return;
+    }
     const name = archiveName(base, absolute);
-    if (!name || name.startsWith("..") || seen.has(name)) return;
+    if (!name || name === ".." || name.startsWith("../") || seen.has(name)) return;
     seen.add(name);
     plan.bytes += stat.size;
     if (plan.bytes > maxBytes) throw new ZipLimitError("bytes", maxBytes, plan.bytes);
@@ -119,7 +158,14 @@ export async function planZip(
 
   const walk = async (directory: string, depth: number): Promise<void> => {
     if (depth > MAX_DEPTH) throw new ZipLimitError("depth", MAX_DEPTH, depth);
-    const entries = await fs.readdir(directory, { withFileTypes: true });
+    let entries;
+    try {
+      entries = await fs.readdir(directory, { withFileTypes: true });
+    } catch {
+      // A folder that cannot be opened is left out and counted, not the end of the archive.
+      plan.skipped.unreadable += 1;
+      return;
+    }
     entries.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     for (const entry of entries) {
       const absolute = path.join(directory, entry.name);
@@ -128,6 +174,10 @@ export async function planZip(
         continue;
       }
       if (entry.isDirectory()) {
+        if (CREDENTIAL_DIRECTORIES.has(entry.name)) {
+          plan.skipped.secrets += 1;
+          continue;
+        }
         if (isHiddenFileName(entry.name) || SKIPPED_DIRECTORIES.has(entry.name)) {
           plan.skipped.hidden += 1;
           continue;
@@ -165,13 +215,22 @@ export async function planZip(
     // ...and then the real one, since a folder on the way can itself be a link out.
     const real = await fs.realpath(absolute);
     if (!inside(rootReal, real)) throw new ZipPathError();
+    // Naming a folder is not a way round what a walk leaves out.
+    const name = path.basename(absolute);
     if (stat.isDirectory()) {
-      await walk(absolute, 0);
+      if (absolute !== rootReal && CREDENTIAL_DIRECTORIES.has(name)) {
+        plan.skipped.secrets += 1;
+      } else if (absolute !== rootReal && (isHiddenFileName(name) || SKIPPED_DIRECTORIES.has(name))) {
+        plan.skipped.hidden += 1;
+      } else {
+        await walk(absolute, 0);
+      }
     } else if (stat.isFile()) {
-      const name = path.basename(absolute);
       if (isSecretFileName(name)) {
         plan.skipped.secrets += 1;
-      } else if (!isHiddenFileName(name)) {
+      } else if (isHiddenFileName(name) || SKIPPED_FILES.has(name.toLowerCase())) {
+        plan.skipped.hidden += 1;
+      } else {
         await add(absolute);
       }
     }

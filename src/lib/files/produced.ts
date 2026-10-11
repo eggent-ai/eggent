@@ -1,6 +1,7 @@
 import fs from "node:fs/promises";
 import path from "node:path";
 import { getWorkDir, isHiddenFileName } from "@/lib/storage/project-store";
+import { projectFolderIsLink } from "@/lib/files/workspace-root";
 import { fileMentionPath } from "@/lib/files/openable";
 import { isSecretFileName } from "@/lib/files/zip-walk";
 
@@ -20,22 +21,8 @@ import { isSecretFileName } from "@/lib/files/zip-walk";
  * commands and nothing else pointed at a result.
  */
 
-export type ProducedSource = "answer" | "tool" | "scan";
-
-export interface ProducedFile {
-  /** Relative to the folder it belongs to, forward slashes. */
-  path: string;
-  size: number;
-  source: ProducedSource;
-}
-
-/** The files of one folder: a project's, or the orchestrator's ("none"). */
-export interface ProducedGroup {
-  project: string;
-  items: ProducedFile[];
-  /** How many there were; `items` holds the first few. */
-  total: number;
-}
+export type { ProducedFile, ProducedGroup, ProducedSource } from "@/lib/files/produced-shape";
+import type { ProducedFile, ProducedGroup, ProducedSource } from "@/lib/files/produced-shape";
 
 /** What is kept with a message: up to this many files, the rest only counted. */
 export const MAX_STORED_FILES = 12;
@@ -120,9 +107,15 @@ function imagePathsOf(output: unknown): string[] {
   return paths;
 }
 
-function isInternal(relative: string): boolean {
+/**
+ * Whether a path is the agent's own housekeeping. In the orchestrator's folder the
+ * first segment is usually a project, and that project has housekeeping of its own
+ * (its skills, its notes) one level down.
+ */
+function isInternal(relative: string, orchestrator: boolean): boolean {
   const segments = relative.split("/");
   if (INTERNAL_TOP_LEVEL.has(segments[0].toLowerCase())) return true;
+  if (orchestrator && segments.length > 1 && INTERNAL_TOP_LEVEL.has(segments[1].toLowerCase())) return true;
   return segments.some((segment) => SKIPPED_SEGMENTS.has(segment) || isHiddenFileName(segment) || segment === ".DS_Store");
 }
 
@@ -146,6 +139,8 @@ export interface CollectInput {
 
 export async function collectProducedFiles(input: CollectInput): Promise<ProducedGroup | null> {
   const projectKey = input.projectId && input.projectId !== "none" ? input.projectId : "none";
+  // A project whose folder is a link to somewhere else has no folder to judge a path against.
+  if (await projectFolderIsLink(projectKey)) return null;
   const workDir = await realpathOrNull(path.resolve(getWorkDir(projectKey)));
   const cwd = await realpathOrNull(path.resolve(input.cwd));
   if (!workDir || !cwd) return null;
@@ -190,12 +185,12 @@ export async function collectProducedFiles(input: CollectInput): Promise<Produce
     } catch {
       return;
     }
-    // A link is not a file the turn made, and neither is a folder.
-    if (!stat.isFile()) return;
+    // A link is not a file the turn made, neither is a folder, and nor is a second name for a file that lives elsewhere.
+    if (!stat.isFile() || stat.nlink > 1) return;
     const real = await realpathOrNull(absolute);
     if (!real || !real.startsWith(workDir + path.sep)) return;
     const relative = path.relative(workDir, real).split(path.sep).join("/");
-    if (!relative || isInternal(relative) || isSecretFileName(path.basename(relative))) return;
+    if (!relative || isInternal(relative, projectKey === "none") || isSecretFileName(path.basename(relative))) return;
     if (stat.mtimeMs < input.startedAt - START_SLACK_MS) return;
     accepted.push({ path: relative, size: stat.size, source });
   };
@@ -206,8 +201,12 @@ export async function collectProducedFiles(input: CollectInput): Promise<Produce
   if (accepted.length === 0 && tools.some((tool) => SCAN_TOOLS.has(tool.toolName.toLowerCase()))) {
     const found: Array<{ absolute: string }> = [];
     let visited = 0;
+    // The orchestrator's folder holds every project, and what other chats made and what
+    // arrived from the person's computer during these minutes is in them: there only the
+    // files lying directly in it are looked at.
+    const maxDepth = projectKey === "none" && cwd === workDir ? 0 : MAX_SCAN_DEPTH;
     const walk = async (directory: string, depth: number): Promise<void> => {
-      if (depth > MAX_SCAN_DEPTH || visited >= MAX_SCAN_ENTRIES) return;
+      if (depth > maxDepth || visited >= MAX_SCAN_ENTRIES) return;
       let entries;
       try {
         entries = await fs.readdir(directory, { withFileTypes: true });
@@ -222,6 +221,7 @@ export async function collectProducedFiles(input: CollectInput): Promise<Produce
         if (entry.isDirectory()) {
           if (SKIPPED_SEGMENTS.has(entry.name) || isHiddenFileName(entry.name)) continue;
           if (directory === cwd && INTERNAL_TOP_LEVEL.has(entry.name.toLowerCase())) continue;
+          if (depth + 1 > maxDepth) continue;
           await walk(absolute, depth + 1);
         } else if (entry.isFile()) {
           try {

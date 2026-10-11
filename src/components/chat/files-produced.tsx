@@ -6,7 +6,7 @@ import { useI18n } from "@/i18n/provider";
 import { useAppStore } from "@/store/app-store";
 import { fileDownloadUrl, isOpenableFile } from "@/lib/files/openable";
 import { startZipDownload } from "@/lib/files/zip-download";
-import type { ProducedFile, ProducedGroup } from "@/lib/files/produced";
+import type { ProducedFile, ProducedGroup } from "@/lib/files/produced-shape";
 
 /**
  * Under an answer: the files it made.

@@ -12,7 +12,7 @@ import type { SubagentSnapshot } from "@/lib/pi/types";
 import { FileMention } from "./file-mention";
 import { LearnedNote } from "./learned-note";
 import { FilesProduced } from "./files-produced";
-import type { ProducedGroup } from "@/lib/files/produced";
+import { cleanProducedGroups, type ProducedGroup } from "@/lib/files/produced-shape";
 import type { LearnedNotice } from "@/lib/learning/types";
 import { embeddedAudioPath, embeddedImageUrl, fileMentionPath } from "@/lib/files/openable";
 import { hashText, runnableCommand } from "@/lib/terminal/format";
@@ -320,7 +320,7 @@ function producedFilesOf(parts: UIMessage["parts"]): ProducedGroup[] {
     const candidate = part as { type?: string; data?: unknown };
     if (candidate.type !== "data-eggentFiles") continue;
     const data = candidate.data;
-    if (Array.isArray(data)) return data.filter((group): group is ProducedGroup => Boolean(group) && typeof group.project === "string" && Array.isArray(group.items));
+    return cleanProducedGroups(data);
   }
   return [];
 }

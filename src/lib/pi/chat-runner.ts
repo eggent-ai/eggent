@@ -1340,11 +1340,21 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
           assistantText = `${assistantText}${separator}${notice}`;
           appendTimelineText(timelineParts, `${separator}${notice}`);
         }
+        // A stopped turn keeps the files it had made, as the same turn on the other surface does.
+        const files = await producedForTurn({
+          chatId: options.chatId,
+          tools: tools.values(),
+          startedAt: turnStartedAt,
+          cwd: session.sessionManager.getCwd(),
+          projectId: options.projectId,
+          assistantText,
+        });
         await persistTurn({
           assistantText,
           tools: [...tools.values()],
           runtimeStats,
           parts: completedTimelineParts(attachSubagentSnapshots(timelineParts, subagents)),
+          ...(files.length > 0 ? { files } : {}),
         });
       };
 
