@@ -49,6 +49,9 @@ export default function MessengersPage() {
                   <li>
                     <span className="font-mono">/reset</span> - {t("messengers.command.reset")}
                   </li>
+                  <li>
+                    <span className="font-mono">/files</span> - {t("messengers.command.files")}
+                  </li>
                 </ul>
                 <p className="text-xs text-muted-foreground">
                   {t("messengers.notes") }

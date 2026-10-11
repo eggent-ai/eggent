@@ -14,7 +14,8 @@ import { attachToLiveRun, startLiveRun, type LiveRunSink } from "@/lib/pi/live-r
 import { applySchedulingToolPolicy, hasScheduleIntent, hasScheduleManagementIntent } from "@/lib/pi/schedule-intent";
 import { describeProviderFailure, type ProviderFailure } from "@/lib/pi/provider-failure";
 import { isHelperToolName } from "@/lib/pi/subagent-format";
-import { chatAllowsVisits, grantVisits, mentionRuntimeText, planProjectMention, revokeVisits, type MentionPlan } from "@/lib/pi/project-visit";
+import { chatAllowsVisits, grantVisits, mentionRuntimeText, planProjectMention, revokeVisits, takeVisitFiles, type MentionPlan } from "@/lib/pi/project-visit";
+import { collectProducedFiles, mergeProducedGroups, type ProducedGroup } from "@/lib/files/produced";
 import { SubagentProgressTracker } from "@/lib/pi/subagent-progress";
 import type { AgentProgressEvent, PiChatRunOptions, PiRuntimeStats, PiToolRecord, SubagentSnapshot } from "@/lib/pi/types";
 import { getChat, saveChat } from "@/lib/storage/chat-store";
@@ -570,6 +571,34 @@ function promptForMessage(text: string, runtimeSuffix: string, mention: MentionP
   return { runtime, policy: mention.directive };
 }
 
+/**
+ * The files this turn made - what its answer names, what its tools wrote - and
+ * what the projects it asked made. Never fails the turn: a card that cannot be
+ * worked out is a card that is not shown.
+ */
+async function producedForTurn(input: {
+  chatId: string;
+  tools: Iterable<PiToolRecord>;
+  startedAt: string;
+  cwd: string;
+  projectId?: string;
+  assistantText: string;
+}): Promise<ProducedGroup[]> {
+  let own: ProducedGroup | null = null;
+  try {
+    own = await collectProducedFiles({
+      tools: input.tools,
+      startedAt: Date.parse(input.startedAt),
+      cwd: input.cwd,
+      projectId: input.projectId,
+      assistantText: input.assistantText,
+    });
+  } catch (error) {
+    console.warn("Could not work out the files of a turn:", error);
+  }
+  return mergeProducedGroups([own, ...takeVisitFiles(input.chatId)]);
+}
+
 async function persistUserMessage(options: PiChatRunOptions, userMessageId: string) {
   const chat = await getChat(options.chatId);
   if (!chat) return;
@@ -603,6 +632,8 @@ async function persistAssistantMessage(options: {
   replaceMessageId?: string;
   /** Set when this write is the checkpoint itself. */
   checkpointId?: string;
+  /** The files the turn made, for the row under the answer. */
+  files?: ProducedGroup[];
 }) {
   const chat = await getChat(options.chatId);
   if (!chat) return;
@@ -625,6 +656,7 @@ async function persistAssistantMessage(options: {
       })),
       parts: completedTimelineParts(options.parts ?? []),
       piRuntimeStats: options.runtimeStats,
+      ...(options.files?.length ? { files: options.files } : {}),
       ...(options.checkpointId ? { inProgress: true } : {}),
     });
 
@@ -716,7 +748,7 @@ export async function runPiAgentText(options: PiChatRunOptions & {
    * same as it having nothing to say, and the text of the last message the
    * model wrote - the answer, without the narration before it.
    */
-  outcome?: { stopped?: boolean; finalText?: string };
+  outcome?: { stopped?: boolean; finalText?: string; files?: ProducedGroup[]; filesSent?: boolean };
 }): Promise<string> {
   // A listener that throws must not take the turn down with it: the answer is
   // still delivered whole at the end.
@@ -1006,12 +1038,28 @@ export async function runPiAgentText(options: PiChatRunOptions & {
     if (!stopped && isEmptyZeroTokenTurn(assistantText, tools.values(), currentPromptUsage)) {
       throw await emptyTurnError(providerFailure);
     }
+    const producedFiles = await producedForTurn({
+      chatId: options.chatId,
+      tools: tools.values(),
+      startedAt: turnStartedAt,
+      cwd: session.sessionManager.getCwd(),
+      projectId: options.projectId,
+      assistantText,
+    });
+    if (options.outcome) {
+      options.outcome.files = producedFiles;
+      // The agent already sent files to the person's own chat: no need to say they can be fetched.
+      options.outcome.filesSent = [...tools.values()].some(
+        (tool) => tool.toolName === "telegram_send_file" && tool.status === "completed" && /"success":\s*true/.test(stringifyForDisplay(tool.output))
+      );
+    }
     await persistAssistantMessage({
       chatId: options.chatId,
       assistantText,
       tools: [...tools.values()],
       runtimeStats: buildPiRuntimeStats(session, currentPromptUsage, addUsage(baselineUsage, currentPromptUsage)),
       parts: attachSubagentSnapshots(timelineParts, subagents),
+      files: producedFiles,
     });
     // A visit is the project doing what another chat asked: what the person
     // said was said there, and that turn does the learning from it.
@@ -1042,6 +1090,7 @@ export async function runPiAgentText(options: PiChatRunOptions & {
     throw error;
   } finally {
     if (mention) revokeVisits(options.chatId);
+    takeVisitFiles(options.chatId);
     watchdog?.stop();
     live?.finish();
     clearActiveRun(options.chatId, runId);
@@ -1524,12 +1573,23 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         const finalStats = buildPiRuntimeStats(session, currentPromptUsage, addUsage(baselineUsage, currentPromptUsage));
         emitStats(finalStats);
         closeTextPart();
+        const producedFiles = await producedForTurn({
+          chatId: options.chatId,
+          tools: tools.values(),
+          startedAt: turnStartedAt,
+          cwd: session.sessionManager.getCwd(),
+          projectId: options.projectId,
+          assistantText,
+        });
+        // Shown at once; the stored message carries the same list for a reload.
+        if (producedFiles.length > 0) safeWrite({ type: "data-eggentFiles", id: "eggent-files", data: producedFiles });
         persisted = true;
         await persistTurn({
           assistantText,
           tools: [...tools.values()],
           runtimeStats: finalStats,
           parts: attachSubagentSnapshots(timelineParts, subagents),
+          files: producedFiles,
         });
         learnFromTurn({
           chatId: options.chatId,
@@ -1583,6 +1643,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         safeWrite({ type: "error", errorText: streamErrorText(error) });
       } finally {
         if (mention) revokeVisits(options.chatId);
+        takeVisitFiles(options.chatId);
         watchdog?.stop();
         live?.finish();
         clearActiveRun(options.chatId, runId);

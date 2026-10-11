@@ -27,6 +27,8 @@ import {
   RELAY_BOT_KEY,
 } from "@/lib/telegram/conversation";
 import { resetChatTurn } from "@/lib/pi/turn-control";
+import type { ProducedGroup } from "@/lib/files/produced";
+import { sendWorkspaceFileToTelegram, sendWorkspaceFilesAsArchive } from "@/lib/files/telegram-send";
 import {
   chatShortId,
   findChatByShortId,
@@ -468,6 +470,14 @@ async function resolveExternalMessageRunContext(
   };
 }
 
+function telegramRuntimeOf(toolRuntimeData: Record<string, unknown> | undefined): { chatId: string | number; botToken?: string } | null {
+  const chatId = telegramChatIdOf(toolRuntimeData);
+  if (chatId === null) return null;
+  const raw = toolRuntimeData?.telegram as Record<string, unknown>;
+  const botToken = typeof raw.botToken === "string" && raw.botToken.trim() ? raw.botToken.trim() : undefined;
+  return { chatId, ...(botToken ? { botToken } : {}) };
+}
+
 function telegramChatIdOf(toolRuntimeData: Record<string, unknown> | undefined): string | number | null {
   const raw = toolRuntimeData?.telegram;
   if (!raw || typeof raw !== "object" || Array.isArray(raw)) return null;
@@ -494,7 +504,17 @@ type ChatCommand = { kind: "list" } | { kind: "open"; shortId: string };
  * button is: instant, free, and not dependent on the model choosing a tool.
  */
 export function isChatCommand(message: string): boolean {
-  return parseChatCommand(message) !== null || isResetCommand(message);
+  return parseChatCommand(message) !== null || isResetCommand(message) || isFilesCommand(message);
+}
+
+/**
+ * `/files`: the files the last answer made, sent to this chat. The answer says
+ * which they are; asking for them is one word, instead of a request the model
+ * has to understand and carry out.
+ */
+export function isFilesCommand(message: string): boolean {
+  const first = message.trim().split(/\s+/, 1)[0]?.toLowerCase() ?? "";
+  return first.split("@", 1)[0] === "/files";
 }
 
 /**
@@ -639,6 +659,89 @@ async function answerReset(context: ResolvedExternalMessageRunContext): Promise<
   };
 }
 
+/** The newest answer in a chat that carries files, and what it carries. */
+function lastFileGroups(chat: Awaited<ReturnType<typeof getChat>>): ProducedGroup[] {
+  for (let index = (chat?.messages.length ?? 0) - 1; index >= 0; index -= 1) {
+    const message = chat!.messages[index];
+    if (message.role === "assistant" && message.files?.length) return message.files;
+  }
+  return [];
+}
+
+/** The files named in a short line: up to three names, then how many more. */
+function fileNamesLine(groups: ProducedGroup[], moreWord: (count: number) => string): string {
+  const names = groups.flatMap((group) => group.items.map((item) => item.path.split("/").pop() ?? item.path));
+  const total = groups.reduce((sum, group) => sum + group.total, 0);
+  const shown = names.slice(0, 3).join(", ");
+  return total > Math.min(3, names.length) ? `${shown} ${moreWord(total - Math.min(3, names.length))}` : shown;
+}
+
+async function answerFiles(
+  context: ResolvedExternalMessageRunContext,
+  input: HandleExternalMessageInput
+): Promise<ExternalMessageResult> {
+  const { session, previousChatId, resolvedProjectId, currentPath, resolvedChatId } = context;
+  const t = await getServerTranslator();
+  const groups = lastFileGroups(await getChat(resolvedChatId));
+  const telegram = telegramRuntimeOf(input.toolRuntimeData);
+  const run = telegram ? { chatId: telegram.chatId, botToken: telegram.botToken } : null;
+
+  let reply: string;
+  if (groups.length === 0) {
+    reply = t("external.files.none");
+  } else {
+    const files = groups.flatMap((group) => group.items.map((item) => ({ project: group.project, path: item.path })));
+    const names = fileNamesLine(groups, (count) => t("external.files.more", { count }));
+    const failure = (outcome: { reason: string; error?: string }) =>
+      outcome.reason === "too-large" ? t("external.files.tooLarge")
+        : outcome.reason === "no-destination" ? t("api.error.telegramNoDestination")
+          : outcome.reason === "not-found" ? t("external.files.gone")
+            : outcome.error ?? t("api.error.telegramSendFailed");
+    if (files.length <= 3) {
+      let sent = 0;
+      let problem: string | null = null;
+      for (const file of files) {
+        const outcome = await sendWorkspaceFileToTelegram({ ...file, chatId: resolvedChatId, run });
+        if (outcome.ok) sent += 1;
+        else problem = failure(outcome);
+      }
+      reply = sent > 0 ? [t("external.files.sent", { names }), problem].filter(Boolean).join("\n") : problem ?? t("external.files.gone");
+    } else {
+      // Several groups can only be one archive per folder; the common case is one.
+      const outcomes = [];
+      for (const group of groups) {
+        outcomes.push(await sendWorkspaceFilesAsArchive({
+          project: group.project,
+          paths: group.items.map((item) => item.path),
+          chatId: resolvedChatId,
+          run,
+        }));
+      }
+      const sent = outcomes.filter((outcome) => outcome.ok).length;
+      const bad = outcomes.find((outcome) => !outcome.ok);
+      reply = sent > 0
+        ? t("external.files.sentArchive", { count: files.length })
+        : bad && !bad.ok ? failure(bad) : t("external.files.gone");
+    }
+  }
+
+  return {
+    success: true,
+    sessionId: session.id,
+    reply,
+    context: {
+      activeProjectId: resolvedProjectId || null,
+      activeProjectName: null,
+      activeChatId: resolvedChatId,
+      activeChatTitle: await chatTitle(resolvedChatId),
+      currentPath: currentPath || "",
+    },
+    chatChanged: Boolean(previousChatId) && resolvedChatId !== previousChatId,
+    switchedProject: { toProjectId: null, toProjectName: null },
+    createdProject: null,
+  };
+}
+
 export async function handleExternalMessage(
   input: HandleExternalMessageInput
 ): Promise<ExternalMessageResult> {
@@ -701,6 +804,7 @@ export async function handleExternalMessage(
   const chatCommand = isTelegramMessage(input) ? parseChatCommand(message) : null;
   if (chatCommand) return answerChatCommand(chatCommand, runContext);
   if (isTelegramMessage(input) && !input.publicMode && isResetCommand(message)) return answerReset(runContext);
+  if (isTelegramMessage(input) && !input.publicMode && isFilesCommand(message)) return answerFiles(runContext, input);
 
   // A message sent while this chat is already working belongs to that run, not
   // to a second agent of its own. Over a messenger there is no stop button, so
@@ -744,8 +848,8 @@ export async function handleExternalMessage(
     };
   }
 
-  const outcome: { stopped?: boolean } = {};
-  const reply = await runPiAgentText({
+  const outcome: { stopped?: boolean; files?: ProducedGroup[]; filesSent?: boolean } = {};
+  let reply = await runPiAgentText({
     outcome,
     chatId: resolvedChatId,
     userMessage: message,
@@ -760,6 +864,14 @@ export async function handleExternalMessage(
     enableEggentTools: input.publicMode ? false : undefined,
     onProgress: input.onProgress,
   });
+
+  // A Telegram answer cannot carry a file the way the browser's does, so it says
+  // there is one and how to get it - unless the agent already sent it.
+  if (isTelegramMessage(input) && !input.publicMode && outcome.files?.length && !outcome.filesSent) {
+    const t = await getServerTranslator();
+    const names = fileNamesLine(outcome.files, (count) => t("external.files.more", { count }));
+    reply = `${reply}\n\n${t("external.files.hint", { names })}`;
+  }
 
   const afterChat = await getChat(resolvedChatId);
   const newMessages = afterChat?.messages.slice(beforeCount) ?? [];

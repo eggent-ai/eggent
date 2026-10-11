@@ -11,6 +11,8 @@ import { isAgentToolName, isProjectToolName } from "@/lib/pi/subagent-format";
 import type { SubagentSnapshot } from "@/lib/pi/types";
 import { FileMention } from "./file-mention";
 import { LearnedNote } from "./learned-note";
+import { FilesProduced } from "./files-produced";
+import type { ProducedGroup } from "@/lib/files/produced";
 import type { LearnedNotice } from "@/lib/learning/types";
 import { embeddedAudioPath, embeddedImageUrl, fileMentionPath } from "@/lib/files/openable";
 import { hashText, runnableCommand } from "@/lib/terminal/format";
@@ -292,6 +294,7 @@ export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
 
   if (!renderedParts.some(Boolean)) return null;
   const learned = learnedNoticeOf(message.parts);
+  const producedFiles = producedFilesOf(message.parts);
 
   return (
     <div className="flex items-start gap-3 py-2" data-message-role="assistant">
@@ -304,10 +307,22 @@ export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
       </div>
       <div className="flex min-w-0 flex-1 flex-col gap-3 pt-0.5 text-sm leading-7">
         {renderedParts}
+        {producedFiles.length > 0 ? <FilesProduced groups={producedFiles} /> : null}
         {learned ? <LearnedNote notice={learned} /> : null}
       </div>
     </div>
   );
+}
+
+/** The files this answer made, when it made any: the row under it. */
+function producedFilesOf(parts: UIMessage["parts"]): ProducedGroup[] {
+  for (const part of parts) {
+    const candidate = part as { type?: string; data?: unknown };
+    if (candidate.type !== "data-eggentFiles") continue;
+    const data = candidate.data;
+    if (Array.isArray(data)) return data.filter((group): group is ProducedGroup => Boolean(group) && typeof group.project === "string" && Array.isArray(group.items));
+  }
+  return [];
 }
 
 /** What the agent saved after this answer, when it saved anything. */

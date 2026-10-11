@@ -18,6 +18,7 @@ import {
   Trash2,
   Upload,
   FolderUp,
+  FolderArchive,
 } from "lucide-react";
 import { useAppStore } from "@/store/app-store";
 import { settingsScopeHref } from "@/lib/orchestrator-scope";
@@ -25,6 +26,7 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
 import { useBackgroundSync } from "@/hooks/use-background-sync";
 import { fileDownloadUrl, isOpenableFile } from "@/lib/files/openable";
+import { startZipDownload } from "@/lib/files/zip-download";
 import { formatUploadSize, MAX_UPLOAD_BYTES, MAX_UPLOAD_LABEL } from "@/lib/files/upload-limits";
 import { useI18n } from "@/i18n/provider";
 import {
@@ -538,6 +540,13 @@ function TreeNode({
     }
   };
 
+  // The whole folder as one archive. Refused archives say why; saying nothing
+  // would look like a button that does not work.
+  const downloadFolder = async () => {
+    const result = await startZipDownload(projectId, [relativePath]);
+    if (!result.ok) window.alert(result.error);
+  };
+
   const deleteEntry = async () => {
     const label = type === "directory" ? "folder" : "file";
     if (!window.confirm(`Delete ${label} "${relativePath}"?${type === "directory" ? " This will delete all files inside." : ""}`)) {
@@ -631,7 +640,7 @@ function TreeNode({
           className={cn(
             "flex items-center gap-1 w-full text-left text-xs py-1 px-1 rounded-sm hover:bg-accent/50 transition-colors",
             type === "file" && "pr-12",
-            type === "directory" && "pr-24",
+            type === "directory" && "pr-28",
             isActive && "bg-accent text-accent-foreground font-medium"
           )}
           style={{ paddingLeft: `${depth * 12 + 4}px` }}
@@ -724,6 +733,18 @@ function TreeNode({
             aria-label={t("files.uploadFolderInto", { name })}
           >
             <FolderUp className="size-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              void downloadFolder();
+            }}
+            className="inline-flex size-5 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+            title={t("files.downloadZipOf", { name })}
+            aria-label={t("files.downloadZipOf", { name })}
+          >
+            <FolderArchive className="size-3.5" />
           </button>
           <button
             type="button"
@@ -882,6 +903,11 @@ export function FileTree({ projectId }: FileTreeProps) {
       cancelled = true;
     };
   }, [projectId, refreshToken]);
+
+  const downloadAll = async () => {
+    const result = await startZipDownload(projectId, [""]);
+    if (!result.ok) window.alert(result.error);
+  };
 
   const createRootEntry = async (entryType: "file" | "directory") => {
     const label = entryType === "file" ? "file" : "folder";
@@ -1065,7 +1091,7 @@ export function FileTree({ projectId }: FileTreeProps) {
         <button
           onClick={() => setCurrentPath("")}
           className={cn(
-            "flex items-center gap-1 w-full text-left text-xs py-1 px-1 pr-20 rounded-sm hover:bg-accent/50 transition-colors",
+            "flex items-center gap-1 w-full text-left text-xs py-1 px-1 pr-24 rounded-sm hover:bg-accent/50 transition-colors",
             currentPath === "" && "bg-accent text-accent-foreground font-medium"
           )}
         >
@@ -1101,6 +1127,18 @@ export function FileTree({ projectId }: FileTreeProps) {
             aria-label={t("files.uploadFolder")}
           >
             <FolderUp className="size-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={(event) => {
+              event.stopPropagation();
+              void downloadAll();
+            }}
+            className="inline-flex size-5 items-center justify-center rounded-sm text-muted-foreground hover:bg-accent hover:text-foreground"
+            title={t("files.downloadAllZip")}
+            aria-label={t("files.downloadAllZip")}
+          >
+            <FolderArchive className="size-3.5" />
           </button>
           <button
             type="button"

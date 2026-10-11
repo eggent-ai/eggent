@@ -14,6 +14,7 @@ async function getEggentTelegramBotCommands() {
     { command: "new", description: t("telegram.command.new") },
     { command: "chats", description: t("telegram.command.chats") },
     { command: "reset", description: t("telegram.command.reset") },
+    { command: "files", description: t("telegram.command.files") },
   ];
 }
 

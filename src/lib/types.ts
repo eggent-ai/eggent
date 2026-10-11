@@ -3,6 +3,7 @@
 // ============================================================
 
 import type { LearnedNotice } from "@/lib/learning/types";
+import type { ProducedGroup } from "@/lib/files/produced";
 import type { PiRuntimeStats, SubagentSnapshot } from "@/lib/pi/types";
 
 // --- Settings ---
@@ -108,6 +109,8 @@ export interface ChatMessage {
   inProgress?: boolean;
   /** What the agent saved after this answer, once it had looked back over it. */
   learned?: LearnedNotice;
+  /** The files this turn made, for the row under the answer: see files/produced.ts. */
+  files?: ProducedGroup[];
 }
 
 export interface Attachment {

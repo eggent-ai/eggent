@@ -1837,6 +1837,28 @@ export async function deleteProject(projectId: string): Promise<boolean> {
   }
 }
 
+const HIDDEN_FILE_NAMES = new Set([
+  ".meta",
+  ".venv",
+  "venv",
+  "cron.json",
+  PROJECT_METADATA_FILENAME,
+  // File-sync bookkeeping, when this folder is synced to someone's computer.
+  // `.stfolder` is the marker the sync tool refuses to work without, and it
+  // will not recreate one it finds missing - deleting it from here silently
+  // stops the folder syncing. `.stignore` is generated, and `.stversions`
+  // holds superseded copies that are restored from the sync page, not by
+  // digging through them.
+  ".stfolder",
+  ".stignore",
+  ".stversions",
+]);
+
+/** Names the Files panel keeps out of sight: internal metadata, virtualenvs and sync bookkeeping. */
+export function isHiddenFileName(name: string): boolean {
+  return HIDDEN_FILE_NAMES.has(name);
+}
+
 export async function getProjectFiles(
   projectId: string,
   subPath: string = ""
@@ -1849,25 +1871,9 @@ export async function getProjectFiles(
   try {
     const entries = await fs.readdir(targetDir, { withFileTypes: true });
     const files = [];
-    const HIDDEN_NAMES = new Set([
-      ".meta",
-      ".venv",
-      "venv",
-      "cron.json",
-      PROJECT_METADATA_FILENAME,
-      // File-sync bookkeeping, when this folder is synced to someone's computer.
-      // `.stfolder` is the marker the sync tool refuses to work without, and it
-      // will not recreate one it finds missing - deleting it from here silently
-      // stops the folder syncing. `.stignore` is generated, and `.stversions`
-      // holds superseded copies that are restored from the sync page, not by
-      // digging through them.
-      ".stfolder",
-      ".stignore",
-      ".stversions",
-    ]);
 
     for (const entry of entries) {
-      if (HIDDEN_NAMES.has(entry.name)) continue; // hide internal metadata and virtualenvs
+      if (isHiddenFileName(entry.name)) continue; // hide internal metadata and virtualenvs
       const stat = await fs.stat(path.join(targetDir, entry.name));
       files.push({
         name: entry.name,

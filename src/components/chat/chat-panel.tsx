@@ -212,6 +212,15 @@ function chatMessagesToUIMessages(chatMessages: ChatMessage[]): UIMessage[] {
         } as UIMessage["parts"][number]);
       }
 
+      // The files this turn made, for the row under the answer.
+      if (m.files?.length) {
+        parts.push({
+          type: "data-eggentFiles",
+          id: `files-${m.id}`,
+          data: m.files,
+        } as UIMessage["parts"][number]);
+      }
+
       // What the agent saved after this answer, once it had looked back over it.
       if (m.learned?.items?.length) {
         parts.push({

@@ -578,6 +578,7 @@ function helpText(t: (key: MessageKey, values?: Record<string, string | number |
         t("telegram.bot.help.new"),
         t("telegram.bot.help.chats"),
         t("telegram.bot.help.reset"),
+        t("telegram.bot.help.filesCommand"),
         "",
         t("telegram.bot.help.text"),
         t("telegram.bot.help.mention"),

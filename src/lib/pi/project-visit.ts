@@ -7,6 +7,7 @@ import { resolveProjectMention, type MentionableProject } from "@/lib/pi/project
 import { describeStepTarget } from "@/lib/pi/subagent-progress";
 import { resetChatTurn } from "@/lib/pi/turn-control";
 import type { ChatContextMode } from "@/lib/types";
+import type { ProducedGroup } from "@/lib/files/produced";
 
 /**
  * A project doing a piece of work for another chat.
@@ -114,6 +115,30 @@ export function revokeVisits(chatId: string): void {
 
 export function visitGranted(chatId: string | undefined, projectId: string): boolean {
   return Boolean(chatId && grants().get(chatId)?.has(projectId));
+}
+
+// -- what a visit made -------------------------------------------------------
+
+const FILES_KEY = "__EGGENT_VISIT_FILES__";
+
+function visitFiles(): Map<string, ProducedGroup[]> {
+  const holder = globalThis as typeof globalThis & { [FILES_KEY]?: Map<string, ProducedGroup[]> };
+  if (!holder[FILES_KEY]) holder[FILES_KEY] = new Map();
+  return holder[FILES_KEY];
+}
+
+/** The files a visit made, kept for the turn that asked, whose answer will carry them. */
+export function recordVisitFiles(parentChatId: string, groups: readonly ProducedGroup[]): void {
+  if (groups.length === 0) return;
+  const known = visitFiles().get(parentChatId) ?? [];
+  visitFiles().set(parentChatId, [...known, ...groups]);
+}
+
+/** What the visits of this turn made; the turn takes it once. */
+export function takeVisitFiles(parentChatId: string): ProducedGroup[] {
+  const groups = visitFiles().get(parentChatId) ?? [];
+  visitFiles().delete(parentChatId);
+  return groups;
 }
 
 // -- reading a mention and telling the model about it -------------------------
@@ -365,7 +390,7 @@ export async function runProjectVisit(request: {
       if (request.signal?.aborted) return aborted();
       await ensureVisitChat(chatId, project, parent);
 
-      const outcome: { stopped?: boolean; finalText?: string } = {};
+      const outcome: { stopped?: boolean; finalText?: string; files?: ProducedGroup[] } = {};
       let timedOut = false;
       let finished = false;
       const stop = () => void stopVisitTurn(chatId, () => finished);
@@ -429,6 +454,9 @@ export async function runProjectVisit(request: {
         request.signal?.removeEventListener("abort", stop);
       }
 
+      // What the project made is a result of this turn too: the answer that
+      // carries its words carries its files.
+      if (outcome.files?.length) recordVisitFiles(parent.chatId, outcome.files);
       const answer = clipAnswer(outcome.finalText?.trim() || text);
       const base = { text: answer.text, chatId, toolUses, seconds: seconds(), truncated: answer.truncated };
       if (timedOut) {
