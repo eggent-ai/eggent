@@ -195,6 +195,21 @@ await rememberTelegramDestination({ chatId: 42, via: "relay", sessionId: "cloud-
 const retained = await scheduleHost.retainPiScheduleSession({ chatId: OWNER, projectId: null, session });
 assert.equal(retained, true, "the owner session was not kept for its schedule");
 
+// Next compiles the boot hook and each route on its own, so a module-level Map
+// is one copy per compiled module. A second copy of the module has to see the
+// session the first one retained, or a retime, a delete or a pause from route
+// code cannot find the session holding the timers.
+await check("the registry is shared by every copy of the module", async () => {
+  // A variable, so the type checker does not try to resolve the query string.
+  const secondCopy = "../src/lib/pi/schedule-host.ts?second-copy";
+  const second = (await import(secondCopy)) as typeof scheduleHost;
+  assert.notEqual(second.listRetainedPiScheduleSessions, scheduleHost.listRetainedPiScheduleSessions, "this is the same copy, so the check proves nothing");
+  assert.ok(
+    second.listRetainedPiScheduleSessions().some((entry) => entry.chatId === OWNER),
+    "a second copy of the module cannot see the retained session"
+  );
+});
+
 async function fireRun(marker = ""): Promise<void> {
   const before = relayed.length;
   await session.sendCustomMessage({

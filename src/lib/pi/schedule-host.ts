@@ -60,14 +60,47 @@ type RetainedSession = {
   reloading?: boolean;
 };
 
-const retained = new Map<string, RetainedSession>();
 /**
- * Retained sessions lent to a turn of their own chat. Their schedules stay
- * armed while they are out, so a change to the store has to find them too.
+ * The registries below live on the global object, not in this module.
+ *
+ * Next compiles the instrumentation hook and each route separately, and a
+ * module-level Map in one is not the Map another of them sees - the same
+ * reason the active runs and the event bus hang off the global. The sessions
+ * armed at boot are registered here by the instrumentation hook, and the
+ * schedule tool, the Schedules page and the chat runner read them from route
+ * code; with one copy each, a retime or a delete could not find the session
+ * that held the timers.
  */
-const lent = new Map<string, AgentSession>();
-/** Sessions whose scheduler must re-read its store once they are idle. */
-const pendingScheduleReloads = new WeakSet<AgentSession>();
+type ScheduleHostState = {
+  /** Sessions kept alive because they own an enabled schedule or an MCP sign-in. */
+  retained: Map<string, RetainedSession>;
+  /**
+   * Retained sessions lent to a turn of their own chat. Their schedules stay
+   * armed while they are out, so a change to the store has to find them too.
+   */
+  lent: Map<string, AgentSession>;
+  /** Sessions whose scheduler must re-read its store once they are idle. */
+  pendingScheduleReloads: WeakSet<AgentSession>;
+  /** Runs in progress, by the session that owns the schedule. */
+  scheduledRuns: WeakMap<AgentSession, ScheduledRun>;
+};
+
+const HOST_STATE_KEY = "__EGGENT_SCHEDULE_HOST__";
+
+function scheduleHostState(): ScheduleHostState {
+  const holder = globalThis as typeof globalThis & { [HOST_STATE_KEY]?: ScheduleHostState };
+  if (!holder[HOST_STATE_KEY]) {
+    holder[HOST_STATE_KEY] = {
+      retained: new Map<string, RetainedSession>(),
+      lent: new Map<string, AgentSession>(),
+      pendingScheduleReloads: new WeakSet<AgentSession>(),
+      scheduledRuns: new WeakMap<AgentSession, ScheduledRun>(),
+    };
+  }
+  return holder[HOST_STATE_KEY];
+}
+
+const { retained, lent, pendingScheduleReloads, scheduledRuns } = scheduleHostState();
 const POLL_MS = 5_000;
 const EMPTY_GRACE_MS = 10 * 60_000;
 const SCHEDULE_LOCK_RETRY_MS = 50;
@@ -257,8 +290,6 @@ interface ScheduledRun {
   /** The agent already wrote to the person's own Telegram chat itself. */
   reachedTelegram: boolean;
 }
-
-const scheduledRuns = new WeakMap<AgentSession, ScheduledRun>();
 
 /** Runs of one task on one day share a chat: a task firing every half hour must not make a chat each time. */
 function runChatId(ownerChatId: string, jobKey: string, day: string): string {
