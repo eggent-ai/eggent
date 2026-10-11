@@ -36,6 +36,7 @@ const enMessages = {
   "nav.chats": "Chats",
   "nav.noChats": "No chats yet",
   "nav.scheduledChat": "Report from the scheduled task “{job}”",
+  "nav.visitChat": "Work done when “{chat}” asked this project",
   // Read out for the mark on a chat whose turn is still running. Sighted users
   // get a pulsing dot; this is the same sentence in words.
   "nav.chatWorking": "Still working",
@@ -215,6 +216,11 @@ const enMessages = {
   "chat.tools.running": "running…",
   // Helpers started with the Agent tool: one card per helper, grouped per message.
   "chat.helpers.title": "Helpers",
+  "chat.projects.title": "Projects",
+  "chat.projects.open": "Open in {project}",
+  "chat.projects.mentionTitle": "Ask a project",
+  "chat.projects.mentionHelp": "Tab or Enter to choose. The project does the task in a chat of its own and the answer comes back here.",
+  "chat.projects.willAsk": "Will ask the project “{project}” and bring the answer back here.",
   "chat.helpers.summary.working": "{done} of {total} done",
   "chat.helpers.summary.finished": "Finished",
   "chat.helpers.summary.failed": "failed: {count}",
@@ -1078,6 +1084,9 @@ const enMessages = {
   // The chat a scheduled task reports into: one per task and day.
   "schedules.runChatTitle": "{job} · {month} {day}",
   "schedules.runFallbackName": "Scheduled task",
+  // The chat a project works in when another chat asks it with @project.
+  "projects.visit.chatTitle": "From \"{chat}\"",
+  "projects.visit.untitled": "another chat",
   // What the host says itself when a task cannot run. The detail is quoted, never reworded.
   "schedules.run.failed": "Scheduled task \"{job}\" did not finish this time. It will try again at its next time.",
   "schedules.paused.refused": "Scheduled task \"{job}\" is paused: its last {count} runs were turned away before they could start.",

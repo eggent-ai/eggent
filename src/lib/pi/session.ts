@@ -19,7 +19,7 @@ import { openChatSessionManager } from "@/lib/pi/session-files";
 import { logExtensionError, ownsScheduleStore, shutdownSessionExtensions } from "@/lib/pi/session-lifecycle";
 import { createSchedulePolicyExtension } from "@/lib/pi/schedule-policy";
 import { isScheduledRunSessionId, SCHEDULED_RUN_REFUSAL } from "@/lib/pi/scheduled-run-state";
-import { bindSubagentMonitor, createSubagentPolicyExtension, MAX_PARALLEL_SUBAGENTS, SubagentMonitor } from "@/lib/pi/subagents";
+import { bindSubagentMonitor, createSubagentPolicyExtension, MAX_PARALLEL_SUBAGENTS, SubagentMonitor, VISIT_MAX_PARALLEL_SUBAGENTS } from "@/lib/pi/subagents";
 import type { PiSessionOptions } from "@/lib/pi/types";
 import { getChatFiles } from "@/lib/storage/chat-files-store";
 import type { ChatContextMode, ChatFile, ProjectSkillMetadata } from "@/lib/types";
@@ -198,6 +198,8 @@ function buildEggentProjectContext(options: {
    * prompt cache on every turn.
    */
   budgetLevel?: "ok" | "half" | "low";
+  /** This run is a project doing work for another chat. */
+  visit?: { parentChatId: string; parentTitle?: string };
 }): string {
   // Ordering here is load-bearing, not cosmetic.
   //
@@ -343,6 +345,15 @@ function buildEggentProjectContext(options: {
     options.projectId ? `Project id: ${options.projectId}` : "Project id: orchestrator",
     options.projectName ? `Project name: ${options.projectName}` : "",
     options.projectDescription ? `Project description: ${options.projectDescription}` : "",
+    options.visit
+      ? [
+          "",
+          "## This run is a visit",
+          `Another chat of this workspace${options.visit.parentTitle ? ` (\"${options.visit.parentTitle}\")` : ""} asked this project for the task you were just given, and what you write last is handed back to that chat as it stands.`,
+          "Nobody is here to answer a question: do the work with what you have, and make the last thing you write a complete answer that stands on its own, in the language of the task.",
+          "You cannot ask another project, and you do not change which project is active.",
+        ].join("\n")
+      : "",
     `Working directory: ${options.cwd}`,
     `Memory file: ${options.memoryFilePath}`,
     // A managed workspace reports a label without a provider id, so require only
@@ -611,6 +622,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     usageToolAvailable: isUsageProviderConfigured(),
     deploymentContext: deploymentContext(),
     budgetLevel: await currentBudgetLevel(),
+    visit: options.visit,
   });
   const explicitContextFiles = liteMode ? [] : loadEggentContextFiles(cwd, agentDir);
 
@@ -622,7 +634,10 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     agentDir,
     extensionFactories: [
       createSchedulePolicyExtension(isScheduledRunSessionId, SCHEDULED_RUN_REFUSAL),
-      createSubagentPolicyExtension({ monitor: subagentMonitor }),
+      createSubagentPolicyExtension({
+        monitor: subagentMonitor,
+        ...(options.visit ? { maxParallel: VISIT_MAX_PARALLEL_SUBAGENTS } : {}),
+      }),
     ],
     additionalSkillPaths: projectSkillPaths,
     noExtensions: corePiToolsOnly,
@@ -707,6 +722,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
         runId: options.runId,
         abortSignal: options.abortSignal,
         onPiInteraction: options.onPiInteraction,
+        visit: options.visit,
         // A UI context is registered for every run, but only a run that streams
         // interactions back has someone able to answer them. Telegram and the
         // external API do not, so asking there would block until timeout.

@@ -550,7 +550,7 @@ async function answerChatCommand(
             const where = [chat.projectName, formatAgo(chat.updatedAt, t)].filter(Boolean).join(" · ");
             const title = chat.title.length > 60 ? `${chat.title.slice(0, 59)}…` : chat.title;
             const current = chat.id === context.resolvedChatId ? ` ${t("telegram.chats.current")}` : "";
-            return `${chat.scheduledJob ? "🕒" : "💬"} ${title}${current}\n   ${where ? `${where} · ` : ""}/c_${chatShortId(chat.id)}`;
+            return `${chat.scheduledJob ? "🕒" : chat.visitFrom ? "↪️" : "💬"} ${title}${current}\n   ${where ? `${where} · ` : ""}/c_${chatShortId(chat.id)}`;
           }),
           "",
           t("telegram.chats.hint"),

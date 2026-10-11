@@ -7,6 +7,7 @@ import { useRouter, usePathname } from "next/navigation";
 import {
   Bot,
   CalendarClock,
+  CornerDownRight,
   FolderOpen,
   LifeBuoy,
   LogOut,
@@ -290,12 +291,21 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 <SidebarMenuButton
                   isActive={activeChatId === chat.id}
                   onClick={() => handleChatClick(chat.id)}
-                  title={chat.scheduledJob ? t("nav.scheduledChat", { job: chat.scheduledJob }) : undefined}
+                  title={
+                    chat.scheduledJob
+                      ? t("nav.scheduledChat", { job: chat.scheduledJob })
+                      : chat.visitFrom
+                        ? t("nav.visitChat", { chat: chat.visitFrom })
+                        : undefined
+                  }
                 >
                   {/* A scheduled task reports into a chat a day, so these
                       would otherwise read as conversations nobody started. */}
                   {chat.scheduledJob ? (
                     <CalendarClock aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+                  ) : chat.visitFrom ? (
+                    // Work this project did when another chat asked it with @.
+                    <CornerDownRight aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
                   ) : null}
                   <span className="truncate">{chat.title}</span>
                 </SidebarMenuButton>

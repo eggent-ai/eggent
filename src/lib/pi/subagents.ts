@@ -28,6 +28,9 @@ import { isAgentToolName } from "@/lib/pi/subagent-format";
  */
 export const MAX_PARALLEL_SUBAGENTS = 6;
 
+/** A project visit is a whole session of its own: its helpers are kept to this many at once. */
+export const VISIT_MAX_PARALLEL_SUBAGENTS = 2;
+
 function scheduleOf(input: Record<string, unknown>): string {
   return typeof input.schedule === "string" ? input.schedule.trim() : "";
 }

@@ -16,6 +16,13 @@ export interface PiSessionOptions {
   chatContextMode?: ChatContextMode;
   enableEggentTools?: boolean;
   /**
+   * This session is a project doing work for another chat, which is where its
+   * answer goes; see project-visit.ts. A visit cannot visit, runs no more than
+   * two helpers at once, does not learn from the exchange, and whatever it
+   * sends to Telegram is attributed to the chat that asked.
+   */
+  visit?: { parentChatId: string; parentTitle?: string };
+  /**
    * Optional escape hatch for tests/debugging: when true, disables pi-discovered
    * extensions/skills/prompts/themes. By default Eggent allows all global pi packages.
    */
@@ -103,6 +110,12 @@ export interface SubagentSnapshot {
   toolCallId: string;
   description: string;
   agentType?: string;
+  /** Set when this is not a helper but another project doing work asked of it with @. */
+  kind?: "project";
+  projectId?: string;
+  projectName?: string;
+  /** The chat the project worked in: where its whole answer and its history are. */
+  visitChatId?: string;
   model?: string;
   status: SubagentStatus;
   startedAt: string;

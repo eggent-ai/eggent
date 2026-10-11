@@ -27,6 +27,7 @@ export async function getAllChats(): Promise<ChatListItem[]> {
         projectId: chat.projectId,
         contextMode: chat.contextMode,
         ...(chat.scheduledRun?.jobName ? { scheduledJob: chat.scheduledRun.jobName } : {}),
+        ...(chat.visit ? { visitFrom: chat.visit.fromTitle || chat.visit.fromChatId } : {}),
         createdAt: chat.createdAt,
         updatedAt: chat.updatedAt,
         messageCount: chat.messages.length,

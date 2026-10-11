@@ -138,6 +138,8 @@ export interface Chat {
   contextMode?: ChatContextMode;
   /** Set on a chat a scheduled task wrote its report into. */
   scheduledRun?: ScheduledRunInfo;
+  /** Set on a chat a project was asked to work in, from another chat: see eggent_ask_project. */
+  visit?: ProjectVisitInfo;
   messages: ChatMessage[];
   createdAt: string;
   updatedAt: string;
@@ -158,6 +160,18 @@ export interface ScheduledRunInfo {
   day: string;
 }
 
+/**
+ * Where a visit to a project came from.
+ *
+ * Writing `@project do this` in one chat has that project do the work in a chat
+ * of its own - one per conversation and project, so asking it again continues
+ * what it did - and the answer comes back to where the question was asked.
+ */
+export interface ProjectVisitInfo {
+  fromChatId: string;
+  fromTitle?: string;
+}
+
 export interface ChatListItem {
   id: string;
   title: string;
@@ -165,6 +179,8 @@ export interface ChatListItem {
   contextMode?: ChatContextMode;
   /** The scheduled task that wrote this chat, when one did. */
   scheduledJob?: string;
+  /** The title of the chat that asked this project, when this chat is a visit. */
+  visitFrom?: string;
   createdAt: string;
   updatedAt: string;
   messageCount: number;

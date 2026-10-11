@@ -7,13 +7,14 @@ import { CodeBlock } from "./code-block";
 import { ToolOutput } from "./tool-output";
 import { ToolGroup } from "./tool-group";
 import { SubagentGroup, type HelperItem } from "./subagent-group";
-import { isAgentToolName } from "@/lib/pi/subagent-format";
+import { isAgentToolName, isProjectToolName } from "@/lib/pi/subagent-format";
 import type { SubagentSnapshot } from "@/lib/pi/types";
 import { FileMention } from "./file-mention";
 import { LearnedNote } from "./learned-note";
 import type { LearnedNotice } from "@/lib/learning/types";
 import { embeddedAudioPath, embeddedImageUrl, fileMentionPath } from "@/lib/files/openable";
 import { hashText, runnableCommand } from "@/lib/terminal/format";
+import { resolveProjectMention } from "@/lib/pi/project-mention";
 import { useAppStore } from "@/store/app-store";
 import { useMemo, type ReactNode } from "react";
 import type { UIMessage } from "ai";
@@ -26,6 +27,34 @@ interface MessageBubbleProps {
    * context and its blocks should not offer to run.
    */
   shellScope?: string;
+}
+
+/**
+ * The person's own words, with a leading @project marked when it is understood
+ * as one: the same reading the server makes, so a pill means the message was
+ * handed to that project and a plain @word means it was not.
+ */
+function UserText({ text }: { text: string }) {
+  const projects = useAppStore((state) => state.projects);
+  const activeProjectId = useAppStore((state) => state.activeProjectId);
+  const mention = useMemo(() => {
+    if (!text.startsWith("@")) return null;
+    const resolution = resolveProjectMention(
+      text,
+      projects.map(({ id, name, description }) => ({ id, name, description })),
+      activeProjectId
+    );
+    return resolution.kind === "project" ? resolution : null;
+  }, [text, projects, activeProjectId]);
+  if (!mention) return <>{text}</>;
+  return (
+    <>
+      <span className="rounded bg-primary/10 px-1 font-medium text-primary" title={mention.project.name}>
+        @{mention.handle}
+      </span>
+      {text.slice(1 + mention.handle.length)}
+    </>
+  );
 }
 
 function normalizeVisibleText(text: string): string {
@@ -120,7 +149,7 @@ export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
           <User className="size-4" />
         </div>
         <div className="min-w-0 flex-1 pt-0.5 text-sm leading-7">
-          <p className="whitespace-pre-wrap">{visibleTextContent}</p>
+          <p className="whitespace-pre-wrap"><UserText text={visibleTextContent} /></p>
         </div>
       </div>
     );
@@ -208,11 +237,13 @@ export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
 
     // A scheduled Agent call registers a job and returns; it is not a helper
     // at work in this message, so it stays an ordinary tool card.
-    if (isAgentToolName(tool.toolName) && !(typeof input.schedule === "string" && input.schedule.trim())) {
+    const projectCall = isProjectToolName(tool.toolName);
+    if (projectCall || (isAgentToolName(tool.toolName) && !(typeof input.schedule === "string" && input.schedule.trim()))) {
       // At most one of the two groups is ever open: starting either closes the other.
       if (pendingTools.length) flushTools();
       pendingHelpers.push({
         toolCallId: tool.toolCallId || `agent-${idx}`,
+        ...(projectCall ? { kind: "project" as const } : {}),
         input,
         toolState:
           tool.state === "output-available" ? "output" : tool.state === "output-error" ? "error" : "running",

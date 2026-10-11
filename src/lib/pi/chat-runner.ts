@@ -13,7 +13,8 @@ import { noteSessionEvent, startTurnWatchdog, watchdogThresholds, watchdogTickMs
 import { attachToLiveRun, startLiveRun, type LiveRunSink } from "@/lib/pi/live-run";
 import { applySchedulingToolPolicy, hasScheduleIntent, hasScheduleManagementIntent } from "@/lib/pi/schedule-intent";
 import { describeProviderFailure, type ProviderFailure } from "@/lib/pi/provider-failure";
-import { isAgentToolName } from "@/lib/pi/subagent-format";
+import { isHelperToolName } from "@/lib/pi/subagent-format";
+import { chatAllowsVisits, grantVisits, mentionRuntimeText, planProjectMention, revokeVisits, type MentionPlan } from "@/lib/pi/project-visit";
 import { SubagentProgressTracker } from "@/lib/pi/subagent-progress";
 import type { AgentProgressEvent, PiChatRunOptions, PiRuntimeStats, PiToolRecord, SubagentSnapshot } from "@/lib/pi/types";
 import { getChat, saveChat } from "@/lib/storage/chat-store";
@@ -371,7 +372,7 @@ function attachSubagentSnapshots(
   tracker: SubagentProgressTracker
 ): ChatMessagePart[] {
   for (const part of parts) {
-    if (part.type !== "tool" || !isAgentToolName(part.toolName)) continue;
+    if (part.type !== "tool" || !isHelperToolName(part.toolName)) continue;
     const snapshot = tracker.get(part.toolCallId);
     if (!snapshot) continue;
     if (snapshot.status === "running") {
@@ -552,6 +553,23 @@ function preparePromptForRuntime(text: string): string {
   ].join("\n");
 }
 
+/**
+ * What the model is sent for this message, and what the scheduling policy reads
+ * to decide which tools to withhold.
+ *
+ * A message that opens with @project is replaced by the rules for handing it
+ * over, with the task after them; the stored message stays as the person typed
+ * it. The policy reads the rules only, never the task: "@shop remind me every
+ * day at 9" is work for the shop, and must not make this chat withhold its own
+ * tools to schedule something.
+ */
+function promptForMessage(text: string, runtimeSuffix: string, mention: MentionPlan | null): { runtime: string; policy: string } {
+  if (!mention) return { runtime: preparePromptForRuntime(`${text}${runtimeSuffix}`), policy: `${text}${runtimeSuffix}` };
+  const runtime = mentionRuntimeText(mention, runtimeSuffix);
+  if (mention.kind === "self") return { runtime: preparePromptForRuntime(runtime), policy: mention.task };
+  return { runtime, policy: mention.directive };
+}
+
 async function persistUserMessage(options: PiChatRunOptions, userMessageId: string) {
   const chat = await getChat(options.chatId);
   if (!chat) return;
@@ -691,8 +709,14 @@ export async function runPiAgentText(options: PiChatRunOptions & {
   toolRuntimeData?: Record<string, unknown>;
   /** Told about each piece of the answer as it arrives; see AgentProgressEvent. */
   onProgress?: (event: AgentProgressEvent) => void;
-  /** Filled in as the turn ends: whether somebody stopped it, which is not the same as it having nothing to say. */
-  outcome?: { stopped?: boolean };
+  /** Told about every event of the session itself, arguments and all: for code in this process, never for a caller outside it. */
+  onSessionEvent?: (event: unknown) => void;
+  /**
+   * Filled in as the turn ends: whether somebody stopped it, which is not the
+   * same as it having nothing to say, and the text of the last message the
+   * model wrote - the answer, without the narration before it.
+   */
+  outcome?: { stopped?: boolean; finalText?: string };
 }): Promise<string> {
   // A listener that throws must not take the turn down with it: the answer is
   // still delivered whole at the end.
@@ -707,9 +731,8 @@ export async function runPiAgentText(options: PiChatRunOptions & {
   const turnStartedAt = new Date().toISOString();
   const userMessageId = crypto.randomUUID();
   const runId = options.runId ?? crypto.randomUUID();
-  const prompt = options.runtimeData
-    ? `${options.userMessage}\n\nRuntime data:\n${JSON.stringify(options.runtimeData, null, 2)}`
-    : options.userMessage;
+  const runtimeSuffix = options.runtimeData ? `\n\nRuntime data:\n${JSON.stringify(options.runtimeData, null, 2)}` : "";
+  const prompt = `${options.userMessage}${runtimeSuffix}`;
 
   // Reachable from the first line. A session is built by running extension
   // code, and a turn stuck there - a server that never answers - used to be
@@ -753,6 +776,12 @@ export async function runPiAgentText(options: PiChatRunOptions & {
 
   await persistUserMessage({ ...options, userMessage: prompt }, userMessageId);
 
+  const mention = await planProjectMention(options.userMessage, {
+    disabled: options.enableEggentTools === false || Boolean(options.visit) || !chatAllowsVisits(options.chatContextMode),
+    currentProjectId: options.projectId,
+  });
+  const promptFor = promptForMessage(options.userMessage, runtimeSuffix, mention);
+
   let session: Awaited<ReturnType<typeof createEggentPiSession>>;
   try {
     session = takeRetainedPiScheduleSession(options.chatId) ?? await raceAbort(
@@ -768,6 +797,7 @@ export async function runPiAgentText(options: PiChatRunOptions & {
         // session, so a shared chat built the full tool set.
         enableEggentTools: options.enableEggentTools,
         toolRuntimeData: options.toolRuntimeData,
+        visit: options.visit,
         runId,
         abortSignal: runAbort.signal,
       }),
@@ -833,11 +863,23 @@ export async function runPiAgentText(options: PiChatRunOptions & {
     liveTextId = null;
   };
 
+  // The text of the message being written, and of the last one that was
+  // finished: the answer is the last, not everything said on the way to it.
+  let messageText = "";
+  let lastMessageText = "";
   const unsubscribe = session.subscribe((event: unknown) => {
     const record = asRecord(event);
     if (!record) return;
+    if (options.onSessionEvent) {
+      try {
+        options.onSessionEvent(record);
+      } catch (error) {
+        console.warn("A session event listener failed:", error);
+      }
+    }
     subagents.handle(record);
     if (watchdog) noteSessionEvent(watchdog, record);
+    if (record.type === "message_start" && asRecord(record.message)?.role === "assistant") messageText = "";
     // Said to the turn while it was still being set up: it can hear it now.
     if (record.type === "agent_start") {
       for (const text of starting.takeQueuedSteers()) {
@@ -849,6 +891,7 @@ export async function runPiAgentText(options: PiChatRunOptions & {
       const assistantEvent = asRecord(record.assistantMessageEvent);
       if (assistantEvent?.type === "text_delta" && typeof assistantEvent.delta === "string") {
         assistantText += assistantEvent.delta;
+        messageText += assistantEvent.delta;
         appendTimelineText(timelineParts, assistantEvent.delta);
         liveText(assistantEvent.delta);
         report({ type: "text", delta: assistantEvent.delta });
@@ -859,6 +902,7 @@ export async function runPiAgentText(options: PiChatRunOptions & {
     if (record.type === "message_end") {
       const message = asRecord(record.message);
       if (message?.role === "assistant") {
+        if (messageText.trim()) lastMessageText = messageText;
         const usage = asUsage(message.usage);
         lastTurnUsage = usage ?? lastTurnUsage;
         currentPromptUsage = addUsage(currentPromptUsage, usage);
@@ -933,12 +977,14 @@ export async function runPiAgentText(options: PiChatRunOptions & {
   });
 
   try {
-    applySchedulingToolPolicy(session, prompt);
+    applySchedulingToolPolicy(session, promptFor.policy);
     // Reachable while it runs, so a second message can stop it or be added to
     // it instead of starting a rival agent in the same chat.
     registerActiveRun(options.chatId, { session, runId, surface: "external", requestStop });
+    // The person named a project: only now may the tool be used for it.
+    if (mention) grantVisits(options.chatId, mention.allowed);
     try {
-      await session.prompt(preparePromptForRuntime(prompt));
+      await session.prompt(promptFor.runtime);
     } catch (error) {
       // A turn somebody stopped may end by throwing; what it wrote is kept.
       if (!stopped) throw error;
@@ -967,7 +1013,9 @@ export async function runPiAgentText(options: PiChatRunOptions & {
       runtimeStats: buildPiRuntimeStats(session, currentPromptUsage, addUsage(baselineUsage, currentPromptUsage)),
       parts: attachSubagentSnapshots(timelineParts, subagents),
     });
-    if (!stopped) {
+    // A visit is the project doing what another chat asked: what the person
+    // said was said there, and that turn does the learning from it.
+    if (!stopped && !options.visit) {
       learnFromTurn({
         chatId: options.chatId,
         projectId: options.projectId,
@@ -983,6 +1031,7 @@ export async function runPiAgentText(options: PiChatRunOptions & {
       });
     }
     if (stopped && options.outcome) options.outcome.stopped = true;
+    if (options.outcome) options.outcome.finalText = lastMessageText;
     return assistantText;
   } catch (error) {
     // The caller of this path answers the messenger it came from; anyone
@@ -992,6 +1041,7 @@ export async function runPiAgentText(options: PiChatRunOptions & {
     live?.push({ type: "error", errorText: streamErrorText(error) });
     throw error;
   } finally {
+    if (mention) revokeVisits(options.chatId);
     watchdog?.stop();
     live?.finish();
     clearActiveRun(options.chatId, runId);
@@ -1093,6 +1143,12 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
           },
         })
         : null;
+
+      const mention = await planProjectMention(options.userMessage, {
+        disabled: options.enableEggentTools === false || Boolean(options.visit) || !chatAllowsVisits(options.chatContextMode),
+        currentProjectId: options.projectId,
+      });
+      const promptFor = promptForMessage(options.userMessage, "", mention);
 
       let session: Awaited<ReturnType<typeof createEggentPiSession>>;
       try {
@@ -1439,7 +1495,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
           return;
         }
 
-        applySchedulingToolPolicy(session, options.userMessage);
+        applySchedulingToolPolicy(session, promptFor.policy);
         // See runPiAgentText: a run has to be reachable from the other surfaces
         // for the whole time it is working.
         registerActiveRun(options.chatId, {
@@ -1450,7 +1506,9 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
             void abortSession();
           },
         });
-        await session.prompt(preparePromptForRuntime(options.userMessage));
+        // The person named a project: only now may the tool be used for it.
+        if (mention) grantVisits(options.chatId, mention.allowed);
+        await session.prompt(promptFor.runtime);
 
         if (aborted) {
           await abortPromise;
@@ -1524,6 +1582,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         // else watching would be left with a stream that simply stopped.
         safeWrite({ type: "error", errorText: streamErrorText(error) });
       } finally {
+        if (mention) revokeVisits(options.chatId);
         watchdog?.stop();
         live?.finish();
         clearActiveRun(options.chatId, runId);

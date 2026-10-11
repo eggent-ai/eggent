@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useCallback, useState, useEffect, useMemo } from "react";
-import { Send, Square, Paperclip, X, FileIcon, ImageIcon, Mic, MicOff, Loader2, Sparkles, Check, Gauge, SquareTerminal } from "lucide-react";
+import { Send, Square, Paperclip, X, FileIcon, ImageIcon, Mic, MicOff, Loader2, Sparkles, Check, Gauge, SquareTerminal, FolderOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -18,6 +18,8 @@ import type { ChatContextMode, ChatFile } from "@/lib/types";
 import type { PiRuntimeStats } from "@/lib/pi/types";
 import type { PiPendingInteraction } from "@/lib/pi/interaction-types";
 import { parseShellInput } from "@/lib/terminal/format";
+import { mentionHandleFor, resolveProjectMention, suggestProjects, type MentionableProject } from "@/lib/pi/project-mention";
+import { useAppStore } from "@/store/app-store";
 
 function formatTokenCount(value?: number | null) {
   if (value === undefined || value === null) return "—";
@@ -260,6 +262,11 @@ export function ChatInput({
   const [slashCommandsLoading, setSlashCommandsLoading] = useState(false);
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
   const [slashMenuDismissed, setSlashMenuDismissed] = useState(false);
+  const mentionMenuRef = useRef<HTMLDivElement>(null);
+  const mentionItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const [selectedMentionIndex, setSelectedMentionIndex] = useState(0);
+  const [mentionMenuDismissed, setMentionMenuDismissed] = useState(false);
+  const allProjects = useAppStore((state) => state.projects);
 
   // Load chat files when chatId changes
   useEffect(() => {
@@ -386,6 +393,70 @@ export function ChatInput({
     });
   }, [setInput]);
 
+  // `@` at the start offers the workspace's other projects: writing a project's
+  // name hands it the task. A light chat has no tools to do that with, and a
+  // question on screen is waiting for its own answer.
+  const mentionable = useMemo<MentionableProject[]>(
+    () => allProjects.map((project) => ({ id: project.id, name: project.name, description: project.description })),
+    [allProjects]
+  );
+  const mentionQuery = useMemo(() => {
+    if (contextMode !== "full" || pendingInteraction) return null;
+    const match = /^@([^\s]*)$/.exec(input);
+    return match ? match[1] : null;
+  }, [input, contextMode, pendingInteraction]);
+  const mentionOptions = useMemo(
+    () => (mentionQuery === null ? [] : suggestProjects(mentionQuery, mentionable.filter((project) => project.id !== projectId))),
+    [mentionQuery, mentionable, projectId]
+  );
+  const showMentionMenu = !mentionMenuDismissed && mentionQuery !== null && mentionOptions.length > 0;
+  // Said above the field once the message reads as a task for a project, so
+  // the person sees how it was understood before sending it.
+  const mentionTarget = useMemo(() => {
+    if (contextMode !== "full" || pendingInteraction || !input.startsWith("@")) return null;
+    const resolution = resolveProjectMention(input, mentionable, projectId);
+    return resolution.kind === "project" ? resolution.project : null;
+  }, [input, contextMode, pendingInteraction, mentionable, projectId]);
+
+  useEffect(() => {
+    setMentionMenuDismissed(false);
+    setSelectedMentionIndex(0);
+  }, [mentionQuery, mentionOptions.length]);
+
+  useEffect(() => {
+    mentionItemRefs.current.length = mentionOptions.length;
+  }, [mentionOptions.length]);
+
+  useEffect(() => {
+    if (!showMentionMenu) return;
+    mentionItemRefs.current[selectedMentionIndex]?.scrollIntoView({ block: "nearest" });
+  }, [showMentionMenu, selectedMentionIndex]);
+
+  useEffect(() => {
+    if (!showMentionMenu) return;
+    const handlePointerDown = (event: PointerEvent) => {
+      const target = event.target;
+      if (!(target instanceof Node)) return;
+      if (mentionMenuRef.current?.contains(target)) return;
+      setMentionMenuDismissed(true);
+    };
+    document.addEventListener("pointerdown", handlePointerDown, true);
+    return () => document.removeEventListener("pointerdown", handlePointerDown, true);
+  }, [showMentionMenu]);
+
+  const applyMention = useCallback((project: MentionableProject) => {
+    const text = `@${mentionHandleFor(project, mentionable)} `;
+    setInput(text);
+    requestAnimationFrame(() => {
+      const textarea = textareaRef.current;
+      if (!textarea) return;
+      textarea.focus();
+      textarea.setSelectionRange(text.length, text.length);
+      textarea.style.height = "auto";
+      textarea.style.height = Math.min(textarea.scrollHeight, 200) + "px";
+    });
+  }, [mentionable, setInput]);
+
   const canSubmit = pendingInteraction
     ? Boolean(input.trim()) || pendingInteraction.kind === "confirm"
     : Boolean(input.trim()) || uploadedFiles.length > 0;
@@ -404,6 +475,29 @@ export function ChatInput({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      if (showMentionMenu) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setSelectedMentionIndex((index) => (index + 1) % mentionOptions.length);
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setSelectedMentionIndex((index) => (index - 1 + mentionOptions.length) % mentionOptions.length);
+          return;
+        }
+        if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
+          e.preventDefault();
+          applyMention(mentionOptions[selectedMentionIndex] || mentionOptions[0]);
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setMentionMenuDismissed(true);
+          return;
+        }
+      }
+
       if (showSlashMenu && filteredSlashCommands.length > 0) {
         if (e.key === "ArrowDown") {
           e.preventDefault();
@@ -433,6 +527,10 @@ export function ChatInput({
       }
     },
     [
+      showMentionMenu,
+      mentionOptions,
+      selectedMentionIndex,
+      applyMention,
       showSlashMenu,
       filteredSlashCommands,
       selectedCommandIndex,
@@ -773,6 +871,50 @@ export function ChatInput({
         )}
 
         <div className="relative">
+          {showMentionMenu && (
+            <div
+              ref={mentionMenuRef}
+              className="absolute bottom-full left-0 right-0 z-30 mb-2 overflow-hidden rounded-2xl border bg-popover text-popover-foreground shadow-xl"
+            >
+              <div className="border-b px-3 py-2 text-xs font-medium text-muted-foreground">
+                {t("chat.projects.mentionTitle")}
+              </div>
+              <div className="max-h-72 overflow-y-auto py-1" role="listbox" aria-label={t("chat.projects.mentionTitle")}>
+                {mentionOptions.map((project, index) => {
+                  const selected = index === selectedMentionIndex;
+                  return (
+                    <button
+                      key={project.id}
+                      ref={(node) => {
+                        mentionItemRefs.current[index] = node;
+                      }}
+                      type="button"
+                      role="option"
+                      aria-selected={selected}
+                      onMouseDown={(event) => {
+                        event.preventDefault();
+                        applyMention(project);
+                      }}
+                      className={`flex w-full items-start gap-3 px-3 py-2 text-left text-sm transition-colors ${selected ? "bg-accent text-accent-foreground" : "hover:bg-accent/60"}`}
+                    >
+                      <span className="mt-0.5 inline-flex h-6 w-6 shrink-0 items-center justify-center rounded-md border bg-muted text-muted-foreground">
+                        <FolderOpen className="size-3.5" aria-hidden />
+                      </span>
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate font-medium">{project.name}</span>
+                        {project.description ? (
+                          <span className="mt-0.5 line-clamp-2 block text-xs text-muted-foreground">{project.description}</span>
+                        ) : null}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="border-t px-3 py-1.5 text-[11px] text-muted-foreground">
+                {t("chat.projects.mentionHelp")}
+              </div>
+            </div>
+          )}
           {showSlashMenu && (
             <div
               ref={slashMenuRef}
@@ -843,6 +985,12 @@ export function ChatInput({
           {/* The mode is announced the moment the first character makes it one:
               a message that is about to run in a shell must not look like one
               that is about to be sent to the agent. */}
+          {mentionTarget && !showMentionMenu ? (
+            <div className="mb-1.5 flex items-center gap-1.5 px-1 text-xs text-muted-foreground" role="status">
+              <FolderOpen className="size-3.5 shrink-0" aria-hidden />
+              <span className="truncate">{t("chat.projects.willAsk", { project: mentionTarget.name })}</span>
+            </div>
+          ) : null}
           {shellMode ? (
             <div
               className="mb-1.5 flex items-center gap-1.5 px-1 text-xs text-muted-foreground"

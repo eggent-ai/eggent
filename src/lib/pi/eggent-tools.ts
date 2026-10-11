@@ -31,6 +31,7 @@ import {
 import { afterTelegramDelivery } from "@/lib/telegram/conversation";
 import { withChatFooter } from "@/lib/telegram/format";
 import { createChat, getChat } from "@/lib/storage/chat-store";
+import { describeVisitResult, runProjectVisit, visitChatIdFor, visitGranted, visitProgressDetails } from "@/lib/pi/project-visit";
 import { listChatSummaries, readChatConversation, searchChats } from "@/lib/storage/chat-browse";
 import { chatPath } from "@/lib/dashboard-routes";
 import {
@@ -224,6 +225,8 @@ export async function createEggentPiTools(options: {
   runId?: string;
   abortSignal?: AbortSignal;
   onPiInteraction?: (interaction: PiPendingInteraction) => void;
+  /** This run is a project doing work for another chat: it cannot visit another, and what it sends to Telegram is the asking chat's. */
+  visit?: { parentChatId: string; parentTitle?: string };
 } = {}): Promise<{ tools: ToolDefinition[]; cleanup: () => Promise<void> }> {
   // Memory, skills and MCP belong to whichever workspace is running, and the
   // orchestrator is one of them.
@@ -1230,7 +1233,8 @@ export async function createEggentPiTools(options: {
     const session = options.getAgentSession?.();
     const runChat = await scheduledRunChatFor(session);
     if (runChat && kind === "text") noteScheduledRunReachedTelegram(session);
-    await afterTelegramDelivery({ destination, result, chatId: runChat?.id ?? options.chatId });
+    // A visit's own chat is not where the person is: what it sends belongs to the chat that asked.
+    await afterTelegramDelivery({ destination, result, chatId: runChat?.id ?? options.visit?.parentChatId ?? options.chatId });
   };
   const noDestinationResult = (chat?: string) => textResult(JSON.stringify(
     chat
@@ -1384,6 +1388,58 @@ export async function createEggentPiTools(options: {
         });
       },
   }));
+
+  // A project can be asked to do a piece of work, by name, from any chat: see
+  // project-visit.ts. Only when there is another project to ask, and never from
+  // inside a visit (a project does not ask another project).
+  const askableProjects = options.visit ? [] : (await getAllProjects()).filter((project) => project.id !== options.projectId);
+  if (askableProjects.length > 0) {
+    tools.push(defineTool({
+      name: "eggent_ask_project",
+      label: "Ask a Project",
+      description: "Hand a task to another project of this workspace and wait for its answer. Only when this turn's instructions say the person addressed a project with @; never on your own.",
+      parameters: Type.Object({
+        project: Type.String({ description: "The project's id, exactly as this turn's instructions give it." }),
+        task: Type.String({ description: "What the project should do, in the person's words." }),
+      }),
+      execute: async (_toolCallId, params, signal, onUpdate) => {
+        const target = askableProjects.find((project) => project.id === (params.project?.trim() ?? ""));
+        if (!target || !visitGranted(options.chatId, target.id)) {
+          return textResult(JSON.stringify({
+            success: false,
+            error: "A project can be asked only by the person, by starting a message with @ and its name.",
+            note: "Do not ask a project on your own. Answer the person yourself, or tell them they can write @name followed by what they want done.",
+          }, null, 2));
+        }
+        const task = params.task?.trim();
+        if (!task) return textResult(JSON.stringify({ success: false, error: "task is required." }, null, 2));
+        if (!options.chatId) return textResult(JSON.stringify({ success: false, error: "This run has no chat to bring the answer back to." }, null, 2));
+        const parentChat = await getChat(options.chatId);
+        const visitChatId = visitChatIdFor(options.chatId, target.id);
+        const result = await runProjectVisit({
+          project: { id: target.id, name: target.name },
+          task,
+          parent: { chatId: options.chatId, title: parentChat?.title },
+          signal,
+          onProgress: (progress) => onUpdate?.({
+            content: [{ type: "text" as const, text: "" }],
+            details: visitProgressDetails(progress, { projectName: target.name, chatId: visitChatId }),
+          }),
+        });
+        return textResult(describeVisitResult(target.name, result), {
+          visit: {
+            projectId: target.id,
+            projectName: target.name,
+            chatId: result.chatId,
+            ok: result.ok,
+            stopped: Boolean(result.stopped),
+            seconds: result.seconds,
+            toolUses: result.toolUses,
+          },
+        });
+      },
+    }));
+  }
 
   return { tools, cleanup: async () => {} };
 }

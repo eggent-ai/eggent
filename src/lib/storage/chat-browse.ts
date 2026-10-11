@@ -23,6 +23,8 @@ export interface ChatSummary {
   messageCount: number;
   /** The scheduled task that wrote this chat, when one did. */
   scheduledJob?: string;
+  /** The chat that asked this project to work here, when this chat is a visit. */
+  visitFrom?: string;
 }
 
 export interface ChatSearchHit {
@@ -73,6 +75,7 @@ function summarize(chat: ChatListItem, names: Map<string, string>): ChatSummary 
     updatedAt: chat.updatedAt,
     messageCount: chat.messageCount,
     ...(chat.scheduledJob ? { scheduledJob: chat.scheduledJob } : {}),
+    ...(chat.visitFrom ? { visitFrom: chat.visitFrom } : {}),
   };
 }
 
@@ -178,6 +181,7 @@ export async function readChatConversation(
       updatedAt: chat.updatedAt,
       messageCount: chat.messages.length,
       scheduledJob: chat.scheduledRun?.jobName,
+      visitFrom: chat.visit ? chat.visit.fromTitle || chat.visit.fromChatId : undefined,
     }, names),
     messages: page.map(({ message, index }) => ({
       index,

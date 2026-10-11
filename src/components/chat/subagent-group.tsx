@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState, type ReactNode } from "react";
+import Link from "next/link";
 import {
   Bot,
   ChevronDown,
@@ -10,6 +11,7 @@ import {
   CircleSlash,
   CircleX,
   FileText,
+  FolderOpen,
   Globe,
   ImageIcon,
   Loader2,
@@ -22,6 +24,7 @@ import {
 } from "lucide-react";
 import { useI18n } from "@/i18n/provider";
 import type { MessageKey } from "@/i18n/messages";
+import { chatPath } from "@/lib/dashboard-routes";
 import { splitAgentResult, toolResultText } from "@/lib/pi/subagent-format";
 import { toolActivity, type ToolActivity } from "@/lib/pi/tool-activity";
 import type { SubagentSnapshot } from "@/lib/pi/types";
@@ -41,6 +44,8 @@ export type HelperState = "running" | "done" | "failed" | "stopped" | "detached"
 
 export interface HelperItem {
   toolCallId: string;
+  /** A project asked to do something with @, not a helper: same card, other words. */
+  kind?: "project";
   input: Record<string, unknown>;
   /** The tool call's own state: still running, returned, or returned an error. */
   toolState: "running" | "output" | "error";
@@ -60,6 +65,10 @@ const DETACHED_RESULT = /^Agent (?:started|queued) in background/i;
 // this, a group someone was watching snapped shut the moment it finished.
 const openGroups = new Map<string, boolean>();
 const openRows = new Set<string>();
+
+function isProjectItem(item: HelperItem): boolean {
+  return item.kind === "project" || item.snapshot?.kind === "project";
+}
 
 export function helperState(item: HelperItem): HelperState {
   const text = item.toolState === "running" ? "" : toolResultText(item.output);
@@ -154,6 +163,7 @@ export function SubagentGroup({ items, renderMarkdown }: SubagentGroupProps) {
     });
   };
   const now = useNow(running > 0);
+  const projectsOnly = items.length > 0 && items.every(isProjectItem);
 
   const starts = items
     .map((item) => (item.snapshot?.startedAt ? Date.parse(item.snapshot.startedAt) : NaN))
@@ -182,8 +192,8 @@ export function SubagentGroup({ items, renderMarkdown }: SubagentGroupProps) {
         className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-muted-foreground transition-colors hover:text-foreground"
       >
         {expanded ? <ChevronDown className="size-3.5 shrink-0" /> : <ChevronRight className="size-3.5 shrink-0" />}
-        <Users className="size-3.5 shrink-0" />
-        <span className="font-medium">{t("chat.helpers.title")}</span>
+        {projectsOnly ? <FolderOpen className="size-3.5 shrink-0" /> : <Users className="size-3.5 shrink-0" />}
+        <span className="font-medium">{projectsOnly ? t("chat.projects.title") : t("chat.helpers.title")}</span>
         {/* Pinned leading, as in the tools group: an arbitrary size resets it. */}
         <span className="inline-flex min-w-5 justify-center rounded-full bg-muted px-1.5 py-0.5 text-[11px]/4 font-medium tabular-nums text-foreground">
           {items.length}
@@ -231,14 +241,21 @@ function HelperRow({
     });
   };
   const snapshot = item.snapshot;
-  const description =
-    (typeof item.input.description === "string" && item.input.description.trim()) ||
-    snapshot?.description ||
-    t("chat.helpers.title");
+  const project = isProjectItem(item);
+  const projectName = project
+    ? snapshot?.projectName || (typeof item.input.project === "string" ? item.input.project : "") || t("chat.projects.title")
+    : "";
+  const description = project
+    ? projectName
+    : (typeof item.input.description === "string" && item.input.description.trim()) ||
+      snapshot?.description ||
+      t("chat.helpers.title");
   const agentType =
     snapshot?.agentType ?? (typeof item.input.subagent_type === "string" ? item.input.subagent_type : undefined);
-  const showType = agentType && agentType.toLowerCase() !== "general-purpose";
-  const prompt = typeof item.input.prompt === "string" ? item.input.prompt.trim() : "";
+  const showType = !project && agentType && agentType.toLowerCase() !== "general-purpose";
+  const prompt = project
+    ? typeof item.input.task === "string" ? item.input.task.trim() : ""
+    : typeof item.input.prompt === "string" ? item.input.prompt.trim() : "";
   const elapsed = elapsedMs(snapshot, now);
   const steps = snapshot?.toolUses ?? snapshot?.steps.length ?? 0;
   const { result, error } = state === "running" ? { result: "", error: undefined } : splitAgentResult(toolResultText(item.output));
@@ -348,6 +365,15 @@ function HelperRow({
                 <p className="text-xs text-muted-foreground">{t("chat.helpers.noResult")}</p>
               )}
             </section>
+          ) : null}
+
+          {project && snapshot?.visitChatId ? (
+            <p className="text-xs">
+              <Link href={chatPath(snapshot.visitChatId)} className="inline-flex min-h-6 items-center gap-1.5 text-foreground underline underline-offset-2 hover:text-primary">
+                <FolderOpen className="size-3.5" aria-hidden />
+                {t("chat.projects.open", { project: projectName })}
+              </Link>
+            </p>
           ) : null}
 
           {snapshot && (snapshot.model || snapshot.tokens) ? (

@@ -6,8 +6,25 @@
 
 export const AGENT_TOOL_NAME = "Agent";
 
+/** The tool that has another project do a piece of work; see project-visit.ts. */
+export const PROJECT_TOOL_NAME = "eggent_ask_project";
+
 export function isAgentToolName(name: unknown): boolean {
   return typeof name === "string" && name.toLowerCase() === "agent";
+}
+
+export function isProjectToolName(name: unknown): boolean {
+  return name === PROJECT_TOOL_NAME;
+}
+
+/**
+ * A call the chat draws as a card with a progress of its own: a helper, or a
+ * project asked to do something. They share the card; what they do not share is
+ * how they are started, so the code that starts or limits helpers keeps asking
+ * `isAgentToolName`.
+ */
+export function isHelperToolName(name: unknown): boolean {
+  return isAgentToolName(name) || isProjectToolName(name);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -29,8 +46,8 @@ export function toolResultText(output: unknown): string {
     .join("\n");
 }
 
-const COMPLETED_HEADLINE = /^Agent completed in [^\n]*$/m;
-const FAILED_HEADLINE = /^Agent failed: ([^\n]*)$/m;
+const COMPLETED_HEADLINE = /^(?:Agent completed in|Project ".*?" finished in) [^\n]*$/m;
+const FAILED_HEADLINE = /^(?:Agent failed|Project ".*?" failed): ([^\n]*)$/m;
 
 /**
  * What a helper found, separated from the line the extension puts in front of
@@ -41,7 +58,9 @@ export function splitAgentResult(text: string): { result: string; error?: string
   const failed = text.match(FAILED_HEADLINE);
   if (failed && failed.index !== undefined && failed.index < 400) {
     const rest = text.slice(failed.index + failed[0].length).trim();
-    return { result: rest, error: failed[1].trim() || undefined };
+    // A project's headline ends the reason with a full stop of its own.
+    const reason = failed[0].startsWith("Project") ? failed[1].trim().replace(/\.$/, "") : failed[1].trim();
+    return { result: rest, error: reason || undefined };
   }
   const completed = text.match(COMPLETED_HEADLINE);
   if (completed && completed.index !== undefined && completed.index < 400) {

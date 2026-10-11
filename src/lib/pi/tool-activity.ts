@@ -26,6 +26,8 @@ const TOOL_ACTIVITIES: Record<string, ToolActivity> = {
   subagentworkflow: "helper",
   get_subagent_result: "helper",
   steer_subagent: "helper",
+  // A project asked with @ is work handed to someone else, as a helper is.
+  eggent_ask_project: "helper",
   mcp: "service",
   mcpscript: "service",
   eggent_generate_image: "image",

@@ -3,7 +3,8 @@ import os from "node:os";
 import path from "node:path";
 import { redactSecrets } from "@/lib/pi/provider-failure";
 import {
-  isAgentToolName,
+  isHelperToolName,
+  isProjectToolName,
   parseSubagentActivity,
   parseTokenCount,
   splitAgentResult,
@@ -13,6 +14,9 @@ import type { SubagentSnapshot, SubagentStatus, SubagentStep } from "@/lib/pi/ty
 
 /**
  * What each helper is doing while the turn waits for it, for the chat to show.
+ * A project asked to do something with @ is drawn the same way, so it is
+ * followed here too - from the progress its own tool reports rather than from a
+ * transcript, since it works in a session of its own.
  *
  * Two sources, because neither is enough alone. The Agent tool reports progress
  * on its own call about twelve times a second: status, tool count, turns,
@@ -152,10 +156,10 @@ export class SubagentProgressTracker {
   handle(event: unknown): void {
     if (this.disposed) return;
     const record = asRecord(event);
-    if (!record || !isAgentToolName(record.toolName)) return;
+    if (!record || !isHelperToolName(record.toolName)) return;
     const toolCallId = typeof record.toolCallId === "string" ? record.toolCallId : "";
     if (!toolCallId) return;
-    if (record.type === "tool_execution_start") this.start(toolCallId, record.args);
+    if (record.type === "tool_execution_start") this.start(toolCallId, record.args, isProjectToolName(record.toolName));
     else if (record.type === "tool_execution_update") this.update(toolCallId, record.partialResult);
     else if (record.type === "tool_execution_end") this.end(toolCallId, record.result, record.isError === true);
   }
@@ -182,8 +186,12 @@ export class SubagentProgressTracker {
     }
   }
 
-  private start(toolCallId: string, rawArgs: unknown): void {
+  private start(toolCallId: string, rawArgs: unknown, project = false): void {
     const args = asRecord(rawArgs) ?? {};
+    if (project) {
+      this.startProject(toolCallId, args);
+      return;
+    }
     // A scheduled Agent call registers a job and returns at once; there is no
     // helper working in this turn to follow.
     if (typeof args.schedule === "string" && args.schedule.trim()) return;
@@ -213,6 +221,33 @@ export class SubagentProgressTracker {
     this.report(toolCallId, true);
   }
 
+  /** A project asked to do something: its task is the description, and its steps arrive with its progress. */
+  private startProject(toolCallId: string, args: Record<string, unknown>): void {
+    if (this.entries.has(toolCallId)) return;
+    const task = typeof args.task === "string" ? args.task : "";
+    this.entries.set(toolCallId, {
+      snapshot: {
+        toolCallId,
+        description: clip(task, 120),
+        kind: "project",
+        ...(typeof args.project === "string" && args.project.trim() ? { projectId: args.project.trim() } : {}),
+        status: "running",
+        startedAt: new Date().toISOString(),
+        now: { kind: "thinking" },
+        toolUses: 0,
+        steps: [],
+      },
+      // No transcript to find: nothing here is read from the task directory.
+      prompt: "",
+      stepIndex: new Map(),
+      lastEmitAt: 0,
+      emittedKey: "",
+      timer: null,
+      finished: false,
+    });
+    this.report(toolCallId, true);
+  }
+
   private update(toolCallId: string, partialResult: unknown): void {
     const entry = this.entries.get(toolCallId);
     if (!entry || entry.finished) return;
@@ -236,6 +271,16 @@ export class SubagentProgressTracker {
     let status: SubagentStatus = "done";
     if (isError || extensionStatus === "error") status = "failed";
     else if (extensionStatus === "stopped" || extensionStatus === "aborted") status = "stopped";
+    if (snapshot.kind === "project") {
+      // The project's own verdict: the tool answers in text either way.
+      const visit = asRecord(details?.visit);
+      if (visit) {
+        if (typeof visit.projectName === "string") snapshot.projectName = visit.projectName;
+        if (typeof visit.chatId === "string") snapshot.visitChatId = visit.chatId;
+        if (typeof visit.toolUses === "number") snapshot.toolUses = Math.max(snapshot.toolUses, visit.toolUses);
+        if (visit.ok === false) status = visit.stopped === true ? "stopped" : "failed";
+      }
+    }
     snapshot.status = status;
     if (status === "failed") {
       const reason = error
@@ -261,6 +306,23 @@ export class SubagentProgressTracker {
     if (typeof details.modelName === "string" && details.modelName.trim()) snapshot.model = details.modelName.trim();
     if (!snapshot.description && typeof details.description === "string") snapshot.description = clip(details.description, 120);
     if (!snapshot.agentType && typeof details.subagentType === "string") snapshot.agentType = details.subagentType;
+    if (snapshot.kind === "project") {
+      if (typeof details.projectName === "string" && details.projectName.trim()) snapshot.projectName = clip(details.projectName, 120);
+      if (typeof details.visitChatId === "string") snapshot.visitChatId = details.visitChatId;
+      if (Array.isArray(details.steps)) {
+        const steps: SubagentStep[] = [];
+        for (const item of details.steps.slice(-MAX_STEPS)) {
+          const record = asRecord(item);
+          if (!record || typeof record.tool !== "string") continue;
+          const step: SubagentStep = { tool: record.tool };
+          if (typeof record.target === "string" && record.target) step.target = clip(redactSecrets(record.target));
+          if (record.failed === true) step.failed = true;
+          steps.push(step);
+        }
+        snapshot.steps = steps;
+      }
+      if (typeof details.earlierSteps === "number" && details.earlierSteps > 0) snapshot.earlierSteps = details.earlierSteps;
+    }
   }
 
   private ensurePolling(): void {
