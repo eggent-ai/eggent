@@ -1035,6 +1035,7 @@ const enMessages = {
   "telegram.bot.help.chats": "/chats - recent chats; tap one to continue it",
   "telegram.bot.help.reset": "/reset - stop an answer that seems stuck (the conversation is kept)",
   "telegram.bot.help.text": "Text messages are sent to the agent.",
+  "telegram.bot.help.mention": "Start a message with @ and a project's name to hand it a task; its answer comes back here.",
   "telegram.bot.help.voice": "Voice messages are transcribed locally and sent to the agent.",
   "telegram.bot.help.files": "File uploads are saved into chat files.",
   "telegram.bot.help.sendBack": "You can also ask the agent to send a local file back to Telegram.",
