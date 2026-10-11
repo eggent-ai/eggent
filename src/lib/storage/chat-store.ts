@@ -43,16 +43,32 @@ export async function getAllChats(): Promise<ChatListItem[]> {
   );
 }
 
+// Files already looked through for credentials and found clean, by chat and by
+// what the file was when it was looked at. The chat page asks for the open
+// conversation every thirty seconds and almost always nothing has changed, so
+// a conversation that was clean a moment ago is not walked again.
+const KNOWN_CLEAN_LIMIT = 500;
+const knownClean = new Map<string, string>();
+
 export async function getChat(chatId: string): Promise<Chat | null> {
   await ensureDir(CHATS_DIR);
   const filePath = path.join(CHATS_DIR, `${chatId}.json`);
   try {
+    const stat = await fs.stat(filePath);
     const content = await fs.readFile(filePath, "utf-8");
     // A chat saved before pictures were dropped on write still carries them,
     // and this is what the chat page downloads. One saved before credentials
     // were masked on write may carry those: masked here too, so what a screen or
     // the chat browser shows never has one in it, whatever the file still holds.
-    return withoutSecrets(withoutInlineImages(JSON.parse(content) as Chat));
+    const stripped = withoutInlineImages(JSON.parse(content) as Chat);
+    const identity = `${stat.mtimeMs}:${stat.size}`;
+    if (knownClean.get(chatId) === identity) return stripped;
+    const masked = withoutSecrets(stripped);
+    if (masked === stripped) {
+      if (knownClean.size >= KNOWN_CLEAN_LIMIT) knownClean.clear();
+      knownClean.set(chatId, identity);
+    }
+    return masked;
   } catch {
     return null;
   }

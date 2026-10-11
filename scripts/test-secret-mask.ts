@@ -195,6 +195,17 @@ await check("saving a chat that was already masked changes nothing", async () =>
   assert.equal(rawFile(chat.id), before);
 });
 
+await check("a chat that was clean is not trusted once its file changes", async () => {
+  const id = "66666666-6666-4666-8666-666666666666";
+  const file = path.join(chatsDir, `${id}.json`);
+  const write = (content: string) => fs.writeFileSync(file, JSON.stringify({ id, title: "T", createdAt: "x", updatedAt: "x", messages: [{ id: "m", role: "user", content, createdAt: "x" }] }));
+  write("hello");
+  assert.equal((await getChat(id))?.messages[0].content, "hello");
+  assert.equal((await getChat(id))?.messages[0].content, "hello");
+  write(`now with ${FAKE.google} in it`);
+  assert.equal((await getChat(id))?.messages[0].content, "now with [hidden key] in it");
+});
+
 console.log("\nThe sweep\n");
 
 await check("what old chats still hold is masked once, and only the files that held something are rewritten", async () => {
