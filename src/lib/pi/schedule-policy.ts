@@ -81,39 +81,59 @@ export function bashReferencesScheduleStore(command: string): boolean {
   return command.replaceAll("\\", "/").toLowerCase().includes("subagent-schedules");
 }
 
-export const eggentSchedulePolicyExtension: InlineExtension = {
-  name: "eggent-schedule-policy",
-  hidden: true,
-  factory: (pi) => {
-    pi.on("tool_call", (event, ctx) => {
-      const toolName = event.toolName.toLowerCase();
-      const input = event.input as Record<string, unknown>;
+/**
+ * The rules every session carries about scheduled tasks.
+ *
+ * `inScheduledRun` says whether a session is writing the report of a scheduled
+ * run. It is given rather than imported because this file is also loaded by a
+ * test that runs without the application's path aliases.
+ */
+export function createSchedulePolicyExtension(
+  inScheduledRun: (sessionId: string | undefined) => boolean,
+  refusal: string
+): InlineExtension {
+  return {
+    name: "eggent-schedule-policy",
+    hidden: true,
+    factory: (pi) => {
+      pi.on("tool_call", (event, ctx) => {
+        const toolName = event.toolName.toLowerCase();
+        const input = event.input as Record<string, unknown>;
 
-      if (toolName === "agent") {
-        const schedule = typeof input.schedule === "string" ? input.schedule.trim() : "";
-        const prompt = typeof input.prompt === "string" ? input.prompt : "";
-        if (schedule && prompt) {
-          input.prompt = withScheduleExecutionDirective(prompt);
+        if (toolName === "agent") {
+          const schedule = typeof input.schedule === "string" ? input.schedule.trim() : "";
+          const prompt = typeof input.prompt === "string" ? input.prompt : "";
+          // The report of a scheduled run has every tool and no person in it; a
+          // task made from there would be one nobody asked for.
+          if (schedule && inScheduledRun(ctx.sessionManager?.getSessionId?.())) {
+            return { block: true, reason: refusal };
+          }
+          if (schedule && prompt) {
+            input.prompt = withScheduleExecutionDirective(prompt);
+          }
+          return undefined;
         }
+
+        if (toolName === "write" || toolName === "edit") {
+          const targetPath = typeof input.path === "string" ? input.path : "";
+          if (targetPath && isScheduleStorePath(targetPath, ctx.cwd)) {
+            return { block: true, reason: SCHEDULE_GUARD_REASON };
+          }
+          return undefined;
+        }
+
+        if (toolName === "bash") {
+          const command = typeof input.command === "string" ? input.command : "";
+          if (command && bashReferencesScheduleStore(command)) {
+            return { block: true, reason: SCHEDULE_GUARD_REASON };
+          }
+        }
+
         return undefined;
-      }
+      });
+    },
+  };
+}
 
-      if (toolName === "write" || toolName === "edit") {
-        const targetPath = typeof input.path === "string" ? input.path : "";
-        if (targetPath && isScheduleStorePath(targetPath, ctx.cwd)) {
-          return { block: true, reason: SCHEDULE_GUARD_REASON };
-        }
-        return undefined;
-      }
-
-      if (toolName === "bash") {
-        const command = typeof input.command === "string" ? input.command : "";
-        if (command && bashReferencesScheduleStore(command)) {
-          return { block: true, reason: SCHEDULE_GUARD_REASON };
-        }
-      }
-
-      return undefined;
-    });
-  },
-};
+/** No session is a scheduled run as far as this one knows: the plain rules, for tests. */
+export const eggentSchedulePolicyExtension: InlineExtension = createSchedulePolicyExtension(() => false, "");

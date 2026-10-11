@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import {
   bashReferencesScheduleStore,
+  createSchedulePolicyExtension,
   detectSchedule,
   eggentSchedulePolicyExtension,
   isScheduleStorePath,
@@ -72,5 +73,26 @@ assert.equal(
   toolCallHandler({ toolName: "write", input: { path: "notes/report.md" } }, { cwd: "/workspace" }),
   undefined
 );
+
+// The report of a scheduled run has every tool and no person in it: a task
+// made from there is one nobody asked for.
+let runHandler;
+createSchedulePolicyExtension((sessionId) => sessionId === "session-in-a-run", "no person is here").factory({
+  on(event, handler) {
+    if (event === "tool_call") runHandler = handler;
+  },
+});
+const inRun = { cwd: "/workspace", sessionManager: { getSessionId: () => "session-in-a-run" } };
+const person = { cwd: "/workspace", sessionManager: { getSessionId: () => "session-with-a-person" } };
+const madeInARun = runHandler({ toolName: "Agent", input: { schedule: "5m", prompt: originalPrompt } }, inRun);
+assert.equal(madeInARun?.block, true);
+assert.equal(madeInARun?.reason, "no person is here");
+const madeByAPerson = { toolName: "Agent", input: { schedule: "5m", prompt: originalPrompt } };
+assert.equal(runHandler(madeByAPerson, person), undefined);
+assert.ok(madeByAPerson.input.prompt.startsWith(SCHEDULE_EXECUTION_MARKER));
+// An Agent call with no schedule is an ordinary helper, run or no run.
+assert.equal(runHandler({ toolName: "Agent", input: { prompt: "look something up" } }, inRun), undefined);
+// A context without a session manager (the plain test above) is not a run.
+assert.equal(runHandler({ toolName: "Agent", input: { schedule: "5m", prompt: originalPrompt } }, { cwd: "/workspace" }), undefined);
 
 console.log("schedule policy tests passed");

@@ -857,13 +857,14 @@ export async function createEggentPiTools(options: {
     defineTool({
       name: "eggent_manage_schedules",
       label: "Manage Pi Scheduled Tasks",
-      description: `List, update, or clear pi-subagents scheduled tasks. Use this for existing schedule-management requests, including show/delete/cancel/change/move/reschedule${localisedExamples(SCHEDULE_MANAGEMENT_EXAMPLES)}. To update, list first if the id is unknown, then pass the exact job_id with a new schedule, new prompt, or both - what a task does can be changed as well as when it runs. Never edit .pi/subagent-schedules files with edit, write, or bash.`,
+      description: `List, update, or clear pi-subagents scheduled tasks. Use this for existing schedule-management requests, including show/delete/cancel/change/move/reschedule/pause/resume${localisedExamples(SCHEDULE_MANAGEMENT_EXAMPLES)}. To update, list first if the id is unknown, then pass the exact job_id with a new schedule, new prompt, enabled, or a combination - what a task does can be changed as well as when it runs, and a task can be paused and resumed. A task Eggent paused after runs that could not be carried out is resumed with enabled=true once the cause is dealt with. Never edit .pi/subagent-schedules files with edit, write, or bash.`,
       parameters: Type.Object({
         action: Type.Union([Type.Literal("list"), Type.Literal("update"), Type.Literal("clear")], { description: "list = inspect tasks, update = change one existing task and re-arm its live scheduler, clear = remove tasks: with job_id only that one, without it every task in scope." }),
         scope: Type.Optional(Type.Union([Type.Literal("current"), Type.Literal("all")], { description: "current = current workspace cwd; all = orchestrator and all projects. Use all when the task may belong to another chat or project. Defaults to current." })),
         job_id: Type.Optional(Type.String({ description: "Exact scheduled job id returned by list. Required for update; with clear it limits removal to that one task (without it clear removes every task in scope)." })),
         schedule: Type.Optional(Type.String({ description: "New schedule for update: 6-field cron, interval such as 5m/1h, relative one-shot such as +10m, or future ISO timestamp. Leave out to keep the current timing." })),
         prompt: Type.Optional(Type.String({ description: "New instructions for update: what the task should do when it fires, written as the work itself rather than as a request to schedule anything. Leave out to keep the current instructions. Pass the full new text - it replaces the old one." })),
+        enabled: Type.Optional(Type.Boolean({ description: "For update: false pauses the task (it stays listed and does not fire), true resumes it. Leave out to keep it as it is." })),
       }),
       execute: async (_toolCallId, params) => {
         const result = await managePiSchedules({
@@ -873,6 +874,7 @@ export async function createEggentPiTools(options: {
           jobId: params.job_id,
           schedule: params.schedule,
           prompt: params.prompt,
+          enabled: params.enabled,
           currentSession: options.getAgentSession?.(),
         });
         return textResult(JSON.stringify(result, null, 2), result);

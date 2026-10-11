@@ -611,6 +611,11 @@ const enMessages = {
   "schedules.runs": "Runs: {count}",
   "schedules.status.scheduled": "scheduled",
   "schedules.status.disabled": "disabled",
+  "schedules.status.paused": "paused",
+  "schedules.status.pausedAuto": "paused by Eggent",
+  "schedules.pause": "Pause",
+  "schedules.resume": "Resume",
+  "schedules.resumeFailed": "Could not resume that task.",
 
   "skills.title": "Skills",
   "skills.description": "Browse the skills installed in the orchestrator or in a project, and install bundled skills into the selected workspace. Installed skills live in its {path} directory.",
@@ -1061,6 +1066,11 @@ const enMessages = {
   // The chat a scheduled task reports into: one per task and day.
   "schedules.runChatTitle": "{job} · {month} {day}",
   "schedules.runFallbackName": "Scheduled task",
+  // What the host says itself when a task cannot run. The detail is quoted, never reworded.
+  "schedules.run.failed": "Scheduled task \"{job}\" did not finish this time. It will try again at its next time.",
+  "schedules.paused.refused": "Scheduled task \"{job}\" is paused: its last {count} runs were turned away before they could start.",
+  "schedules.paused.failed": "Scheduled task \"{job}\" is paused: its last {count} runs ended with an error.",
+  "schedules.paused.resume": "Once that is dealt with, resume it in Settings → Schedules, or ask me to resume it.",
   "date.monthsShort": "Jan,Feb,Mar,Apr,May,Jun,Jul,Aug,Sep,Oct,Nov,Dec",
 
   // Code blocks in an answer.

@@ -10,6 +10,14 @@ import { getActiveRun } from "@/lib/pi/active-runs";
 import { detectSchedule, withScheduleExecutionDirective } from "@/lib/pi/schedule-policy";
 import { piScheduleStorePath } from "@/lib/pi/session-lifecycle";
 import { subagentMonitorFor } from "@/lib/pi/subagents";
+import { describeProviderFailure, redactSecrets } from "@/lib/pi/provider-failure";
+import { forgetJobHealth, healthKey, recordRunOutcome, type RunDelivery, type RunOutcome } from "@/lib/pi/schedule-health";
+import {
+  isScheduledRunSessionId,
+  markScheduledRunSession,
+  SCHEDULED_RUN_REFUSAL,
+  unmarkScheduledRunSession,
+} from "@/lib/pi/scheduled-run-state";
 
 type ScheduleJobRecord = {
   id?: string;
@@ -31,6 +39,12 @@ type ScheduleJobRecord = {
   lastRun?: string;
   lastStatus?: string;
   runCount?: number;
+  /** Who switched it off: "eggent" after runs that could not be carried out, "user" when asked to. */
+  pausedBy?: "eggent" | "user";
+  pausedReason?: "refused" | "failed";
+  pausedAt?: string;
+  /** What the last run said was wrong, as the person was told. */
+  pausedDetail?: string;
 };
 
 type ScheduleStoreFile = {
@@ -289,7 +303,28 @@ interface ScheduledRun {
   chat?: Promise<Chat>;
   /** The agent already wrote to the person's own Telegram chat itself. */
   reachedTelegram: boolean;
+  /** The model service turned the report's own request away: a limit the deployment enforces. */
+  refused?: boolean;
+  /** What it said, in the person's language. */
+  refusalText?: string;
+  /** The report's own model call ended in an error the runtime could not get past. */
+  failure?: string;
+  /** How the helper that did the work ended, from its notification. */
+  childStatus?: string;
+  childError?: string;
+  /** The task this run was, found once: the run chat and the verdict both need it. */
+  job?: Promise<{ id?: string; name: string } | null>;
 }
+
+/**
+ * The id the deployment's model gateway gives the answer it writes in place of
+ * a model's when it turns a request away (a limit reached, the disk full). Such
+ * an answer is a well-formed reply that finishes normally and spent nothing, so
+ * to the runtime, to the scheduler and to the store the run looks like a
+ * success: the id is the one thing that tells them apart. The gateway's own
+ * test pins the prefix.
+ */
+const GATEWAY_REFUSAL_ID_PREFIX = "eggent_limit_";
 
 /** Runs of one task on one day share a chat: a task firing every half hour must not make a chat each time. */
 function runChatId(ownerChatId: string, jobKey: string, day: string): string {
@@ -317,6 +352,11 @@ async function firedJob(session: AgentSession, description?: string): Promise<{ 
   return name ? { id: job?.id, name } : null;
 }
 
+function jobOf(session: AgentSession, run: ScheduledRun) {
+  run.job ??= firedJob(session, run.description);
+  return run.job;
+}
+
 /** Loaded on use: the translator reaches into Next, which this module otherwise does not need. */
 async function translator() {
   return (await import("@/i18n/server")).getServerTranslator();
@@ -337,7 +377,7 @@ function ensureRunChat(session: AgentSession, run: ScheduledRun): Promise<Chat> 
   run.chat ??= (async () => {
     const owner = await getChat(run.ownerChatId);
     const t = await translator();
-    const job = await firedJob(session, run.description);
+    const job = await jobOf(session, run);
     const jobName = job?.name || t("schedules.runFallbackName");
     const day = new Date().toISOString().slice(0, 10);
     const id = runChatId(run.ownerChatId, job?.id || jobName, day);
@@ -369,6 +409,11 @@ function ensureRunChat(session: AgentSession, run: ScheduledRun): Promise<Chat> 
 export async function scheduledRunChatFor(session: AgentSession | null | undefined): Promise<Chat | null> {
   const run = session ? scheduledRuns.get(session) : undefined;
   return run ? ensureRunChat(session!, run) : null;
+}
+
+/** True while this session is writing the report of a scheduled run, with nobody in the turn. */
+export function isScheduledRunSession(session: AgentSession | null | undefined): boolean {
+  return isScheduledRunSessionId(session?.sessionId);
 }
 
 /** The run already wrote to the person, so its last words need not go out again. */
@@ -408,6 +453,73 @@ async function copyRunIntoChatContext(session: AgentSession, run: ScheduledRun, 
   }
 }
 
+/** What happened to the run, as far as the record is concerned. */
+function classifyRun(run: ScheduledRun): { outcome: RunOutcome; detail?: string } {
+  if (run.refused) return { outcome: "refused", detail: run.refusalText };
+  if (run.failure) return { outcome: "failed", detail: run.failure };
+  // "stopped" is somebody stopping the helper, not the task failing.
+  if (run.childStatus === "error" || run.childStatus === "aborted") {
+    return { outcome: "failed", detail: run.childError };
+  }
+  return { outcome: "ok" };
+}
+
+interface RunReview {
+  delivery: RunDelivery;
+  /** Written by the host instead of the run's own report. */
+  notice?: string;
+}
+
+/**
+ * Count the run, and decide what the person hears about it.
+ *
+ * A task that meets the same wall every time it fires used to deliver the
+ * refusal as the day's report forever. The first refusal is still delivered, as
+ * the report it is; the ones after it are kept in the run's chat and not sent;
+ * and when it is clear the next one will fail the same way the task is paused
+ * and the person is told so, once.
+ */
+async function reviewFinishedRun(session: AgentSession, run: ScheduledRun, hasReport: boolean): Promise<RunReview> {
+  const { outcome, detail } = classifyRun(run);
+  const job = await jobOf(session, run).catch(() => null);
+  // Without the task's id there is nothing to count against.
+  if (!job?.id) return { delivery: "report" };
+
+  const verdict = await recordRunOutcome(healthKey(session.sessionId, job.id), outcome, {
+    detail: detail ? redactSecrets(detail) : undefined,
+    hasReport,
+  });
+  if (verdict.delivery === "report" || verdict.delivery === "silent") return { delivery: verdict.delivery };
+
+  const t = await translator();
+  const shown = verdict.health.detail;
+  if (verdict.delivery === "notice") {
+    return { delivery: "notice", notice: [t("schedules.run.failed", { job: job.name }), shown].filter(Boolean).join("\n\n") };
+  }
+
+  const reason = outcome === "refused" ? "refused" : "failed";
+  // Not claimed unless it happened: a task that could not be switched off goes on reporting as before.
+  if (!(await pauseJob(session, job.id, reason, shown))) return { delivery: "report" };
+  return {
+    delivery: "pause-notice",
+    notice: [
+      t(reason === "refused" ? "schedules.paused.refused" : "schedules.paused.failed", { job: job.name, count: verdict.health.streak }),
+      shown,
+      t("schedules.paused.resume"),
+    ].filter(Boolean).join("\n\n"),
+  };
+}
+
+/**
+ * Put a message the host wrote into the run chat's own context. Without it a
+ * reply to the notice - "resume it" - reaches an agent that has never seen it.
+ */
+async function noteInRunContext(session: AgentSession, chatId: string, text: string): Promise<void> {
+  if (getActiveRun(chatId)) return;
+  const { openChatSessionManager } = await import("@/lib/pi/session-files");
+  openChatSessionManager(chatId, session.sessionManager.getCwd()).appendCustomMessageEntry("eggent-schedule-notice", text, true, undefined);
+}
+
 async function finishScheduledRun(
   session: AgentSession,
   run: ScheduledRun,
@@ -415,7 +527,15 @@ async function finishScheduledRun(
   tools: ToolRecord[]
 ) {
   const completedTools = tools.filter((tool) => tool.status !== "running");
-  if (!assistantText.trim() && completedTools.length === 0) return;
+  const hasReport = Boolean(assistantText.trim()) || completedTools.length > 0;
+  const review = await reviewFinishedRun(session, run, hasReport).catch((error): RunReview => {
+    console.warn("Could not review the scheduled run:", error);
+    return { delivery: "report" };
+  });
+  if (!hasReport && !review.notice) return;
+
+  const text = review.notice ?? assistantText;
+  const reported = review.notice ? [] : completedTools;
 
   const runChat = await ensureRunChat(session, run);
   const chat = (await getChat(runChat.id)) ?? runChat;
@@ -424,9 +544,9 @@ async function finishScheduledRun(
   const assistantMessage: ChatMessage = {
     id: crypto.randomUUID(),
     role: "assistant",
-    content: assistantText,
+    content: text,
     createdAt: now,
-    toolCalls: completedTools.map((tool) => ({
+    toolCalls: reported.map((tool) => ({
       toolCallId: tool.toolCallId,
       toolName: tool.toolName,
       args: normalizeToolInput(tool.input),
@@ -434,7 +554,7 @@ async function finishScheduledRun(
   };
   chat.messages.push(assistantMessage);
 
-  for (const tool of completedTools) {
+  for (const tool of reported) {
     chat.messages.push({
       id: crypto.randomUUID(),
       role: "tool",
@@ -452,6 +572,16 @@ async function finishScheduledRun(
   await copyRunIntoChatContext(session, run, chat.id).catch((error) => {
     console.warn("Could not give the scheduled run's chat its context:", error);
   });
+  if (review.notice) {
+    await noteInRunContext(session, chat.id, review.notice).catch((error) => {
+      console.warn("Could not give the scheduled run's chat its notice:", error);
+    });
+  }
+
+  // The same thing happening again is kept in the run's chat and not sent: the
+  // person has been told, and sending it every time is what a task meeting a
+  // wall used to do.
+  if (review.delivery === "silent") return;
 
   // The delivery deliberately does not depend on the agent calling a tool. A
   // scheduled job runs as a subagent with its own tool list, which is why every
@@ -460,15 +590,74 @@ async function finishScheduledRun(
   // knows both the result and the destination, so it does the sending itself -
   // unless the agent already wrote to the person, when its closing remark
   // ("the reminder is sent") would only arrive as a second, emptier message.
-  if (run.reachedTelegram) return;
+  // A notice is the host's own word and goes out either way.
+  if (run.reachedTelegram && !review.notice) return;
   try {
-    const result = await deliverChatToTelegram({ chatId: chat.id, text: assistantText, title: chat.title });
+    const result = await deliverChatToTelegram({ chatId: chat.id, text, title: chat.title });
     if (result && !result.success) {
       console.warn("Scheduled Telegram delivery failed:", result.error);
     }
   } catch (error) {
     console.warn("Scheduled Telegram delivery failed:", error);
   }
+}
+
+/**
+ * Switch a task off after runs that could not be carried out.
+ *
+ * Written to the store and then handed to the re-arm the delete path uses: the
+ * scheduler keeps its own copy of the jobs and goes on firing a task the file
+ * says is off until the session holding it re-reads the store, and a reload
+ * stops every helper that session has running.
+ */
+async function pauseJob(
+  session: AgentSession,
+  jobId: string,
+  reason: "refused" | "failed",
+  detail?: string
+): Promise<boolean> {
+  const outcome = await mutateScheduleStore(scheduleStorePath(session), (data) => {
+    const job = (data.jobs ?? []).find((candidate) => candidate.id === jobId);
+    if (!job || job.enabled === false) return { changed: false, result: null };
+    job.enabled = false;
+    job.pausedBy = "eggent";
+    job.pausedReason = reason;
+    job.pausedAt = new Date().toISOString();
+    if (detail) job.pausedDetail = detail;
+    else delete job.pausedDetail;
+    return { changed: true, result: { remaining: (data.jobs ?? []).filter((candidate) => candidate.enabled !== false).length } };
+  }).catch((error) => {
+    console.warn(`[Schedules] Could not pause ${jobId}:`, error instanceof Error ? error.message : error);
+    return null;
+  });
+  if (!outcome) return false;
+  await rearmAfterClear({ cwd: session.sessionManager.getCwd(), sessionId: session.sessionId, remaining: outcome.remaining }, session);
+  return true;
+}
+
+/** Text of a message's content parts, whatever dialect wrote them. */
+function textOfContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => {
+      const record = asRecord(part);
+      return record?.type === "text" && typeof record.text === "string" ? record.text : "";
+    })
+    .join("");
+}
+
+/** What the end of one of the report's own model calls says about the run. */
+function noteAssistantEnd(run: ScheduledRun, message: Record<string, unknown>): void {
+  const responseId = typeof message.responseId === "string" ? message.responseId : "";
+  if (responseId.startsWith(GATEWAY_REFUSAL_ID_PREFIX)) {
+    run.refused = true;
+    run.refusalText = textOfContent(message.content).trim() || run.refusalText;
+  }
+  // The last call decides: a retry that went through is not a failure.
+  run.failure = message.stopReason === "error"
+    ? describeProviderFailure(message.errorMessage)?.message ?? "the model request failed"
+    : undefined;
 }
 
 function subscribeForScheduledOutput(session: AgentSession, chatId: string, projectId?: string | null): () => void {
@@ -490,6 +679,8 @@ function subscribeForScheduledOutput(session: AgentSession, chatId: string, proj
           startLeafId: session.sessionManager.getLeafId(),
           reachedTelegram: false,
         });
+        // From here until it settles, this session's tools refuse to touch the schedules.
+        markScheduledRunSession(session.sessionId);
       }
       return;
     }
@@ -498,9 +689,14 @@ function subscribeForScheduledOutput(session: AgentSession, chatId: string, proj
       const message = asRecord(record.message);
       const details = asRecord(message?.details);
       const run = scheduledRuns.get(session);
-      if (run && message?.role === "custom" && message.customType === "subagent-notification" && typeof details?.description === "string") {
-        run.description ??= details.description;
+      if (!run || !message) return;
+      if (message.role === "custom" && message.customType === "subagent-notification") {
+        if (typeof details?.description === "string") run.description ??= details.description;
+        if (typeof details?.status === "string") run.childStatus ??= details.status;
+        if (typeof details?.error === "string" && details.error.trim()) run.childError ??= details.error.trim();
+        return;
       }
+      if (message.role === "assistant") noteAssistantEnd(run, message);
       return;
     }
 
@@ -550,6 +746,7 @@ function subscribeForScheduledOutput(session: AgentSession, chatId: string, proj
         reachedTelegram: false,
       };
       scheduledRuns.delete(session);
+      unmarkScheduledRunSession(session.sessionId);
       void finishScheduledRun(session, run, text, completed).catch((error) => {
         console.error("Failed to persist scheduled pi turn:", error);
       });
@@ -562,6 +759,7 @@ function subscribeForScheduledOutput(session: AgentSession, chatId: string, proj
   return () => {
     unsubscribe();
     scheduledRuns.delete(session);
+    unmarkScheduledRunSession(session.sessionId);
   };
 }
 
@@ -823,6 +1021,10 @@ function findLiveScheduleSession(options: {
   for (const entry of retained.values()) {
     if (isScheduleSession(entry.session, options.cwd, options.sessionId)) return entry.session;
   }
+  // A session lent to a turn of its own chat still holds the armed timers.
+  for (const session of lent.values()) {
+    if (isScheduleSession(session, options.cwd, options.sessionId)) return session;
+  }
   return null;
 }
 
@@ -833,8 +1035,25 @@ export async function managePiSchedules(options: {
   jobId?: string;
   schedule?: string;
   prompt?: string;
+  /** false switches a task off, true switches it back on. */
+  enabled?: boolean;
   currentSession?: AgentSession | null;
 }) {
+  // The report of a scheduled run has every tool and no person: a model told
+  // "do not touch the schedule" in a prompt it never read deleted the task it
+  // was reporting on. Reading is fine; nothing else is.
+  if (options.action !== "list" && isScheduledRunSession(options.currentSession)) {
+    return {
+      action: options.action,
+      scope: options.scope ?? "current",
+      refused: true,
+      updated: false,
+      rearmed: false,
+      count: 0,
+      schedules: [],
+      error: SCHEDULED_RUN_REFUSAL,
+    };
+  }
   const contexts = await scheduleContexts({ cwd: options.cwd, scope: options.scope });
   const schedules: Array<ScheduleJobRecord & {
     projectId: string | null;
@@ -908,8 +1127,9 @@ export async function managePiSchedules(options: {
     if (!jobId) throw new Error("job_id is required when action=update");
     const nextSchedule = options.schedule?.trim();
     const nextPrompt = options.prompt?.trim();
-    if (!nextSchedule && !nextPrompt) {
-      throw new Error("action=update needs a new schedule, new prompt, or both");
+    const nextEnabled = typeof options.enabled === "boolean" ? options.enabled : undefined;
+    if (!nextSchedule && !nextPrompt && nextEnabled === undefined) {
+      throw new Error("action=update needs a new schedule, a new prompt, enabled, or a combination of them");
     }
 
     const matches = locations.filter((location) => location.job.id === jobId);
@@ -938,13 +1158,25 @@ export async function managePiSchedules(options: {
       sessionId: target.store.sessionId,
       currentSession: options.currentSession,
     });
-    if (!targetSession) {
+    // Changing what a task says or when it runs needs the scheduler that holds
+    // it. Switching one off needs nothing armed, and switching one on brings a
+    // scheduler up for it below.
+    if (!targetSession && (nextSchedule || nextPrompt)) {
       return {
         action: options.action,
         scope: options.scope ?? "current",
         updated: false,
         rearmed: false,
         error: `Scheduled job ${jobId} is stored but its scheduler session is not live. Open its original chat before updating it.`,
+      };
+    }
+    if (nextEnabled === true && !nextSchedule && target.job.scheduleType === "once" && Date.parse(String(target.job.schedule)) <= Date.now()) {
+      return {
+        action: options.action,
+        scope: options.scope ?? "current",
+        updated: false,
+        rearmed: false,
+        error: `Scheduled job ${jobId} is a one-time task whose moment has passed. Give it a new time with schedule.`,
       };
     }
 
@@ -967,8 +1199,50 @@ export async function managePiSchedules(options: {
       // Always re-applied, never stacked: the directive is what stops a fired
       // job from re-creating itself instead of doing the work.
       if (job.prompt) job.prompt = withScheduleExecutionDirective(job.prompt);
+      if (nextEnabled === false) {
+        job.enabled = false;
+        job.pausedBy = "user";
+        job.pausedAt = new Date().toISOString();
+        delete job.pausedReason;
+        delete job.pausedDetail;
+      }
+      if (nextEnabled === true) {
+        job.enabled = true;
+        delete job.pausedBy;
+        delete job.pausedReason;
+        delete job.pausedAt;
+        delete job.pausedDetail;
+      }
       return { changed: true, result: { ...job } };
     });
+    // A task switched back on starts from a clean record.
+    if (nextEnabled === true) await forgetJobHealth(healthKey(target.store.sessionId, jobId)).catch(() => undefined);
+
+    if (!targetSession) {
+      // Nothing is armed for this store. Switching a task off leaves it so;
+      // switching one on has to bring a scheduler up, the way a restart does.
+      if (nextEnabled !== true) {
+        return {
+          action: options.action,
+          scope: options.scope ?? "current",
+          updated: true,
+          rearmed: false,
+          enabled: nextEnabled,
+          job: updatedJob,
+        };
+      }
+      const revived = await armScheduleStore(target.context, target.store.sessionId);
+      return {
+        action: options.action,
+        scope: options.scope ?? "current",
+        updated: true,
+        rearmed: revived ? "started" : false,
+        enabled: true,
+        nextRun: updatedJob.nextRun,
+        job: updatedJob,
+        ...(revived ? {} : { error: "The task is switched on, but its scheduler could not be started. Try again, or open its original chat." }),
+      };
+    }
 
     if (targetSession === options.currentSession) {
       pendingScheduleReloads.add(targetSession);
@@ -977,6 +1251,19 @@ export async function managePiSchedules(options: {
         scope: options.scope ?? "current",
         updated: true,
         rearmed: "after_current_turn",
+        nextRun: detected?.nextRun ?? updatedJob.nextRun,
+        job: updatedJob,
+      };
+    }
+    // Reloading stops every helper the session has running, and one of them may
+    // be another task's run: wait until it is idle, as a delete does.
+    if (targetSession.isIdle === false || hasRunningSubagents(targetSession)) {
+      pendingScheduleReloads.add(targetSession);
+      return {
+        action: options.action,
+        scope: options.scope ?? "current",
+        updated: true,
+        rearmed: "when_idle",
         nextRun: detected?.nextRun ?? updatedJob.nextRun,
         job: updatedJob,
       };
@@ -1014,6 +1301,36 @@ export async function managePiSchedules(options: {
 }
 
 /**
+ * Open the session a store is named after, so pi-subagents arms what is enabled
+ * in it. A restart does this for every store at boot; switching a paused task
+ * back on does it for one whose session was let go while nothing in it was
+ * enabled.
+ */
+async function armScheduleStore(
+  context: { projectId: string | null; projectName: string; cwd: string },
+  sessionId: string
+): Promise<boolean> {
+  if (retained.has(keyFor(sessionId))) return true;
+  try {
+    const { createEggentPiSession } = await import("@/lib/pi/session");
+    const session = await createEggentPiSession({
+      chatId: sessionId,
+      projectId: context.projectId ?? undefined,
+      cwd: context.cwd,
+    });
+    const kept = await retainPiScheduleSession({ chatId: sessionId, projectId: context.projectId, session });
+    if (!kept) session.dispose();
+    return kept;
+  } catch (error) {
+    console.warn(
+      `[Schedules] Could not restore ${sessionId} in ${context.projectName}:`,
+      error instanceof Error ? error.message : error
+    );
+    return false;
+  }
+}
+
+/**
  * Bring stored schedules back after a restart.
  *
  * A scheduled job is armed by pi-subagents inside a live session and dies with
@@ -1027,7 +1344,6 @@ export async function managePiSchedules(options: {
  * pi-subagents arm it on session_start.
  */
 export async function restorePiSchedules(): Promise<{ armed: number; expired: number; failed: number }> {
-  const { createEggentPiSession } = await import("@/lib/pi/session");
   const contexts = await scheduleContexts({ scope: "all" });
   let armed = 0;
   let expired = 0;
@@ -1055,30 +1371,8 @@ export async function restorePiSchedules(): Promise<{ armed: number; expired: nu
       if (!jobs.some((job) => job.enabled !== false)) continue;
       if (retained.has(keyFor(store.sessionId))) continue;
 
-      try {
-        const session = await createEggentPiSession({
-          chatId: store.sessionId,
-          projectId: context.projectId ?? undefined,
-          cwd: context.cwd,
-        });
-        const kept = await retainPiScheduleSession({
-          chatId: store.sessionId,
-          projectId: context.projectId,
-          session,
-        });
-        if (kept) {
-          armed += 1;
-        } else {
-          session.dispose();
-          failed += 1;
-        }
-      } catch (error) {
-        failed += 1;
-        console.warn(
-          `[Schedules] Could not restore ${store.sessionId} in ${context.projectName}:`,
-          error instanceof Error ? error.message : error
-        );
-      }
+      if (await armScheduleStore(context, store.sessionId)) armed += 1;
+      else failed += 1;
     }
   }
 

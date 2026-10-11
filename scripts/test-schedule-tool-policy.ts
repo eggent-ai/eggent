@@ -50,6 +50,15 @@ function check(name: string, fn: () => void): void {
 
 console.log("Scheduling tool policy\n");
 
+check("pausing and resuming a task are management too", () => {
+  for (const text of ["pause my morning schedule", "resume the scheduled report", "disable that reminder", "enable the reminder again"]) {
+    const s = makeSession();
+    applySchedulingToolPolicy(s, text);
+    assert.ok(!s.active.includes("Agent"), `${text}: Agent was left in`);
+    assert.ok(s.active.includes("eggent_manage_schedules"), text);
+  }
+});
+
 check("a management turn withholds the tools that would edit the store by hand", () => {
   const s = makeSession();
   applySchedulingToolPolicy(s, "show me the list of scheduled jobs");

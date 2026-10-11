@@ -144,7 +144,7 @@ await check("an update that asks for nothing is refused", async () => {
   await seed({ ...BASE });
   await assert.rejects(
     () => managePiSchedules({ action: "update", scope: "current", cwd: workDir, jobId: "job-1", currentSession: fakeSession() as never }),
-    /new schedule, new prompt, or both/
+    /new schedule, a new prompt, enabled/
   );
 });
 
@@ -295,6 +295,128 @@ await check("a scheduled run in progress is not cut off: the reload waits for it
   await new Promise((resolve) => setTimeout(resolve, 5_600));
   assert.equal(g.state.reloads, 1);
   assert.equal(g.state.disposed, 0);
+});
+
+console.log("\nSwitching a task off and on\n");
+
+const { markScheduledRunSession, unmarkScheduledRunSession } = await import("../src/lib/pi/scheduled-run-state.ts");
+const { recordRunOutcome, readJobHealth, healthKey, resetScheduleHealth } = await import("../src/lib/pi/schedule-health.ts");
+
+await check("a task can be paused, and keeps everything else it was", async () => {
+  await seed({ ...BASE });
+  const session = fakeSession();
+  const result = await managePiSchedules({
+    action: "update", scope: "current", cwd: workDir, jobId: "job-1", enabled: false, currentSession: session as never,
+  });
+  assert.equal((result as { updated?: boolean }).updated, true, JSON.stringify(result));
+  const job = await readJob();
+  assert.equal(job.enabled, false);
+  assert.equal(job.pausedBy, "user");
+  assert.ok(job.pausedAt);
+  assert.equal(job.schedule, BASE.schedule, "the timing must be left alone");
+  assert.ok(job.prompt.startsWith(SCHEDULE_EXECUTION_MARKER));
+  assert.equal((result as { rearmed?: unknown }).rearmed, "after_current_turn");
+});
+
+await check("pausing needs no live scheduler: there is nothing armed to stop", async () => {
+  await seed({ ...BASE });
+  const result = await managePiSchedules({ action: "update", scope: "current", cwd: workDir, jobId: "job-1", enabled: false });
+  assert.equal((result as { updated?: boolean }).updated, true, JSON.stringify(result));
+  assert.equal((await readJob()).enabled, false);
+});
+
+await check("changing the wording still needs the scheduler that holds the task", async () => {
+  await seed({ ...BASE });
+  const result = await managePiSchedules({ action: "update", scope: "current", cwd: workDir, jobId: "job-1", prompt: "Other." });
+  assert.equal((result as { updated?: boolean }).updated, false);
+  assert.match(String((result as { error?: string }).error), /not live/);
+});
+
+await check("resuming clears the pause and the record of trouble, and re-arms a live scheduler", async () => {
+  resetScheduleHealth();
+  await seed({ ...BASE, enabled: false, pausedBy: "eggent", pausedReason: "refused", pausedAt: "2026-10-11T06:00:00.000Z", pausedDetail: "Limit reached" });
+  await recordRunOutcome(healthKey("chat-1", "job-1"), "refused", { hasReport: true, detail: "Limit reached" });
+  const session = fakeSession();
+  const result = await managePiSchedules({
+    action: "update", scope: "current", cwd: workDir, jobId: "job-1", enabled: true, currentSession: session as never,
+  });
+  assert.equal((result as { updated?: boolean }).updated, true, JSON.stringify(result));
+  const job = await readJob();
+  assert.equal(job.enabled, true);
+  for (const field of ["pausedBy", "pausedReason", "pausedAt", "pausedDetail"]) {
+    assert.equal(job[field], undefined, `${field} was left behind`);
+  }
+  assert.equal(await readJobHealth(healthKey("chat-1", "job-1")), undefined, "a resumed task starts from a clean record");
+});
+
+await check("a one-time task whose moment has passed cannot be resumed without a new time", async () => {
+  await seed({ ...BASE, schedule: "2020-01-01T00:00:00.000Z", scheduleType: "once", enabled: false, pausedBy: "user" });
+  const result = await managePiSchedules({ action: "update", scope: "current", cwd: workDir, jobId: "job-1", enabled: true, currentSession: fakeSession() as never });
+  assert.equal((result as { updated?: boolean }).updated, false);
+  assert.match(String((result as { error?: string }).error), /moment has passed/);
+  assert.equal((await readJob()).enabled, false);
+});
+
+await check("resuming a task whose scheduler is gone says so rather than pretending", async () => {
+  await seed({ ...BASE, enabled: false, pausedBy: "eggent", pausedReason: "refused" });
+  const result = await managePiSchedules({ action: "update", scope: "current", cwd: workDir, jobId: "job-1", enabled: true });
+  // No model is configured here, so the session cannot be built: the task is
+  // switched on in its store and the answer says the scheduler did not start.
+  assert.equal((result as { updated?: boolean }).updated, true, JSON.stringify(result));
+  assert.equal((result as { rearmed?: unknown }).rearmed, false);
+  assert.ok((result as { error?: string }).error, "no explanation");
+  assert.equal((await readJob()).enabled, true);
+});
+
+await check("a retained scheduler that is busy is reloaded when it is idle, not from under its run", async () => {
+  await seedChat("chat-h", ["h-1"]);
+  const h = retainedSession("chat-h");
+  await retainPiScheduleSession({ chatId: "chat-h", session: h as never });
+  h.isIdle = false;
+  const result = await managePiSchedules({ action: "update", scope: "all", jobId: "h-1", enabled: false });
+  assert.equal((result as { rearmed?: unknown }).rearmed, "when_idle", JSON.stringify(result));
+  assert.equal(h.state.reloads, 0, "reloaded while a run was in progress");
+  h.isIdle = true;
+  takeRetainedPiScheduleSession("chat-h");
+});
+
+console.log("\nThe report of a scheduled run\n");
+
+await check("cannot create, change or delete tasks: the person is not there", async () => {
+  await seed({ ...BASE });
+  markScheduledRunSession("chat-1");
+  try {
+    for (const action of ["update", "clear"] as const) {
+      const result = await managePiSchedules({
+        action, scope: "current", cwd: workDir, jobId: "job-1", prompt: "Something else.", currentSession: fakeSession() as never,
+      });
+      assert.equal((result as { refused?: boolean }).refused, true, `${action}: ${JSON.stringify(result)}`);
+      assert.match(String((result as { error?: string }).error), /no person is in it/);
+    }
+    const job = await readJob();
+    assert.equal(job.id, "job-1", "the task was deleted");
+    assert.match(job.prompt, /single most important/, "the task was rewritten");
+  } finally {
+    unmarkScheduledRunSession("chat-1");
+  }
+});
+
+await check("but may look at them", async () => {
+  await seed({ ...BASE });
+  markScheduledRunSession("chat-1");
+  try {
+    const result = await managePiSchedules({ action: "list", scope: "current", cwd: workDir, currentSession: fakeSession() as never });
+    assert.equal((result as { count?: number }).count, 1);
+    assert.equal((result as { refused?: boolean }).refused, undefined);
+  } finally {
+    unmarkScheduledRunSession("chat-1");
+  }
+});
+
+await check("a person's own turn in the same chat is not a run", async () => {
+  await seed({ ...BASE });
+  const result = await managePiSchedules({ action: "update", scope: "current", cwd: workDir, jobId: "job-1", prompt: "Reworded.", currentSession: fakeSession() as never });
+  assert.equal((result as { updated?: boolean }).updated, true, JSON.stringify(result));
 });
 
 console.log(`\n${ran} checks, ${failed} failed`);

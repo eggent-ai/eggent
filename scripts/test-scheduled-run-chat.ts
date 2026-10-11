@@ -37,10 +37,11 @@ const PROVIDER = "stub";
 const MODEL = "stub-model";
 const SETUP = "Every morning, go through my todo list.";
 const REPORT = "**Today**: finish the platform.";
+const REFUSAL = "Request not carried out: the limit for this workspace has been reached. Details: https://example.test/limits";
 
-function chunk(delta: Record<string, unknown>, finish: string | null = null): string {
+function chunk(delta: Record<string, unknown>, finish: string | null = null, id = "stub-completion"): string {
   return `data: ${JSON.stringify({
-    id: "stub-completion",
+    id,
     object: "chat.completion.chunk",
     created: 0,
     model: MODEL,
@@ -71,7 +72,23 @@ const provider = http.createServer((req, res) => {
     const lastText = JSON.stringify(last?.content ?? "");
     const toolAnswered = messages[messages.length - 1]?.role === "tool";
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
+    // The deployment's gateway answers a request it turns away with a reply of its
+    // own, under an id of its own, that finishes normally and spends nothing.
+    if (lastText.includes("REFUSE")) {
+      res.write(chunk({ role: "assistant" }, null, "eggent_limit_1"));
+      res.write(chunk({ content: REFUSAL }, null, "eggent_limit_1"));
+      res.write(chunk({}, "stop", "eggent_limit_1"));
+      res.write("data: [DONE]\n\n");
+      res.end();
+      return;
+    }
     res.write(chunk({ role: "assistant" }));
+    if (lastText.includes("EMPTY-REPORT")) {
+      res.write(chunk({}, "stop"));
+      res.write("data: [DONE]\n\n");
+      res.end();
+      return;
+    }
     if (lastText.includes("SEND-ITSELF") && !toolAnswered) {
       res.write(chunk({
         tool_calls: [{
@@ -210,20 +227,24 @@ await check("the registry is shared by every copy of the module", async () => {
   );
 });
 
-async function fireRun(marker = ""): Promise<void> {
+async function fireRun(
+  marker = "",
+  options: { sends?: boolean; details?: Record<string, unknown> } = {}
+): Promise<void> {
   const before = relayed.length;
   await session.sendCustomMessage({
     customType: "subagent-notification",
     content: `<task-notification>\n<summary>Agent "morning review" completed</summary>\n<result>todo: finish the platform ${marker}</result>\n</task-notification>`,
     display: true,
-    details: { description: "morning review" },
+    details: { description: "morning review", ...options.details },
   }, { triggerTurn: true, deliverAs: "followUp" });
   await session.waitForIdle();
-  // The report is written and sent after the turn settles.
-  for (let waited = 0; waited < 5000 && relayed.length === before; waited += 25) {
+  // The report is written and sent after the turn settles. A run that is kept
+  // and not sent has nothing to wait for, so give it a moment instead.
+  for (let waited = 0; waited < (options.sends === false ? 400 : 5000) && relayed.length === before; waited += 25) {
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
-  await new Promise((resolve) => setTimeout(resolve, 50));
+  await new Promise((resolve) => setTimeout(resolve, 100));
 }
 
 async function runChats() {
@@ -322,6 +343,92 @@ await check("the run, closing remark included, is kept in the run's chat", async
   const last = runChat?.messages.filter((message) => message.role === "assistant").pop();
   assert.equal(last?.content, "The reminder is sent.");
   assert.ok(runChat?.messages.some((message) => message.role === "tool" && message.toolName === "telegram_send_message"));
+});
+
+console.log("\nA task that meets the wall every time\n");
+
+const jobFile = path.join(storeDir, `${session.sessionId}.json`);
+const readJobRecord = () => JSON.parse(fs.readFileSync(jobFile, "utf-8")).jobs[0];
+const healthFile = path.join(root, "data", "schedules", "health.json");
+const runChatNow = async () => (await getChat(runChatItem.id))!;
+const assistantTexts = async () => (await runChatNow()).messages.filter((message) => message.role === "assistant").map((message) => message.content);
+
+const beforeRefusals = relayed.length;
+await fireRun("REFUSE");
+
+await check("the first refusal is delivered, as the report it is", () => {
+  const sent = relayed.slice(beforeRefusals).filter((entry) => entry.path.endsWith("/message"));
+  assert.equal(sent.length, 1, `sent ${sent.length}`);
+  assert.ok(String(sent[0].body.text).includes("limit for this workspace has been reached"), String(sent[0].body.text));
+  assert.equal(readJobRecord().enabled, true, "paused after one refusal");
+});
+
+await fireRun("REFUSE", { sends: false });
+
+await check("the second is kept in the run's chat and not sent again", async () => {
+  assert.equal(relayed.length - beforeRefusals, 1, "a repeat refusal reached Telegram");
+  const texts = await assistantTexts();
+  assert.ok(texts.filter((text) => String(text).includes("limit for this workspace")).length >= 2, "the repeat was not kept");
+  assert.equal(JSON.parse(fs.readFileSync(healthFile, "utf-8")).jobs[`${session.sessionId}:job-morning`].streak, 2);
+  assert.equal(readJobRecord().enabled, true);
+});
+
+await fireRun("REFUSE");
+
+await check("the third pauses the task, in its store, with the reason", () => {
+  const job = readJobRecord();
+  assert.equal(job.enabled, false, "the task is still on");
+  assert.equal(job.pausedBy, "eggent");
+  assert.equal(job.pausedReason, "refused");
+  assert.ok(String(job.pausedDetail).includes("limit for this workspace"), String(job.pausedDetail));
+});
+
+await check("and tells the person once, in words, how to resume it", () => {
+  const sent = relayed.slice(beforeRefusals).filter((entry) => entry.path.endsWith("/message"));
+  assert.equal(sent.length, 2, `sent ${sent.length}: the repeat refusals must stay quiet`);
+  const text = String(sent[1].body.text);
+  assert.ok(text.includes('"Morning review" is paused'), text);
+  assert.ok(text.includes("resume it"), text);
+});
+
+await check("the notice is in the run's chat, and in what an answer to it would be read against", async () => {
+  const texts = await assistantTexts();
+  assert.ok(String(texts[texts.length - 1]).includes("is paused"), String(texts[texts.length - 1]));
+  const sessionDir = getEggentPiSessionDir();
+  const file = fs.readdirSync(sessionDir).find((name) => name.endsWith(`_${runChatItem.id}.jsonl`))!;
+  const context = SessionManager.open(path.join(sessionDir, file), sessionDir, cwd).buildSessionContext();
+  assert.ok(JSON.stringify(context.messages).includes("is paused"), "a reply to the notice would reach an agent that never saw it");
+});
+
+await check("a paused task can be resumed, and its count starts again", async () => {
+  const result = await scheduleHost.managePiSchedules({ action: "update", scope: "current", cwd, jobId: "job-morning", enabled: true });
+  assert.equal((result as { updated?: boolean }).updated, true, JSON.stringify(result));
+  const job = readJobRecord();
+  assert.equal(job.enabled, true);
+  assert.equal(job.pausedBy, undefined);
+  const stored = JSON.parse(fs.readFileSync(healthFile, "utf-8"));
+  assert.equal(stored.jobs[`${session.sessionId}:job-morning`], undefined);
+});
+
+console.log("\nA run that did not finish\n");
+
+const beforeFailure = relayed.length;
+await fireRun("EMPTY-REPORT", { details: { status: "error", error: "The helper stopped after 30 turns." } });
+
+await check("with nothing to report, the person is told it did not finish, and why", () => {
+  const sent = relayed.slice(beforeFailure).filter((entry) => entry.path.endsWith("/message"));
+  assert.equal(sent.length, 1, `sent ${sent.length}`);
+  const text = String(sent[0].body.text);
+  assert.ok(text.includes('"Morning review" did not finish'), text);
+  assert.ok(text.includes("stopped after 30 turns"), text);
+  assert.equal(readJobRecord().enabled, true, "one failure must not pause a task");
+});
+
+await fireRun();
+
+await check("a run that goes well clears the count", () => {
+  const stored = JSON.parse(fs.readFileSync(healthFile, "utf-8"));
+  assert.equal(stored.jobs[`${session.sessionId}:job-morning`], undefined);
 });
 
 scheduleHost.takeRetainedPiScheduleSession(OWNER)?.dispose();

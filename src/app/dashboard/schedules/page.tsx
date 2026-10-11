@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { CalendarClock, Clock, Loader2, RefreshCw, Trash2 } from "lucide-react";
+import { CalendarClock, Clock, Loader2, Pause, Play, RefreshCw, Trash2 } from "lucide-react";
 import { SettingsScopeSelect, useSettingsScope } from "@/components/settings-scope";
 import { SettingsPageHeader, SettingsShell } from "@/components/settings-shell";
 import { Badge } from "@/components/ui/badge";
@@ -25,6 +25,10 @@ type PiSchedule = {
   lastStatus?: string;
   nextRun?: string;
   runCount?: number;
+  pausedBy?: "eggent" | "user";
+  pausedReason?: "refused" | "failed";
+  pausedAt?: string;
+  pausedDetail?: string;
   projectId: string | null;
   projectName: string;
   sessionId: string;
@@ -39,7 +43,13 @@ function formatDate(value?: string) {
   }
 }
 
+/** A task somebody or Eggent switched off, as opposed to a one-time task that has run. */
+function isPaused(job: PiSchedule): boolean {
+  return job.enabled === false && Boolean(job.pausedBy);
+}
+
 function statusVariant(job: PiSchedule): "default" | "secondary" | "destructive" | "outline" {
+  if (isPaused(job)) return job.pausedBy === "eggent" ? "destructive" : "outline";
   if (!job.enabled) return "outline";
   if (job.lastStatus === "error") return "destructive";
   if (job.lastStatus === "running") return "default";
@@ -68,7 +78,7 @@ export default function PiSchedulesPage() {
     }
   };
 
-  const change = async (job: PiSchedule, action: "delete" | "retime", schedule?: string) => {
+  const change = async (job: PiSchedule, action: "delete" | "retime" | "pause" | "resume", schedule?: string) => {
     setBusyId(job.id);
     try {
       const response = await fetch("/api/pi-schedules", {
@@ -77,7 +87,11 @@ export default function PiSchedulesPage() {
         body: JSON.stringify({ action, jobId: job.id, schedule }),
       });
       if (!response.ok) throw new Error(t("schedules.changeFailed"));
+      const result = await response.json().catch(() => null);
       await load();
+      // A resume that switched the task on but could not start its scheduler
+      // answers 200 with the reason; the person should see it.
+      if (action === "resume" && result && typeof result.error === "string") window.alert(t("schedules.resumeFailed"));
     } catch {
       window.alert(t("schedules.changeFailed"));
     } finally {
@@ -205,11 +219,29 @@ export default function PiSchedulesPage() {
                     </td>
                     <td className="px-4 py-3 align-top">
                       <Badge variant={statusVariant(job)}>
-                        {job.enabled ? job.lastStatus || t("schedules.status.scheduled") : t("schedules.status.disabled")}
+                        {isPaused(job)
+                          ? job.pausedBy === "eggent" ? t("schedules.status.pausedAuto") : t("schedules.status.paused")
+                          : job.enabled ? job.lastStatus || t("schedules.status.scheduled") : t("schedules.status.disabled")}
                       </Badge>
+                      {isPaused(job) && job.pausedDetail ? (
+                        <div className="mt-1 line-clamp-3 max-w-xs text-xs text-muted-foreground">{job.pausedDetail}</div>
+                      ) : null}
                     </td>
                     <td className="px-4 py-3 align-top">
                       <div className="flex items-center justify-end gap-1">
+                        {job.enabled !== false || isPaused(job) ? (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            className="size-11 p-0"
+                            aria-label={isPaused(job) ? t("schedules.resume") : t("schedules.pause")}
+                            title={isPaused(job) ? t("schedules.resume") : t("schedules.pause")}
+                            disabled={busyId === job.id}
+                            onClick={() => change(job, isPaused(job) ? "resume" : "pause")}
+                          >
+                            {isPaused(job) ? <Play className="size-4" /> : <Pause className="size-4" />}
+                          </Button>
+                        ) : null}
                         <Button
                           variant="ghost"
                           size="sm"

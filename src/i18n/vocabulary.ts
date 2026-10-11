@@ -95,6 +95,10 @@ export const SCHEDULE_MANAGEMENT_VERBS: readonly string[] = [
   "move",
   "reschedule",
   "edit",
+  "pause",
+  "resume",
+  "disable",
+  "enable",
 ];
 
 /** The subset of the above that means "move it to another time". */

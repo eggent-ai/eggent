@@ -25,6 +25,10 @@ type PiScheduledSubagent = {
   lastStatus?: "success" | "error" | "running";
   nextRun?: string;
   runCount?: number;
+  pausedBy?: "eggent" | "user";
+  pausedReason?: "refused" | "failed";
+  pausedAt?: string;
+  pausedDetail?: string;
 };
 
 async function readSchedulesForContext(context: { projectId: string | null; projectName: string; cwd: string }) {
@@ -78,7 +82,7 @@ export async function GET() {
 
 
 /**
- * Delete a job, or move it to a different time.
+ * Delete a job, move it to a different time, or switch it off and on.
  *
  * Both go through `managePiSchedules`, never through the store file. The store
  * is owned by a live pi session: writing it directly changes the persisted time
@@ -101,6 +105,10 @@ export async function POST(request: Request) {
   try {
     if (action === "delete") {
       const result = await managePiSchedules({ action: "clear", scope: "all", jobId });
+      return NextResponse.json(result);
+    }
+    if (action === "pause" || action === "resume") {
+      const result = await managePiSchedules({ action: "update", scope: "all", jobId, enabled: action === "resume" });
       return NextResponse.json(result);
     }
     if (action === "retime") {
