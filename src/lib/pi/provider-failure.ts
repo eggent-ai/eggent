@@ -15,6 +15,8 @@
  * where it says nothing at all.
  */
 
+import { VENDOR_SHAPES } from "@/lib/secrets/shapes";
+
 /** A provider's own account of why a request failed. */
 export interface ProviderFailure {
   /** HTTP status, when one can be found. */
@@ -33,20 +35,9 @@ const MAX_MESSAGE_CHARS = 220;
  * patterns are deliberately broad: a redacted word costs nothing, a leaked key
  * costs a rotation.
  */
-const SECRET_PATTERNS: RegExp[] = [
-  /\bBearer\s+[A-Za-z0-9._\-]{8,}/gi,
-  /\bsk-[A-Za-z0-9._\-]{8,}/g,
-  /\beggw_[A-Za-z0-9._\-]{8,}/g,
-  /\bAIza[A-Za-z0-9._\-]{10,}/g,
-  /\bAQ\.[A-Za-z0-9._\-]{10,}/g,
-  /\bvk1\.a\.[A-Za-z0-9._\-]{10,}/g,
-  /\b\d{8,10}:AA[A-Za-z0-9._\-]{20,}/g,
-  /\b(?:api[_-]?key|apikey|access[_-]?token|authorization)["']?\s*[:=]\s*["']?[A-Za-z0-9._\-]{8,}/gi,
-];
-
 export function redactSecrets(text: string): string {
   let out = text;
-  for (const pattern of SECRET_PATTERNS) out = out.replace(pattern, "[redacted]");
+  for (const { pattern } of VENDOR_SHAPES) out = out.replace(pattern, "[redacted]");
   return out;
 }
 

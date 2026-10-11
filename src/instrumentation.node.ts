@@ -2,10 +2,21 @@ import { initTelegramLifecycle } from "@/lib/telegram/polling-lifecycle";
 import { getManagedGatewayToken, refreshPiModelCatalog, syncManagedProviderCatalog } from "@/lib/pi/config-store";
 import { managedGatewayBaseUrl, refreshManagedCatalog } from "@/lib/pi/managed-models";
 import { restorePiSchedules } from "@/lib/pi/schedule-host";
+import { sweepStoredChats } from "@/lib/secrets/sweep";
 
 initTelegramLifecycle().catch((error) => {
   console.error("Failed to initialize Telegram lifecycle:", error);
 });
+
+// Credentials already in stored chats are masked once per version of the shape
+// list; new writes are masked as they happen (chat-store.ts).
+sweepStoredChats()
+  .then((result) => {
+    if (result) console.log(`[Secrets] Stored chats checked: ${result.scanned}, masked: ${result.masked}${result.skipped ? `, left for their next save: ${result.skipped}` : ""}`);
+  })
+  .catch((error) => {
+    console.warn("Failed to sweep stored chats for credentials:", error);
+  });
 
 // A scheduled job is armed inside a live session and dies with it, so without
 // this every restart ends every schedule while its store still says enabled.

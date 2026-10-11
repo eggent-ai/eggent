@@ -1,5 +1,6 @@
 import { INJECTION_PHRASES, ROLE_PHRASES, SECRET_LABELS, SECRET_LINK_WORDS, SENDING_WORDS, wordMatcher, wordPattern } from "@/i18n/vocabulary";
 import { redactSecrets } from "@/lib/pi/provider-failure";
+import { hasShape, MORE_SHAPES } from "@/lib/secrets/shapes";
 
 /**
  * What may be written into the agent's own memory.
@@ -37,13 +38,14 @@ const SPOKEN_SECRET = new RegExp(
   "i"
 );
 
-/** Credential shapes beyond the ones the chat already redacts. */
+/**
+ * Shapes beyond the ones the chat already redacts: the shared list of other
+ * vendors' tokens, a signed token and a private key (secrets/shapes.ts), the
+ * spoken form, and two that are right here and would not be anywhere else - a
+ * guard on what the agent may *keep* can afford to be broader than a mask on
+ * what a chat stores, because refusing a note loses nothing.
+ */
 const EXTRA_SECRET_PATTERNS: RegExp[] = [
-  /\bgh[pousr]_[A-Za-z0-9]{20,}/,
-  /\bAKIA[0-9A-Z]{16}\b/,
-  /\bxox[abprs]-[A-Za-z0-9-]{10,}/,
-  /\beyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/,
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----/,
   SPOKEN_SECRET,
   // A long hexadecimal run is a hash or a key, and either is not worth keeping.
   /\b[a-f0-9]{32,}\b/i,
@@ -87,7 +89,7 @@ export function scan(text: string, kind: "note" | "document" = "note"): Scan | n
   if (INVISIBLE.test(text)) {
     return { code: "invisible", reason: "it contains invisible or control characters" };
   }
-  if (redactSecrets(text) !== text || EXTRA_SECRET_PATTERNS.some((pattern) => pattern.test(text))) {
+  if (redactSecrets(text) !== text || hasShape(text, MORE_SHAPES) || EXTRA_SECRET_PATTERNS.some((pattern) => pattern.test(text))) {
     return { code: "secret", reason: "it looks like it contains a password, key or token, which must never be saved" };
   }
   if (CREDENTIAL_IN_URL.test(text)) {

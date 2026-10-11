@@ -19,6 +19,9 @@ import type { PiRuntimeStats } from "@/lib/pi/types";
 import type { PiPendingInteraction } from "@/lib/pi/interaction-types";
 import { parseShellInput } from "@/lib/terminal/format";
 import { mentionHandleFor, resolveProjectMention, suggestProjects, type MentionableProject } from "@/lib/pi/project-mention";
+import { firstSecret, type SecretKind } from "@/lib/secrets/shapes";
+import { SPOKEN_CREDENTIAL } from "@/lib/secrets/spoken";
+import { SecretNotice } from "@/components/chat/secret-notice";
 import { useAppStore } from "@/store/app-store";
 
 function formatTokenCount(value?: number | null) {
@@ -267,6 +270,8 @@ export function ChatInput({
   const [selectedMentionIndex, setSelectedMentionIndex] = useState(0);
   const [mentionMenuDismissed, setMentionMenuDismissed] = useState(false);
   const allProjects = useAppStore((state) => state.projects);
+  // What looks like a credential in the message about to be sent.
+  const [secretWarning, setSecretWarning] = useState<{ kind: SecretKind; text: string } | null>(null);
 
   // Load chat files when chatId changes
   useEffect(() => {
@@ -470,8 +475,28 @@ export function ChatInput({
       onSubmit();
       return;
     }
+    // A credential is stored in the chat's history, so the person is asked once.
+    // A command for the shell is theirs to write, and the answer to a question
+    // card is meant for whoever asked.
+    if (!shellMode) {
+      const secret = firstSecret(input, { spoken: SPOKEN_CREDENTIAL });
+      if (secret) {
+        setSecretWarning({ kind: secret.kind, text: input });
+        return;
+      }
+    }
     onSubmit(input.trim() ? undefined : t("chat.attachmentOnlyPrompt"));
   }, [canSubmit, input, isLoading, onSubmit, pendingInteraction, shellMode, t]);
+
+  // Editing the message ends the warning about it.
+  useEffect(() => {
+    if (secretWarning && input !== secretWarning.text) setSecretWarning(null);
+  }, [input, secretWarning]);
+
+  const sendDespiteSecret = useCallback(() => {
+    setSecretWarning(null);
+    onSubmit(input.trim() ? undefined : t("chat.attachmentOnlyPrompt"));
+  }, [input, onSubmit, t]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -985,6 +1010,16 @@ export function ChatInput({
           {/* The mode is announced the moment the first character makes it one:
               a message that is about to run in a shell must not look like one
               that is about to be sent to the agent. */}
+          {secretWarning ? (
+            <SecretNotice
+              kind={secretWarning.kind}
+              onSend={sendDespiteSecret}
+              onEdit={() => {
+                setSecretWarning(null);
+                textareaRef.current?.focus();
+              }}
+            />
+          ) : null}
           {mentionTarget && !showMentionMenu ? (
             <div className="mb-1.5 flex items-center gap-1.5 px-1 text-xs text-muted-foreground" role="status">
               <FolderOpen className="size-3.5 shrink-0" aria-hidden />
