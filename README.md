@@ -473,6 +473,7 @@ curl -X POST http://localhost:3000/api/chat/files \
 GET  /api/files
 GET  /api/files/content
 GET  /api/files/download
+GET  /api/files/zip        # a folder (?path=) or several files (repeat ?path=) as one .zip
 POST /api/files/upload
 ```
 
@@ -580,6 +581,11 @@ Supported commands:
 - `/help`
 - `/code`
 - `/new`
+- `/chats` - recent chats
+- `/reset` - stop an answer that seems stuck, keeping the conversation
+- `/files` - send the files the last answer made
+
+A message that starts with `@` and a project's name hands the task to that project.
 
 Telegram replies use safe HTML formatting for common Markdown patterns such as bold text, inline code, code blocks, and links. Long runs send typing actions and sparse progress messages so the bot does not feel stuck.
 
