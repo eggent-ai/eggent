@@ -5,9 +5,11 @@ import { createEggentPiSession } from "@/lib/pi/session";
 import { diagnoseCurrentProvider, getPiModelsState, managedCredentialRecoverable } from "@/lib/pi/config-store";
 import { getServerTranslator } from "@/i18n/server";
 import { learnFromTurn } from "@/lib/learning/review";
-import { cancelPendingInteractionsForRun } from "@/lib/pi/pending-interactions";
+import { cancelPendingInteractionsForRun, listPendingInteractions } from "@/lib/pi/pending-interactions";
 import { retainPiMcpOAuthSession, retainPiScheduleSession, takeRetainedPiScheduleSession } from "@/lib/pi/schedule-host";
-import { clearActiveRun, getActiveRun, isStopRequest, registerActiveRun } from "@/lib/pi/active-runs";
+import { clearActiveRun, getActiveRun, isStopRequest, registerActiveRun, stopActiveRun } from "@/lib/pi/active-runs";
+import { createStartingRun, raceAbort, TurnAbortedError } from "@/lib/pi/turn-control";
+import { noteSessionEvent, startTurnWatchdog, watchdogThresholds, watchdogTickMs, type StalledTurn } from "@/lib/pi/turn-watchdog";
 import { attachToLiveRun, startLiveRun, type LiveRunSink } from "@/lib/pi/live-run";
 import { applySchedulingToolPolicy, hasScheduleIntent, hasScheduleManagementIntent } from "@/lib/pi/schedule-intent";
 import { describeProviderFailure, type ProviderFailure } from "@/lib/pi/provider-failure";
@@ -652,10 +654,10 @@ export async function joinActiveRun(
   if (!active) return null;
 
   if (isStopRequest(message)) {
-    await active.session.abort().catch((error) => {
-      console.warn("Failed to abort the running turn:", error);
-    });
-    clearActiveRun(chatId, active.runId);
+    // Through the run's own way of stopping, when it has one: a turn aborted
+    // from outside believes it finished, and one that had written nothing yet
+    // was then reported as a provider that answered nothing.
+    await stopActiveRun(chatId);
     return "stopped";
   }
 
@@ -672,11 +674,25 @@ export async function joinActiveRun(
   }
 }
 
+/** What the person is told when a turn was given up on for going quiet. */
+async function stalledNotice(stalled: StalledTurn): Promise<string> {
+  const t = await getServerTranslator();
+  const minutes = Math.max(1, Math.round(stalled.silentMs / 60_000));
+  const key = stalled.phase === "starting" ? "external.run.stalledStart" : stalled.phase === "tool" ? "external.run.stalledTool" : "external.run.stalled";
+  return t(key, { minutes });
+}
+
+function logStall(chatId: string, stalled: StalledTurn): void {
+  console.warn(`[watchdog] chat ${chatId.slice(0, 8)} stalled in ${stalled.phase} after ${Math.round(stalled.silentMs / 1000)}s`);
+}
+
 export async function runPiAgentText(options: PiChatRunOptions & {
   runtimeData?: Record<string, unknown>;
   toolRuntimeData?: Record<string, unknown>;
   /** Told about each piece of the answer as it arrives; see AgentProgressEvent. */
   onProgress?: (event: AgentProgressEvent) => void;
+  /** Filled in as the turn ends: whether somebody stopped it, which is not the same as it having nothing to say. */
+  outcome?: { stopped?: boolean };
 }): Promise<string> {
   // A listener that throws must not take the turn down with it: the answer is
   // still delivered whole at the end.
@@ -695,23 +711,83 @@ export async function runPiAgentText(options: PiChatRunOptions & {
     ? `${options.userMessage}\n\nRuntime data:\n${JSON.stringify(options.runtimeData, null, 2)}`
     : options.userMessage;
 
+  // Reachable from the first line. A session is built by running extension
+  // code, and a turn stuck there - a server that never answers - used to be
+  // beyond every stop, because nothing knew it was running yet. A message that
+  // arrives meanwhile is kept and handed to the turn once it can hear it.
+  const runAbort = new AbortController();
+  if (options.abortSignal) {
+    if (options.abortSignal.aborted) runAbort.abort();
+    else options.abortSignal.addEventListener("abort", () => runAbort.abort(), { once: true });
+  }
+  let stopped = false;
+  const turn: { stalled: StalledTurn | null; session: Awaited<ReturnType<typeof createEggentPiSession>> | null } = { stalled: null, session: null };
+  const requestStop = () => {
+    stopped = true;
+    runAbort.abort();
+    // A stop discards what was waiting to be added to the turn: left queued, it
+    // would start the loop again the moment the abort let go of it.
+    starting.takeQueuedSteers();
+    turn.session?.clearQueue();
+    void turn.session?.abort().catch((error) => {
+      console.warn("Failed to stop the running turn:", error);
+    });
+  };
+  const starting = createStartingRun(requestStop);
+  registerActiveRun(options.chatId, { session: starting.run, runId, surface: "external", requestStop });
+  const thresholds = watchdogThresholds();
+  const watchdog = thresholds
+    ? startTurnWatchdog({
+      thresholds,
+      tickMs: watchdogTickMs(),
+      isWaitingForHuman: () => listPendingInteractions(runId).some((interaction) => interaction.status === "pending"),
+      onSoft: () => report({ type: "silent", active: true }),
+      onResume: () => report({ type: "silent", active: false }),
+      onStall: (stalled) => {
+        turn.stalled = stalled;
+        logStall(options.chatId, stalled);
+        requestStop();
+      },
+    })
+    : null;
+
   await persistUserMessage({ ...options, userMessage: prompt }, userMessageId);
 
-  const session = takeRetainedPiScheduleSession(options.chatId) ?? await createEggentPiSession({
-    cwd: options.cwd,
-    agentDir: options.agentDir,
-    tools: options.tools,
-    chatId: options.chatId,
-    projectId: options.projectId,
-    chatContextMode: options.chatContextMode,
-    // A public share must never be handed the workspace tools; the flag was
-    // accepted here and read by the learning gate below, but never reached the
-    // session, so a shared chat built the full tool set.
-    enableEggentTools: options.enableEggentTools,
-    toolRuntimeData: options.toolRuntimeData,
-    runId,
-    abortSignal: options.abortSignal,
-  });
+  let session: Awaited<ReturnType<typeof createEggentPiSession>>;
+  try {
+    session = takeRetainedPiScheduleSession(options.chatId) ?? await raceAbort(
+      createEggentPiSession({
+        cwd: options.cwd,
+        agentDir: options.agentDir,
+        tools: options.tools,
+        chatId: options.chatId,
+        projectId: options.projectId,
+        chatContextMode: options.chatContextMode,
+        // A public share must never be handed the workspace tools; the flag was
+        // accepted here and read by the learning gate below, but never reached the
+        // session, so a shared chat built the full tool set.
+        enableEggentTools: options.enableEggentTools,
+        toolRuntimeData: options.toolRuntimeData,
+        runId,
+        abortSignal: runAbort.signal,
+      }),
+      runAbort.signal,
+      // A session that was finally built for a turn nobody is waiting on.
+      (late) => late.dispose()
+    );
+  } catch (error) {
+    watchdog?.stop();
+    clearActiveRun(options.chatId, runId);
+    cancelPendingInteractionsForRun(runId);
+    if (!(error instanceof TurnAbortedError)) throw error;
+    // Stopped, or given up on, before it began.
+    const t = await getServerTranslator();
+    const notice = turn.stalled ? await stalledNotice(turn.stalled) : t("external.run.stopped");
+    await persistAssistantMessage({ chatId: options.chatId, assistantText: notice, tools: [], parts: [{ type: "text", text: notice }] });
+    return notice;
+  }
+  turn.session = session;
+  starting.attach(session);
 
   let assistantText = "";
   let lastTurnUsage: PiRuntimeStats["lastTurn"] | undefined;
@@ -721,7 +797,6 @@ export async function runPiAgentText(options: PiChatRunOptions & {
   const tools = new Map<string, PiToolRecord>();
   const timelineParts: ChatMessagePart[] = [];
   let mcpOAuthPending = false;
-  let stopped = false;
   // The web can watch a Telegram turn, so it gets each helper's progress too; a
   // messenger only needs to know how many are still working.
   let reportedHelpers = "";
@@ -762,6 +837,13 @@ export async function runPiAgentText(options: PiChatRunOptions & {
     const record = asRecord(event);
     if (!record) return;
     subagents.handle(record);
+    if (watchdog) noteSessionEvent(watchdog, record);
+    // Said to the turn while it was still being set up: it can hear it now.
+    if (record.type === "agent_start") {
+      for (const text of starting.takeQueuedSteers()) {
+        void session.steer(text).catch((error) => console.warn("Failed to hand a waiting message to the turn:", error));
+      }
+    }
 
     if (record.type === "message_update") {
       const assistantEvent = asRecord(record.assistantMessageEvent);
@@ -854,19 +936,23 @@ export async function runPiAgentText(options: PiChatRunOptions & {
     applySchedulingToolPolicy(session, prompt);
     // Reachable while it runs, so a second message can stop it or be added to
     // it instead of starting a rival agent in the same chat.
-    registerActiveRun(options.chatId, {
-      session,
-      runId,
-      surface: "external",
-      requestStop: () => {
-        stopped = true;
-        void session.abort().catch((error) => {
-          console.warn("Failed to stop the running turn:", error);
-        });
-      },
-    });
-    await session.prompt(preparePromptForRuntime(prompt));
+    registerActiveRun(options.chatId, { session, runId, surface: "external", requestStop });
+    try {
+      await session.prompt(preparePromptForRuntime(prompt));
+    } catch (error) {
+      // A turn somebody stopped may end by throwing; what it wrote is kept.
+      if (!stopped) throw error;
+    }
     liveCloseText();
+    if (turn.stalled) {
+      // Given up on for going quiet: the answer says so, in the person's words.
+      const notice = await stalledNotice(turn.stalled);
+      const separator = assistantText.trim() ? "\n\n" : "";
+      assistantText = `${assistantText}${separator}${notice}`;
+      appendTimelineText(timelineParts, `${separator}${notice}`);
+      liveText(`${separator}${notice}`);
+      liveCloseText();
+    }
     currentPromptUsage = currentPromptUsage ?? subtractUsage(getSessionTokenUsage(session), baselineUsage);
     lastTurnUsage = lastTurnUsage ?? currentPromptUsage;
     // A turn someone stopped produced nothing because they said so, which is
@@ -896,6 +982,7 @@ export async function runPiAgentText(options: PiChatRunOptions & {
         toolRuntimeData: options.toolRuntimeData,
       });
     }
+    if (stopped && options.outcome) options.outcome.stopped = true;
     return assistantText;
   } catch (error) {
     // The caller of this path answers the messenger it came from; anyone
@@ -905,6 +992,7 @@ export async function runPiAgentText(options: PiChatRunOptions & {
     live?.push({ type: "error", errorText: streamErrorText(error) });
     throw error;
   } finally {
+    watchdog?.stop();
     live?.finish();
     clearActiveRun(options.chatId, runId);
     cancelPendingInteractionsForRun(runId);
@@ -981,25 +1069,72 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         return;
       }
 
-      const session = takeRetainedPiScheduleSession(options.chatId) ?? await createEggentPiSession({
-        cwd: options.cwd,
-        agentDir: options.agentDir,
-        tools: options.tools,
-        chatId: options.chatId,
-        projectId: options.projectId,
-        chatContextMode: options.chatContextMode,
-        enableEggentTools: options.enableEggentTools,
+      // Reachable while the session is still being built, so a stop - the
+      // button, a stop word, /reset - finds a turn stuck there.
+      const starting = createStartingRun(() => runAbort.abort());
+      registerActiveRun(options.chatId, {
+        session: starting.run,
         runId,
-        abortSignal: runAbort.signal,
-        onPiInteraction: (interaction) => {
-          safeWrite({
-            type: "data-piInteraction",
-            id: `pi-interaction-${interaction.id}`,
-            data: interaction,
-          });
-          if (interaction.status === "pending") checkpointBeforeQuestion(interaction);
-        },
+        surface: "web",
+        requestStop: () => runAbort.abort(),
       });
+      const stall: { stalled: StalledTurn | null } = { stalled: null };
+      const thresholds = watchdogThresholds();
+      const watchdog = thresholds
+        ? startTurnWatchdog({
+          thresholds,
+          tickMs: watchdogTickMs(),
+          // A question on screen is the person's turn to speak, not a silence.
+          isWaitingForHuman: () => listPendingInteractions(runId).some((interaction) => interaction.status === "pending"),
+          onStall: (stalled) => {
+            stall.stalled = stalled;
+            logStall(options.chatId, stalled);
+            runAbort.abort();
+          },
+        })
+        : null;
+
+      let session: Awaited<ReturnType<typeof createEggentPiSession>>;
+      try {
+        session = takeRetainedPiScheduleSession(options.chatId) ?? await raceAbort(
+          createEggentPiSession({
+            cwd: options.cwd,
+            agentDir: options.agentDir,
+            tools: options.tools,
+            chatId: options.chatId,
+            projectId: options.projectId,
+            chatContextMode: options.chatContextMode,
+            enableEggentTools: options.enableEggentTools,
+            runId,
+            abortSignal: runAbort.signal,
+            onPiInteraction: (interaction) => {
+              safeWrite({
+                type: "data-piInteraction",
+                id: `pi-interaction-${interaction.id}`,
+                data: interaction,
+              });
+              if (interaction.status === "pending") checkpointBeforeQuestion(interaction);
+            },
+          }),
+          runAbort.signal,
+          (late) => late.dispose()
+        );
+      } catch (error) {
+        watchdog?.stop();
+        clearActiveRun(options.chatId, runId);
+        cancelPendingInteractionsForRun(runId);
+        if (!(error instanceof TurnAbortedError)) throw error;
+        // Stopped, or given up on, before it began: say so, and keep it.
+        const t = await getServerTranslator();
+        const notice = stall.stalled ? await stalledNotice(stall.stalled) : t("external.run.stopped");
+        await persistAssistantMessage({ chatId: options.chatId, assistantText: notice, tools: [], parts: [{ type: "text", text: notice }] });
+        const textId = `pi-text-${crypto.randomUUID()}`;
+        writer.write({ type: "text-start", id: textId });
+        writer.write({ type: "text-delta", id: textId, delta: notice });
+        writer.write({ type: "text-end", id: textId });
+        return;
+      }
+      starting.attach(session);
 
       let assistantText = "";
       let textStarted = false;
@@ -1093,6 +1228,13 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         if (persisted) return;
         persisted = true;
         closeTextPart();
+        if (stall.stalled) {
+          // Given up on for going quiet: the stored turn says so, in the person's words.
+          const notice = await stalledNotice(stall.stalled);
+          const separator = assistantText.trim() ? "\n\n" : "";
+          assistantText = `${assistantText}${separator}${notice}`;
+          appendTimelineText(timelineParts, `${separator}${notice}`);
+        }
         await persistTurn({
           assistantText,
           tools: [...tools.values()],
@@ -1107,6 +1249,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         cancelPendingInteractionsForRun(runId);
         abortPromise = (async () => {
           try {
+            session.clearQueue();
             await session.abort();
           } catch (error) {
             console.warn("Pi chat abort failed:", error);
@@ -1125,6 +1268,12 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         const record = asRecord(event);
         if (!record) return;
         subagents.handle(record);
+        if (watchdog) noteSessionEvent(watchdog, record);
+        if (record.type === "agent_start") {
+          for (const text of starting.takeQueuedSteers()) {
+            void session.steer(text).catch((error) => console.warn("Failed to hand a waiting message to the turn:", error));
+          }
+        }
 
         if (record.type === "message_update") {
           const assistantEvent = asRecord(record.assistantMessageEvent);
@@ -1375,6 +1524,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         // else watching would be left with a stream that simply stopped.
         safeWrite({ type: "error", errorText: streamErrorText(error) });
       } finally {
+        watchdog?.stop();
         live?.finish();
         clearActiveRun(options.chatId, runId);
         runAbort.signal.removeEventListener("abort", handleAbort);

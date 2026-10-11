@@ -44,14 +44,23 @@ const webExtensionTheme = {
 export function createEggentPiExtensionUIContext(
   options: EggentPiInteractionContextOptions & { abortSignal?: AbortSignal }
 ): ExtensionUIContext {
+  // A run with nowhere to show a card - Telegram, the external API - has no one
+  // who could answer. Its dialogs used to be opened anyway and waited on for
+  // ever: an extension asking "allow this server?" inside the setup of a
+  // Telegram turn held the turn, and the person's own words queued behind it.
+  // They are dismissed at once instead, which is what an extension is told
+  // when a person closes the dialog.
+  const interactive = Boolean(options.onInteraction);
   const request = (interaction: Omit<PiPendingInteraction, "id" | "runId" | "status" | "createdAt" | "updatedAt">, dialogOptions?: ExtensionUIDialogOptions) =>
-    createPendingInteraction({
-      runId: options.runId,
-      ...interaction,
-      timeoutMs: dialogOptions?.timeout,
-      signal: combineAbortSignals(options.abortSignal, dialogOptions?.signal),
-      onUpdate: options.onInteraction,
-    });
+    interactive
+      ? createPendingInteraction({
+        runId: options.runId,
+        ...interaction,
+        timeoutMs: dialogOptions?.timeout,
+        signal: combineAbortSignals(options.abortSignal, dialogOptions?.signal),
+        onUpdate: options.onInteraction,
+      })
+      : Promise.resolve<string | boolean | undefined>(undefined);
 
   const terminalHandlers = new Set<TerminalInputHandler>();
   const statuses = new Map<string, string>();

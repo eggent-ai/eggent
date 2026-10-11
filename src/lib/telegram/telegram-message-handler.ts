@@ -577,6 +577,7 @@ function helpText(t: (key: MessageKey, values?: Record<string, string | number |
         t("telegram.bot.help.code"),
         t("telegram.bot.help.new"),
         t("telegram.bot.help.chats"),
+        t("telegram.bot.help.reset"),
         "",
         t("telegram.bot.help.text"),
         t("telegram.bot.help.voice"),
@@ -866,6 +867,7 @@ export async function processTelegramUpdate(
                 thinking: t("telegram.bot.draft.thinking"),
                 tool: (name) => t(DRAFT_ACTIVITY_KEYS[toolActivity(name)]),
                 helpers: (running, total) => t("telegram.bot.draft.helpers", { running, total }),
+                silent: t("telegram.bot.draft.silent"),
             },
             onUnavailable: () => {
                 fallbackNotifier.stop = startTelegramProgressNotifier({
@@ -936,6 +938,9 @@ export async function processTelegramUpdate(
         }
 
         await stopProgressNotifier();
+        // A turn somebody stopped, with nothing written: they already have the
+        // answer to their stop, and a message after it would read as "done".
+        if (result.stopped && !result.reply.trim()) return { ok: true };
         const sentIds = await sendTelegramMessage(
             botToken,
             chatId,

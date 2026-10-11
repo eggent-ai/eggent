@@ -13,6 +13,7 @@ async function getEggentTelegramBotCommands() {
     { command: "code", description: t("telegram.command.code") },
     { command: "new", description: t("telegram.command.new") },
     { command: "chats", description: t("telegram.command.chats") },
+    { command: "reset", description: t("telegram.command.reset") },
   ];
 }
 

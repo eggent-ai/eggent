@@ -96,8 +96,22 @@ function createInteractiveBashOperations(options: InteractiveBashToolOptions): B
         child.kill("SIGTERM");
       };
 
+      let inputClosed = false;
       const askForInput = async (prompt: string) => {
         if (settled || promptInFlight) return;
+        // Nobody can be asked on a run with no card to show: Telegram, the
+        // external API. A command waiting for an answer there waited for ever,
+        // with the turn behind it. Its input ends instead, which is what a
+        // command reading from a closed terminal is used to - it fails, or takes
+        // its default, and the turn goes on. (A shell that is itself fed through
+        // stdin cannot lose it.)
+        if (!options.onInteraction) {
+          if (!inputClosed && !commandFromStdin) {
+            inputClosed = true;
+            child.stdin?.end();
+          }
+          return;
+        }
         promptInFlight = (async () => {
           const answer = await createPendingInteraction({
             runId: options.runId,

@@ -257,6 +257,19 @@ export function attachToLiveRun(
  *
  * Bounded, because a wedged run must not hold a request open.
  */
+/**
+ * Let go of a run that will not end: its readers are released, the chat can
+ * start another, and the run's own cleanup - if it ever gets there - finds
+ * nothing left to do. For a run a stop did not unstick; the ordinary ending is
+ * `finish()` on the run's own sink.
+ */
+export function abandonLiveRun(chatId: string): boolean {
+  const state = registry().get(chatId);
+  if (!state || state.finished) return false;
+  finishState(state);
+  return true;
+}
+
 export function whenLiveRunFinished(chatId: string, timeoutMs = 10_000): Promise<void> {
   const state = registry().get(chatId);
   if (!state || state.finished) return Promise.resolve();

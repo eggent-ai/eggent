@@ -26,6 +26,7 @@ import {
   moveSessionToChat,
   RELAY_BOT_KEY,
 } from "@/lib/telegram/conversation";
+import { resetChatTurn } from "@/lib/pi/turn-control";
 import {
   chatShortId,
   findChatByShortId,
@@ -59,6 +60,15 @@ export interface HandleExternalMessageInput {
   previousChatId?: string | null;
   /** Told about the answer while it is being written, for a surface that shows it. */
   onProgress?: (event: AgentProgressEvent) => void;
+  /**
+   * Only reach a turn that is already working: stop it, reset it, or add to it.
+   * Never start one. A caller that queues the person's messages in order - the
+   * deployment's bot does, one queue per person - sends a message that arrives
+   * while a turn is running this way first, so "stop" is not stuck behind the
+   * turn it is meant to stop. When there is nothing to reach the answer says
+   * `handled: false` and the caller queues the message as usual.
+   */
+  controlOnly?: boolean;
 }
 
 export interface HandleExternalMediaMessageInput extends HandleExternalMessageInput {
@@ -87,6 +97,14 @@ export interface ExternalMessageResult {
   success: true;
   sessionId: string;
   reply: string;
+  /** False for a `controlOnly` message that found no turn to reach: nothing was done with it. */
+  handled?: boolean;
+  /**
+   * The turn was stopped - by the person, or because it had gone quiet. With an
+   * empty `reply` there is nothing to send: the person already has the answer
+   * to their stop, and a "done" after it would read as if it had finished.
+   */
+  stopped?: boolean;
   context: {
     activeProjectId: string | null;
     activeProjectName: string | null;
@@ -302,6 +320,11 @@ async function ensureSessionChat(
   const title = t("api.external.sessionTitle", { sessionId: session.id });
   await createChat(newChatId, title, projectId);
   setSessionChatId(session, newChatId);
+  // Written now, not when the turn ends: a first message that takes minutes is
+  // the case where the person's next words - /reset, "stop" - arrive while it
+  // is still running, and they must find the chat that turn is running in.
+  session.updatedAt = new Date().toISOString();
+  await saveExternalSession(session);
   return newChatId;
 }
 
@@ -471,7 +494,18 @@ type ChatCommand = { kind: "list" } | { kind: "open"; shortId: string };
  * button is: instant, free, and not dependent on the model choosing a tool.
  */
 export function isChatCommand(message: string): boolean {
-  return parseChatCommand(message) !== null;
+  return parseChatCommand(message) !== null || isResetCommand(message);
+}
+
+/**
+ * `/reset`: stop a turn that seems stuck and keep the conversation. A messenger
+ * has no stop button, and over polling or behind a queue the word "stop" can sit
+ * waiting behind the turn it is meant to stop; this is the way out that does not
+ * depend on the model understanding it.
+ */
+export function isResetCommand(message: string): boolean {
+  const first = message.trim().split(/\s+/, 1)[0]?.toLowerCase() ?? "";
+  return first.split("@", 1)[0] === "/reset";
 }
 
 function parseChatCommand(message: string): ChatCommand | null {
@@ -578,6 +612,33 @@ async function isExitProjectMessage(message: string, via: string | undefined): P
   return message.trim().toLowerCase().startsWith(prefix.toLowerCase());
 }
 
+async function answerReset(context: ResolvedExternalMessageRunContext): Promise<ExternalMessageResult> {
+  const { session, previousChatId, resolvedProjectId, currentPath, resolvedChatId } = context;
+  const t = await getServerTranslator();
+  const outcome = await resetChatTurn(resolvedChatId);
+  const reply = !outcome.found
+    ? t("external.run.resetIdle")
+    : [
+      outcome.hadQuestion ? t("external.run.resetQuestion") : t("external.run.reset"),
+      outcome.abandoned ? t("external.run.resetFreed") : "",
+    ].filter(Boolean).join("\n\n");
+  return {
+    success: true,
+    sessionId: session.id,
+    reply,
+    context: {
+      activeProjectId: resolvedProjectId || null,
+      activeProjectName: null,
+      activeChatId: resolvedChatId,
+      activeChatTitle: await chatTitle(resolvedChatId),
+      currentPath: currentPath || "",
+    },
+    chatChanged: Boolean(previousChatId) && resolvedChatId !== previousChatId,
+    switchedProject: { toProjectId: null, toProjectName: null },
+    createdProject: null,
+  };
+}
+
 export async function handleExternalMessage(
   input: HandleExternalMessageInput
 ): Promise<ExternalMessageResult> {
@@ -639,6 +700,7 @@ export async function handleExternalMessage(
 
   const chatCommand = isTelegramMessage(input) ? parseChatCommand(message) : null;
   if (chatCommand) return answerChatCommand(chatCommand, runContext);
+  if (isTelegramMessage(input) && !input.publicMode && isResetCommand(message)) return answerReset(runContext);
 
   // A message sent while this chat is already working belongs to that run, not
   // to a second agent of its own. Over a messenger there is no stop button, so
@@ -663,7 +725,28 @@ export async function handleExternalMessage(
     };
   }
 
+  if (input.controlOnly) {
+    return {
+      success: true,
+      sessionId: session.id,
+      reply: "",
+      handled: false,
+      context: {
+        activeProjectId: resolvedProjectId || null,
+        activeProjectName: null,
+        activeChatId: resolvedChatId,
+        activeChatTitle: await chatTitle(resolvedChatId),
+        currentPath: currentPath || "",
+      },
+      chatChanged: false,
+      switchedProject: { toProjectId: null, toProjectName: null },
+      createdProject: null,
+    };
+  }
+
+  const outcome: { stopped?: boolean } = {};
   const reply = await runPiAgentText({
+    outcome,
     chatId: resolvedChatId,
     userMessage: message,
     projectId: resolvedProjectId,
@@ -761,6 +844,7 @@ export async function handleExternalMessage(
     success: true,
     sessionId: session.id,
     reply,
+    ...(outcome.stopped ? { stopped: true } : {}),
     context: {
       activeProjectId,
       activeProjectName: activeProject?.name ?? null,

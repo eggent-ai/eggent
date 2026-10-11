@@ -20,6 +20,7 @@ interface ExternalMessageBody {
   toolRuntimeData?: unknown;
   publicMode?: unknown;
   telegramReplyToMessageId?: unknown;
+  controlOnly?: unknown;
 }
 
 function parseBearerToken(req: NextRequest): string | null {
@@ -97,6 +98,7 @@ export async function POST(req: NextRequest) {
           ? body.toolRuntimeData as Record<string, unknown>
           : undefined,
       publicMode: body.publicMode === true,
+      controlOnly: body.controlOnly === true,
       telegramReplyToMessageId:
         typeof body.telegramReplyToMessageId === "number" && Number.isInteger(body.telegramReplyToMessageId)
           ? body.telegramReplyToMessageId

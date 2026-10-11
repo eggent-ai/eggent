@@ -319,6 +319,40 @@ await check("the helper line stays under an answer that has already started, and
   ]);
 });
 
+const withSilent = { thinking: "Thinking…", tool: () => undefined, silent: "Still working… /reset stops it." };
+const quiet = (active: boolean) => ({ type: "silent" as const, active });
+
+await check("a turn that has gone quiet says it is still going, and how to stop it, in place of Thinking", async () => {
+  const { bodies, send } = recorder();
+  const draft = startDraftStream({ chatId: 7, send, format, status: withSilent, throttleMs: 10, refreshMs: 10_000 });
+  await sleep(20);
+  draft.onProgress(quiet(true));
+  await sleep(40);
+  draft.onProgress(quiet(false));
+  await sleep(40);
+  await draft.stop();
+  assert.deepEqual(shown(bodies), ["<i>Thinking…</i>", "<i>Still working… /reset stops it.</i>", "<i>Thinking…</i>"]);
+});
+
+await check("under an answer already started it is a footer, and goes when the turn speaks again", async () => {
+  const { bodies, send } = recorder();
+  const draft = startDraftStream({ chatId: 7, send, format, status: withSilent, throttleMs: 10, refreshMs: 10_000 });
+  await sleep(20);
+  draft.onProgress(text("Working on it"));
+  await sleep(40);
+  draft.onProgress(quiet(true));
+  await sleep(40);
+  draft.onProgress(quiet(false));
+  await sleep(40);
+  await draft.stop();
+  assert.deepEqual(shown(bodies), [
+    "<i>Thinking…</i>",
+    "<b>Working on it</b>",
+    "<b>Working on it</b>\n\n<i>Still working… /reset stops it.</i>",
+    "<b>Working on it</b>",
+  ]);
+});
+
 await check("tools are grouped by what the person sees, whatever the case of the name", () => {
   assert.equal(toolActivity("web_search"), "search");
   assert.equal(toolActivity("fetch_content"), "page");

@@ -290,6 +290,14 @@ const enMessages = {
   "chat.errors.providerLocalOnly": "{provider} points at an address that only exists on the machine Eggent runs on, so a model running on your own computer cannot be reached from here. Use a provider available over the internet.",
   "external.run.stopped": "Stopped. Whatever was finished is saved — tell me what to do instead.",
   "external.run.steered": "Got it, I am taking that into account in what I am doing right now.",
+  // /reset, and a turn given up on for going quiet. Said to the person, so no jargon.
+  "external.run.reset": "Stopped it. Your messages and what was finished are saved - write again to carry on, or send /new for a fresh start.",
+  "external.run.resetQuestion": "Stopped it and dropped the question it was waiting on. Your messages and what was finished are saved - write again to carry on, or send /new for a fresh start.",
+  "external.run.resetIdle": "Nothing is running here right now. Send /new if you want a fresh conversation.",
+  "external.run.resetFreed": "It did not stop by itself, so I let go of it: you can write again. Whatever it was doing may finish quietly on its own.",
+  "external.run.stalled": "I stopped this: nothing had happened for {minutes} min, and a model that has gone quiet this long is not coming back. Your messages are saved - write again to carry on, or send /new for a fresh start.",
+  "external.run.stalledStart": "I stopped this: the workspace had not finished getting ready after {minutes} min. Your messages are saved - write again to try once more.",
+  "external.run.stalledTool": "I stopped this: a command had been running for {minutes} min without a word. Whatever it finished is saved - write again to carry on, ideally in smaller steps.",
   "chat.compaction.runningManual": "Compacting the chat history…",
   "chat.compaction.runningAuto": "Compacting the context so the conversation can continue…",
   "chat.compaction.done": "Context compacted: {before} tokens before, about {after} after.",
@@ -435,6 +443,7 @@ const enMessages = {
   "messengers.command.help": "show help",
   "messengers.command.code": "activate access for your Telegram user_id",
   "messengers.command.new": "start a new conversation and reset context",
+  "messengers.command.reset": "stop a stuck answer, keep the conversation",
   "messengers.notes": "Notes: only private chats are supported. Uploaded files are saved into chat files, and you can ask the agent to send a local file back to Telegram.",
 
   "externalApiToken.description": "Create a token for {header} and rotate it when needed.",
@@ -1007,6 +1016,7 @@ const enMessages = {
   "telegram.bot.draft.image": "Drawing a picture…",
   "telegram.bot.draft.send": "Sending to Telegram…",
   "telegram.bot.draft.work": "Working…",
+  "telegram.bot.draft.silent": "Still working… it has been quiet for a while. Send /reset if you want to stop it.",
   "telegram.bot.emptyAgentReply": "Empty response from the agent.",
   "telegram.bot.help.connected": "Telegram connection is active.",
   "telegram.bot.help.activeProject": "Active project: {project}",
@@ -1017,6 +1027,7 @@ const enMessages = {
   "telegram.bot.help.code": "/code <access_code> - activate access for your Telegram user",
   "telegram.bot.help.new": "/new - start a new conversation (reset context)",
   "telegram.bot.help.chats": "/chats - recent chats; tap one to continue it",
+  "telegram.bot.help.reset": "/reset - stop an answer that seems stuck (the conversation is kept)",
   "telegram.bot.help.text": "Text messages are sent to the agent.",
   "telegram.bot.help.voice": "Voice messages are transcribed locally and sent to the agent.",
   "telegram.bot.help.files": "File uploads are saved into chat files.",
@@ -1048,6 +1059,7 @@ const enMessages = {
   "telegram.command.code": "Activate access with a code",
   "telegram.command.new": "Start a new conversation",
   "telegram.command.chats": "Recent chats",
+  "telegram.command.reset": "Stop a stuck answer",
 
   // A messenger has no chat list, so /chats is one. Each line ends with the
   // command that opens that chat, which Telegram turns into a tap target.

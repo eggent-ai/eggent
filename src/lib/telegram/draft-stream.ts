@@ -38,6 +38,12 @@ export interface DraftStatus {
    * and a draft showing only that sentence reads as a bot that stopped.
    */
   helpers?: (running: number, total: number) => string;
+  /**
+   * What to say when the turn has been quiet for a while: that it is still
+   * going, and how to stop it. It outranks every other line, before the answer
+   * starts and under it after, and goes away when the turn speaks again.
+   */
+  silent?: string;
 }
 
 export interface DraftStreamOptions {
@@ -106,14 +112,19 @@ export function startDraftStream(options: DraftStreamOptions): DraftStream {
   let inFlight: Promise<unknown> = Promise.resolve();
 
   let helpers: { running: number; total: number } | null = null;
+  let silent = false;
 
   const helpersLine = (): string => {
     if (!helpers || helpers.running <= 0 || !options.status?.helpers) return "";
     return options.status.helpers(helpers.running, helpers.total);
   };
 
+  const silentLine = (): string => (silent && options.status?.silent) || "";
+
   const statusLine = (): string => {
     if (!options.status) return "";
+    const quiet = silentLine();
+    if (quiet) return quiet;
     const helperLine = helpersLine();
     if (helperLine) return helperLine;
     for (let index = running.length - 1; index >= 0; index -= 1) {
@@ -129,7 +140,7 @@ export function startDraftStream(options: DraftStreamOptions): DraftStream {
   const current = (): { key: string; plain: string; answer: boolean; footer?: string } | null => {
     const visible = draftTail(text);
     if (visible) {
-      const footer = helpersLine();
+      const footer = silentLine() || helpersLine();
       return footer
         ? { key: `answer:${visible}|helpers:${footer}`, plain: visible, answer: true, footer }
         : { key: `answer:${visible}`, plain: visible, answer: true };
@@ -244,6 +255,8 @@ export function startDraftStream(options: DraftStreamOptions): DraftStream {
         if (draftTail(text)) return;
       } else if (event.type === "helpers") {
         helpers = { running: event.running, total: event.total };
+      } else if (event.type === "silent") {
+        silent = event.active;
       } else {
         return;
       }
