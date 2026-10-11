@@ -1,7 +1,7 @@
-import { constants as fsConstants } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
-import { isSecretFileName, planZip, ZipLimitError } from "@/lib/files/zip-walk";
+import { openPlainFile } from "@/lib/files/safe-open";
+import { pathIsSensitive, planZip, ZipLimitError } from "@/lib/files/zip-walk";
 import { projectFolderIsLink, workDirOrNull } from "@/lib/files/workspace-root";
 import {
   looksLikePhoto,
@@ -37,7 +37,7 @@ export interface RunDestination {
 export async function resolveWorkspaceFile(
   project: string,
   relativePath: string
-): Promise<{ absolute: string; name: string; size: number } | null> {
+): Promise<{ absolute: string; name: string; size: number; root: string } | null> {
   const folder = workDirOrNull(project);
   if (!folder || (await projectFolderIsLink(project))) return null;
   const workDir = path.resolve(folder);
@@ -50,31 +50,29 @@ export async function resolveWorkspaceFile(
     const [realWork, realFile] = await Promise.all([fs.realpath(workDir), fs.realpath(absolute)]);
     if (!realFile.startsWith(realWork + path.sep)) return null;
     const name = path.basename(absolute);
-    if (isSecretFileName(name)) return null;
-    return { absolute, name, size: stat.size };
+    // The folders credentials live in are not served by name, whatever the file in them is called.
+    if (pathIsSensitive(path.relative(workDir, absolute))) return null;
+    return { absolute, name, size: stat.size, root: realWork };
   } catch {
     return null;
   }
 }
 
-// O_NOFOLLOW is missing where there are no such links to follow.
-const OPEN_FLAGS = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0);
-
 /**
- * The bytes of a file, read through the handle it was checked on. The path was
- * judged a moment ago; a link put in its place since is not followed.
+ * The bytes of a file, read through the handle it was checked on (see openPlainFile): the
+ * path was judged a moment ago, and what is read is what that path leads to inside the folder.
  */
-async function readPlainFile(absolute: string): Promise<Buffer | null> {
-  let handle;
+async function readPlainFile(absolute: string, root: string): Promise<Buffer | null> {
+  const handle = await openPlainFile(absolute, { root });
+  if (!handle) return null;
   try {
-    handle = await fs.open(absolute, OPEN_FLAGS);
     const info = await handle.stat();
-    if (!info.isFile() || info.nlink > 1 || info.size > TELEGRAM_FILE_MAX_BYTES) return null;
+    if (info.size > TELEGRAM_FILE_MAX_BYTES) return null;
     return await handle.readFile();
   } catch {
     return null;
   } finally {
-    await handle?.close().catch(() => undefined);
+    await handle.close().catch(() => undefined);
   }
 }
 
@@ -94,7 +92,7 @@ export async function sendWorkspaceFileToTelegram(input: {
   const destination = input.destination ?? (await resolveTelegramDestination(input.run ?? null));
   if (!destination) return { ok: false, reason: "no-destination" };
 
-  const buffer = await readPlainFile(file.absolute);
+  const buffer = await readPlainFile(file.absolute, file.root);
   if (!buffer) return { ok: false, reason: "not-found" };
   const payload = { buffer, name: file.name };
   const asPhoto = looksLikePhoto(file.name);

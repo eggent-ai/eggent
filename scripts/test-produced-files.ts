@@ -303,6 +303,15 @@ await check("a file with another name elsewhere is not a result", async () => {
   fs.linkSync(elsewhere, path.join(shopDir, "twin.md"));
   assert.equal(await collect({ tools: [{ toolName: "write", input: { path: "twin.md" }, status: "completed" }], assistantText: "Saved `twin.md`." }), null);
 });
+await check("what lives in a folder made for credentials is never a result, nor served by name, whatever the file is called", async () => {
+  work(".kube/config", "apiVersion: v1"); work(".docker/config.json", "{}"); work(".SSH/known_hosts", "host key"); work(".git/config", "[remote]");
+  const targets = [".kube/config", ".docker/config.json", ".SSH/known_hosts", ".git/config"];
+  const group = await collect({ tools: targets.map((target) => ({ toolName: "write", input: { path: target }, status: "completed" })), assistantText: `Saved ${targets.map((target) => `\`${target}\``).join(", ")}.` });
+  assert.equal(group, null);
+  const { resolveWorkspaceFile } = await import("../src/lib/files/telegram-send.ts");
+  for (const target of targets) assert.equal(await resolveWorkspaceFile("shop", target), null, `${target} was served`);
+  assert.ok(await resolveWorkspaceFile("shop", "reports/written.md"), "an ordinary file stopped being served");
+});
 await check("a project whose folder is a link to somewhere else has no results, and serves nothing", async () => {
   fs.writeFileSync(path.join(root, "data", "hostfile.md"), "x");
   const linked = path.join(projectsDir, "linkedproj");
@@ -509,7 +518,7 @@ await check("sending from the browser needs a session, this site and JSON", asyn
       body: JSON.stringify({ project: "shop", path: "reports/summary.md" }),
     }));
   assert.equal((await send({}, false)).status, 401);
-  assert.equal((await send({ origin: "https://evil.example", "sec-fetch-site": "cross-site" })).status, 403);
+  assert.equal((await send({ origin: "https://evil.example.test", "sec-fetch-site": "cross-site" })).status, 403);
   const plain = await telegramRoute.POST(new NextRequest("http://localhost/api/files/telegram", {
     method: "POST", headers: { cookie: `eggent_auth=${token}`, "content-type": "text/plain" }, body: JSON.stringify({ project: "shop", path: "reports/summary.md" }),
   }));

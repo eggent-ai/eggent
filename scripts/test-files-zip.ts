@@ -304,7 +304,7 @@ await check("the names that hold credentials are all recognised, and ordinary na
   for (const name of holds) assert.ok(isSecretFileName(name), `${name} was not recognised`);
   const ordinary = [
     "README.md", "report.docx", "environment.ts", "credentials-policy.md", "secrets-of-success.txt", "keyboard.txt", "tokens.csv",
-    "service.json", "client.json", "env.md", "notes.env.md", "key-points.pdf", "monkey.png",
+    "service.json", "client.json", "env.md", "notes.env.md", "key-points.pdf", "monkey.png", "tokens.json", "design-tokens.json",
   ];
   for (const name of ordinary) assert.ok(!isSecretFileName(name), `${name} was taken for a secret`);
 });
@@ -436,6 +436,72 @@ await check("the archive says when it moves, so a stalled one can be told from a
   let moves = 0;
   for await (const _chunk of zipStream(plan.files, { root: plan.root, onActivity: () => { moves += 1; } })) void _chunk;
   assert.ok(moves >= plan.files.length, `${moves} signs of life for ${plan.files.length} files`);
+});
+
+await check("a file swapped for a pipe after the plan neither hangs the archive nor is waited for", async () => {
+  try {
+    execFileSync("mkfifo", [path.join(root, ".probe-fifo")]);
+    fs.rmSync(path.join(root, ".probe-fifo"));
+  } catch {
+    console.log("        (no mkfifo on this machine: skipped)");
+    return;
+  }
+  write("pipe/a.txt", "first");
+  write("pipe/b.txt", "second");
+  const plan = await planZip(project, ["pipe"]);
+  fs.rmSync(path.join(project, "pipe", "b.txt"));
+  execFileSync("mkfifo", [path.join(project, "pipe", "b.txt")]);
+  const buffer = await Promise.race([sealed(plan), new Promise<"HUNG">((resolve) => setTimeout(() => resolve("HUNG"), 4000))]);
+  assert.notEqual(buffer, "HUNG", "opening a pipe nobody writes to blocked the archive");
+  assert.deepEqual(listZip(buffer as Buffer).map((entry) => entry.path), ["pipe/a.txt"]);
+  const { openPlainFile } = await import("../src/lib/files/safe-open.ts");
+  const started = Date.now();
+  assert.equal(await openPlainFile(path.join(project, "pipe", "b.txt")), null);
+  assert.ok(Date.now() - started < 1000, "the open waited");
+});
+await check("an archive that is dropped while it is held back lets go of every file it had opened", async () => {
+  // Read in flowing mode to a threshold and drop the stream while the reader holds it back: the
+  // generator then rests at a different yield each time, header, data or trailer. A header is
+  // written after the next file is opened, and a handle opened and then not closed is left to the
+  // garbage collector - which on newer Node ends the process.
+  for (let index = 0; index < 2000; index += 1) write(`tiny/f${String(index).padStart(5, "0")}.txt`, "x".repeat(10 + (index % 7)));
+  const plan = await planZip(project, ["tiny"]);
+  const before = openFiles();
+  for (let round = 0; round < 60; round += 1) {
+    const stream = zipStream(plan.files, { root: plan.root });
+    const target = 3000 + ((round * 7919) % 40000);
+    let got = 0;
+    await new Promise<void>((resolve) => {
+      stream.on("data", (chunk: Buffer) => {
+        got += chunk.length;
+        if (got >= target) {
+          stream.pause();
+          setImmediate(() => stream.destroy());
+        }
+      });
+      stream.on("close", () => resolve());
+      stream.on("error", () => undefined);
+    });
+  }
+  await new Promise((resolve) => setTimeout(resolve, 200));
+  if (before >= 0) assert.ok(openFiles() <= before, `${openFiles() - before} handles left open`);
+});
+await check("a file named outright inside a folder that holds credentials is not packed either, in any case", async () => {
+  write("kept/ok.txt", "fine");
+  write("kept/.kube/config", "apiVersion: v1");
+  write("kept/.git/config", "[remote] url = https://token@example.test/x.git");
+  write("kept/.SSH/known", "host key");
+  write("kept/.Aws/credentials", "[default]");
+  write("kept/node_modules/dep/index.js", "module.exports = 1;");
+  const base = path.join(project, "kept");
+  for (const target of [".kube/config", ".git/config", ".SSH/known", ".ssh/known", ".Aws/credentials", ".aws/credentials", "node_modules/dep/index.js"]) {
+    const plan = await planZip(base, [target, "ok.txt"]);
+    assert.deepEqual(plan.files.map((file) => file.name), ["ok.txt"], `${target} was packed`);
+    assert.ok(plan.skipped.secrets + plan.skipped.hidden >= 1, `${target} was not counted`);
+  }
+  // Walking the folder leaves the same ones out, whatever case their names are in.
+  const whole = await planZip(base, [""]);
+  assert.deepEqual(whole.files.map((file) => file.name), ["ok.txt"]);
 });
 
 console.log("\nThe place, and who may hold it\n");

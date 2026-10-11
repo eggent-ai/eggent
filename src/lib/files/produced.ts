@@ -3,7 +3,7 @@ import path from "node:path";
 import { getWorkDir, isHiddenFileName } from "@/lib/storage/project-store";
 import { projectFolderIsLink } from "@/lib/files/workspace-root";
 import { fileMentionPath } from "@/lib/files/openable";
-import { isSecretFileName } from "@/lib/files/zip-walk";
+import { isSecretFileName, pathIsSensitive } from "@/lib/files/zip-walk";
 
 /**
  * The files a turn made, for the row under its answer.
@@ -116,7 +116,9 @@ function isInternal(relative: string, orchestrator: boolean): boolean {
   const segments = relative.split("/");
   if (INTERNAL_TOP_LEVEL.has(segments[0].toLowerCase())) return true;
   if (orchestrator && segments.length > 1 && INTERNAL_TOP_LEVEL.has(segments[1].toLowerCase())) return true;
-  return segments.some((segment) => SKIPPED_SEGMENTS.has(segment) || isHiddenFileName(segment) || segment === ".DS_Store");
+  if (segments.some((segment) => SKIPPED_SEGMENTS.has(segment.toLowerCase()) || isHiddenFileName(segment) || segment === ".DS_Store")) return true;
+  // The folders credentials live in are never a result, whatever the file in them is called.
+  return pathIsSensitive(relative);
 }
 
 async function realpathOrNull(target: string): Promise<string | null> {

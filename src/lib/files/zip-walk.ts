@@ -34,7 +34,10 @@ export function zipLimits(env: Record<string, string | undefined> = process.env)
 
 /** Folders nobody wants in a download: dependencies, caches and the runtime's own state. */
 const SKIPPED_DIRECTORIES = new Set(["node_modules", ".git", "__pycache__", ".pi", ".cache", ".next"]);
-/** Folders that exist to hold credentials: left out whole, and counted with the files that hold them. */
+/**
+ * Folders that exist to hold credentials: left out whole, and counted with the files that hold them.
+ * Names are compared without case - on the filesystems a Mac or a Windows machine uses, `.SSH` is `.ssh`.
+ */
 const CREDENTIAL_DIRECTORIES = new Set([".ssh", ".aws", ".gnupg", ".kube", ".docker", ".azure", ".gcloud"]);
 const SKIPPED_FILES = new Set([".ds_store", "thumbs.db"]);
 
@@ -48,7 +51,7 @@ const SKIPPED_FILES = new Set([".ds_store", "thumbs.db"]);
 const SECRET_FILE = new RegExp(
   `^(?:${[
     "\\.env(?:\\..*)?", ".*\\.env", "\\.env~", "\\.envrc",
-    "\\.mcp\\.json", "mcp\\.json", "auth\\.json", "tokens?\\.json",
+    "\\.mcp\\.json", "mcp\\.json", "auth\\.json", "token\\.json",
     "\\.npmrc", "\\.netrc", "_netrc", "\\.pgpass", "\\.pypirc", "\\.htpasswd", "htpasswd",
     "\\.git-credentials", "\\.dockercfg", "\\.s3cfg", "\\.boto", "\\.vault[-_]?pass.*",
     "id_(?:rsa|dsa|ecdsa|ed25519).*",
@@ -64,6 +67,19 @@ const SECRET_FILE = new RegExp(
 
 export function isSecretFileName(name: string): boolean {
   return SECRET_FILE.test(name);
+}
+
+const SEGMENTS_NOT_SERVED = new Set([...CREDENTIAL_DIRECTORIES, ".git", ".pi"]);
+
+/**
+ * Whether serving this path by name would hand over a credential: a credential file, or
+ * anything inside a folder that exists to hold them (and inside git's or the agent's own
+ * state, which carry tokens in their configs). The relative path, any case.
+ */
+export function pathIsSensitive(relative: string): boolean {
+  const segments = relative.split(/[\\/]/).filter(Boolean);
+  if (segments.some((segment) => SEGMENTS_NOT_SERVED.has(segment.toLowerCase()))) return true;
+  return segments.length > 0 && isSecretFileName(segments[segments.length - 1]);
 }
 
 export type ZipLimitKind = "bytes" | "files" | "empty" | "depth";
@@ -174,11 +190,11 @@ export async function planZip(
         continue;
       }
       if (entry.isDirectory()) {
-        if (CREDENTIAL_DIRECTORIES.has(entry.name)) {
+        if (CREDENTIAL_DIRECTORIES.has(entry.name.toLowerCase())) {
           plan.skipped.secrets += 1;
           continue;
         }
-        if (isHiddenFileName(entry.name) || SKIPPED_DIRECTORIES.has(entry.name)) {
+        if (isHiddenFileName(entry.name) || SKIPPED_DIRECTORIES.has(entry.name.toLowerCase())) {
           plan.skipped.hidden += 1;
           continue;
         }
@@ -215,20 +231,24 @@ export async function planZip(
     // ...and then the real one, since a folder on the way can itself be a link out.
     const real = await fs.realpath(absolute);
     if (!inside(rootReal, real)) throw new ZipPathError();
-    // Naming a folder is not a way round what a walk leaves out.
+    // Naming a folder is not a way round what a walk leaves out - and neither is naming a file in
+    // one: every part of the path is judged, not only the last.
     const name = path.basename(absolute);
+    const segments = path.relative(rootReal, absolute).split(path.sep).filter(Boolean);
+    if (segments.some((segment) => CREDENTIAL_DIRECTORIES.has(segment.toLowerCase()))) {
+      plan.skipped.secrets += 1;
+      continue;
+    }
+    if (segments.some((segment) => SKIPPED_DIRECTORIES.has(segment.toLowerCase()) || isHiddenFileName(segment))) {
+      plan.skipped.hidden += 1;
+      continue;
+    }
     if (stat.isDirectory()) {
-      if (absolute !== rootReal && CREDENTIAL_DIRECTORIES.has(name)) {
-        plan.skipped.secrets += 1;
-      } else if (absolute !== rootReal && (isHiddenFileName(name) || SKIPPED_DIRECTORIES.has(name))) {
-        plan.skipped.hidden += 1;
-      } else {
-        await walk(absolute, 0);
-      }
+      await walk(absolute, 0);
     } else if (stat.isFile()) {
       if (isSecretFileName(name)) {
         plan.skipped.secrets += 1;
-      } else if (isHiddenFileName(name) || SKIPPED_FILES.has(name.toLowerCase())) {
+      } else if (SKIPPED_FILES.has(name.toLowerCase())) {
         plan.skipped.hidden += 1;
       } else {
         await add(absolute);

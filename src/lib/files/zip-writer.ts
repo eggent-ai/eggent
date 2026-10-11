@@ -1,9 +1,6 @@
-import { constants as fsConstants } from "node:fs";
-import fs from "node:fs/promises";
-import type { FileHandle } from "node:fs/promises";
-import path from "node:path";
 import { Readable, Transform, pipeline } from "node:stream";
 import zlib from "node:zlib";
+import { openPlainFile } from "@/lib/files/safe-open";
 
 /**
  * A ZIP archive written as a stream.
@@ -158,36 +155,6 @@ function endRecord(count: number, directorySize: number, directoryOffset: number
   return record;
 }
 
-// O_NOFOLLOW is missing where there are no such links to follow.
-const OPEN_FLAGS = fsConstants.O_RDONLY | (fsConstants.O_NOFOLLOW ?? 0);
-
-/**
- * Opens a file for the archive, or says why it must not go in.
- *
- * The plan was made some time ago - for a large folder, minutes - and the folder
- * belongs to an agent with a shell. So the file is checked again when it is
- * opened: not a link, one name only, and the thing opened is the thing that the
- * path leads to inside the folder.
- */
-async function openForArchive(file: ZipFile, root: string | undefined): Promise<FileHandle | null> {
-  let handle: FileHandle | null = null;
-  try {
-    handle = await fs.open(file.filePath, OPEN_FLAGS);
-    const opened = await handle.stat();
-    if (!opened.isFile() || opened.nlink > 1) throw new Error("not a plain file");
-    if (root) {
-      const real = await fs.realpath(file.filePath);
-      if (!real.startsWith(root + path.sep)) throw new Error("outside the folder");
-      const there = await fs.stat(real);
-      if (there.ino !== opened.ino || there.dev !== opened.dev) throw new Error("replaced");
-    }
-    return handle;
-  } catch {
-    await handle?.close().catch(() => undefined);
-    return null;
-  }
-}
-
 async function* writeArchive(files: readonly ZipFile[], options: ZipStreamOptions): AsyncGenerator<Buffer> {
   const { signal, onActivity } = options;
   if (files.length > MAX_ENTRIES) throw new Error("Too many files for one archive.");
@@ -199,52 +166,59 @@ async function* writeArchive(files: readonly ZipFile[], options: ZipStreamOption
     if (offset > MAX_OFFSET) throw new Error("The archive is too large.");
     onActivity?.();
     // Before the header, so a file that cannot be had leaves no trace in the archive.
-    const handle = file.size > 0 ? await openForArchive(file, options.root) : null;
+    const handle = file.size > 0 ? await openPlainFile(file.filePath, { root: options.root }) : null;
     if (file.size > 0 && !handle) continue;
-    const name = Buffer.from(file.name, "utf8");
-    const { time, date } = dosDateTime(file.mtime);
-    const header = localHeader(name, time, date);
-    const entryOffset = offset;
-    yield header;
-    onActivity?.();
-    offset += header.length;
-
-    let crc = 0;
-    let size = 0;
-    let compressed = 0;
-    const counter = new Transform({
-      transform(chunk: Buffer, _encoding, callback) {
-        crc = crc32Update(crc, chunk);
-        size += chunk.length;
-        callback(null, chunk);
-      },
-    });
-    const deflate = zlib.createDeflateRaw({ level: isAlreadyCompressed(file.name) ? 0 : 6 });
-    // An empty file has no bytes to read, and a range of [0, -1] is an error.
-    const input = handle
-      ? handle.createReadStream({ start: 0, end: file.size - 1, autoClose: true })
-      : Readable.from([]);
-    const flow = pipeline(input, counter, deflate, () => undefined);
+    // From here the handle is this entry's to close, whatever stops the archive: a reader that
+    // goes away while the generator rests at the header (backpressure holds it there) ends it
+    // through this block, and a handle opened above and not closed below is left to the
+    // garbage collector - which on newer Node ends the process.
     try {
-      for await (const out of flow) {
-        const piece = out as Buffer;
-        compressed += piece.length;
-        offset += piece.length;
-        yield piece;
-        onActivity?.();
+      const name = Buffer.from(file.name, "utf8");
+      const { time, date } = dosDateTime(file.mtime);
+      const header = localHeader(name, time, date);
+      const entryOffset = offset;
+      yield header;
+      onActivity?.();
+      offset += header.length;
+
+      let crc = 0;
+      let size = 0;
+      let compressed = 0;
+      const counter = new Transform({
+        transform(chunk: Buffer, _encoding, callback) {
+          crc = crc32Update(crc, chunk);
+          size += chunk.length;
+          callback(null, chunk);
+        },
+      });
+      const deflate = zlib.createDeflateRaw({ level: isAlreadyCompressed(file.name) ? 0 : 6 });
+      // An empty file has no bytes to read, and a range of [0, -1] is an error.
+      const input = handle
+        ? handle.createReadStream({ start: 0, end: file.size - 1, autoClose: true })
+        : Readable.from([]);
+      const flow = pipeline(input, counter, deflate, () => undefined);
+      try {
+        for await (const out of flow) {
+          const piece = out as Buffer;
+          compressed += piece.length;
+          offset += piece.length;
+          yield piece;
+          onActivity?.();
+        }
+      } finally {
+        input.destroy();
+        counter.destroy();
+        deflate.destroy();
       }
+
+      const entry: Finished = { name, time, date, crc, compressed, size, mode: file.mode, offset: entryOffset };
+      const trailer = descriptor(entry);
+      yield trailer;
+      offset += trailer.length;
+      finished.push(entry);
     } finally {
-      input.destroy();
-      counter.destroy();
-      deflate.destroy();
       await handle?.close().catch(() => undefined);
     }
-
-    const entry: Finished = { name, time, date, crc, compressed, size, mode: file.mode, offset: entryOffset };
-    const trailer = descriptor(entry);
-    yield trailer;
-    offset += trailer.length;
-    finished.push(entry);
   }
 
   const directoryOffset = offset;

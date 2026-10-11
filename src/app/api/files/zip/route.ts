@@ -138,16 +138,20 @@ export async function GET(req: NextRequest) {
     },
   });
   let released = false;
-  const idle = setInterval(() => {
-    if (Date.now() - lastMoved > limit) stream.destroy(new Error("The archive was dropped: nobody was taking it."));
-  }, Math.max(250, Math.min(10_000, Math.floor(limit / 4))));
-  (idle as { unref?: () => void }).unref?.();
   const release = () => {
     if (released) return;
     released = true;
     clearInterval(idle);
     state.count = Math.max(0, state.count - 1);
   };
+  const idle = setInterval(() => {
+    if (Date.now() - lastMoved <= limit) return;
+    stream.destroy(new Error("The archive was dropped: nobody was taking it."));
+    // The place is given back here, not left to the stream's own end: a stream stuck in a call
+    // that cannot be interrupted never reaches it, and a place held by that is held for ever.
+    release();
+  }, Math.max(250, Math.min(10_000, Math.floor(limit / 4))));
+  (idle as { unref?: () => void }).unref?.();
   stream.once("close", release);
   stream.once("error", release);
   req.signal.addEventListener("abort", () => stream.destroy(), { once: true });
