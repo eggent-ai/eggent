@@ -1,4 +1,4 @@
-import { findSecrets, type SecretKind } from "@/lib/secrets/shapes";
+import { findSecrets, looksLikeAName, SECRET_TRIGGER, type SecretKind } from "@/lib/secrets/shapes";
 
 /**
  * Keeping credentials out of what a chat stores.
@@ -25,13 +25,8 @@ const MASKS: Record<SecretKind, string> = {
   password: "[hidden password]",
 };
 
-// Every shape has a prefix or a keyword; one scan for any of them says whether
-// a text is worth looking at, so the common text costs a single pass.
-const ANYTHING_LIKE_A_SECRET =
-  /(?:\bsk-|eggw_|AIza|\bAQ\.|vk1\.a\.|\d:AA|\bBearer\b|gh[pousr]_|github_pat_|AKIA|xox[abprs]-|eyJ|PRIVATE KEY|:\/\/[^\s/@:]+:[^\s/@]+@|api[_-]?key|apikey|access[_-]?token|authorization)/i;
-
 export function maskSecrets(text: string): string {
-  if (!ANYTHING_LIKE_A_SECRET.test(text)) return text;
+  if (!SECRET_TRIGGER.test(text)) return text;
   const matches = findSecrets(text);
   if (matches.length === 0) return text;
   let out = "";
@@ -44,6 +39,39 @@ export function maskSecrets(text: string): string {
     at = match.end;
   }
   return out + text.slice(at);
+}
+
+// A value kept under a name that says what it is: `{ api_key: "..." }` in a tool call's
+// arguments is a key and a value in two strings, which no pattern over text ever sees
+// together. Names are compared without case, dashes and underscores.
+const KEYED: Record<string, string> = {
+  apikey: MASKS["api-key"],
+  secretkey: MASKS["api-key"],
+  clientsecret: MASKS["api-key"],
+  accesstoken: MASKS.token,
+  authtoken: MASKS.token,
+  bottoken: MASKS["bot-token"],
+  token: MASKS.token,
+  secret: MASKS.token,
+  privatekey: MASKS["private-key"],
+  authorization: MASKS.token,
+  password: MASKS.password,
+  passwd: MASKS.password,
+};
+
+// What a key's value looks like when it is a key and not a word: long, with a letter and
+// a digit in it, the characters tokens are made of.
+const KEY_VALUE = /^(?=.*\d)(?=.*[A-Za-z])[A-Za-z0-9._\-+/=~]{16,}$/;
+// A password field holding its own name, or a template slot, is an example and not a password.
+const PLACEHOLDER = /^(?:your[_ -]?password|password|passwd|changeme|string|\*+|x+|<[^>]*>|\$\{[^}]*\}|\{\{[^}]*\}\})$/i;
+
+function keyedMask(key: string, value: string): string | null {
+  if (key.length > 24 || value.length < 4 || value.length > 4096) return null;
+  const mask = KEYED[key.toLowerCase().replace(/[_-]/g, "")];
+  if (!mask || value.startsWith("[hidden ")) return null;
+  if (mask === MASKS.password) return /\s/.test(value) || PLACEHOLDER.test(value) ? null : mask;
+  if (/^(?:Bearer|Basic|Token)\s+\S{8,}$/i.test(value) && !/^\w+\s+(?:\$|<|\{)/.test(value)) return mask;
+  return KEY_VALUE.test(value) && !looksLikeAName(value) ? mask : null;
 }
 
 function walk(value: unknown, depth: number): unknown {
@@ -65,8 +93,9 @@ function walk(value: unknown, depth: number): unknown {
   const record = value as Record<string, unknown>;
   let copy: Record<string, unknown> | null = null;
   for (const key of Object.keys(record)) {
-    const next = walk(record[key], depth + 1);
-    if (next !== record[key]) {
+    const current = record[key];
+    const next = typeof current === "string" ? keyedMask(key, current) ?? walk(current, depth + 1) : walk(current, depth + 1);
+    if (next !== current) {
       copy ??= { ...record };
       copy[key] = next;
     }

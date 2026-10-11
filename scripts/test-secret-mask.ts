@@ -50,6 +50,25 @@ const FAKE = {
   pem: J("-----BEGIN ", "PRIVATE KEY-----\n", filler(64), "\n", "-----END ", "PRIVATE KEY-----"),
 };
 
+// Vendors that give their keys a prefix of their own.
+const VENDORS: Array<[string, string, string]> = [
+  ["a Stripe key", J("sk", "_live_", filler(24)), "api-key"],
+  ["an hf_ token", J("hf", "_", filler(34)), "token"],
+  ["a gsk_ key", J("gsk", "_", filler(52)), "api-key"],
+  ["a GitLab token", J("glpat", "-", filler(20)), "token"],
+  ["a tvly- key", J("tvly", "-dev-", filler(32)), "api-key"],
+  ["an npm token", J("npm", "_", filler(36)), "token"],
+  ["a pplx- key", J("pplx", "-", filler(40)), "api-key"],
+  ["an xai- key", J("xai", "-", filler(80)), "api-key"],
+  ["an r8_ token", J("r8", "_", filler(37)), "token"],
+  ["a Shopify token", J("shp", "at_", "0123456789abcdef0123456789abcdef"), "token"],
+  ["a SendGrid key", J("SG", ".", filler(22), ".", filler(43)), "api-key"],
+  ["a DigitalOcean token", J("dop", "_v1_", "0123456789abcdef".repeat(4)), "token"],
+  ["a Google sign-in token", J("ya", "29.", filler(60)), "token"],
+  ["a temporary cloud key", J("AS", "IA", "ABCDEFGHIJKLMNOP"), "cloud-key"],
+  ["a Slack app token", J("xa", "pp-", "1-A01ABCDEF-", filler(30)), "token"],
+];
+
 const shapes = await import("../src/lib/secrets/shapes.ts");
 const mask = await import("../src/lib/secrets/mask.ts");
 const { SPOKEN_CREDENTIAL } = await import("../src/lib/secrets/spoken.ts");
@@ -87,6 +106,38 @@ await check("a private key is masked whole when the whole of it is there", () =>
   assert.equal(masked, "before\n[hidden private key]\nafter");
 });
 
+await check("the vendors with a prefix of their own are found, each named for what it is", () => {
+  for (const [what, text, kind] of VENDORS) {
+    const found = shapes.findSecrets(`Here is ${what}: ${text} - thanks`);
+    assert.equal(found.length, 1, `${what}: ${JSON.stringify(found)}`);
+    assert.equal(found[0].kind, kind, `${what}: ${found[0].kind}`);
+    assert.equal(mask.maskSecrets(`k=${text};`).includes(text.slice(8)), false, `${what} survived`);
+  }
+});
+await check("a key in an environment variable is found by the variable's name", () => {
+  const key = J(filler(12), "9", filler(20));
+  for (const label of ["WIDGET_API_KEY", "export GADGET_API_KEY", "my_client_secret", "GITHUB_ACCESS_TOKEN", "auth_token", "client_secret", "SECRET_KEY"]) {
+    for (const text of [`${label}=${key}`, `${label}: "${key}"`, `${label} = '${key}'`]) {
+      const found = shapes.findSecrets(`before ${text} after`);
+      assert.equal(found.length, 1, text);
+      assert.equal(mask.maskSecrets(text).includes(key), false, `${text} survived`);
+    }
+  }
+});
+await check("a key that is the only thing in the text is found without any other hint", () => {
+  assert.equal(mask.maskSecrets(`client_secret = "${J(filler(10), "7", filler(20))}"`), '[hidden token]"');
+  assert.equal(mask.maskSecrets(`auth_token: ${J(filler(10), "7", filler(20))}`), "[hidden token]");
+});
+await check("a password with an @ in it is masked to the last one, and no further", () => {
+  assert.equal(mask.maskSecrets("DB=postgres://app:p@ss@db.example.test:5432/main"), "DB=postgres://[hidden login]@db.example.test:5432/main");
+  assert.equal(mask.maskSecrets("cache=redis://:s3cretPass@cache.example.test:6379/0"), "cache=redis://[hidden login]@cache.example.test:6379/0");
+  assert.equal(
+    mask.maskSecrets('{"url":"postgres://u:pw@h.example.test:5432","owner":"a@b.example.test"}'),
+    '{"url":"postgres://[hidden login]@h.example.test:5432","owner":"a@b.example.test"}'
+  );
+  assert.equal(mask.maskSecrets("see (mongodb+srv://u:pw@c.example.test/db) and a@b.example.test"), "see (mongodb+srv://[hidden login]@c.example.test/db) and a@b.example.test");
+});
+
 console.log("\nWhat is not\n");
 
 await check("code and prose about keys come through untouched", () => {
@@ -107,6 +158,15 @@ await check("code and prose about keys come through untouched", () => {
     "https://example.test/path?token=abc and https://user@example.test/x",
     "email me at a.b@example.test about invoice 20260412:AA is not a token",
     "version 1.2.3-beta.4 and build 20260412",
+    // Names written by a person, not keys: words joined by dots and underscores, with a number.
+    "api_key = self.oauth2_client.fetch_token",
+    "access_token = process.env.OPENAI_API_KEY_2024",
+    "Authorization: Bearer YOUR_API_KEY_123456789",
+    "WIDGET_API_KEY=${WIDGET_API_KEY}",
+    "export OPENAI_API_KEY=your-key-here",
+    'client_secret = settings.google_oauth2_client_secret',
+    "ssh://git@github.example.test:2222/org/repo.git and https://example.test:8080/x@y and http://localhost:3000/",
+    "mail me@example.test, see https://user@example.test:443/path",
   ];
   for (const text of harmless) {
     assert.deepEqual(shapes.findSecrets(text), [], text);
@@ -154,6 +214,52 @@ await check("a big text is no slower to pass than to read", () => {
   const started = Date.now();
   mask.maskSecrets(big);
   assert.ok(Date.now() - started < 1000, `${Date.now() - started} ms for ${big.length} characters`);
+});
+await check("hostile text costs time in proportion to its length, shape by shape", () => {
+  // Each of these used to make one pattern read a long run again from every position inside it:
+  // 100 KB of any of them took seconds, 200 KB half a minute.
+  const rep = (piece: string, length = 150_000) => piece.repeat(Math.ceil(length / piece.length));
+  const hostile: Record<string, string> = {
+    "dots": `api_key ${rep("a.")}`,
+    "dashes": rep("sk-"),
+    "hyphenated words": rep("word-word-"),
+    "signed-token starts": rep("eyJ-"),
+    "signed-token segments": rep("eyJaaaaaaaaaa."),
+    "key headers with no end": rep("-----BEGIN PRIVATE KEY-----"),
+    "key headers and ends": rep("-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----\n"),
+    "scheme markers": rep("://user:pa"),
+    "slack-looking": rep("xoxb-"),
+    "labels": rep("WIDGET_API_KEY="),
+    "one long word": `${"x".repeat(150_000)}_API_KEY=`,
+    "passwords with ats": `http://u:${"p@".repeat(200_000)}`,
+  };
+  for (const [name, text] of Object.entries(hostile)) {
+    const started = Date.now();
+    shapes.findSecrets(text);
+    mask.maskSecrets(text);
+    const took = Date.now() - started;
+    assert.ok(took < 1500, `${name}: ${took} ms for ${text.length} characters`);
+  }
+});
+await check("a value kept under a key's own name is masked, and only when it is one", () => {
+  const key = J(filler(12), "9", filler(20));
+  const chat = {
+    parts: [
+      { type: "tool", args: { api_key: key, apiKey: key, "Client-Secret": key, access_token: key, password: "hunter2", authorization: `Bearer ${key}` }, id: "t1" },
+      { type: "tool", args: { api_key: "os.environ", token: 12345, password: "your_password", secret: "short", name: "plain" } },
+    ],
+  };
+  const frozen = JSON.stringify(chat);
+  const masked = mask.withoutSecrets(chat);
+  assert.equal(JSON.stringify(chat), frozen, "the input was changed");
+  const first = masked.parts[0].args as Record<string, unknown>;
+  assert.deepEqual(first, {
+    api_key: "[hidden key]", apiKey: "[hidden key]", "Client-Secret": "[hidden key]", access_token: "[hidden token]",
+    password: "[hidden password]", authorization: "[hidden token]",
+  });
+  assert.equal(masked.parts[0].id, "t1");
+  assert.equal(masked.parts[1], chat.parts[1], "a part with nothing to mask was copied");
+  assert.equal(JSON.stringify(mask.withoutSecrets(masked)), JSON.stringify(masked), "masking twice changed it");
 });
 await check("the scrub on provider errors is as broad as ever", () => {
   assert.equal(redactSecrets(`failed with api_key=${filler(20)}`), "failed with [redacted]");
@@ -253,6 +359,83 @@ await check("a chat saved while it was being read is left for its own next save"
   } finally {
     Object.assign(fs.promises, { stat: realStat });
   }
+});
+
+const dirtyChat = (id: string, secret: string) => JSON.stringify({ id, title: id.slice(0, 4), createdAt: "x", updatedAt: "x", messages: [{ id: "m", role: "user", content: `k ${secret}`, createdAt: "x" }] });
+const markerFile = path.join(root, "data", "secrets-sweep.json");
+const hourAgo = new Date(Date.now() - 3_600_000);
+
+await check("a chat left for later is listed, and the next run looks at it and at what else was left", async () => {
+  const busy = "77777777-7777-4777-8777-777777777777";
+  const quiet = "88888888-8888-4888-8888-888888888888";
+  fs.writeFileSync(path.join(chatsDir, `${busy}.json`), dirtyChat(busy, FAKE.openai));
+  fs.writeFileSync(path.join(chatsDir, `${quiet}.json`), dirtyChat(quiet, FAKE.openai));
+  fs.utimesSync(path.join(chatsDir, `${quiet}.json`), hourAgo, hourAgo);
+
+  const first = await sweepStoredChats({ force: true, minAgeMs: 60_000 });
+  assert.ok(first && first.retry.includes(`${busy}.json`), JSON.stringify(first));
+  assert.ok(!first.retry.includes(`${quiet}.json`), "an old chat was left for later");
+  assert.match(rawFile(busy), /sk-proj/, "a chat used a moment ago was rewritten");
+  assert.doesNotMatch(rawFile(quiet), /sk-proj/, "an old chat was not masked");
+  assert.deepEqual((JSON.parse(fs.readFileSync(markerFile, "utf-8")) as { retry: string[] }).retry, first.retry);
+
+  const second = await sweepStoredChats();
+  assert.ok(second && second.masked >= 1 && second.retry.length === 0, JSON.stringify(second));
+  assert.doesNotMatch(rawFile(busy), /sk-proj/);
+  assert.equal(await sweepStoredChats(), null, "it ran again with nothing left to do");
+});
+await check("a file that cannot be read is counted and not asked about again", async () => {
+  const broken = "99999999-9999-4999-8999-999999999999";
+  fs.writeFileSync(path.join(chatsDir, `${broken}.json`), "{ not json");
+  const result = await sweepStoredChats({ force: true });
+  assert.ok(result && result.failed >= 1 && !result.retry.includes(`${broken}.json`), JSON.stringify(result));
+  assert.equal(await sweepStoredChats(), null);
+  fs.rmSync(path.join(chatsDir, `${broken}.json`));
+});
+await check("a save that lands while the rewrite is being written is not written over", async () => {
+  const id = "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa";
+  const file = path.join(chatsDir, `${id}.json`);
+  fs.writeFileSync(file, dirtyChat(id, FAKE.openai));
+  fs.utimesSync(file, hourAgo, hourAgo);
+  const realStat = fs.promises.stat;
+  let calls = 0;
+  const patched = async (target: fs.PathLike, ...rest: unknown[]): Promise<fs.Stats> => {
+    const result = await (realStat as unknown as (...args: unknown[]) => Promise<fs.Stats>)(target, ...rest);
+    if (String(target).endsWith(`${id}.json`)) {
+      calls += 1;
+      // The third look is the one after the temporary copy was written.
+      if (calls === 3) return { ...result, mtimeMs: result.mtimeMs + 5000 } as fs.Stats;
+    }
+    return result;
+  };
+  Object.assign(fs.promises, { stat: patched });
+  try {
+    const result = await sweepStoredChats({ force: true });
+    assert.ok(result && result.retry.includes(`${id}.json`), JSON.stringify(result));
+  } finally {
+    Object.assign(fs.promises, { stat: realStat });
+  }
+  assert.match(rawFile(id), /sk-proj/, "the file was rewritten over a newer save");
+  assert.deepEqual(fs.readdirSync(chatsDir).filter((name) => name.includes(".sweep-")), [], "a temporary copy was left behind");
+  fs.rmSync(file);
+});
+await check("a marker from an older shape list is not trusted, and its names are never paths", async () => {
+  const id = "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb";
+  const file = path.join(chatsDir, `${id}.json`);
+  fs.writeFileSync(file, dirtyChat(id, FAKE.openai));
+  fs.utimesSync(file, hourAgo, hourAgo);
+  fs.writeFileSync(markerFile, JSON.stringify({ version: SWEEP_VERSION - 1, retry: [] }));
+  const result = await sweepStoredChats();
+  assert.ok(result && result.masked >= 1, JSON.stringify(result));
+  assert.doesNotMatch(rawFile(id), /sk-proj/);
+
+  const outside = path.join(root, "data", "outside.json");
+  fs.writeFileSync(outside, dirtyChat("cccccccc-cccc-4ccc-8ccc-cccccccccccc", FAKE.openai));
+  fs.writeFileSync(markerFile, JSON.stringify({ version: SWEEP_VERSION, retry: ["../outside.json", "nested/x.json", "notes.txt"] }));
+  const guarded = await sweepStoredChats();
+  assert.ok(guarded && guarded.scanned === 0, JSON.stringify(guarded));
+  assert.match(fs.readFileSync(outside, "utf-8"), /sk-proj/, "a file outside the chats folder was swept");
+  fs.rmSync(outside);
 });
 
 console.log("\nIn the composer\n");

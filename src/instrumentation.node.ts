@@ -10,13 +10,22 @@ initTelegramLifecycle().catch((error) => {
 
 // Credentials already in stored chats are masked once per version of the shape
 // list; new writes are masked as they happen (chat-store.ts).
-sweepStoredChats()
-  .then((result) => {
-    if (result) console.log(`[Secrets] Stored chats checked: ${result.scanned}, masked: ${result.masked}${result.skipped ? `, left for their next save: ${result.skipped}` : ""}`);
-  })
-  .catch((error) => {
-    console.warn("Failed to sweep stored chats for credentials:", error);
-  });
+function sweepChats(retryLater: boolean): void {
+  // A chat used in the last half minute is left to its own next save, not rewritten under it.
+  sweepStoredChats({ minAgeMs: 30_000 })
+    .then((result) => {
+      if (!result) return;
+      console.log(`[Secrets] Stored chats checked: ${result.scanned}, masked: ${result.masked}${result.skipped ? `, left for their next save: ${result.skipped}` : ""}${result.failed ? `, unreadable: ${result.failed}` : ""}`);
+      if (retryLater && result.retry.length > 0) {
+        const timer = setTimeout(() => sweepChats(false), 2 * 60_000);
+        (timer as { unref?: () => void }).unref?.();
+      }
+    })
+    .catch((error) => {
+      console.warn("Failed to sweep stored chats for credentials:", error);
+    });
+}
+sweepChats(true);
 
 // A scheduled job is armed inside a live session and dies with it, so without
 // this every restart ends every schedule while its store still says enabled.
