@@ -704,6 +704,10 @@ export async function runPiAgentText(options: PiChatRunOptions & {
     chatId: options.chatId,
     projectId: options.projectId,
     chatContextMode: options.chatContextMode,
+    // A public share must never be handed the workspace tools; the flag was
+    // accepted here and read by the learning gate below, but never reached the
+    // session, so a shared chat built the full tool set.
+    enableEggentTools: options.enableEggentTools,
     toolRuntimeData: options.toolRuntimeData,
     runId,
     abortSignal: options.abortSignal,
@@ -984,6 +988,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         chatId: options.chatId,
         projectId: options.projectId,
         chatContextMode: options.chatContextMode,
+        enableEggentTools: options.enableEggentTools,
         runId,
         abortSignal: runAbort.signal,
         onPiInteraction: (interaction) => {
