@@ -24,6 +24,7 @@ export const SWEEP_VERSION = 2;
 const DATA_DIR = path.join(process.cwd(), "data");
 const CHATS_DIR = path.join(DATA_DIR, "chats");
 const MARKER = path.join(DATA_DIR, "secrets-sweep.json");
+const SKEW_TOLERANCE_MS = 60_000;
 
 export interface SweepResult {
   scanned: number;
@@ -62,6 +63,7 @@ export async function sweepStoredChats(options: SweepOptions = {}): Promise<Swee
   // Only what an earlier run left: a name read from a marker is never trusted as a path.
   const files = retry ? retry.filter((name) => name === path.basename(name) && name.endsWith(".json")) : await listChats();
 
+  await removeOrphanedCopies();
   const minAgeMs = options.minAgeMs ?? 0;
   const result: SweepResult = { scanned: 0, masked: 0, skipped: 0, failed: 0, retry: [] };
   for (const file of files) {
@@ -77,7 +79,13 @@ export async function sweepStoredChats(options: SweepOptions = {}): Promise<Swee
         const now = await fs.stat(target);
         return now.mtimeMs !== before.mtimeMs || now.size !== before.size;
       };
-      if (Date.now() - before.mtimeMs < minAgeMs || (await busy())) {
+      // "Used a moment ago" includes a file stamped a hair ahead of this clock - modification
+      // times carry microseconds and Date.now() only milliseconds, so a file written this
+      // instant can read as half a millisecond from the future. A stamp more than a minute
+      // ahead (a laptop whose clock runs fast, synced here) is nobody using the chat just now,
+      // and read as "young" it would keep the chat out of every sweep.
+      const age = Date.now() - before.mtimeMs;
+      if ((minAgeMs > 0 && age > -SKEW_TOLERANCE_MS && age < minAgeMs) || (await busy())) {
         result.skipped += 1;
         result.retry.push(file);
         continue;
@@ -104,6 +112,20 @@ export async function sweepStoredChats(options: SweepOptions = {}): Promise<Swee
   await fs.mkdir(DATA_DIR, { recursive: true });
   await fs.writeFile(MARKER, `${JSON.stringify({ version: SWEEP_VERSION, at: new Date().toISOString(), ...result }, null, 2)}\n`, "utf-8");
   return result;
+}
+
+/** A rewrite that was killed halfway leaves its temporary copy behind; nothing lists it, so nothing would ever remove it. */
+async function removeOrphanedCopies(): Promise<void> {
+  try {
+    for (const name of await fs.readdir(CHATS_DIR)) {
+      if (!/\.json\.sweep-\d+$/.test(name)) continue;
+      const target = path.join(CHATS_DIR, name);
+      const stat = await fs.stat(target).catch(() => null);
+      if (stat && Date.now() - stat.mtimeMs > 10 * 60_000) await fs.rm(target, { force: true });
+    }
+  } catch {
+    // No chats folder yet: nothing to clean.
+  }
 }
 
 async function listChats(): Promise<string[]> {

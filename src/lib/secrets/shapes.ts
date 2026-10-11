@@ -137,12 +137,23 @@ const LOOKS_SECRET = "(?=[A-Za-z0-9._\\-]{16,})(?=[A-Za-z0-9._\\-]*\\d)(?=[A-Za-
 export function looksLikeAName(value: string): boolean {
   const parts = value.split(/[._\-]+/).filter(Boolean);
   if (parts.length < 2) return false;
-  return parts.every((part) => /^[A-Za-z]{2,}\d{0,4}$/.test(part) || /^\d{1,10}$/.test(part));
+  return parts.every((part) => /^[A-Za-z]+\d{0,4}$/.test(part) || /^\d{1,10}$/.test(part));
 }
 
-/** The value a labelled or bearer match ends in: its last run of token characters. */
+const TOKEN_CHARACTER = /[A-Za-z0-9._\-]/;
+
+/**
+ * The value a labelled or bearer match ends in: its last run of token characters.
+ *
+ * Read from the end. The match can begin with a prefix of any length (an environment
+ * variable's name is `\w*` before the label), and a pattern anchored at the end but not
+ * at the start is tried from every position of that prefix - the quadratic scan this
+ * file exists to avoid, hidden in the one helper that looks at a match after it was made.
+ */
 function valueOf(matched: string): string {
-  return /[A-Za-z0-9._\-]+$/.exec(matched)?.[0] ?? "";
+  let start = matched.length;
+  while (start > 0 && TOKEN_CHARACTER.test(matched[start - 1])) start -= 1;
+  return matched.slice(start);
 }
 
 const notAName = (matched: string): boolean => !looksLikeAName(valueOf(matched));
@@ -209,8 +220,9 @@ export interface SecretMatch {
 
 const PRIVATE_KEY_HEADER = /-----BEGIN [A-Z ]*PRIVATE KEY-----/g;
 const PRIVATE_KEY_FOOTER = /-----END [A-Z ]*PRIVATE KEY-----/g;
-// No key is longer than a dozen kilobytes; a footer further off than that is somebody else's.
-const PRIVATE_KEY_MAX_BODY = 12_000;
+// A footer further off than this is somebody else's. Pairing is linear whatever the distance, so
+// the cap is only there to say where one key ends and an unrelated header begins.
+const PRIVATE_KEY_MAX_BODY = 262_144;
 
 /**
  * Private keys, header to footer when both are there and the header alone when not.

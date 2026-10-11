@@ -43,21 +43,30 @@ export function maskSecrets(text: string): string {
 
 // A value kept under a name that says what it is: `{ api_key: "..." }` in a tool call's
 // arguments is a key and a value in two strings, which no pattern over text ever sees
-// together. Names are compared without case, dashes and underscores.
-const KEYED: Record<string, string> = {
-  apikey: MASKS["api-key"],
-  secretkey: MASKS["api-key"],
-  clientsecret: MASKS["api-key"],
-  accesstoken: MASKS.token,
-  authtoken: MASKS.token,
-  bottoken: MASKS["bot-token"],
-  token: MASKS.token,
-  secret: MASKS.token,
-  privatekey: MASKS["private-key"],
-  authorization: MASKS.token,
-  password: MASKS.password,
-  passwd: MASKS.password,
-};
+// together. Names are compared without case, dashes and underscores, and by how they end:
+// `WIDGET_API_KEY` in an MCP server's env block and `X-Auth-Token` in a header are the same
+// thing written the way their tool wants it. Longer endings come first.
+const KEYED_ENDINGS: Array<[string, string]> = [
+  ["clientsecret", MASKS["api-key"]],
+  ["secretkey", MASKS["api-key"]],
+  ["apikey", MASKS["api-key"]],
+  ["accesstoken", MASKS.token],
+  ["authtoken", MASKS.token],
+  ["bottoken", MASKS["bot-token"]],
+  ["privatekey", MASKS["private-key"]],
+  ["authorization", MASKS.token],
+  ["password", MASKS.password],
+  ["passwd", MASKS.password],
+  ["token", MASKS.token],
+  ["secret", MASKS.token],
+];
+
+function keyedMaskFor(key: string): string | null {
+  if (key.length > 48) return null;
+  const name = key.toLowerCase().replace(/[_-]/g, "");
+  for (const [ending, mask] of KEYED_ENDINGS) if (name.endsWith(ending)) return mask;
+  return null;
+}
 
 // What a key's value looks like when it is a key and not a word: long, with a letter and
 // a digit in it, the characters tokens are made of.
@@ -66,8 +75,8 @@ const KEY_VALUE = /^(?=.*\d)(?=.*[A-Za-z])[A-Za-z0-9._\-+/=~]{16,}$/;
 const PLACEHOLDER = /^(?:your[_ -]?password|password|passwd|changeme|string|\*+|x+|<[^>]*>|\$\{[^}]*\}|\{\{[^}]*\}\})$/i;
 
 function keyedMask(key: string, value: string): string | null {
-  if (key.length > 24 || value.length < 4 || value.length > 4096) return null;
-  const mask = KEYED[key.toLowerCase().replace(/[_-]/g, "")];
+  if (value.length < 4 || value.length > 4096) return null;
+  const mask = keyedMaskFor(key);
   if (!mask || value.startsWith("[hidden ")) return null;
   if (mask === MASKS.password) return /\s/.test(value) || PLACEHOLDER.test(value) ? null : mask;
   if (/^(?:Bearer|Basic|Token)\s+\S{8,}$/i.test(value) && !/^\w+\s+(?:\$|<|\{)/.test(value)) return mask;
