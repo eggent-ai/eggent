@@ -90,7 +90,7 @@ check("another project's file, from the projects folder", () =>
     { project: "none", path: "shop/pic.png", inline: "1" }
   )
 );
-check("the desktop app's own data folder", () =>
+check("a data folder outside the image", () =>
   assert.equal(requested(embeddedImageUrl("/Users/me/Eggent/data/projects/generated-images/a.png", "none")).path, "generated-images/a.png")
 );
 check("not an image stays as written", () =>

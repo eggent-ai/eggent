@@ -126,7 +126,7 @@ export function embeddedImageUrl(src: string, projectId: string): string | null 
 /**
  * The path inside the workspace's projects folder that an absolute path names,
  * or null. Matches `.../data/projects/<rest>` wherever the data folder lives
- * (`/app/data` in the image, a person's own folder on the desktop app).
+ * (`/app/data` in the image, any folder on a machine that runs Eggent directly).
  */
 function projectsFolderPath(src: string): string | null {
   let value = src.trim();
