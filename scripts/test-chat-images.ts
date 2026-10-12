@@ -71,11 +71,38 @@ check("a % that escapes nothing is judged as written", () =>
   assert.equal(requested(embeddedImageUrl("uploads/100%.png", "none")).path, "uploads/100%.png")
 );
 
+console.log("\nan absolute path in the projects folder (the image tool reports those):");
+check("the shape from the report, in the orchestrator", () =>
+  assert.deepEqual(
+    requested(embeddedImageUrl("/app/data/projects/generated-images/eggent-image-1.png", "none")),
+    { project: "none", path: "generated-images/eggent-image-1.png", inline: "1" }
+  )
+);
+check("inside the open project, against that project", () =>
+  assert.deepEqual(
+    requested(embeddedImageUrl("/app/data/projects/landing/site/hero.png", "landing")),
+    { project: "landing", path: "site/hero.png", inline: "1" }
+  )
+);
+check("another project's file, from the projects folder", () =>
+  assert.deepEqual(
+    requested(embeddedImageUrl("/app/data/projects/shop/pic.png", "landing")),
+    { project: "none", path: "shop/pic.png", inline: "1" }
+  )
+);
+check("the desktop app's own data folder", () =>
+  assert.equal(requested(embeddedImageUrl("/Users/me/Eggent/data/projects/generated-images/a.png", "none")).path, "generated-images/a.png")
+);
+check("not an image stays as written", () =>
+  assert.equal(embeddedImageUrl("/app/data/projects/site/index.html", "none"), null)
+);
+
 console.log("\nanything else is left exactly as written:");
 for (const [src, why] of [
   ["https://example.invalid/pic.png", "a web address"],
   ["data:image/png;base64,iVBORw0KGgo=", "a data url"],
-  ["/app/data/projects/uploads/pic.png", "an absolute path"],
+  ["/etc/pic.png", "an absolute path outside the projects folder"],
+  ["/app/data/projects/../pic.png", "the projects folder, then out of it"],
   ["~/pic.png", "a home path"],
   ["../outside.png", "a path out of the project"],
   ["uploads/%2E%2E/%2E%2E/outside.png", "the same, encoded"],

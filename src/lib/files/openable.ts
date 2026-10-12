@@ -104,9 +104,40 @@ export function fileMentionPath(text: string): string | null {
  * encoded `..`.
  */
 export function embeddedImageUrl(src: string, projectId: string): string | null {
+  const absolute = projectsFolderPath(src);
+  if (absolute) {
+    // The agent copies the path a tool reported, and the image tool reports
+    // where the file lies on disk: `/app/data/projects/generated-images/x.png`.
+    // That is a file in the workspace's projects folder, so it is loaded from
+    // there - from the open project when it lies inside it, otherwise from the
+    // folder itself (the orchestrator's scope).
+    if (!EMBEDDABLE_IMAGE.test(absolute)) return null;
+    const ownPrefix = projectId && projectId !== "none" ? `${projectId}/` : "";
+    if (ownPrefix && absolute.startsWith(ownPrefix)) {
+      return fileDownloadUrl(projectId, absolute.slice(ownPrefix.length), { inline: true });
+    }
+    return fileDownloadUrl("none", absolute, { inline: true });
+  }
   const normalized = embeddedPath(src);
   if (!normalized || !EMBEDDABLE_IMAGE.test(normalized)) return null;
   return fileDownloadUrl(projectId, normalized, { inline: true });
+}
+
+/**
+ * The path inside the workspace's projects folder that an absolute path names,
+ * or null. Matches `.../data/projects/<rest>` wherever the data folder lives
+ * (`/app/data` in the image, a person's own folder on the desktop app).
+ */
+function projectsFolderPath(src: string): string | null {
+  let value = src.trim();
+  try {
+    value = decodeURIComponent(value);
+  } catch {
+    // Judge it as written.
+  }
+  const match = /^(?:\/[^/]+)*\/data\/projects\/(.+)$/.exec(value);
+  if (!match) return null;
+  return projectRelativePath(match[1]);
 }
 
 /**
