@@ -318,7 +318,7 @@ await check("a call to the mcp proxy meant for the messages tool is turned back 
   assert.ok(!meantForMessages("eggent_messages", { action: "inbox" }));
   let hook: ((event: { toolName: string; input: unknown }) => unknown) | null = null;
   (createMailToolGuardExtension() as unknown as { factory: (pi: unknown) => void }).factory({ on: (name: string, fn: typeof hook) => { if (name === "tool_call") hook = fn; } });
-  assert.match(String((hook!({ toolName: "mcp", input: { action: "send", to: "x" } }) as { reason?: string })?.reason), /call eggent_messages directly/);
+  assert.match(String((hook!({ toolName: "mcp", input: { action: "send", to: "x" } }) as { reason?: string })?.reason), /call eggent_messages directly \(not mcp\)/);
   assert.equal(hook!({ toolName: "mcp", input: { search: "issues" } }), undefined);
 });
 
@@ -426,6 +426,7 @@ await check("a turn in that chat is told so in its system prompt, and no other c
   assert.match(assigned, /Messages\/Boris\/report\.txt/);
   assert.ok(!plain.includes("This chat answers a message"), "another chat was told about the message");
   assert.match(plain, /eggent_messages is one of your own tools - call it directly, never through mcp/);
+  assert.match(plain, /do not ask which channel/);
 });
 
 stub.close();

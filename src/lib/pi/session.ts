@@ -383,7 +383,7 @@ function buildEggentProjectContext(options: {
     // shares. Named as one of the agent's own tools: told about it only in the
     // operator's block, a model reached for the mcp proxy with its arguments.
     options.mailAvailable
-      ? "Messages: eggent_messages is one of your own tools - call it directly, never through mcp. It holds this workspace's messages with the other people of its company: contacts, inbox, read, send, describe."
+      ? "Messages: eggent_messages is one of your own tools - call it directly, never through mcp. The other people of this workspace's company are its contacts: when your person asks you to write, tell, answer or send something to one of them, look them up there and send it with eggent_messages - that is where colleagues are written to, so do not ask which channel. It also reads what they wrote (inbox, read) and keeps what each does (describe)."
       : "",
     // Supplied by the operator of this deployment. Eggent does not know what it
     // says, so it is quoted rather than summarized, and it outranks guesswork.

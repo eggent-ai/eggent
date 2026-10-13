@@ -19,7 +19,7 @@ export function meantForMessages(toolName: string, input: unknown): boolean {
 }
 
 export const MESSAGES_TOOL_REDIRECT =
-  "eggent_messages is one of your own tools, not an MCP server: call eggent_messages directly, with these same arguments.";
+  "mcp has no such action. The tool you mean is eggent_messages, a tool of your own: call eggent_messages directly (not mcp), with these same arguments.";
 
 export function createMailToolGuardExtension(): InlineExtension {
   return {
