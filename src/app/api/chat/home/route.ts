@@ -2,8 +2,10 @@ import { NextRequest } from "next/server";
 import { getServerTranslator } from "@/i18n/server";
 import { getActiveRun } from "@/lib/pi/active-runs";
 import { getLiveRun } from "@/lib/pi/live-run";
-import { localNode, remoteEnabled } from "@/lib/remote/config";
-import { remoteFailureMessage, remoteTurnRunning, forgetHandOver, whereLabel } from "@/lib/remote/proxy-turn";
+import { localNode, remoteEnabled, switchWaitMs } from "@/lib/remote/config";
+import { waitForCover } from "@/lib/remote/head";
+import { forgetHandOver, recallHandOver, remoteChatState, remoteFailureMessage, whereLabel } from "@/lib/remote/proxy-turn";
+import { stampAfter } from "@/lib/remote/stamp";
 import { listDevices } from "@/lib/remote/relay-client";
 import { isDeviceHome, parseHome, RemoteError, type ChatHome } from "@/lib/remote/types";
 import { getChat, saveChat } from "@/lib/storage/chat-store";
@@ -65,7 +67,13 @@ export async function POST(req: NextRequest) {
   if (!chatId) return Response.json({ ok: true, home, stored: false });
   const chat = await getChat(chatId);
   if (!chat) {
-    // Moved before it exists: what this side remembered of handing it over is no longer the plan.
+    // A chat this side handed over a moment ago and has not got back yet lives over
+    // there and nowhere else. Moving it from here would let the next message start
+    // a chat of the same name on this side: two chats, two agent sessions, one id.
+    const handedTo = recallHandOver(chatId);
+    if (handedTo && handedTo !== home) {
+      return refuse(new RemoteError("not-synced", "The chat has not come back from where it was started yet.", { home: me }), me);
+    }
     forgetHandOver(chatId);
     return Response.json({ ok: true, home, stored: false });
   }
@@ -80,15 +88,25 @@ export async function POST(req: NextRequest) {
   // moving the chat under it would put a second agent in the same conversation.
   const otherSide: ChatHome | null =
     me !== "cloud" ? "cloud" : isDeviceHome(chat.home) ? chat.home : home && isDeviceHome(home) ? home : null;
-  if (otherSide && (await remoteTurnRunning(chatId, otherSide)) === true) {
+  const other = otherSide ? await remoteChatState(chatId, otherSide) : null;
+  if (other?.running) {
     return refuse(new RemoteError("busy", "This chat is working right now.", { home: home ?? undefined }), home ?? undefined);
+  }
+  if (other) {
+    // This side is about to write the file. It has to hold what the other side
+    // wrote first, or the move is written over a copy that is behind - and the
+    // next turn here runs without the exchange the other side just had.
+    const gaps = await waitForCover(chatId, other.head, { timeoutMs: switchWaitMs(), signal: req.signal });
+    if (gaps.length > 0) {
+      return refuse(new RemoteError("not-synced", "The chat has not arrived here yet.", { home: me }), me);
+    }
   }
   forgetHandOver(chatId);
 
   if (home) chat.home = home;
   else delete chat.home;
   // The newer copy wins when the two sides' files are joined, so a switch has to be newer than the file it changes.
-  chat.updatedAt = new Date().toISOString();
+  chat.updatedAt = stampAfter(chat.updatedAt);
   await saveChat(chat);
   return Response.json({ ok: true, home, stored: true });
 }

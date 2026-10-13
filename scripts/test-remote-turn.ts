@@ -64,8 +64,9 @@ let device: Side;
 const relay = await startRelay({ cloud: () => cloud, device: () => device }, session);
 const syncDelayMs = 700;
 
-cloud = await startSide({ name: "cloud", node: "cloud", relayUrl: relay.url("cloud"), modelUrl: model.url, repoRoot });
-device = await startSide({ name: "device", node: "device:test-mac", relayUrl: relay.url("device"), modelUrl: model.url, repoRoot });
+const suiteEnv = { EGGENT_REMOTE_STOP_GRACE_SECONDS: "3" };
+cloud = await startSide({ name: "cloud", node: "cloud", relayUrl: relay.url("cloud"), modelUrl: model.url, repoRoot, env: suiteEnv });
+device = await startSide({ name: "device", node: "device:test-mac", relayUrl: relay.url("device"), modelUrl: model.url, repoRoot, env: suiteEnv });
 const syncer = startSyncer(cloud.root, device.root, { delayMs: syncDelayMs });
 
 const JSON_HEADERS = { "content-type": "application/json", cookie };
@@ -860,6 +861,156 @@ try {
     }
     const read = await readChatStream(await post(cloud, "/api/chat", { chatId: chat, message: "and now?" }));
     assert.match(read.text, /device answered\./, read.text);
+  });
+
+  await check("a message typed on a side that has not heard of a move is not run where the move took the chat from", async () => {
+    const chat = crypto.randomUUID();
+    await readChatStream(await post(device, "/api/chat", { chatId: chat, message: "start it in the cloud", home: "cloud", projectId: "none" }));
+    await until("the chat on the computer", () => messagesOf(device, chat).length >= 2 && sessionFilesOf(device.root, chat).length === 1);
+    syncer.pause();
+    try {
+      // On the cloud's screen the person moves the chat to the computer.
+      assert.equal((await post(cloud, "/api/chat/home", { chatId: chat, home: "device:test-mac" })).status, 200);
+      // On the computer, whose copy has not heard of it, the person types.
+      const calls = model.callsBy("cloud").length;
+      const refused = await post(device, "/api/chat", { chatId: chat, message: "typed before the move arrived", projectId: "none" });
+      assert.equal(refused.status, 409);
+      assert.equal(((await refused.json()) as { code?: string }).code, "moved");
+      assert.equal(model.callsBy("cloud").length, calls, "the cloud ran it, and undid the move");
+      assert.equal(readChatFile(cloud.root, chat)?.home, "device:test-mac");
+    } finally {
+      syncer.resume();
+    }
+    // Once the move has arrived, the same message runs where the person moved the chat to.
+    await until("the move on the computer", () => readChatFile(device.root, chat)?.home === "device:test-mac");
+    const ok = await readChatStream(await post(device, "/api/chat", { chatId: chat, message: "now that it has arrived", projectId: "none" }));
+    assert.match(ok.text, /device answered\./, ok.text);
+  });
+
+  await check("a chat is not moved by a side that is behind: the move waits for what the other side wrote", async () => {
+    const chat = crypto.randomUUID();
+    await readChatStream(await post(device, "/api/chat", { chatId: chat, message: "first, on the computer", home: "device:test-mac", projectId: "none" }));
+    await until("the chat on the cloud", () => messagesOf(cloud, chat).length === 2 && sessionFilesOf(cloud.root, chat).length === 1);
+    syncer.pause();
+    try {
+      await readChatStream(await post(device, "/api/chat", { chatId: chat, message: "second, typed while the sync is held", projectId: "none" }));
+      // The cloud's copy is a turn behind. Moving the chat to the cloud now would write over what the computer wrote.
+      const flip = await post(cloud, "/api/chat/home", { chatId: chat, home: "cloud" });
+      assert.equal(flip.status, 409, "the cloud moved the chat from a copy that was behind the computer's");
+      assert.equal(((await flip.json()) as { code?: string }).code, "not-synced");
+      assert.equal(readChatFile(cloud.root, chat)?.home, "device:test-mac");
+    } finally {
+      syncer.resume();
+    }
+    await until("the second turn on the cloud", () => messagesOf(cloud, chat).length === 4);
+    assert.equal((await post(cloud, "/api/chat/home", { chatId: chat, home: "cloud" })).status, 200);
+    const next = await readChatStream(await post(cloud, "/api/chat", { chatId: chat, message: "third, in the cloud", projectId: "none" }));
+    assert.match(next.text, /ctx users=3/, `the cloud did not see the whole conversation: ${next.text}`);
+  });
+
+  await check("/here does not take a chat from a side that has written more than this one has yet", async () => {
+    const created = await tell(cloud, "tg-behind", "first from the messenger");
+    const chat = created.body.context.activeChatId as string;
+    assert.equal((await post(cloud, "/api/chat/home", { chatId: chat, home: "device:test-mac" })).status, 200);
+    await until("the chat on the computer", () => messagesOf(device, chat).length >= 2 && sessionFilesOf(device.root, chat).length === 1);
+    syncer.pause();
+    try {
+      await readChatStream(await post(device, "/api/chat", { chatId: chat, message: "typed on the computer", projectId: "none" }));
+      const refused = await tell(cloud, "tg-behind", "/here");
+      assert.match(String(refused.body.reply), /hasn't fully arrived/, JSON.stringify(refused.body));
+      assert.equal(readChatFile(cloud.root, chat)?.home, "device:test-mac");
+    } finally {
+      syncer.resume();
+    }
+    await until("the chat on the cloud", () => messagesOf(cloud, chat).length >= 4);
+    const done = await tell(cloud, "tg-behind", "/here");
+    assert.match(String(done.body.reply), /runs here now/, JSON.stringify(done.body));
+  });
+
+  await check("a chat that this side handed over and has not got back yet is not moved from here until it has", async () => {
+    const chat = crypto.randomUUID();
+    syncer.pause();
+    try {
+      await readChatStream(await post(device, "/api/chat", { chatId: chat, message: "start it in the cloud", home: "cloud", projectId: "none" }));
+      assert.equal(readChatFile(device.root, chat), null);
+      // Moving it now would let the next message start a chat of the same name here.
+      const flip = await post(device, "/api/chat/home", { chatId: chat, home: "device:test-mac" });
+      assert.equal(flip.status, 409);
+      assert.equal(((await flip.json()) as { code?: string }).code, "not-synced");
+    } finally {
+      syncer.resume();
+    }
+    await until("the chat on the computer", () => readChatFile(device.root, chat) !== null);
+    assert.equal((await post(device, "/api/chat/home", { chatId: chat, home: "device:test-mac" })).status, 200);
+  });
+
+  await check("a stop pressed while only the stored copy is being waited for answers once it has arrived", async () => {
+    syncer.setDelay(4500);
+    try {
+      const chat = crypto.randomUUID();
+      const calls = model.callsBy("cloud").length;
+      const pending = post(device, "/api/chat", { chatId: chat, message: "a quick one for the cloud", home: "cloud", projectId: "none" }).then((response) => readChatStream(response));
+      await until("the cloud's model to answer", () => model.callsBy("cloud").length > calls);
+      await sleep(800); // the answer has streamed, the turn is over there and this side waits for the file
+      const stop = await post(device, `/api/chat/${chat}/stop`, {});
+      assert.ok(readChatFile(device.root, chat) !== null, "the stop answered before the stored chat had arrived, and the screen reloaded without it");
+      assert.equal(((await stop.json()) as { stopped?: boolean }).stopped, false);
+      await pending;
+    } finally {
+      syncer.setDelay(syncDelayMs);
+    }
+  });
+
+  await check("a stop that has not landed is not sent into what the person sent next", async () => {
+    const chat = crypto.randomUUID();
+    await readChatStream(await post(cloud, "/api/chat", { chatId: chat, message: "plain cloud turn" }));
+    syncer.pause();
+    let second: Promise<{ text: string }>;
+    try {
+      assert.equal((await post(cloud, "/api/chat/home", { chatId: chat, home: "device:test-mac" })).status, 200);
+      const controller = new AbortController();
+      const first = fetch(`${cloud.url}/api/chat`, {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ chatId: chat, message: "SLOW the first thing", projectId: "none" }),
+        signal: controller.signal,
+      }).catch(() => null);
+      await sleep(1200);
+      controller.abort();
+      // The stop lands on nothing: the computer is still waiting for the chat to reach it.
+      await post(cloud, `/api/chat/${chat}/stop`, {});
+      await first;
+      await sleep(150);
+      // What the person types next, a moment after, also waits for the chat to get there.
+      second = post(cloud, "/api/chat", { chatId: chat, message: "SLOW the correction", projectId: "none" }).then((response) => readChatStream(response));
+      await sleep(300);
+    } finally {
+      syncer.resume();
+    }
+    const read = await second;
+    assert.match(read.text, /slow15/, `the correction was cut short by a stop meant for the message before it: ${read.text}`);
+  });
+
+  await check("a stop the other side acknowledges, whose stream never ends, still frees the chat", async () => {
+    relay.state.stallStreamOf = "/api/chat";
+    const chat = crypto.randomUUID();
+    const sending = post(cloud, "/api/chat", { chatId: chat, message: "SLOW a turn whose end never arrives", home: "device:test-mac", projectId: "none" }).then((response) => readChatStream(response));
+    await sleep(1500);
+    await post(cloud, `/api/chat/${chat}/stop`, {});
+    const finished = await Promise.race([sending.then(() => true), sleep(20_000).then(() => false)]);
+    assert.equal(finished, true, "the stream was never let go of");
+    const head = (await (await get(cloud, `/api/chat/${chat}/head`)).json()) as { running?: boolean };
+    assert.equal(head.running, false, "the chat is still marked running");
+  });
+
+  await check("a switch is stamped later than the file it changes, whatever this machine's clock says", async () => {
+    const chat = crypto.randomUUID();
+    const future = new Date(Date.now() + 3_600_000).toISOString();
+    fs.mkdirSync(path.join(cloud.root, "data", "chats"), { recursive: true });
+    fs.writeFileSync(path.join(cloud.root, "data", "chats", `${chat}.json`), JSON.stringify({ id: chat, title: "Clock", messages: [], createdAt: future, updatedAt: future }));
+    assert.equal((await post(cloud, "/api/chat/home", { chatId: chat, home: "device:test-mac" })).status, 200);
+    const stored = readChatFile(cloud.root, chat)!;
+    assert.ok(Date.parse(stored.updatedAt) > Date.parse(future), `the switch is stamped ${stored.updatedAt}, before the file it changed (${future})`);
   });
 
   await check("a file the sync never sends is not waited for", async () => {

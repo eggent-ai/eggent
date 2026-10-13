@@ -16,7 +16,10 @@ import { getServerTranslator } from "@/i18n/server";
 import { getActiveRun } from "@/lib/pi/active-runs";
 import { getLiveRun } from "@/lib/pi/live-run";
 import { isRemoteHome, localNode, remoteEnabled } from "@/lib/remote/config";
-import { forgetHandOver, remoteTurnRunning } from "@/lib/remote/proxy-turn";
+import { switchWaitMs } from "@/lib/remote/config";
+import { waitForCover } from "@/lib/remote/head";
+import { forgetHandOver, remoteChatState } from "@/lib/remote/proxy-turn";
+import { stampAfter } from "@/lib/remote/stamp";
 import type { MessageKey } from "@/i18n/messages";
 import type { AgentProgressEvent } from "@/lib/pi/types";
 import type { ChatContextMode } from "@/lib/types";
@@ -661,15 +664,18 @@ async function answerHere(context: ResolvedExternalMessageRunContext): Promise<E
     const chat = await getChat(resolvedChatId);
     if (chat && chat.home !== here) {
       // A turn that is working - here, or over there - is not moved from under itself.
-      const working =
-        Boolean(getActiveRun(resolvedChatId) || getLiveRun(resolvedChatId)) ||
-        (isRemoteHome(chat.home) && (await remoteTurnRunning(resolvedChatId, chat.home)) === true);
+      const other = isRemoteHome(chat.home) ? await remoteChatState(resolvedChatId, chat.home) : null;
+      const working = Boolean(getActiveRun(resolvedChatId) || getLiveRun(resolvedChatId)) || other?.running === true;
+      // ... and this side takes the chat over only once it holds what the other side wrote.
+      const behind = !working && other !== null && (await waitForCover(resolvedChatId, other.head, { timeoutMs: switchWaitMs() })).length > 0;
       if (working) {
         reply = t("external.here.busy");
+      } else if (behind) {
+        reply = t("external.here.notSynced");
       } else {
         chat.home = here;
         // The newer copy wins when the two sides' files are joined.
-        chat.updatedAt = new Date().toISOString();
+        chat.updatedAt = stampAfter(chat.updatedAt);
         await saveChat(chat);
         forgetHandOver(resolvedChatId);
         reply = t("external.here.done");

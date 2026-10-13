@@ -1,6 +1,7 @@
 import { getServerTranslator } from "@/i18n/server";
 import { getActiveRun } from "@/lib/pi/active-runs";
-import { coverWaitMs, localNode, remoteEnabled } from "@/lib/remote/config";
+import { coverWaitMs, isRemoteHome, localNode, remoteEnabled } from "@/lib/remote/config";
+import { stampAfter } from "@/lib/remote/stamp";
 import { waitForCover } from "@/lib/remote/head";
 import { whereLabel, remoteFailureMessage } from "@/lib/remote/proxy-turn";
 import {
@@ -75,6 +76,17 @@ export async function prepareRelayedTurn(
   }
 
   const want = input.head ?? null;
+
+  // The sender's copy of the chat is older than this side's, and this side's says the
+  // chat lives somewhere else: the person moved it a moment ago and the sender has not
+  // heard. Running the turn here would undo the move without a word.
+  if (input.chatId && want?.updatedAt) {
+    const mine = await getChat(input.chatId);
+    if (mine && isRemoteHome(mine.home) && Date.parse(mine.updatedAt) > Date.parse(want.updatedAt)) {
+      return refusal(new RemoteError("moved", "This chat was moved in the meantime.", { home: mine.home }), from);
+    }
+  }
+
   if (input.chatId && want) {
     const gaps = await waitForCover(input.chatId, want, { timeoutMs: coverWaitMs(), signal: req.signal });
     if (gaps.length > 0) {
@@ -115,6 +127,6 @@ export async function ensureChatHomeIsHere(chatId: string): Promise<void> {
   const chat = await getChat(chatId);
   if (!chat || chat.home === me) return;
   chat.home = me;
-  chat.updatedAt = new Date().toISOString();
+  chat.updatedAt = stampAfter(chat.updatedAt);
   await saveChat(chat);
 }

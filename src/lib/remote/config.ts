@@ -79,6 +79,20 @@ export function settleWaitMs(): number {
   return seconds("EGGENT_REMOTE_SETTLE_WAIT_SECONDS", 25, 1, 300) * 1000;
 }
 
+/**
+ * How long a move of a chat waits for what the other side wrote to reach this side
+ * before it is refused. A move is something a person does with a button, so this is
+ * shorter than the wait a message gets.
+ */
+export function switchWaitMs(): number {
+  return Math.min(coverWaitMs(), 10_000);
+}
+
+/** How long a stop may take before the other side's stream is let go of. */
+export function stopGraceMs(): number {
+  return seconds("EGGENT_REMOTE_STOP_GRACE_SECONDS", 20, 1, 120) * 1000;
+}
+
 /** How long the other side has to start answering before the request is given up on. */
 export function relayHeadersTimeoutMs(): number {
   return seconds("EGGENT_REMOTE_RELAY_HEADERS_SECONDS", 150, 5, 600) * 1000;

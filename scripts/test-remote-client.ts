@@ -7,6 +7,7 @@
  */
 import assert from "node:assert/strict";
 import { canRunHereInstead, choiceFor, nothingToChoose, parseHandoverFailure, placeChoices } from "../src/lib/remote/client.ts";
+import { stampAfter } from "../src/lib/remote/stamp.ts";
 import type { RemoteDevice, RemoteStatus } from "../src/lib/remote/types.ts";
 
 let failed = 0;
@@ -92,6 +93,15 @@ check("running it here instead is offered for the refusals it fixes, and only th
   for (const code of fixes) assert.equal(canRunHereInstead({ message: "", code }), true, code);
   for (const code of ["not-synced", "busy", "failed", "disabled"] as const) assert.equal(canRunHereInstead({ message: "", code }), false, code);
   assert.equal(canRunHereInstead({ message: "" }), false);
+});
+
+check("a change is stamped later than the one it replaces, even when this machine's clock is behind", () => {
+  const now = Date.now();
+  assert.ok(Math.abs(Date.parse(stampAfter(undefined)) - now) < 2000);
+  assert.ok(Math.abs(Date.parse(stampAfter(new Date(now - 60_000).toISOString())) - now) < 2000);
+  const ahead = new Date(now + 3_600_000).toISOString();
+  assert.equal(Date.parse(stampAfter(ahead)), Date.parse(ahead) + 1);
+  assert.ok(Math.abs(Date.parse(stampAfter("not a date")) - now) < 2000);
 });
 
 console.log(failed ? `\n${failed} failed` : "\nall passed");

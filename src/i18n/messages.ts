@@ -1197,6 +1197,7 @@ const enMessages = {
   "remote.error.notReady": "{where} can't take this chat yet: its chat history isn't shared with the cloud.",
   "remote.error.notSynced": "{where} hasn't received this chat's latest changes yet. Give it a few seconds and send again.",
   "remote.error.busy": "This chat is working right now. Wait for it to finish, or stop it first.",
+  "remote.error.moved": "This chat was moved to this side a moment ago, before this screen had heard of it. Give it a few seconds and send again.",
   "remote.error.timeout": "{where} didn't answer in time.",
   "remote.error.disabled": "Running chats on another side isn't set up here.",
   "remote.error.failed": "The message couldn't be handed to {where}: {reason}",
@@ -1206,6 +1207,7 @@ const enMessages = {
   "external.here.already": "This chat already runs here.",
   "external.here.unavailable": "Running a chat on another side isn't set up here.",
   "external.here.busy": "This chat is working right now, so it cannot be moved. Wait for it to finish, or send \"stop\" (or /reset) first.",
+  "external.here.notSynced": "This chat hasn't fully arrived here yet. Give it a few seconds and send /here again.",
 
   // The control under the composer that says where a chat runs.
   "chat.runPlace.trigger": "Where this chat runs",

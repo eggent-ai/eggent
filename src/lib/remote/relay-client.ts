@@ -29,6 +29,7 @@ const RELAY_CODES = new Set<RemoteFailureCode>([
   "not-synced",
   "busy",
   "not-running",
+  "moved",
   "failed",
   "timeout",
 ]);

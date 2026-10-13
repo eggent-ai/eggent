@@ -32,6 +32,10 @@ export async function POST(
   // of the chat arrives here, which is as long as the screen is willing to wait
   // for it: answering earlier made the answer the person chose to keep vanish
   // and come back when the sync caught up.
-  if (stopped) await whenLiveRunFinished(chatId, relayed ? settleWaitMs() + 5_000 : undefined);
+  //
+  // Also when the turn is already over and only the stored copy is being waited for: the
+  // stop pressed in that moment found nothing to stop, and the screen was reloading the
+  // stale copy the moment it answered.
+  if (stopped || relayed) await whenLiveRunFinished(chatId, relayed ? settleWaitMs() + 5_000 : undefined);
   return Response.json({ stopped });
 }

@@ -149,6 +149,7 @@ export type RemoteFailureCode =
   | "not-synced"
   | "busy"
   | "not-running"
+  | "moved"
   | "failed"
   | "timeout";
 

@@ -1,9 +1,9 @@
 import { createUIMessageStream, createUIMessageStreamResponse, type UIMessage } from "ai";
 import { getServerTranslator } from "@/i18n/server";
 import type { MessageKey, MessageValues } from "@/i18n/messages";
-import { clearActiveRun, joinActiveRun, registerActiveRun, type AbortableRun } from "@/lib/pi/active-runs";
+import { clearActiveRun, getActiveRun, joinActiveRun, registerActiveRun, type AbortableRun } from "@/lib/pi/active-runs";
 import { attachToLiveRun, startLiveRun, type LiveRunChunk } from "@/lib/pi/live-run";
-import { isRemoteHome, localNode, remoteEnabled, settleWaitMs } from "@/lib/remote/config";
+import { isRemoteHome, localNode, remoteEnabled, settleWaitMs, stopGraceMs } from "@/lib/remote/config";
 import { getChat } from "@/lib/storage/chat-store";
 import { readChatHead, waitForCover } from "@/lib/remote/head";
 import { errorFromResponse, listDevices, relayJson, relayRequest } from "@/lib/remote/relay-client";
@@ -161,6 +161,8 @@ export function remoteFailureMessage(error: RemoteError, t: Translator, where: s
       return t("remote.error.notSynced", { where });
     case "busy":
       return t("remote.error.busy");
+    case "moved":
+      return t("remote.error.moved");
     case "timeout":
       return t("remote.error.timeout", { where });
     case "disabled":
@@ -272,6 +274,10 @@ function beginHandedOver(input: {
   const stopRemote = async () => {
     const deadline = Date.now() + (state.opened ? 8000 : 3000);
     for (;;) {
+      // The stop is for this turn. Once the person has sent something else, another
+      // run stands in the registry for the chat, and a stop now would cut that one.
+      const current = getActiveRun(chatId);
+      if (current && current.runId !== runId) return;
       try {
         const answer = await relayJson<{ stopped?: boolean }>(home, {
           method: "POST",
@@ -302,7 +308,7 @@ function beginHandedOver(input: {
     // after a while the stream is let go of and the turn ends here.
     const grace = setTimeout(() => {
       if (state.streaming) abort.abort();
-    }, input.stopGraceMs ?? 20_000);
+    }, input.stopGraceMs ?? stopGraceMs());
     if (typeof grace === "object" && grace && "unref" in grace) grace.unref();
   };
 
@@ -372,7 +378,9 @@ async function driveHandedOver(handover: Handover, input: DriveInput): Promise<D
   let completed = false;
   try {
     try {
-      for await (const data of readSseData(input.upstream)) {
+      // With the handover's own signal: letting go of the request after the answer has begun
+      // cannot cancel a body somebody is reading (it is locked), so the reader is told to stop.
+      for await (const data of readSseData(input.upstream, handover.abort.signal)) {
         if (data === "[DONE]") {
           completed = true;
           break;
@@ -456,21 +464,25 @@ function steerer(turn: HandedOverTurn, interactive: boolean): (text: string) => 
 }
 
 /**
- * Whether a turn is running in this chat on the other side, or null when the
- * other side cannot be asked. For the moments a chat is about to be moved: a
- * side that only looks at its own registry would take a chat away from a turn
- * that is mid-way over there.
+ * What the other side holds of a chat and whether a turn is running there, or
+ * null when the other side cannot be asked.
+ *
+ * For the moments a chat is about to be moved. This side's own registry cannot
+ * see a turn that is mid-way over there, and this side's copy of the chat may be
+ * behind what that side wrote: a move written from a copy that is behind puts
+ * two writers on one conversation.
  */
-export async function remoteTurnRunning(chatId: string, home: ChatHome): Promise<boolean | null> {
+export async function remoteChatState(chatId: string, home: ChatHome): Promise<{ running: boolean; head: ChatHead } | null> {
   if (!remoteEnabled()) return null;
   try {
-    const head = await relayJson<{ running?: unknown }>(home, {
+    const raw = await relayJson<Record<string, unknown>>(home, {
       method: "GET",
       path: `/api/chat/${encodeURIComponent(chatId)}/head`,
       headers: handoverHeaders(home),
       signal: AbortSignal.timeout(8000),
     });
-    return head.running === true;
+    const head = cleanHead(raw);
+    return head ? { running: raw.running === true, head } : null;
   } catch {
     return null;
   }

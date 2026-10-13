@@ -10,7 +10,7 @@ export interface HandoverFailure {
   home?: ChatHome;
 }
 
-const CODES = new Set(["disabled", "offline", "denied", "not-ready", "not-synced", "busy", "not-running", "failed", "timeout"]);
+const CODES = new Set(["disabled", "offline", "denied", "not-ready", "not-synced", "busy", "not-running", "moved", "failed", "timeout"]);
 
 /**
  * A failed send, as a refusal to hand the message over - or null when it was
