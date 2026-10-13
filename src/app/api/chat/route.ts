@@ -137,6 +137,8 @@ export async function POST(req: NextRequest) {
         chatContextMode: contextMode,
         cwd: resolvedCurrentPath,
         ...(relayedFrom ? { remote: { servedFor: relayedFrom } } : {}),
+        // A messenger's turn that was handed over has nobody to answer a question card.
+        ...(relayedFrom && req.headers.get(REMOTE_HEADERS.interactive) === "0" ? { interactive: false } : {}),
       });
 
       return createUIMessageStreamResponse({

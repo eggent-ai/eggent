@@ -408,6 +408,110 @@ try {
     const call = model.callsBy("cloud").at(-1)!;
     assert.ok(!/Where this chat runs/.test(call.system));
   });
+
+  // ------------------------------------------------------------------ 13 (a messenger)
+  const TELEGRAM = { telegram: { chatId: 4242, botToken: "123:fake" } };
+  async function tell(side: Side, session: string, message: string): Promise<{ status: number; body: Record<string, any> }> {
+    const response = await fetch(`${side.url}/api/external/message`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer test-external-token" },
+      body: JSON.stringify({ sessionId: session, message, toolRuntimeData: TELEGRAM }),
+    });
+    return { status: response.status, body: (await response.json()) as Record<string, any> };
+  }
+
+  let tgChat = "";
+  await check("a messenger's chat that lives on the computer is run there, and the reply is what the computer's agent wrote", async () => {
+    const first = await tell(cloud, "tg-a", "first from the messenger");
+    assert.equal(first.status, 200, JSON.stringify(first.body));
+    assert.match(String(first.body.reply), /cloud answered\./);
+    tgChat = first.body.context.activeChatId as string;
+    const flip = await post(cloud, "/api/chat/home", { chatId: tgChat, home: "device:test-mac" });
+    assert.equal(flip.status, 200, await flip.clone().text());
+
+    const deviceCalls = model.callsBy("device").length;
+    const second = await tell(cloud, "tg-a", "second from the messenger");
+    assert.equal(second.status, 200, JSON.stringify(second.body));
+    assert.match(String(second.body.reply), /device answered\./, String(second.body.reply));
+    assert.match(String(second.body.reply), /ctx users=2/, "the computer did not see the earlier exchange");
+    assert.equal(model.callsBy("device").length, deviceCalls + 1);
+    assert.equal(second.body.context.activeChatId, tgChat, "the conversation moved");
+    // The turn was written down by the computer and is here by the time the reply goes out.
+    const stored = messagesOf(cloud, tgChat);
+    assert.equal(stored.filter((message) => message.role === "user").length, 2);
+    assert.ok(stored[stored.length - 1].content.includes("device answered"));
+  });
+
+  await check("a question the agent would ask is not put to anyone: nobody is looking at that screen", async () => {
+    const started = Date.now();
+    const answer = await tell(cloud, "tg-a", "ASK-ME about the colour");
+    assert.equal(answer.status, 200, JSON.stringify(answer.body));
+    assert.match(String(answer.body.reply), /device got the answer/);
+    assert.match(String(answer.body.reply), /No interactive UI/, String(answer.body.reply));
+    assert.ok(Date.now() - started < 25_000, "the turn waited for an answer nobody could give");
+  });
+
+  await check("a messenger's turn streams its progress as it comes, and ends with the whole result", async () => {
+    const response = await fetch(`${cloud.url}/api/external/message`, {
+      method: "POST",
+      headers: { "content-type": "application/json", authorization: "Bearer test-external-token", accept: "text/event-stream" },
+      body: JSON.stringify({ sessionId: "tg-a", message: "SLOW progress please", toolRuntimeData: TELEGRAM }),
+    });
+    assert.match(response.headers.get("content-type") ?? "", /text\/event-stream/);
+    const { readSseData } = await import("../src/lib/remote/sse.ts");
+    const events: Array<{ type: string; delta?: string; at: number }> = [];
+    for await (const data of readSseData(response.body!)) {
+      try {
+        events.push({ ...(JSON.parse(data) as { type: string; delta?: string }), at: Date.now() });
+      } catch {
+        // not an event
+      }
+    }
+    const pieces = events.filter((event) => event.type === "text");
+    assert.ok(pieces.length >= 5, `only ${pieces.length} pieces of text`);
+    assert.ok(pieces.at(-1)!.at - pieces[0].at >= 1000, "the text arrived all at once");
+    assert.equal(events.at(-1)?.type, "done");
+  });
+
+  await check("a computer that is not there is said so to the person, with the way out", async () => {
+    relay.state.deviceOnline = false;
+    try {
+      const answer = await tell(cloud, "tg-a", "anybody home?");
+      assert.equal(answer.status, 500, JSON.stringify(answer.body));
+      assert.match(String(answer.body.error), /isn't available|not available/i);
+      assert.match(String(answer.body.error), /\/here/, "no way out was offered");
+    } finally {
+      relay.state.deviceOnline = true;
+    }
+  });
+
+  await check("/here brings the chat to the side that is reading it, and the next message runs there", async () => {
+    const done = await tell(cloud, "tg-a", "/here");
+    assert.equal(done.status, 200, JSON.stringify(done.body));
+    assert.match(String(done.body.reply), /runs here now/);
+    assert.equal(readChatFile(cloud.root, tgChat)?.home, "cloud");
+    const again = await tell(cloud, "tg-a", "/here");
+    assert.match(String(again.body.reply), /already runs here/);
+    const next = await tell(cloud, "tg-a", "back in the cloud");
+    assert.match(String(next.body.reply), /cloud answered\./);
+  });
+
+  await check("a message sent while the computer is working on a messenger's turn joins that turn, and 'stop' stops it there", async () => {
+    assert.equal((await post(cloud, "/api/chat/home", { chatId: tgChat, home: "device:test-mac" })).status, 200);
+    const callsBefore = model.callsBy("device").length;
+    const slow = tell(cloud, "tg-a", "SLOW telegram turn");
+    await sleep(1200);
+    const steered = await tell(cloud, "tg-a", "also mention the weather");
+    assert.match(String(steered.body.reply), /taking that into account/, JSON.stringify(steered.body));
+    const stopped = await tell(cloud, "tg-a", "stop");
+    assert.match(String(stopped.body.reply), /Stopped/, JSON.stringify(stopped.body));
+    const result = await slow;
+    assert.equal(result.status, 200, JSON.stringify(result.body));
+    assert.equal(result.body.stopped, true, "the stopped turn did not say so");
+    assert.ok(!String(result.body.reply).includes("slow15"), "it ran to the end");
+    assert.equal(model.callsBy("cloud").filter((call) => call.userTexts.join(" ").includes("SLOW telegram turn")).length, 0, "the cloud ran it");
+    assert.ok(model.callsBy("device").length > callsBefore);
+  });
 } finally {
   syncer.stop();
   await cloud.stop();

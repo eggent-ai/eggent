@@ -35,6 +35,13 @@ export interface PiSessionOptions {
    */
   remote?: { servedFor: ChatHome };
   /**
+   * False when nobody is watching the screen of this turn - a messenger asked,
+   * and the turn was handed to another side to run. Questions are then not put
+   * on the stream (nobody could answer them and the turn would wait for ever),
+   * which is how a turn started from a messenger behaves on its own side too.
+   */
+  interactive?: boolean;
+  /**
    * Optional escape hatch for tests/debugging: when true, disables pi-discovered
    * extensions/skills/prompts/themes. By default Eggent allows all global pi packages.
    */

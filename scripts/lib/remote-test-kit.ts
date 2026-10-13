@@ -172,6 +172,7 @@ export async function startSide(options: StartSideOptions): Promise<Side> {
         EGGENT_REMOTE_COVER_WAIT_SECONDS: "6",
         EGGENT_REMOTE_SETTLE_WAIT_SECONDS: "10",
         EGGENT_TURN_WATCHDOG: "off",
+        EXTERNAL_API_TOKEN: "test-external-token",
         EGGENT_TEST_STUBS: "i18n/server",
         ...(options.env ?? {}),
       } as unknown as NodeJS.ProcessEnv,

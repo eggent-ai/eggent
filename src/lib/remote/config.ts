@@ -81,5 +81,5 @@ export function settleWaitMs(): number {
 
 /** How long the other side has to start answering before the request is given up on. */
 export function relayHeadersTimeoutMs(): number {
-  return seconds("EGGENT_REMOTE_RELAY_HEADERS_SECONDS", 90, 5, 600) * 1000;
+  return seconds("EGGENT_REMOTE_RELAY_HEADERS_SECONDS", 150, 5, 600) * 1000;
 }

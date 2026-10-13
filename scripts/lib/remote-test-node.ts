@@ -52,6 +52,7 @@ const activeRuns = await import("../../src/app/api/chat/active-runs/route.ts");
 const home = await import("../../src/app/api/chat/home/route.ts");
 const status = await import("../../src/app/api/remote/status/route.ts");
 const respond = await import("../../src/app/api/pi-runs/[runId]/interactions/[interactionId]/respond/route.ts");
+const external = await import("../../src/app/api/external/message/route.ts");
 
 type Handler = (req: InstanceType<typeof NextRequest>, ctx: { params: Promise<Record<string, string>> }) => Promise<Response> | Response;
 
@@ -81,6 +82,7 @@ const routes: Route[] = [
   route("GET", "/api/chat/:chatId/stream", stream.GET),
   route("GET", "/api/remote/status", status.GET),
   route("POST", "/api/pi-runs/:runId/interactions/:interactionId/respond", respond.POST),
+  route("POST", "/api/external/message", external.POST),
 ];
 
 function readBody(req: http.IncomingMessage): Promise<Buffer> {

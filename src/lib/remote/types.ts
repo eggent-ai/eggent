@@ -92,6 +92,8 @@ export const REMOTE_HEADERS = {
   home: "x-eggent-home",
   /** The chat's title, URI-encoded, for the question a computer asks before it runs it. */
   title: "x-eggent-chat-title",
+  /** "0" when nobody is looking at the screen of this turn (a messenger asked): a question cannot be put to anyone. */
+  interactive: "x-eggent-interactive",
 } as const;
 
 export type RemoteFailureCode =

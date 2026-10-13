@@ -1,5 +1,5 @@
 import { joinActiveRun, runPiAgentText } from "@/lib/pi/chat-runner";
-import { createChat, getChat } from "@/lib/storage/chat-store";
+import { createChat, getChat, saveChat } from "@/lib/storage/chat-store";
 import { saveChatFile } from "@/lib/storage/chat-files-store";
 import { getAllProjects, getProject } from "@/lib/storage/project-store";
 import { transcribeVoiceNote } from "@/lib/speech/voice-note";
@@ -13,6 +13,7 @@ import {
   type ExternalSession,
 } from "@/lib/storage/external-session-store";
 import { getServerTranslator } from "@/i18n/server";
+import { localNode, remoteEnabled } from "@/lib/remote/config";
 import type { MessageKey } from "@/i18n/messages";
 import type { AgentProgressEvent } from "@/lib/pi/types";
 import type { ChatContextMode } from "@/lib/types";
@@ -504,7 +505,17 @@ type ChatCommand = { kind: "list" } | { kind: "open"; shortId: string };
  * button is: instant, free, and not dependent on the model choosing a tool.
  */
 export function isChatCommand(message: string): boolean {
-  return parseChatCommand(message) !== null || isResetCommand(message) || isFilesCommand(message);
+  return parseChatCommand(message) !== null || isResetCommand(message) || isFilesCommand(message) || isHereCommand(message);
+}
+
+/**
+ * `/here`: run this chat on the side that is reading it. A chat that was
+ * switched to another side stops answering when that side goes away, and a
+ * messenger has no switch to put it back with.
+ */
+export function isHereCommand(message: string): boolean {
+  const first = message.trim().split(/\s+/, 1)[0]?.toLowerCase() ?? "";
+  return first.split("@", 1)[0] === "/here";
 }
 
 /**
@@ -636,6 +647,40 @@ async function isExitProjectMessage(message: string, via: string | undefined): P
   const prefix = t("telegram.bot.exitProject", { project: "" }).trim();
   if (!prefix) return false;
   return message.trim().toLowerCase().startsWith(prefix.toLowerCase());
+}
+
+async function answerHere(context: ResolvedExternalMessageRunContext): Promise<ExternalMessageResult> {
+  const { session, previousChatId, resolvedProjectId, currentPath, resolvedChatId } = context;
+  const t = await getServerTranslator();
+  const here = remoteEnabled() ? localNode() : null;
+  let reply = t("external.here.unavailable");
+  if (here) {
+    const chat = await getChat(resolvedChatId);
+    if (chat && chat.home !== here) {
+      chat.home = here;
+      // The newer copy wins when the two sides' files are joined.
+      chat.updatedAt = new Date().toISOString();
+      await saveChat(chat);
+      reply = t("external.here.done");
+    } else {
+      reply = t("external.here.already");
+    }
+  }
+  return {
+    success: true,
+    sessionId: session.id,
+    reply,
+    context: {
+      activeProjectId: resolvedProjectId || null,
+      activeProjectName: null,
+      activeChatId: resolvedChatId,
+      activeChatTitle: await chatTitle(resolvedChatId),
+      currentPath: currentPath || "",
+    },
+    chatChanged: Boolean(previousChatId) && resolvedChatId !== previousChatId,
+    switchedProject: { toProjectId: null, toProjectName: null },
+    createdProject: null,
+  };
 }
 
 async function answerReset(context: ResolvedExternalMessageRunContext): Promise<ExternalMessageResult> {
@@ -818,6 +863,7 @@ export async function handleExternalMessage(
   if (chatCommand) return answerChatCommand(chatCommand, runContext);
   if (isTelegramMessage(input) && !input.publicMode && isResetCommand(message)) return answerReset(runContext);
   if (isTelegramMessage(input) && !input.publicMode && isFilesCommand(message)) return answerFiles(runContext, input);
+  if (isTelegramMessage(input) && !input.publicMode && isHereCommand(message)) return answerHere(runContext);
 
   // A message sent while this chat is already working belongs to that run, not
   // to a second agent of its own. Over a messenger there is no stop button, so
@@ -879,6 +925,9 @@ export async function handleExternalMessage(
     // shell, no writing, no web, nothing outside the project. See public-share.ts.
     publicShare: input.publicMode === true,
     onProgress: input.onProgress,
+    // A chat that lives on the other side of a paired workspace and computer is
+    // run there and read back here, the same as from the browser.
+    allowHandover: input.publicMode !== true,
   });
 
   // A Telegram answer cannot carry a file the way the browser's does, so it says

@@ -3,7 +3,8 @@ import { getServerTranslator } from "@/i18n/server";
 import type { MessageKey, MessageValues } from "@/i18n/messages";
 import { clearActiveRun, joinActiveRun, registerActiveRun, type AbortableRun } from "@/lib/pi/active-runs";
 import { attachToLiveRun, startLiveRun, type LiveRunChunk } from "@/lib/pi/live-run";
-import { localNode, settleWaitMs } from "@/lib/remote/config";
+import { isRemoteHome, localNode, remoteEnabled, settleWaitMs } from "@/lib/remote/config";
+import { getChat } from "@/lib/storage/chat-store";
 import { readChatHead, waitForCover } from "@/lib/remote/head";
 import { errorFromResponse, listDevices, relayJson, relayRequest } from "@/lib/remote/relay-client";
 import { readSseData } from "@/lib/remote/sse";
@@ -120,6 +121,13 @@ export function recallHandOver(chatId: string): ChatHome | null {
   return entry.home;
 }
 
+/** Where a chat lives when that is not here and this install can reach it; null in every other case. */
+export async function storedRemoteHome(chatId: string): Promise<ChatHome | null> {
+  if (!remoteEnabled()) return null;
+  const chat = await getChat(chatId);
+  return chat && isRemoteHome(chat.home) ? chat.home : null;
+}
+
 /** What the person calls the other side. */
 export async function whereLabel(home: ChatHome, t: Translator): Promise<string> {
   if (home === "cloud") return t("remote.where.cloud");
@@ -214,45 +222,39 @@ function noticeStream(text: string, chatId: string): Response {
 }
 
 /**
- * Run a turn on the other side and relay it.
+ * The part of a handed-over turn that is the same whoever asked: the run is
+ * registered like any other (so stop, steer and a second tab find it), the
+ * other side's stream is copied into this side's replayable buffer as it
+ * arrives, and the turn is not over until the stored chat has come back.
  *
- * Returns before the turn is over: the response is the stream. A request that
- * could not be handed over at all is answered here, as JSON, before any stream
- * exists, so the screen can offer the person what to do instead.
+ * `onChunk` is one more reader of the buffer, for the caller that wants to see
+ * the chunks go by - the browser's response, or a messenger collecting text.
  */
-export async function runHandedOverTurn(turn: HandedOverTurn): Promise<Response> {
-  const { chatId, home } = turn;
-  rememberHandOver(chatId, home);
+interface DriveInput {
+  chatId: string;
+  home: ChatHome;
+  projectId?: string;
+  surface: "web" | "external";
+  upstream: ReadableStream<Uint8Array>;
+  /** Cancels the request whose answer is `upstream`. */
+  abortUpstream: () => void;
+  steer: (text: string) => Promise<void>;
+  onChunk: (chunk: LiveRunChunk) => void;
+  /** What a stream that ends without being finished is told as. */
+  lostText: string;
+  /** How long a stop may take before the other side's stream is let go of. */
+  stopGraceMs?: number;
+}
 
-  // A message that arrives while this chat already has a turn going is for that
-  // turn: the same rule as on the side that runs it, and the handed-over run is
-  // registered like any other so the rule finds it.
-  const joined = await joinActiveRun(chatId, turn.message);
-  if (joined) {
-    const t = await getServerTranslator();
-    return noticeStream(joined === "stopped" ? t("external.run.stopped") : t("external.run.steered"), chatId);
-  }
+interface DriveResult {
+  completed: boolean;
+  stopRequested: boolean;
+}
 
-  const head = await readChatHead(chatId);
-  const headers = handoverHeaders(home, head, turn.chatTitle);
-
-  let upstream: Response;
-  try {
-    upstream = await relayRequest(home, { method: "POST", path: "/api/chat", headers, body: forwardBody(turn, turn.message) });
-    if (!upstream.ok || !upstream.body) throw await errorFromResponse(upstream, home);
-  } catch (error) {
-    return remoteFailureResponse(error, home);
-  }
-
-  const t = await getServerTranslator();
-  const where = await whereLabel(home, t);
+async function driveHandedOver(input: DriveInput): Promise<DriveResult> {
+  const { chatId, home } = input;
   const runId = crypto.randomUUID();
-  const upstreamBody = upstream.body;
-
-  const state = {
-    streaming: true,
-    stopRequested: false,
-  };
+  const state = { streaming: true, stopRequested: false };
 
   // The other side registers its run a moment after it receives the request, so
   // a stop that is asked for straight away can arrive before there is anything
@@ -277,82 +279,270 @@ export async function runHandedOverTurn(turn: HandedOverTurn): Promise<Response>
     }
   };
 
+  const requestStop = () => {
+    if (state.stopRequested) return;
+    state.stopRequested = true;
+    void stopRemote();
+    // A stop the other side does not act on must not hold this side for ever:
+    // after a while the stream is let go of and the turn ends here.
+    const grace = setTimeout(() => {
+      if (state.streaming) input.abortUpstream();
+    }, input.stopGraceMs ?? 20_000);
+    if (typeof grace === "object" && grace && "unref" in grace) grace.unref();
+  };
+
   const run: AbortableRun = {
     get isStreaming() {
       return state.streaming;
     },
     async abort() {
-      state.stopRequested = true;
-      await stopRemote();
+      requestStop();
     },
-    async steer(text: string) {
-      const response = await relayRequest(home, {
-        method: "POST",
-        path: "/api/chat",
-        headers: handoverHeaders(home, null, turn.chatTitle),
-        body: forwardBody(turn, text),
-      });
-      // The answer is only the receiving side's "got it"; the turn it joined is
-      // the one this side is already relaying.
-      if (!response.ok) throw await errorFromResponse(response, home);
-      void response.body?.cancel().catch(() => undefined);
-    },
+    steer: input.steer,
   };
+
+  const live = startLiveRun({ chatId, runId, projectId: input.projectId ?? null, surface: input.surface });
+  registerActiveRun(chatId, { session: run, runId, surface: input.surface, requestStop });
+  attachToLiveRun(chatId, { onChunk: input.onChunk, onFinish: () => {} });
+
+  let completed = false;
+  try {
+    try {
+      for await (const data of readSseData(input.upstream)) {
+        if (data === "[DONE]") {
+          completed = true;
+          break;
+        }
+        let chunk: LiveRunChunk;
+        try {
+          chunk = JSON.parse(data) as LiveRunChunk;
+        } catch {
+          continue;
+        }
+        rememberQuestion(chunk, home);
+        live.push(chunk);
+      }
+    } catch (error) {
+      if (!state.stopRequested) console.warn(`[remote] the stream from ${home} broke:`, error instanceof Error ? error.message : error);
+    } finally {
+      state.streaming = false;
+      clearActiveRun(chatId, runId);
+    }
+
+    if (completed) {
+      await settleLocalCopy(chatId, home);
+    } else if (!state.stopRequested) {
+      // The turn belongs to the chat, not to the connection, so it may well
+      // be running still. Say what is known; the answer arrives with the sync.
+      live.push({ type: "error", errorText: input.lostText });
+    }
+  } finally {
+    live.finish();
+    rememberHandOver(chatId, home);
+  }
+  return { completed, stopRequested: state.stopRequested };
+}
+
+/** What it takes to start a handed-over request, shared by the browser's turn and a messenger's. */
+async function openHandedOver(
+  turn: HandedOverTurn,
+  options: { interactive: boolean; message: string }
+): Promise<{ upstream: Response; abort: AbortController }> {
+  const head = await readChatHead(turn.chatId);
+  const headers = { ...handoverHeaders(turn.home, head, turn.chatTitle), ...(options.interactive ? {} : { [REMOTE_HEADERS.interactive]: "0" }) };
+  // Its own signal: letting go of the other side's stream has to be possible
+  // without the caller's request being the thing that ends.
+  const abort = new AbortController();
+  const upstream = await relayRequest(turn.home, {
+    method: "POST",
+    path: "/api/chat",
+    headers,
+    body: forwardBody(turn, options.message),
+    signal: abort.signal,
+  });
+  if (!upstream.ok || !upstream.body) throw await errorFromResponse(upstream, turn.home);
+  return { upstream, abort };
+}
+
+function steerer(turn: HandedOverTurn, interactive: boolean): (text: string) => Promise<void> {
+  return async (text: string) => {
+    const response = await relayRequest(turn.home, {
+      method: "POST",
+      path: "/api/chat",
+      headers: { ...handoverHeaders(turn.home, null, turn.chatTitle), ...(interactive ? {} : { [REMOTE_HEADERS.interactive]: "0" }) },
+      body: forwardBody(turn, text),
+    });
+    // The answer is only the receiving side's "got it"; the turn it joined is
+    // the one this side is already relaying.
+    if (!response.ok) throw await errorFromResponse(response, turn.home);
+    void response.body?.cancel().catch(() => undefined);
+  };
+}
+
+/**
+ * Run a turn on the other side and relay it.
+ *
+ * Returns before the turn is over: the response is the stream. A request that
+ * could not be handed over at all is answered here, as JSON, before any stream
+ * exists, so the screen can offer the person what to do instead.
+ */
+export async function runHandedOverTurn(turn: HandedOverTurn): Promise<Response> {
+  const { chatId, home } = turn;
+  rememberHandOver(chatId, home);
+
+  // A message that arrives while this chat already has a turn going is for that
+  // turn: the same rule as on the side that runs it, and the handed-over run is
+  // registered like any other so the rule finds it.
+  const joined = await joinActiveRun(chatId, turn.message);
+  if (joined) {
+    const t = await getServerTranslator();
+    return noticeStream(joined === "stopped" ? t("external.run.stopped") : t("external.run.steered"), chatId);
+  }
+
+  let opened: Awaited<ReturnType<typeof openHandedOver>>;
+  try {
+    opened = await openHandedOver(turn, { interactive: true, message: turn.message });
+  } catch (error) {
+    return remoteFailureResponse(error, home);
+  }
+
+  const t = await getServerTranslator();
+  const where = await whereLabel(home, t);
+  const upstreamBody = opened.upstream.body as ReadableStream<Uint8Array>;
 
   const stream = createUIMessageStream<UIMessage>({
     async execute({ writer }) {
-      const live = startLiveRun({ chatId, runId, projectId: turn.projectId ?? null, surface: "web" });
-      registerActiveRun(chatId, {
-        session: run,
-        runId,
+      await driveHandedOver({
+        chatId,
+        home,
+        projectId: turn.projectId,
         surface: "web",
-        requestStop: () => {
-          state.stopRequested = true;
-          void stopRemote();
-        },
+        upstream: upstreamBody,
+        abortUpstream: () => opened.abort.abort(),
+        steer: steerer(turn, true),
+        onChunk: (chunk) => writer.write(chunk),
+        lostText: t("remote.error.lost", { where }),
       });
-      attachToLiveRun(chatId, { onChunk: (chunk) => writer.write(chunk), onFinish: () => {} });
-
-      let completed = false;
-      try {
-        try {
-          for await (const data of readSseData(upstreamBody)) {
-            if (data === "[DONE]") {
-              completed = true;
-              break;
-            }
-            let chunk: LiveRunChunk;
-            try {
-              chunk = JSON.parse(data) as LiveRunChunk;
-            } catch {
-              continue;
-            }
-            rememberQuestion(chunk, home);
-            live.push(chunk);
-          }
-        } catch (error) {
-          console.warn(`[remote] the stream from ${home} broke:`, error instanceof Error ? error.message : error);
-        } finally {
-          state.streaming = false;
-          clearActiveRun(chatId, runId);
-        }
-
-        if (completed) {
-          await settleLocalCopy(chatId, home);
-        } else {
-          // The turn belongs to the chat, not to the connection, so it may well
-          // be running still. Say what is known; the answer arrives with the sync.
-          live.push({ type: "error", errorText: t("remote.error.lost", { where }) });
-        }
-      } finally {
-        live.finish();
-        rememberHandOver(chatId, home);
-      }
     },
     onError: (error) => (error instanceof Error ? error.message : String(error)) || "remote turn failed",
   });
 
   return createUIMessageStreamResponse({ stream, headers: { "X-Chat-Id": chatId } });
+}
+
+/** What a messenger's turn that ran on the other side comes to. */
+export interface HandedOverTextResult {
+  /** Everything the model wrote, in order. */
+  text: string;
+  /** What it wrote last: the answer, without the narration before it. */
+  finalText: string;
+  stopped: boolean;
+}
+
+/** A progress report, in the shape a messenger's draft is built from. */
+export type HandedOverProgress =
+  | { type: "text"; delta: string }
+  | { type: "tool"; name: string; phase: "start" | "end" }
+  | { type: "helpers"; running: number; total: number };
+
+/**
+ * Run a messenger's turn on the other side.
+ *
+ * The other side runs it as it runs any turn and streams it the way it streams
+ * to a screen; this reads that stream into what a messenger needs - the text, the
+ * answer, what is happening - and returns when the turn is over and its chat is
+ * here. It throws, with a reason fit to be said to the person, when the turn
+ * could not be handed over or the other side's turn failed.
+ */
+export async function runHandedOverText(
+  turn: HandedOverTurn,
+  onProgress?: (event: HandedOverProgress) => void
+): Promise<HandedOverTextResult> {
+  const { chatId, home } = turn;
+  rememberHandOver(chatId, home);
+  const t = await getServerTranslator();
+
+  let opened: Awaited<ReturnType<typeof openHandedOver>>;
+  try {
+    opened = await openHandedOver(turn, { interactive: false, message: turn.message });
+  } catch (error) {
+    const failure = error instanceof RemoteError ? error : new RemoteError("failed", error instanceof Error ? error.message : String(error), { home });
+    const where = await whereLabel(home, t);
+    console.warn(`[remote] could not hand the turn to ${home}: ${failure.code} - ${failure.message}`);
+    // The one way out a messenger has: bring the chat back to the side that is reading it.
+    const hint = ["offline", "denied", "not-ready", "timeout"].includes(failure.code) ? ` ${t("remote.error.hintHere")}` : "";
+    throw new Error(`${remoteFailureMessage(failure, t, where)}${hint}`);
+  }
+
+  const where = await whereLabel(home, t);
+  let text = "";
+  let messageText = "";
+  let finalText = "";
+  let failure: string | null = null;
+  const toolNames = new Map<string, string>();
+  const helperStates = new Map<string, string>();
+
+  const report = (event: HandedOverProgress) => {
+    try {
+      onProgress?.(event);
+    } catch (error) {
+      console.warn("A progress listener failed:", error);
+    }
+  };
+
+  const result = await driveHandedOver({
+    chatId,
+    home,
+    projectId: turn.projectId,
+    surface: "external",
+    upstream: opened.upstream.body as ReadableStream<Uint8Array>,
+    abortUpstream: () => opened.abort.abort(),
+    steer: steerer(turn, false),
+    lostText: t("remote.error.lost", { where }),
+    onChunk: (chunk) => {
+      const part = chunk as { type?: string; id?: string; delta?: string; toolCallId?: string; toolName?: string; errorText?: string; data?: { id?: string; status?: string } };
+      switch (part.type) {
+        case "text-start":
+          messageText = "";
+          break;
+        case "text-delta":
+          if (typeof part.delta === "string") {
+            text += part.delta;
+            messageText += part.delta;
+            report({ type: "text", delta: part.delta });
+          }
+          break;
+        case "text-end":
+          if (messageText.trim()) finalText = messageText;
+          break;
+        case "tool-input-available":
+          if (part.toolCallId && part.toolName) {
+            toolNames.set(part.toolCallId, part.toolName);
+            report({ type: "tool", name: part.toolName, phase: "start" });
+          }
+          break;
+        case "tool-output-available":
+        case "tool-output-error":
+          if (part.toolCallId) report({ type: "tool", name: toolNames.get(part.toolCallId) ?? "tool", phase: "end" });
+          break;
+        case "data-piSubagent":
+          if (part.data?.id) {
+            helperStates.set(part.data.id, String(part.data.status ?? ""));
+            const running = [...helperStates.values()].filter((status) => status === "running").length;
+            report({ type: "helpers", running, total: helperStates.size });
+          }
+          break;
+        case "error":
+          failure = part.errorText ?? "The turn failed.";
+          break;
+        default:
+          break;
+      }
+    },
+  });
+
+  if (failure && !result.stopRequested) throw new Error(failure);
+  return { text, finalText, stopped: result.stopRequested };
 }
 
 /**

@@ -1200,6 +1200,10 @@ const enMessages = {
   "remote.error.disabled": "Running chats on another side isn't set up here.",
   "remote.error.failed": "The message couldn't be handed to {where}: {reason}",
   "remote.error.lost": "The connection to {where} was lost. The turn may still be running there; its answer will appear in this chat when it syncs.",
+  "remote.error.hintHere": "Send /here to run this chat on this side instead.",
+  "external.here.done": "Done. This chat runs here now.",
+  "external.here.already": "This chat already runs here.",
+  "external.here.unavailable": "Running a chat on another side isn't set up here.",
 
   // The control under the composer that says where a chat runs.
   "chat.runPlace.trigger": "Where this chat runs",

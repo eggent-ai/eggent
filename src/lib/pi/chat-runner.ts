@@ -21,6 +21,8 @@ import type { AgentProgressEvent, PiChatRunOptions, PiRuntimeStats, PiToolRecord
 import { getChat, saveChat } from "@/lib/storage/chat-store";
 import { clearUsageSnapshotCache } from "@/lib/usage/usage-provider";
 import type { ChatMessage, ChatMessagePart } from "@/lib/types";
+import type { ChatHome } from "@/lib/remote/types";
+import { runHandedOverText, storedRemoteHome } from "@/lib/remote/proxy-turn";
 import type { PiPendingInteraction } from "@/lib/pi/interaction-types";
 import {
   checkpointToolMessageId,
@@ -695,7 +697,14 @@ function logStall(chatId: string, stalled: StalledTurn): void {
   console.warn(`[watchdog] chat ${chatId.slice(0, 8)} stalled in ${stalled.phase} after ${Math.round(stalled.silentMs / 1000)}s`);
 }
 
-type PiAgentTextOptions = PiChatRunOptions & {
+export type PiAgentTextOptions = PiChatRunOptions & {
+  /**
+   * The chat may live on the other side of a paired workspace and computer; when
+   * it does, the turn is handed there instead of run here. Set by the messenger
+   * handlers and by nobody else - a scheduled run, a project visit, a public
+   * link and the learning pass all run where they are.
+   */
+  allowHandover?: boolean;
   runtimeData?: Record<string, unknown>;
   toolRuntimeData?: Record<string, unknown>;
   /** Told about each piece of the answer as it arrives; see AgentProgressEvent. */
@@ -710,7 +719,42 @@ type PiAgentTextOptions = PiChatRunOptions & {
   outcome?: { stopped?: boolean; finalText?: string; files?: ProducedGroup[]; filesSent?: boolean };
 };
 
+async function handOverText(options: PiAgentTextOptions, home: ChatHome): Promise<string> {
+  // The text the person wrote, and the context the messenger adds to it. The
+  // other side's agent reads exactly what this side's would have.
+  const runtimeSuffix = options.runtimeData ? `\n\nRuntime data:\n${JSON.stringify(options.runtimeData, null, 2)}` : "";
+  const chat = await getChat(options.chatId);
+  const result = await runHandedOverText(
+    {
+      chatId: options.chatId,
+      home,
+      message: `${options.userMessage}${runtimeSuffix}`,
+      projectId: options.projectId,
+      contextMode: options.chatContextMode,
+      currentPath: options.cwd,
+      chatTitle: chat?.title,
+    },
+    (event) => {
+      if (!options.onProgress) return;
+      try {
+        options.onProgress(event);
+      } catch (error) {
+        console.warn("A progress listener failed:", error);
+      }
+    }
+  );
+  if (options.outcome) {
+    if (result.stopped) options.outcome.stopped = true;
+    options.outcome.finalText = result.finalText;
+  }
+  return result.text;
+}
+
 export async function runPiAgentText(options: PiAgentTextOptions): Promise<string> {
+  if (options.allowHandover && !options.visit && !options.publicShare) {
+    const home = await storedRemoteHome(options.chatId);
+    if (home) return handOverText(options, home);
+  }
   const scope: TurnSetupScope = {};
   try {
     return await runPiAgentTextTurn(options, scope);
@@ -1256,7 +1300,8 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
       const promptFor = promptForMessage(options.userMessage, "", mention);
 
       // A question the agent asks is put on this response's stream, and saved with the turn so far.
-      const onPiInteraction = (interaction: PiPendingInteraction) => {
+      // A turn nobody is watching - a messenger handed it over - has no one to put one to.
+      const onPiInteraction = options.interactive === false ? undefined : (interaction: PiPendingInteraction) => {
         safeWrite({
           type: "data-piInteraction",
           id: `pi-interaction-${interaction.id}`,
