@@ -674,6 +674,29 @@ try {
     assert.match((await readChatStream(plain)).text, /cloud answered\./);
   });
 
+  await check("a request that names this side as the chat's home is run here, even though this side handed the chat over a moment ago", async () => {
+    const chat = crypto.randomUUID();
+    syncer.pause();
+    try {
+      // A new chat handed to the cloud from the computer; its file has not come back yet.
+      const started = await readChatStream(await post(device, "/api/chat", { chatId: chat, message: "start it in the cloud", home: "cloud", projectId: "none" }));
+      assert.match(started.text, /cloud answered\./);
+      assert.equal(readChatFile(device.root, chat), null);
+      const calls = model.callsBy("device").length;
+      const here = await post(device, "/api/chat", { chatId: chat, message: "no - here", home: "device:test-mac", projectId: "none" });
+      assert.equal(here.status, 200);
+      assert.match((await readChatStream(here)).text, /device answered\./, "it was handed to the cloud again on the strength of the memory of the first message");
+      assert.equal(model.callsBy("device").length, calls + 1);
+    } finally {
+      // Two sides started the same chat on purpose; nothing about it is for the sync to join.
+      for (const side of [cloud, device]) {
+        fs.rmSync(path.join(side.root, "data", "chats", `${chat}.json`), { force: true });
+        for (const file of sessionFilesOf(side.root, chat)) fs.rmSync(path.join(side.root, "data", "pi-sessions", file), { force: true });
+      }
+      syncer.resume();
+    }
+  });
+
   await check("pressing stop while the other side is still getting ready stops the turn before it starts", async () => {
     const chat = crypto.randomUUID();
     await readChatStream(await post(cloud, "/api/chat", { chatId: chat, message: "plain cloud turn" }));
