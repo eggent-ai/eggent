@@ -5,6 +5,7 @@
 import type { LearnedNotice } from "@/lib/learning/types";
 import type { ProducedGroup } from "@/lib/files/produced";
 import type { PiRuntimeStats, SubagentSnapshot } from "@/lib/pi/types";
+import type { ChatHome } from "@/lib/remote/types";
 
 // --- Settings ---
 
@@ -143,6 +144,12 @@ export interface Chat {
   scheduledRun?: ScheduledRunInfo;
   /** Set on a chat a project was asked to work in, from another chat: see eggent_ask_project. */
   visit?: ProjectVisitInfo;
+  /**
+   * Where this chat runs when it should not simply run wherever it is typed in:
+   * the workspace or one paired computer. Absent on every chat that has never
+   * been switched, and then it runs where the message was written.
+   */
+  home?: ChatHome;
   messages: ChatMessage[];
   createdAt: string;
   updatedAt: string;
@@ -184,6 +191,8 @@ export interface ChatListItem {
   scheduledJob?: string;
   /** The title of the chat that asked this project, when this chat is a visit. */
   visitFrom?: string;
+  /** Where the chat runs, when it has been switched to a place of its own. */
+  home?: ChatHome;
   createdAt: string;
   updatedAt: string;
   messageCount: number;

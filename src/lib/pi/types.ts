@@ -1,5 +1,6 @@
 import type { PiPendingInteraction } from "@/lib/pi/interaction-types";
 import type { ChatContextMode } from "@/lib/types";
+import type { ChatHome } from "@/lib/remote/types";
 
 export interface PiSessionOptions {
   cwd?: string;
@@ -28,6 +29,11 @@ export interface PiSessionOptions {
    * sends to Telegram is attributed to the chat that asked.
    */
   visit?: { parentChatId: string; parentTitle?: string };
+  /**
+   * The other side of a paired workspace and computer handed this turn over and
+   * is relaying its stream; see lib/remote. The agent is told where it runs.
+   */
+  remote?: { servedFor: ChatHome };
   /**
    * Optional escape hatch for tests/debugging: when true, disables pi-discovered
    * extensions/skills/prompts/themes. By default Eggent allows all global pi packages.

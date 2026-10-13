@@ -1,6 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
 import type { Chat, ChatContextMode, ChatListItem } from "@/lib/types";
+import type { ChatHome } from "@/lib/remote/types";
 import { publishUiSyncEvent } from "@/lib/realtime/event-bus";
 import { withoutInlineImages } from "@/lib/storage/chat-media";
 import { withoutSecrets } from "@/lib/secrets/mask";
@@ -29,6 +30,7 @@ export async function getAllChats(): Promise<ChatListItem[]> {
         contextMode: chat.contextMode,
         ...(chat.scheduledRun?.jobName ? { scheduledJob: chat.scheduledRun.jobName } : {}),
         ...(chat.visit ? { visitFrom: chat.visit.fromTitle || chat.visit.fromChatId } : {}),
+        ...(chat.home ? { home: chat.home } : {}),
         createdAt: chat.createdAt,
         updatedAt: chat.updatedAt,
         messageCount: chat.messages.length,
@@ -69,6 +71,19 @@ export async function getChat(chatId: string): Promise<Chat | null> {
       knownClean.set(chatId, identity);
     }
     return masked;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * What a chat's file is right now, as a string that changes when the file does.
+ * For code that waits for a chat to change and should not read it for nothing.
+ */
+export async function chatFileIdentity(chatId: string): Promise<string | null> {
+  try {
+    const stat = await fs.stat(path.join(CHATS_DIR, `${chatId}.json`));
+    return `${stat.mtimeMs}:${stat.size}`;
   } catch {
     return null;
   }
@@ -135,7 +150,8 @@ export async function createChat(
   id: string,
   title: string,
   projectId?: string,
-  contextMode?: ChatContextMode
+  contextMode?: ChatContextMode,
+  home?: ChatHome
 ): Promise<Chat> {
   const now = new Date().toISOString();
   const chat: Chat = {
@@ -145,6 +161,7 @@ export async function createChat(
     // Stored only when it is not the default, so nothing changes on disk for
     // the chats that every other surface creates.
     ...(contextMode && contextMode !== "full" ? { contextMode } : {}),
+    ...(home ? { home } : {}),
     messages: [],
     createdAt: now,
     updatedAt: now,

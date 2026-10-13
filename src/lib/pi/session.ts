@@ -23,6 +23,7 @@ import { isScheduledRunSessionId, SCHEDULED_RUN_REFUSAL } from "@/lib/pi/schedul
 import { bindSubagentMonitor, createSubagentPolicyExtension, MAX_PARALLEL_SUBAGENTS, SubagentMonitor, VISIT_MAX_PARALLEL_SUBAGENTS } from "@/lib/pi/subagents";
 import type { PiPendingInteraction } from "@/lib/pi/interaction-types";
 import type { PiSessionOptions } from "@/lib/pi/types";
+import type { ChatHome } from "@/lib/remote/types";
 import { getChatFiles } from "@/lib/storage/chat-files-store";
 import type { ChatContextMode, ChatFile, ProjectSkillMetadata } from "@/lib/types";
 import {
@@ -173,6 +174,24 @@ function loadConfiguredMcpServerIds(cwd: string): string[] {
   }
 }
 
+/**
+ * Which machine the agent is on, for a turn the other side handed over.
+ *
+ * Without it the agent describes the wrong place: it is asked about files while
+ * a computer's folder and a workspace's folder look alike from inside, and it
+ * answers as though it ran wherever the deployment text says it does.
+ */
+function describeHandedOverRun(servedFor: ChatHome): string {
+  const platform = process.platform === "darwin" ? "macOS" : process.platform === "win32" ? "Windows" : "Linux";
+  const here = servedFor === "cloud" ? `the person's own computer (${platform})` : "the person's cloud workspace";
+  const there = servedFor === "cloud" ? "their cloud workspace" : "their computer";
+  return [
+    "",
+    "## Where this chat runs",
+    `This chat was handed over from ${there} and runs on ${here}. The working directory is this side's copy of the project: the two sides keep their files in step in the background, so a change made here reaches the other side after a short delay.`,
+  ].join("\n");
+}
+
 function buildEggentProjectContext(options: {
   projectId?: string;
   projectName?: string;
@@ -202,6 +221,8 @@ function buildEggentProjectContext(options: {
   budgetLevel?: "ok" | "half" | "low";
   /** This run is a project doing work for another chat. */
   visit?: { parentChatId: string; parentTitle?: string };
+  /** The other side handed this turn over; says where it is running so the agent does not guess. */
+  remote?: { servedFor: ChatHome };
 }): string {
   // Ordering here is load-bearing, not cosmetic.
   //
@@ -346,6 +367,7 @@ function buildEggentProjectContext(options: {
     `Today: ${new Date().toISOString().slice(0, 10)} (UTC). Count "yesterday", "last week" and any other relative date from this, not from memory. Run \`date\` if you need the time of day.`,
     options.projectId ? `Project id: ${options.projectId}` : "Project id: orchestrator",
     options.projectName ? `Project name: ${options.projectName}` : "",
+    options.remote ? describeHandedOverRun(options.remote.servedFor) : "",
     options.projectDescription ? `Project description: ${options.projectDescription}` : "",
     options.visit
       ? [
@@ -677,6 +699,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     deploymentContext: deploymentContext(),
     budgetLevel: await currentBudgetLevel(),
     visit: options.visit,
+    remote: options.remote,
   });
   const explicitContextFiles = liteMode || publicShare ? [] : loadEggentContextFiles(cwd, agentDir);
 

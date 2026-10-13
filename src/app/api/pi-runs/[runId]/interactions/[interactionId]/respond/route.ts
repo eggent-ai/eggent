@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { respondToPendingInteraction } from "@/lib/pi/pending-interactions";
+import { forwardInteractionResponse } from "@/lib/remote/proxy-turn";
 
 export async function POST(
   req: NextRequest,
@@ -8,6 +9,12 @@ export async function POST(
   try {
     const { runId, interactionId } = await params;
     const body = await req.json().catch(() => ({}));
+    // A question asked by a turn that runs on the other side is answered there.
+    const forwarded = await forwardInteractionResponse(runId, interactionId, {
+      value: body?.value,
+      cancel: body?.cancel === true,
+    });
+    if (forwarded) return forwarded;
     const interaction = respondToPendingInteraction(runId, interactionId, {
       value: body?.value,
       cancel: body?.cancel === true,

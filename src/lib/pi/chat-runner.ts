@@ -7,7 +7,7 @@ import { getServerTranslator } from "@/i18n/server";
 import { learnFromTurn } from "@/lib/learning/review";
 import { cancelPendingInteractionsForRun, listPendingInteractions } from "@/lib/pi/pending-interactions";
 import { retainPiMcpOAuthSession, retainPiScheduleSession, takeRetainedPiScheduleSession } from "@/lib/pi/schedule-host";
-import { clearActiveRun, getActiveRun, isStopRequest, registerActiveRun, stopActiveRun } from "@/lib/pi/active-runs";
+import { clearActiveRun, joinActiveRun, registerActiveRun } from "@/lib/pi/active-runs";
 import { createStartingRun, raceAbort, TurnAbortedError, undoFailedSetup, type TurnSetupScope } from "@/lib/pi/turn-control";
 import { noteSessionEvent, startTurnWatchdog, watchdogThresholds, watchdogTickMs, type StalledTurn } from "@/lib/pi/turn-watchdog";
 import { attachToLiveRun, startLiveRun, type LiveRunSink } from "@/lib/pi/live-run";
@@ -680,49 +680,8 @@ async function persistAssistantMessage(options: {
   await saveChat(chat);
 }
 
-/**
- * What to do with a message that arrives while this chat already has an agent working.
- *
- * Starting a second agent was the old answer and it was the wrong one: neither
- * could see the other, so a request to stop went to a fresh session that had
- * nothing to stop, while the real run kept going. The runtime has both of the
- * primitives needed here and we were using neither.
- *
- * - A stop is honoured immediately, because that is the whole point of saying it.
- * - Anything else is steered into the running turn: it lands after the current
- *   tool calls and before the next model call, which is where a correction is
- *   still worth something. Queuing it until the end (followUp) would let the
- *   agent finish doing the thing the user was trying to redirect.
- *
- * Returns null when there was no run to join, so the caller starts one normally.
- */
-export async function joinActiveRun(
-  chatId: string,
-  message: string
-): Promise<"stopped" | "steered" | null> {
-  const active = getActiveRun(chatId);
-  if (!active) return null;
-
-  if (isStopRequest(message)) {
-    // Through the run's own way of stopping, when it has one: a turn aborted
-    // from outside believes it finished, and one that had written nothing yet
-    // was then reported as a provider that answered nothing.
-    await stopActiveRun(chatId);
-    return "stopped";
-  }
-
-  // Extension commands cannot be steered - the runtime refuses them - and a
-  // slash command is a new instruction anyway, so let it start its own run.
-  if (message.trimStart().startsWith("/")) return null;
-
-  try {
-    await active.session.steer(message);
-    return "steered";
-  } catch (error) {
-    console.warn("Failed to steer the running turn, starting a new one:", error);
-    return null;
-  }
-}
+// Moved to active-runs.ts so a handed-over turn can use it without loading the whole runner.
+export { joinActiveRun };
 
 /** What the person is told when a turn was given up on for going quiet. */
 async function stalledNotice(stalled: StalledTurn): Promise<string> {
@@ -1320,6 +1279,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
             projectId: options.projectId,
             chatContextMode: options.chatContextMode,
             enableEggentTools: options.enableEggentTools,
+            remote: options.remote,
             runId,
             abortSignal: runAbort.signal,
             onPiInteraction,

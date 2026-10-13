@@ -3,6 +3,10 @@ import { NextRequest } from "next/server";
 import { createPiChatUIMessageStream } from "@/lib/pi/chat-runner";
 import { createChat, getChat } from "@/lib/storage/chat-store";
 import type { ChatContextMode } from "@/lib/types";
+import { isRemoteHome, localNode, remoteEnabled } from "@/lib/remote/config";
+import { ensureChatHomeIsHere, prepareRelayedTurn } from "@/lib/remote/executing";
+import { recallHandOver, runHandedOverTurn } from "@/lib/remote/proxy-turn";
+import { parseHome, REMOTE_HEADERS, type ChatHome } from "@/lib/remote/types";
 import { getServerTranslator } from "@/i18n/server";
 import type { MessageKey } from "@/i18n/messages";
 
@@ -62,25 +66,64 @@ export async function POST(req: NextRequest) {
     // forgot it - silently send the next turn of a light chat with the whole
     // workspace attached again.
     const requestedContextMode = parseContextMode(body.contextMode);
+    // A new chat can be started somewhere other than where it is typed. Once the
+    // chat exists its own home decides, and the request's is ignored.
+    const requestedHome = parseHome(body.home);
 
-    // Create chat if needed
-    let resolvedChatId = chatId;
-    let contextMode: ChatContextMode | undefined;
-    if (!resolvedChatId) {
-      resolvedChatId = crypto.randomUUID();
-      contextMode = requestedContextMode;
-      await createChat(resolvedChatId, t("api.chat.newTitle"), projectId, contextMode);
-    } else {
-      const existing = await getChat(resolvedChatId);
-      if (!existing) {
-        contextMode = requestedContextMode;
-        await createChat(resolvedChatId, t("api.chat.newTitle"), projectId, contextMode);
-      } else {
-        contextMode = existing.contextMode;
-      }
+    // A turn the other side handed over: it runs here, whatever the chat says
+    // about where it lives, once the files it needs have arrived.
+    let relayedFrom: ChatHome | undefined;
+    let joiningRun = false;
+    if (req.headers.get(REMOTE_HEADERS.relayed) === "1") {
+      const prep = await prepareRelayedTurn(req, {
+        chatId: typeof chatId === "string" && chatId ? chatId : undefined,
+        projectId,
+      });
+      if (!prep.ok) return prep.response;
+      relayedFrom = prep.from;
+      joiningRun = prep.joining;
     }
 
+    // Create chat if needed
+    let resolvedChatId: string = typeof chatId === "string" && chatId ? chatId : crypto.randomUUID();
+    let contextMode: ChatContextMode | undefined;
+    let handOverTo: ChatHome | null = null;
+    let chatTitle: string | undefined;
+    const existing = typeof chatId === "string" && chatId ? await getChat(resolvedChatId) : null;
+    if (existing) {
+      contextMode = existing.contextMode;
+      chatTitle = existing.title;
+      if (!relayedFrom && isRemoteHome(existing.home)) handOverTo = existing.home;
+    } else {
+      contextMode = requestedContextMode;
+      const recalled = !relayedFrom && typeof chatId === "string" && chatId ? recallHandOver(resolvedChatId) : null;
+      if (!relayedFrom && isRemoteHome(recalled)) {
+        // Started over there a moment ago; its file has not come back yet.
+        handOverTo = recalled;
+      } else if (!relayedFrom && isRemoteHome(requestedHome)) {
+        // Created over there; the file comes back through the sync.
+        handOverTo = requestedHome;
+      } else {
+        const here = remoteEnabled() ? localNode() : null;
+        const home = relayedFrom ? here : requestedHome && requestedHome === here ? requestedHome : null;
+        await createChat(resolvedChatId, t("api.chat.newTitle"), projectId, contextMode, home ?? undefined);
+      }
+    }
+    if (relayedFrom && !joiningRun) await ensureChatHomeIsHere(resolvedChatId);
+
     const resolvedCurrentPath = typeof currentPath === "string" ? currentPath : undefined;
+
+    if (handOverTo) {
+      return await runHandedOverTurn({
+        chatId: resolvedChatId,
+        home: handOverTo,
+        message,
+        projectId,
+        contextMode,
+        currentPath: resolvedCurrentPath,
+        chatTitle,
+      });
+    }
 
     if (process.env.EGGENT_AGENT_BACKEND !== "legacy") {
       // Deliberately not `req.signal`: a turn belongs to the chat, not to the
@@ -93,6 +136,7 @@ export async function POST(req: NextRequest) {
         projectId,
         chatContextMode: contextMode,
         cwd: resolvedCurrentPath,
+        ...(relayedFrom ? { remote: { servedFor: relayedFrom } } : {}),
       });
 
       return createUIMessageStreamResponse({

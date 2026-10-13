@@ -1186,6 +1186,20 @@ const enMessages = {
   "terminal.panel.closed.shutdown": "The workspace restarted, which ended the terminal.",
   "terminal.panel.closed.timeout": "The terminal ran out of time.",
   "terminal.panel.closed.error": "The terminal stopped working.",
+
+  // Running a chat on the other side of a paired workspace and computer.
+  "remote.where.cloud": "the cloud",
+  "remote.where.yourComputer": "your computer",
+  "remote.error.offlineCloud": "The cloud workspace can't be reached right now. Check the connection, or run this chat on this computer instead.",
+  "remote.error.offlineDevice": "{where} isn't available right now: the Eggent app is closed, offline, or not set to take tasks from the cloud. Run this chat in the cloud instead, or open the app and try again.",
+  "remote.error.denied": "{where} declined to run this chat.",
+  "remote.error.notReady": "{where} can't take this chat yet: its chat history isn't shared with the cloud.",
+  "remote.error.notSynced": "{where} hasn't received this chat's latest changes yet. Give it a few seconds and send again.",
+  "remote.error.busy": "This chat is working right now. Wait for it to finish, or stop it first.",
+  "remote.error.timeout": "{where} didn't answer in time.",
+  "remote.error.disabled": "Running chats on another side isn't set up here.",
+  "remote.error.failed": "The message couldn't be handed to {where}: {reason}",
+  "remote.error.lost": "The connection to {where} was lost. The turn may still be running there; its answer will appear in this chat when it syncs.",
 } as const;
 
 export type MessageKey = keyof typeof enMessages;
