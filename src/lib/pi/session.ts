@@ -208,6 +208,8 @@ function buildEggentProjectContext(options: {
   visit?: { parentChatId: string; parentTitle?: string };
   /** This chat answers a colleague's message: see eggent_messages. */
   mailReply?: MailReplyInfo;
+  /** The workspace has messages with its company's people (EGGENT_MAIL_API_URL). */
+  mailAvailable?: boolean;
 }): string {
   // Ordering here is load-bearing, not cosmetic.
   //
@@ -375,6 +377,12 @@ function buildEggentProjectContext(options: {
       : "Configured MCP servers in this workspace: none",
     options.mcpServerIds?.includes("higgsfield")
       ? "- Higgsfield is configured as an MCP server in this project. For Higgsfield image/video generation in Eggent cloud/web, prefer the `mcp` proxy (`connect`, `search`, `describe`, then tool call) over the `higgsfield` CLI. Do not run `higgsfield auth login`, `higgsfield account status`, or `higgsfield workspace set` unless the user explicitly asks for CLI setup; MCP OAuth is separate from CLI auth and is already persisted after successful authentication."
+      : "",
+    // Only in a company's workspaces, so it stays out of the prefix everybody
+    // shares. Named as one of the agent's own tools: told about it only in the
+    // operator's block, a model reached for the mcp proxy with its arguments.
+    options.mailAvailable
+      ? "Messages: eggent_messages is one of your own tools - call it directly, never through mcp. It holds this workspace's messages with the other people of its company: contacts, inbox, read, send, describe."
       : "",
     // Supplied by the operator of this deployment. Eggent does not know what it
     // says, so it is quoted rather than summarized, and it outranks guesswork.
@@ -689,6 +697,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     budgetLevel: await currentBudgetLevel(),
     visit: options.visit,
     mailReply,
+    mailAvailable: !options.visit && mailEnabled(),
   });
   const explicitContextFiles = liteMode || publicShare ? [] : loadEggentContextFiles(cwd, agentDir);
 

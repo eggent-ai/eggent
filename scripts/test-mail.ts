@@ -412,6 +412,7 @@ await check("a turn in that chat is told so in its system prompt, and no other c
   assert.match(assigned, /> Will send the report tomorrow\./);
   assert.match(assigned, /Messages\/Boris\/report\.txt/);
   assert.ok(!plain.includes("This chat answers a message"), "another chat was told about the message");
+  assert.match(plain, /eggent_messages is one of your own tools - call it directly, never through mcp/);
 });
 
 stub.close();
