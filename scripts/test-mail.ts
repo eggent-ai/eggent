@@ -427,6 +427,7 @@ await check("a turn in that chat is told so in its system prompt, and no other c
   assert.ok(!plain.includes("This chat answers a message"), "another chat was told about the message");
   assert.match(plain, /eggent_messages is one of your own tools - call it directly, never through mcp/);
   assert.match(plain, /do not ask which channel/);
+  assert.match(plain, /- eggent_messages: messages with the other people of this workspace's company/, "the tool is missing from the runtime's list of available tools");
 });
 
 stub.close();
