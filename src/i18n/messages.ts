@@ -1103,6 +1103,7 @@ const enMessages = {
   "telegram.command.chats": "Recent chats",
   "telegram.command.reset": "Stop a stuck answer",
   "telegram.command.files": "Files from the last answer",
+  "telegram.command.here": "Run this chat on this side",
 
   // A messenger has no chat list, so /chats is one. Each line ends with the
   // command that opens that chat, which Telegram turns into a tap target.
