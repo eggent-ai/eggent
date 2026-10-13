@@ -897,7 +897,11 @@ try {
       // The cloud's copy is a turn behind. Moving the chat to the cloud now would write over what the computer wrote.
       const flip = await post(cloud, "/api/chat/home", { chatId: chat, home: "cloud" });
       assert.equal(flip.status, 409, "the cloud moved the chat from a copy that was behind the computer's");
-      assert.equal(((await flip.json()) as { code?: string }).code, "not-synced");
+      const refusal = (await flip.json()) as { code?: string; error?: string };
+      assert.equal(refusal.code, "not-synced");
+      // A move is not a message: the words say the chat can't be moved yet, not "send again".
+      assert.match(String(refusal.error), /can't be moved yet/, String(refusal.error));
+      assert.doesNotMatch(String(refusal.error), /send again/i, String(refusal.error));
       assert.equal(readChatFile(cloud.root, chat)?.home, "device:test-mac");
     } finally {
       syncer.resume();
@@ -936,7 +940,9 @@ try {
       // Moving it now would let the next message start a chat of the same name here.
       const flip = await post(device, "/api/chat/home", { chatId: chat, home: "device:test-mac" });
       assert.equal(flip.status, 409);
-      assert.equal(((await flip.json()) as { code?: string }).code, "not-synced");
+      const refusal = (await flip.json()) as { code?: string; error?: string };
+      assert.equal(refusal.code, "not-synced");
+      assert.match(String(refusal.error), /can't be moved yet/, String(refusal.error));
     } finally {
       syncer.resume();
     }
