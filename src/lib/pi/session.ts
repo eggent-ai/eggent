@@ -28,7 +28,7 @@ import { getChatFiles } from "@/lib/storage/chat-files-store";
 import { getChat } from "@/lib/storage/chat-store";
 import { mailEnabled } from "@/lib/mail/config";
 import { formatMailReplyContext } from "@/lib/mail/reply-context";
-import { createMailToolGuardExtension } from "@/lib/mail/tool-guard";
+import { createMailToolGuardExtension, type MessagesRunner } from "@/lib/mail/tool-guard";
 import type { MailReplyInfo } from "@/lib/mail/types";
 import type { ChatContextMode, ChatFile, ProjectSkillMetadata } from "@/lib/types";
 import {
@@ -728,6 +728,9 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
   // Helpers started with the Agent tool report back inside the turn that started
   // them; see subagents.ts for why they cannot be left detached here.
   const subagentMonitor = new SubagentMonitor();
+  // Filled once the tools exist: the guard below answers a misdirected mcp call
+  // with the messages tool itself.
+  let messagesRunner: MessagesRunner | null = null;
   const resourceLoader = new DefaultResourceLoader({
     cwd,
     agentDir,
@@ -737,7 +740,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
         monitor: subagentMonitor,
         ...(options.visit ? { maxParallel: VISIT_MAX_PARALLEL_SUBAGENTS } : {}),
       }),
-      ...(!options.visit && mailEnabled() ? [createMailToolGuardExtension()] : []),
+      ...(!options.visit && mailEnabled() ? [createMailToolGuardExtension(() => messagesRunner)] : []),
     ],
     additionalSkillPaths: projectSkillPaths,
     noExtensions: corePiToolsOnly,
@@ -847,6 +850,15 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
         // external API do not, so asking there would block until timeout.
         get interactive() { return Boolean(turn.onPiInteraction); },
       });
+  const messagesTool = eggentTools.tools.find((tool) => tool.name === "eggent_messages");
+  if (messagesTool) {
+    messagesRunner = async (params) => {
+      const result = await (messagesTool.execute as (...args: unknown[]) => Promise<{ content?: Array<{ type: string; text?: string }> }>)(
+        "mcp-redirect", params, undefined, undefined, undefined
+      );
+      return (result.content || []).map((part) => part.text ?? "").join("\n");
+    };
+  }
   const customTools = publicShare ? await createPublicShareTools(cwd) : [
     ...eggentTools.tools,
     // ls is not among the runtime's default tools, and read without it is a

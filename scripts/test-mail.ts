@@ -318,8 +318,27 @@ await check("a call to the mcp proxy meant for the messages tool is turned back 
   assert.ok(!meantForMessages("eggent_messages", { action: "inbox" }));
   let hook: ((event: { toolName: string; input: unknown }) => unknown) | null = null;
   (createMailToolGuardExtension() as unknown as { factory: (pi: unknown) => void }).factory({ on: (name: string, fn: typeof hook) => { if (name === "tool_call") hook = fn; } });
-  assert.match(String((hook!({ toolName: "mcp", input: { action: "send", to: "x" } }) as { reason?: string })?.reason), /call eggent_messages directly \(not mcp\)/);
-  assert.equal(hook!({ toolName: "mcp", input: { search: "issues" } }), undefined);
+  assert.match(String((await (hook!({ toolName: "mcp", input: { action: "send", to: "x" } }) as Promise<{ reason?: string }>))?.reason), /call eggent_messages directly \(not mcp\)/);
+  assert.equal(await hook!({ toolName: "mcp", input: { search: "issues" } }), undefined);
+});
+await check("a misdirected call is answered by the messages tool itself, and a send it made is not made twice", async () => {
+  const { createMailToolGuardExtension } = await import("../src/lib/mail/tool-guard.ts");
+  const run = async (params: Record<string, unknown>) => JSON.stringify(await (async () => {
+    const tool = tools.get("eggent_messages")!;
+    const result = await tool.execute("guard", params, undefined, undefined, undefined);
+    return JSON.parse(result.content.map((part) => part.text ?? "").join(""));
+  })());
+  let hook: ((event: { toolName: string; input: unknown }) => Promise<{ reason?: string } | undefined>) | null = null;
+  (createMailToolGuardExtension(() => run) as unknown as { factory: (pi: unknown) => void }).factory({ on: (name: string, fn: typeof hook) => { if (name === "tool_call") hook = fn; } });
+  const contacts = await hook!({ toolName: "mcp", input: { action: "contacts" } });
+  assert.match(String(contacts?.reason), /Do not repeat the call/);
+  assert.match(String(contacts?.reason), /Runs purchasing/);
+  const before = service.sent.length;
+  const viaProxy = await hook!({ toolName: "mcp", input: { action: "send", to: "Boris", text: "Inventory on Friday" } });
+  assert.match(String(viaProxy?.reason), /"success":\s*true/);
+  const again = await run({ action: "send", to: "Boris", text: "Inventory on Friday" });
+  assert.match(again, /not sent twice/);
+  assert.equal(service.sent.length, before + 1, "the same message went twice");
 });
 
 console.log("\nFiles copied into the workspace\n");

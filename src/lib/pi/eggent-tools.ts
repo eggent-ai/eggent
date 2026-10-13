@@ -53,6 +53,20 @@ import {
 } from "@/lib/storage/project-store";
 
 const TELEGRAM_SEND_FILE_MAX_BYTES = 45 * 1024 * 1024;
+
+/** How long an identical message from one chat to one person counts as the same send. */
+const RECENT_SEND_MS = 3 * 60_000;
+const RECENT_SENDS_KEY = "__EGGENT_RECENT_MAIL_SENDS__";
+
+function recentMailSends(): Map<string, { at: number; result: Record<string, unknown> }> {
+  const holder = globalThis as typeof globalThis & { [RECENT_SENDS_KEY]?: Map<string, { at: number; result: Record<string, unknown> }> };
+  if (!holder[RECENT_SENDS_KEY]) holder[RECENT_SENDS_KEY] = new Map();
+  const map = holder[RECENT_SENDS_KEY];
+  if (map.size > 200) {
+    for (const [key, entry] of map) if (Date.now() - entry.at > RECENT_SEND_MS) map.delete(key);
+  }
+  return map;
+}
 const IMAGE_REFERENCE_MAX_BYTES = 20 * 1024 * 1024;
 
 interface TelegramRuntimeData {
@@ -1497,6 +1511,13 @@ export async function createEggentPiTools(options: {
           const text = (params.text || "").trim();
           const paths = Array.isArray(params.files) ? params.files : [];
           if (!text && !paths.length) return mailJson({ success: false, error: "send needs text or files." });
+          // The same words to the same person from the same chat a moment ago:
+          // that send went already, whichever way the call reached here.
+          const sendKey = `${options.chatId || ""}|${contact.id}|${text}|${paths.join("|")}|${params.reply_to || ""}`;
+          const already = recentMailSends().get(sendKey);
+          if (already && Date.now() - already.at < RECENT_SEND_MS) {
+            return mailJson({ ...already.result, note: `Already sent to ${contact.name} a moment ago; it was not sent twice.` });
+          }
           const read = await readFilesForMail(paths, { cwd: options.cwd });
           if ("error" in read) return mailJson({ success: false, error: read.error });
           const sent = await sendMailMessage({
@@ -1508,11 +1529,13 @@ export async function createEggentPiTools(options: {
           });
           // This workspace's own copy of what it sent, like any file of its threads.
           if (sent.attachments.length) void syncMailAttachments().catch(() => undefined);
-          return mailJson({
+          const result = {
             success: true,
             sent: { id: sent.id, to: contact.name, at: sent.createdAt, files: sent.attachments.map((file) => file.name) },
             note: `Tell your person in one line that it went to ${contact.name}. It is signed as written by the agent.`,
-          });
+          };
+          recentMailSends().set(sendKey, { at: Date.now(), result });
+          return mailJson(result);
         } catch (error) {
           const message = error instanceof MailServiceError || error instanceof Error ? error.message : "Messages are not available right now.";
           return mailJson({ success: false, error: message });
