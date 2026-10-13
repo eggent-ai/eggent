@@ -1197,6 +1197,7 @@ const enMessages = {
   "remote.error.notReady": "{where} can't take this chat yet: its chat history isn't shared with the cloud.",
   "remote.error.notSynced": "{where} hasn't received this chat's latest changes yet. Give it a few seconds and send again.",
   "remote.error.busy": "This chat is working right now. Wait for it to finish, or stop it first.",
+  "remote.error.notSyncedMove": "The chat can't be moved yet: this side hasn't received everything the other side wrote in it. Give it a few seconds and try again.",
   "remote.error.moved": "This chat was moved to this side a moment ago, before this screen had heard of it. Give it a few seconds and send again.",
   "remote.error.timeout": "{where} didn't answer in time.",
   "remote.error.disabled": "Running chats on another side isn't set up here.",

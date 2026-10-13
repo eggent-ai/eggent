@@ -13,13 +13,12 @@ import { checkTerminalRequest, guardStatus, jsonError } from "@/lib/terminal/gua
 
 export const runtime = "nodejs";
 
-async function refuse(error: RemoteError, home: ChatHome | undefined): Promise<Response> {
+async function refuse(error: RemoteError, home: ChatHome | undefined, say?: "notSyncedMove"): Promise<Response> {
   const t = await getServerTranslator();
   const where = home ? await whereLabel(home, t) : t("remote.where.yourComputer");
-  return Response.json(
-    { error: remoteFailureMessage(error, t, where), code: error.code, ...(home ? { home } : {}) },
-    { status: error.status }
-  );
+  // A move that waits for what the other side wrote says so, in words about moving: "send again" is for a message.
+  const message = say === "notSyncedMove" ? t("remote.error.notSyncedMove") : remoteFailureMessage(error, t, where);
+  return Response.json({ error: message, code: error.code, ...(home ? { home } : {}) }, { status: error.status });
 }
 
 /**
@@ -72,7 +71,7 @@ export async function POST(req: NextRequest) {
     // a chat of the same name on this side: two chats, two agent sessions, one id.
     const handedTo = recallHandOver(chatId);
     if (handedTo && handedTo !== home) {
-      return refuse(new RemoteError("not-synced", "The chat has not come back from where it was started yet.", { home: me }), me);
+      return refuse(new RemoteError("not-synced", "The chat has not come back from where it was started yet.", { home: me }), me, "notSyncedMove");
     }
     forgetHandOver(chatId);
     return Response.json({ ok: true, home, stored: false });
@@ -98,7 +97,7 @@ export async function POST(req: NextRequest) {
     // next turn here runs without the exchange the other side just had.
     const gaps = await waitForCover(chatId, other.head, { timeoutMs: switchWaitMs(), signal: req.signal });
     if (gaps.length > 0) {
-      return refuse(new RemoteError("not-synced", "The chat has not arrived here yet.", { home: me }), me);
+      return refuse(new RemoteError("not-synced", "The chat has not arrived here yet.", { home: me }), me, "notSyncedMove");
     }
   }
   forgetHandOver(chatId);
