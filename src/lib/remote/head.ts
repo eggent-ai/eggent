@@ -81,11 +81,24 @@ export async function sessionHasEntry(file: string, entryId: string): Promise<bo
   }
 }
 
+/**
+ * Names the file sync never carries: a Mac that opened the folder in Finder has
+ * a `.DS_Store` here that the other side will never get, and a head that listed
+ * it would be waited for until patience ran out, on every message. The same
+ * names the folder's ignore list holds, and the temporary files the sync itself
+ * makes while a file is arriving.
+ */
+const NEVER_SYNCED = /^(\.DS_Store|\.stversions|\.stfolder|\.stignore|Thumbs\.db|desktop\.ini|\.syncthing\..*\.tmp|~syncthing~.*\.tmp|.*\.sync-conflict-.*)$/;
+
 /** What is attached to the chat here, newest names last, as many as a head carries. */
 async function attachedFiles(chatId: string): Promise<ChatHead["files"]> {
   try {
     const files = await getChatFiles(chatId);
-    return files.map((file) => ({ name: file.name, size: file.size })).sort((a, b) => a.name.localeCompare(b.name)).slice(0, 64);
+    return files
+      .filter((file) => !NEVER_SYNCED.test(file.name))
+      .map((file) => ({ name: file.name, size: file.size }))
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .slice(0, 64);
   } catch {
     return [];
   }
@@ -99,6 +112,7 @@ export async function readChatHead(chatId: string): Promise<ChatHead> {
     messages: messages.length,
     lastMessageId: messages.length > 0 ? messages[messages.length - 1].id : null,
     sessionLeaf: file ? await readSessionLeaf(file) : null,
+    updatedAt: chat?.updatedAt ?? null,
     files: await attachedFiles(chatId),
   };
 }
@@ -134,11 +148,14 @@ async function fileIdentity(file: string): Promise<string | null> {
 /** Which parts of `want` this side does not hold yet. Empty means it is covered. */
 export async function chatGaps(chatId: string, want: ChatHead, memo: Memo = {}): Promise<CoverGap[]> {
   const gaps: CoverGap[] = [];
-  if (want.lastMessageId) {
+  if (want.lastMessageId || want.updatedAt) {
     const identity = await chatFileIdentity(chatId);
     if (!memo.chat || memo.chat.identity !== identity) {
       const chat = identity ? await getChat(chatId) : null;
-      memo.chat = { identity, found: Boolean(chat?.messages.some((message) => message.id === want.lastMessageId)) };
+      // The last message is here, and so is the file's latest change (a switch adds no message).
+      const hasMessage = !want.lastMessageId || Boolean(chat?.messages.some((message) => message.id === want.lastMessageId));
+      const isCurrent = !want.updatedAt || (chat ? !(Date.parse(chat.updatedAt) < Date.parse(want.updatedAt)) : false);
+      memo.chat = { identity, found: hasMessage && isCurrent };
     }
     if (!memo.chat.found) gaps.push("chat");
   }

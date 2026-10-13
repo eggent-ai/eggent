@@ -1205,6 +1205,7 @@ const enMessages = {
   "external.here.done": "Done. This chat runs here now.",
   "external.here.already": "This chat already runs here.",
   "external.here.unavailable": "Running a chat on another side isn't set up here.",
+  "external.here.busy": "This chat is working right now, so it cannot be moved. Wait for it to finish, or send \"stop\" (or /reset) first.",
 
   // The control under the composer that says where a chat runs.
   "chat.runPlace.trigger": "Where this chat runs",

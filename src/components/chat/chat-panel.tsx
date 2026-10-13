@@ -484,6 +484,13 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
   const [chatError, setChatError] = useState<string | null>(null);
   // The last message could not be handed to the side the chat runs on; what the person can do about it.
   const [handoverFailure, setHandoverFailure] = useState<HandoverFailure | null>(null);
+  // That message, since nothing else holds it: the side the chat runs on never
+  // received it and this side does not write it down until it has run. Without
+  // it the screen reloads the stored chat, the message is gone, and the buttons
+  // that offer to send it again send whatever the chat ended on before.
+  const lastSentRef = useRef<string | null>(null);
+  const unsentRef = useRef<UIMessage | null>(null);
+  const handoverFailureRef = useRef<HandoverFailure | null>(null);
   // Where the chat runs: what is stored on it, or - for a chat that does not
   // exist yet - what it will be started with. Null means wherever it is typed.
   const [chatHome, setChatHome] = useState<ChatHome | null>(null);
@@ -589,6 +596,8 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         setChatHome(null);
       }
       setHandoverFailure(null);
+      handoverFailureRef.current = null;
+      unsentRef.current = null;
     }
   }, [activeChatId]);
 
@@ -643,7 +652,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     []
   );
 
-  const { messages, sendMessage, status, stop, setMessages, resumeStream, regenerate } = useChat({
+  const { messages, sendMessage, status, stop, setMessages, resumeStream } = useChat({
     id: internalChatId,
     transport,
     onError: (error) => {
@@ -651,6 +660,9 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
       // A message that could not be handed to the side the chat runs on comes back as a reason, not a failure.
       const refusal = parseHandoverFailure(error);
       setHandoverFailure(refusal);
+      handoverFailureRef.current = refusal;
+      // The message that was refused stays on the screen, as the last thing said.
+      unsentRef.current = refusal ? ([...messagesRef.current].reverse().find((message) => message.role === "user") ?? null) : null;
       setChatError(refusal ? refusal.message : formatChatErrorMessage(error, t));
     },
   });
@@ -722,6 +734,14 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     setMailReply(null);
   }, [activeChatId]);
 
+  // What the stored chat does not have yet because the message was refused: it
+  // goes back at the end of what is shown, until the person does something about it.
+  const keepUnsent = useCallback((stored: UIMessage[]): UIMessage[] => {
+    const unsent = unsentRef.current;
+    if (!unsent || !handoverFailureRef.current) return stored;
+    return stored.some((message) => message.id === unsent.id) ? stored : [...stored, unsent];
+  }, []);
+
   // Keep active chat history synced with background updates.
   useEffect(() => {
     if (activeChatId === null) return;
@@ -752,7 +772,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         setMailReply(chat?.mailReply ?? null);
 
         if (!chat?.messages) {
-          setMessages([]);
+          setMessages(keepUnsent([]));
           historyEndsOnUserRef.current = false;
           historyCheckpointIdRef.current = null;
           setLoadedHistoryChatId(activeChatId);
@@ -760,8 +780,9 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         }
 
         const nextMessages = chatMessagesToUIMessages(chat.messages);
-        if (!areUIMessagesEquivalentById(messagesRef.current, nextMessages)) {
-          setMessages(nextMessages);
+        const shown = keepUnsent(nextMessages);
+        if (!areUIMessagesEquivalentById(messagesRef.current, shown)) {
+          setMessages(shown);
         }
         historyEndsOnUserRef.current =
           nextMessages[nextMessages.length - 1]?.role === "user";
@@ -778,7 +799,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [activeChatId, setMessages, status, stopSettling, syncTick]);
+  }, [activeChatId, keepUnsent, setMessages, status, stopSettling, syncTick]);
 
   // Nothing about clicking a chat produces an event, so the run list can be
   // seconds stale exactly when it is being read. Ask on arrival: it decides
@@ -1035,6 +1056,30 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     }
   }, []);
 
+  // Send one message to the agent: the same steps whoever asks, the person's
+  // composer or a button that sends the message again.
+  const dispatchMessage = useCallback((messageText: string) => {
+    setChatError(null);
+    // A message refused earlier and left on the screen is let go of: this one replaces it.
+    const refused = unsentRef.current;
+    unsentRef.current = null;
+    handoverFailureRef.current = null;
+    setHandoverFailure(null);
+    if (refused) setMessages((current) => current.filter((message) => message.id !== refused.id));
+    stopRequestedRef.current = false;
+
+    pendingProjectSwitchRef.current = true;
+    submissionStartCountRef.current = messagesRef.current.length;
+    handledSwitchToolCallsRef.current.clear();
+    queuedSwitchResultRef.current = null;
+    shouldRefreshProjectsRef.current = false;
+
+    registerOutgoingChat(messageText, activeProjectId);
+
+    lastSentRef.current = messageText;
+    sendMessage({ text: messageText });
+  }, [activeProjectId, registerOutgoingChat, sendMessage, setMessages]);
+
   const onSubmit = useCallback((messageOverride?: string) => {
     const typed = messageOverride ?? input;
     if (pendingInteraction) {
@@ -1066,18 +1111,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     const messageText = shellInput?.kind === "literal" ? shellInput.text : typed;
 
     if (!messageText.trim() || isLoading) return;
-    setChatError(null);
-    stopRequestedRef.current = false;
-
-    pendingProjectSwitchRef.current = true;
-    submissionStartCountRef.current = messagesRef.current.length;
-    handledSwitchToolCallsRef.current.clear();
-    queuedSwitchResultRef.current = null;
-    shouldRefreshProjectsRef.current = false;
-
-    registerOutgoingChat(messageText, activeProjectId);
-
-    sendMessage({ text: messageText });
+    dispatchMessage(messageText);
     setInput("");
   }, [
     input,
@@ -1088,8 +1122,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     internalChatId,
     activeProjectId,
     currentPath,
-    sendMessage,
-    registerOutgoingChat,
+    dispatchMessage,
   ]);
 
   // What a command card may ask of the conversation around it.
@@ -1145,6 +1178,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
       }
 
       registerOutgoingChat(messageText, projectId);
+      lastSentRef.current = messageText;
       sendMessage({ text: messageText });
     } catch (error) {
       setChatError(error instanceof Error ? error.message : t("chat.errors.launchSkill"));
@@ -1213,6 +1247,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
   const selectHome = useCallback(async (target: ChatHome): Promise<boolean> => {
     setChatError(null);
     setHandoverFailure(null);
+    handoverFailureRef.current = null;
     if (activeChatId === null) {
       chatHomeRef.current = target;
       setChatHome(target);
@@ -1240,19 +1275,25 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     }
   }, [activeChatId, remote, t]);
 
+  // The message that was refused is sent again - not the last one the chat
+  // shows, which is the one before it: this side never wrote the refused one down.
+  const sendRefusedMessageAgain = useCallback(() => {
+    const text = lastSentRef.current;
+    if (!text) return;
+    dispatchMessage(text);
+  }, [dispatchMessage]);
+
   const retryHandedOverMessage = useCallback(() => {
-    setChatError(null);
-    setHandoverFailure(null);
-    void regenerate();
-  }, [regenerate]);
+    sendRefusedMessageAgain();
+  }, [sendRefusedMessageAgain]);
 
   const runHereInstead = useCallback(async () => {
     const here = remote.status?.node;
     if (!here) return;
-    if (await selectHome(here)) {
-      void regenerate();
-    }
-  }, [regenerate, remote.status?.node, selectHome]);
+    // Choosing a place clears the refusal along with its message; keep the text for the send that follows.
+    const text = lastSentRef.current;
+    if (await selectHome(here) && text) dispatchMessage(text);
+  }, [dispatchMessage, remote.status?.node, selectHome]);
 
   const errorActions = useMemo(() => {
     if (!handoverFailure) return undefined;

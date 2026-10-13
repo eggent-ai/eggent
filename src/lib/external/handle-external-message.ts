@@ -13,7 +13,10 @@ import {
   type ExternalSession,
 } from "@/lib/storage/external-session-store";
 import { getServerTranslator } from "@/i18n/server";
-import { localNode, remoteEnabled } from "@/lib/remote/config";
+import { getActiveRun } from "@/lib/pi/active-runs";
+import { getLiveRun } from "@/lib/pi/live-run";
+import { isRemoteHome, localNode, remoteEnabled } from "@/lib/remote/config";
+import { forgetHandOver, remoteTurnRunning } from "@/lib/remote/proxy-turn";
 import type { MessageKey } from "@/i18n/messages";
 import type { AgentProgressEvent } from "@/lib/pi/types";
 import type { ChatContextMode } from "@/lib/types";
@@ -657,11 +660,20 @@ async function answerHere(context: ResolvedExternalMessageRunContext): Promise<E
   if (here) {
     const chat = await getChat(resolvedChatId);
     if (chat && chat.home !== here) {
-      chat.home = here;
-      // The newer copy wins when the two sides' files are joined.
-      chat.updatedAt = new Date().toISOString();
-      await saveChat(chat);
-      reply = t("external.here.done");
+      // A turn that is working - here, or over there - is not moved from under itself.
+      const working =
+        Boolean(getActiveRun(resolvedChatId) || getLiveRun(resolvedChatId)) ||
+        (isRemoteHome(chat.home) && (await remoteTurnRunning(resolvedChatId, chat.home)) === true);
+      if (working) {
+        reply = t("external.here.busy");
+      } else {
+        chat.home = here;
+        // The newer copy wins when the two sides' files are joined.
+        chat.updatedAt = new Date().toISOString();
+        await saveChat(chat);
+        forgetHandOver(resolvedChatId);
+        reply = t("external.here.done");
+      }
     } else {
       reply = t("external.here.already");
     }
@@ -907,7 +919,7 @@ export async function handleExternalMessage(
     };
   }
 
-  const outcome: { stopped?: boolean; files?: ProducedGroup[]; filesSent?: boolean } = {};
+  const outcome: { stopped?: boolean; files?: ProducedGroup[]; filesSent?: boolean; chatBefore?: number } = {};
   let reply = await runPiAgentText({
     outcome,
     chatId: resolvedChatId,
@@ -939,7 +951,10 @@ export async function handleExternalMessage(
   }
 
   const afterChat = await getChat(resolvedChatId);
-  const newMessages = afterChat?.messages.slice(beforeCount) ?? [];
+  // A turn that ran on the other side says where its own messages begin: this
+  // side's copy of the chat may have been behind it, and counting from here took
+  // what an earlier turn over there had written for what this one did.
+  const newMessages = afterChat?.messages.slice(outcome.chatBefore ?? beforeCount) ?? [];
 
   let switchSignal: SwitchProjectSignal | null = null;
   let createSignal: CreateProjectSignal | null = null;

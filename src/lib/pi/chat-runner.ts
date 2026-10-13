@@ -716,7 +716,18 @@ export type PiAgentTextOptions = PiChatRunOptions & {
    * same as it having nothing to say, and the text of the last message the
    * model wrote - the answer, without the narration before it.
    */
-  outcome?: { stopped?: boolean; finalText?: string; files?: ProducedGroup[]; filesSent?: boolean };
+  outcome?: {
+    stopped?: boolean;
+    finalText?: string;
+    files?: ProducedGroup[];
+    filesSent?: boolean;
+    /**
+     * Set when the turn ran on the other side: how many messages the chat held
+     * there before it, which is where what it wrote begins - this side's copy of
+     * the chat may be behind by more than the turn.
+     */
+    chatBefore?: number;
+  };
 };
 
 async function handOverText(options: PiAgentTextOptions, home: ChatHome): Promise<string> {
@@ -746,6 +757,7 @@ async function handOverText(options: PiAgentTextOptions, home: ChatHome): Promis
   if (options.outcome) {
     if (result.stopped) options.outcome.stopped = true;
     options.outcome.finalText = result.finalText;
+    if (result.chatBefore !== null) options.outcome.chatBefore = result.chatBefore;
   }
   return result.text;
 }
@@ -1250,6 +1262,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         runId,
         surface: "web",
         requestStop: () => runAbort.abort(),
+        ...(options.remote ? { servedForRemote: true } : {}),
       });
       const stall: { stalled: StalledTurn | null } = { stalled: null };
       const thresholds = watchdogThresholds();
@@ -1449,6 +1462,24 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
           const separator = assistantText.trim() ? "\n\n" : "";
           assistantText = `${assistantText}${separator}${notice}`;
           appendTimelineText(timelineParts, `${separator}${notice}`);
+          // On the stream too, not only in the stored turn: whoever reads the
+          // stream - a messenger on the other side of a handover is the case - is
+          // told why the turn stopped, in the same words the stored chat has.
+          // Not through safeWrite: that goes quiet once the turn is aborted, and a turn
+          // that has been given up on is exactly this one.
+          const noticeId = `pi-text-${crypto.randomUUID()}`;
+          for (const part of [
+            { type: "text-start" as const, id: noticeId },
+            { type: "text-delta" as const, id: noticeId, delta: `${separator}${notice}` },
+            { type: "text-end" as const, id: noticeId },
+          ]) {
+            try {
+              if (live) live.push(part);
+              else writer.write(part);
+            } catch {
+              // the reader is gone; the stored turn has it
+            }
+          }
         }
         // A stopped turn keeps the files it had made, as the same turn on the other surface does.
         const files = await producedForTurn({

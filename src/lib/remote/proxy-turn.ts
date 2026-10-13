@@ -110,6 +110,11 @@ function rememberHandOver(chatId: string, home: ChatHome): void {
   entries.set(chatId, { home, until: now + HANDOVER_MEMORY_MS });
 }
 
+/** This side no longer thinks the chat is on the other side: the handover did not happen, or the person moved it. */
+export function forgetHandOver(chatId: string): void {
+  handOvers().delete(chatId);
+}
+
 /** Where a chat that has no file here was handed to, when this side handed it over lately. */
 export function recallHandOver(chatId: string): ChatHome | null {
   const entry = handOvers().get(chatId);
@@ -223,47 +228,50 @@ function noticeStream(text: string, chatId: string): Response {
 }
 
 /**
- * The part of a handed-over turn that is the same whoever asked: the run is
- * registered like any other (so stop, steer and a second tab find it), the
- * other side's stream is copied into this side's replayable buffer as it
- * arrives, and the turn is not over until the stored chat has come back.
+ * A handed-over turn from the moment it is asked for.
  *
- * `onChunk` is one more reader of the buffer, for the caller that wants to see
- * the chunks go by - the browser's response, or a messenger collecting text.
+ * It is registered as the chat's running turn before the other side has said a
+ * word, because that is when it can be stopped from nowhere else: the other side
+ * may wait half a minute for the chat to arrive, or for its owner to agree, or
+ * for its workspace to wake, and a stop pressed in that time has to reach a
+ * turn, not an empty registry - or the turn starts the moment it is ready and
+ * does what the person had just asked it not to.
+ *
+ * Messages that arrive in the meantime are kept and go out once the other side
+ * has a turn to put them in; sent earlier they would start a second one.
  */
-interface DriveInput {
+interface Handover {
+  readonly runId: string;
+  /** Cancels the request to the other side, whether or not it has answered yet. */
+  readonly abort: AbortController;
+  readonly state: { streaming: boolean; stopRequested: boolean; opened: boolean };
+  /** The other side has answered with a stream: what was kept for it goes out. */
+  opened(): void;
+  /** Nothing is running here for this turn any more. */
+  release(): void;
+}
+
+function beginHandedOver(input: {
   chatId: string;
   home: ChatHome;
-  projectId?: string;
   surface: "web" | "external";
-  upstream: ReadableStream<Uint8Array>;
-  /** Cancels the request whose answer is `upstream`. */
-  abortUpstream: () => void;
   steer: (text: string) => Promise<void>;
-  onChunk: (chunk: LiveRunChunk) => void;
-  /** What a stream that ends without being finished is told as. */
-  lostText: string;
   /** How long a stop may take before the other side's stream is let go of. */
   stopGraceMs?: number;
-}
-
-interface DriveResult {
-  completed: boolean;
-  stopRequested: boolean;
-}
-
-async function driveHandedOver(input: DriveInput): Promise<DriveResult> {
+}): Handover {
   const { chatId, home } = input;
   const runId = crypto.randomUUID();
-  const state = { streaming: true, stopRequested: false };
+  const abort = new AbortController();
+  const state = { streaming: true, stopRequested: false, opened: false };
+  const kept: Array<{ text: string; resolve: () => void; reject: (error: unknown) => void }> = [];
 
   // The other side registers its run a moment after it receives the request, so
   // a stop that is asked for straight away can arrive before there is anything
   // to stop. Ask again for a few seconds; the first answer that says it stopped
   // something ends it.
   const stopRemote = async () => {
-    const deadline = Date.now() + 8000;
-    while (state.streaming && Date.now() < deadline) {
+    const deadline = Date.now() + (state.opened ? 8000 : 3000);
+    for (;;) {
       try {
         const answer = await relayJson<{ stopped?: boolean }>(home, {
           method: "POST",
@@ -276,6 +284,8 @@ async function driveHandedOver(input: DriveInput): Promise<DriveResult> {
         console.warn(`[remote] could not pass a stop to ${home}:`, error instanceof Error ? error.message : error);
         return;
       }
+      // A turn that is over has nothing left to stop.
+      if (Date.now() >= deadline || (!state.streaming && state.opened)) return;
       await sleep(500);
     }
   };
@@ -283,11 +293,15 @@ async function driveHandedOver(input: DriveInput): Promise<DriveResult> {
   const requestStop = () => {
     if (state.stopRequested) return;
     state.stopRequested = true;
+    for (const entry of kept.splice(0)) entry.reject(new Error("The turn was stopped."));
     void stopRemote();
+    // Before the other side has answered there is no stream to wait on: the
+    // request is let go of at once, which also withdraws it if it has not started.
+    if (!state.opened) abort.abort();
     // A stop the other side does not act on must not hold this side for ever:
     // after a while the stream is let go of and the turn ends here.
     const grace = setTimeout(() => {
-      if (state.streaming) input.abortUpstream();
+      if (state.streaming) abort.abort();
     }, input.stopGraceMs ?? 20_000);
     if (typeof grace === "object" && grace && "unref" in grace) grace.unref();
   };
@@ -299,11 +313,60 @@ async function driveHandedOver(input: DriveInput): Promise<DriveResult> {
     async abort() {
       requestStop();
     },
-    steer: input.steer,
+    steer: (text) => {
+      if (state.stopRequested) return Promise.reject(new Error("The turn was stopped."));
+      if (state.opened) return input.steer(text);
+      return new Promise<void>((resolve, reject) => kept.push({ text, resolve, reject }));
+    },
   };
+  registerActiveRun(chatId, { session: run, runId, surface: input.surface, requestStop });
+
+  return {
+    runId,
+    abort,
+    state,
+    opened() {
+      state.opened = true;
+      for (const entry of kept.splice(0)) input.steer(entry.text).then(entry.resolve, entry.reject);
+    },
+    release() {
+      state.streaming = false;
+      for (const entry of kept.splice(0)) entry.reject(new Error("The turn did not start."));
+      clearActiveRun(chatId, runId);
+    },
+  };
+}
+
+/**
+ * The part of a handed-over turn that is the same whoever asked: the other
+ * side's stream is copied into this side's replayable buffer as it arrives (so
+ * stop, steer and a second tab find it), and the turn is not over until the
+ * stored chat has come back.
+ *
+ * `onChunk` is one more reader of the buffer, for the caller that wants to see
+ * the chunks go by - the browser's response, or a messenger collecting text.
+ */
+interface DriveInput {
+  chatId: string;
+  home: ChatHome;
+  projectId?: string;
+  surface: "web" | "external";
+  upstream: ReadableStream<Uint8Array>;
+  onChunk: (chunk: LiveRunChunk) => void;
+  /** What a stream that ends without being finished is told as; asked for only if that happens. */
+  lostText: () => Promise<string>;
+}
+
+interface DriveResult {
+  completed: boolean;
+  stopRequested: boolean;
+}
+
+async function driveHandedOver(handover: Handover, input: DriveInput): Promise<DriveResult> {
+  const { chatId, home } = input;
+  const { runId, state } = handover;
 
   const live = startLiveRun({ chatId, runId, projectId: input.projectId ?? null, surface: input.surface, home });
-  registerActiveRun(chatId, { session: run, runId, surface: input.surface, requestStop });
   attachToLiveRun(chatId, { onChunk: input.onChunk, onFinish: () => {} });
 
   let completed = false;
@@ -326,8 +389,7 @@ async function driveHandedOver(input: DriveInput): Promise<DriveResult> {
     } catch (error) {
       if (!state.stopRequested) console.warn(`[remote] the stream from ${home} broke:`, error instanceof Error ? error.message : error);
     } finally {
-      state.streaming = false;
-      clearActiveRun(chatId, runId);
+      handover.release();
     }
 
     if (completed) {
@@ -335,7 +397,7 @@ async function driveHandedOver(input: DriveInput): Promise<DriveResult> {
     } else if (!state.stopRequested) {
       // The turn belongs to the chat, not to the connection, so it may well
       // be running still. Say what is known; the answer arrives with the sync.
-      live.push({ type: "error", errorText: input.lostText });
+      live.push({ type: "error", errorText: await input.lostText() });
     }
   } finally {
     live.finish();
@@ -347,30 +409,43 @@ async function driveHandedOver(input: DriveInput): Promise<DriveResult> {
 /** What it takes to start a handed-over request, shared by the browser's turn and a messenger's. */
 async function openHandedOver(
   turn: HandedOverTurn,
+  handover: Handover,
   options: { interactive: boolean; message: string }
-): Promise<{ upstream: Response; abort: AbortController }> {
+): Promise<{ upstream: Response; chatBefore: number | null }> {
   const head = await readChatHead(turn.chatId);
   const headers = { ...handoverHeaders(turn.home, turn.chatTitle), ...(options.interactive ? {} : { [REMOTE_HEADERS.interactive]: "0" }) };
-  // Its own signal: letting go of the other side's stream has to be possible
-  // without the caller's request being the thing that ends.
-  const abort = new AbortController();
   const upstream = await relayRequest(turn.home, {
     method: "POST",
     path: "/api/chat",
     headers,
     body: forwardBody(turn, options.message, head),
-    signal: abort.signal,
+    // Its own signal: letting go of the other side's stream has to be possible
+    // without the caller's request being the thing that ends.
+    signal: handover.abort.signal,
   });
   if (!upstream.ok || !upstream.body) throw await errorFromResponse(upstream, turn.home);
-  return { upstream, abort };
+  const before = Number(upstream.headers.get(REMOTE_HEADERS.chatBefore));
+  return { upstream, chatBefore: Number.isInteger(before) && before >= 0 ? before : null };
 }
 
+/**
+ * A message for a turn that is already running over there.
+ *
+ * It says so: if that turn has ended in the meantime the other side answers that
+ * nothing is running, and the caller starts a turn of its own with the message
+ * (see `joinActiveRun`) - rather than the other side starting one that nobody
+ * is watching and the person being told their message was taken into account.
+ */
 function steerer(turn: HandedOverTurn, interactive: boolean): (text: string) => Promise<void> {
   return async (text: string) => {
     const response = await relayRequest(turn.home, {
       method: "POST",
       path: "/api/chat",
-      headers: { ...handoverHeaders(turn.home, turn.chatTitle), ...(interactive ? {} : { [REMOTE_HEADERS.interactive]: "0" }) },
+      headers: {
+        ...handoverHeaders(turn.home, turn.chatTitle),
+        ...(interactive ? {} : { [REMOTE_HEADERS.interactive]: "0" }),
+        [REMOTE_HEADERS.steer]: "1",
+      },
       body: forwardBody(turn, text),
     });
     // The answer is only the receiving side's "got it"; the turn it joined is
@@ -378,6 +453,27 @@ function steerer(turn: HandedOverTurn, interactive: boolean): (text: string) => 
     if (!response.ok) throw await errorFromResponse(response, turn.home);
     void response.body?.cancel().catch(() => undefined);
   };
+}
+
+/**
+ * Whether a turn is running in this chat on the other side, or null when the
+ * other side cannot be asked. For the moments a chat is about to be moved: a
+ * side that only looks at its own registry would take a chat away from a turn
+ * that is mid-way over there.
+ */
+export async function remoteTurnRunning(chatId: string, home: ChatHome): Promise<boolean | null> {
+  if (!remoteEnabled()) return null;
+  try {
+    const head = await relayJson<{ running?: unknown }>(home, {
+      method: "GET",
+      path: `/api/chat/${encodeURIComponent(chatId)}/head`,
+      headers: handoverHeaders(home),
+      signal: AbortSignal.timeout(8000),
+    });
+    return head.running === true;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -389,7 +485,6 @@ function steerer(turn: HandedOverTurn, interactive: boolean): (text: string) => 
  */
 export async function runHandedOverTurn(turn: HandedOverTurn): Promise<Response> {
   const { chatId, home } = turn;
-  rememberHandOver(chatId, home);
 
   // A message that arrives while this chat already has a turn going is for that
   // turn: the same rule as on the side that runs it, and the handed-over run is
@@ -400,29 +495,35 @@ export async function runHandedOverTurn(turn: HandedOverTurn): Promise<Response>
     return noticeStream(joined === "stopped" ? t("external.run.stopped") : t("external.run.steered"), chatId);
   }
 
+  const handover = beginHandedOver({ chatId, home, surface: "web", steer: steerer(turn, true) });
   let opened: Awaited<ReturnType<typeof openHandedOver>>;
   try {
-    opened = await openHandedOver(turn, { interactive: true, message: turn.message });
+    opened = await openHandedOver(turn, handover, { interactive: true, message: turn.message });
   } catch (error) {
+    handover.release();
+    const t = await getServerTranslator();
+    // Stopped before it started: that is the answer, not a failure to hand it over.
+    if (handover.state.stopRequested) return noticeStream(t("external.run.stopped"), chatId);
+    // Nothing was handed over, so nothing is remembered as having been.
+    forgetHandOver(chatId);
     return remoteFailureResponse(error, home);
   }
+  rememberHandOver(chatId, home);
+  handover.opened();
 
   const t = await getServerTranslator();
-  const where = await whereLabel(home, t);
   const upstreamBody = opened.upstream.body as ReadableStream<Uint8Array>;
 
   const stream = createUIMessageStream<UIMessage>({
     async execute({ writer }) {
-      await driveHandedOver({
+      await driveHandedOver(handover, {
         chatId,
         home,
         projectId: turn.projectId,
         surface: "web",
         upstream: upstreamBody,
-        abortUpstream: () => opened.abort.abort(),
-        steer: steerer(turn, true),
         onChunk: (chunk) => writer.write(chunk),
-        lostText: t("remote.error.lost", { where }),
+        lostText: async () => t("remote.error.lost", { where: await whereLabel(home, t) }),
       });
     },
     onError: (error) => (error instanceof Error ? error.message : String(error)) || "remote turn failed",
@@ -438,6 +539,12 @@ export interface HandedOverTextResult {
   /** What it wrote last: the answer, without the narration before it. */
   finalText: string;
   stopped: boolean;
+  /**
+   * How many messages the chat held on the side that ran the turn before it
+   * began. This side's copy may be behind, so what the turn wrote is found from
+   * there and not from its own count.
+   */
+  chatBefore: number | null;
 }
 
 /** A progress report, in the shape a messenger's draft is built from. */
@@ -460,13 +567,17 @@ export async function runHandedOverText(
   onProgress?: (event: HandedOverProgress) => void
 ): Promise<HandedOverTextResult> {
   const { chatId, home } = turn;
-  rememberHandOver(chatId, home);
   const t = await getServerTranslator();
 
+  const handover = beginHandedOver({ chatId, home, surface: "external", steer: steerer(turn, false) });
   let opened: Awaited<ReturnType<typeof openHandedOver>>;
   try {
-    opened = await openHandedOver(turn, { interactive: false, message: turn.message });
+    opened = await openHandedOver(turn, handover, { interactive: false, message: turn.message });
   } catch (error) {
+    handover.release();
+    // Stopped before it started: nothing to report but that.
+    if (handover.state.stopRequested) return { text: "", finalText: "", stopped: true, chatBefore: null };
+    forgetHandOver(chatId);
     const failure = error instanceof RemoteError ? error : new RemoteError("failed", error instanceof Error ? error.message : String(error), { home });
     const where = await whereLabel(home, t);
     console.warn(`[remote] could not hand the turn to ${home}: ${failure.code} - ${failure.message}`);
@@ -474,8 +585,9 @@ export async function runHandedOverText(
     const hint = ["offline", "denied", "not-ready", "timeout"].includes(failure.code) ? ` ${t("remote.error.hintHere")}` : "";
     throw new Error(`${remoteFailureMessage(failure, t, where)}${hint}`);
   }
+  rememberHandOver(chatId, home);
+  handover.opened();
 
-  const where = await whereLabel(home, t);
   let text = "";
   let messageText = "";
   let finalText = "";
@@ -491,15 +603,13 @@ export async function runHandedOverText(
     }
   };
 
-  const result = await driveHandedOver({
+  const result = await driveHandedOver(handover, {
     chatId,
     home,
     projectId: turn.projectId,
     surface: "external",
     upstream: opened.upstream.body as ReadableStream<Uint8Array>,
-    abortUpstream: () => opened.abort.abort(),
-    steer: steerer(turn, false),
-    lostText: t("remote.error.lost", { where }),
+    lostText: async () => t("remote.error.lost", { where: await whereLabel(home, t) }),
     onChunk: (chunk) => {
       const part = chunk as { type?: string; id?: string; delta?: string; toolCallId?: string; toolName?: string; errorText?: string; data?: { id?: string; status?: string } };
       switch (part.type) {
@@ -543,7 +653,7 @@ export async function runHandedOverText(
   });
 
   if (failure && !result.stopRequested) throw new Error(failure);
-  return { text, finalText, stopped: result.stopRequested };
+  return { text, finalText, stopped: result.stopRequested, chatBefore: opened.chatBefore };
 }
 
 /**

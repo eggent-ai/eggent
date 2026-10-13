@@ -97,9 +97,13 @@ export async function POST(req: NextRequest) {
       if (!relayedFrom && isRemoteHome(existing.home)) handOverTo = existing.home;
     } else {
       contextMode = requestedContextMode;
-      const recalled = !relayedFrom && typeof chatId === "string" && chatId ? recallHandOver(resolvedChatId) : null;
+      // What the request says about where the chat lives is what the person chose
+      // on the screen; the memory of a hand-over stands in only for a request that
+      // says nothing (a chat started over there a moment ago, whose file has not
+      // come back yet). Letting the memory win turned "run it here instead" into
+      // the same hand-over again.
+      const recalled = !relayedFrom && typeof chatId === "string" && chatId && !requestedHome ? recallHandOver(resolvedChatId) : null;
       if (!relayedFrom && isRemoteHome(recalled)) {
-        // Started over there a moment ago; its file has not come back yet.
         handOverTo = recalled;
       } else if (!relayedFrom && isRemoteHome(requestedHome)) {
         // Created over there; the file comes back through the sync.
@@ -146,6 +150,8 @@ export async function POST(req: NextRequest) {
         stream,
         headers: {
           "X-Chat-Id": resolvedChatId,
+          // Where this turn's messages begin, for the side that relays it: its own copy of the chat may be behind.
+          ...(relayedFrom ? { [REMOTE_HEADERS.chatBefore]: String(existing?.messages.length ?? 0) } : {}),
         },
       });
     }

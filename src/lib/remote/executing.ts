@@ -68,6 +68,12 @@ export async function prepareRelayedTurn(
   // steers that one, and what it needs is the run, not the files.
   if (input.chatId && getActiveRun(input.chatId)) return { ok: true, from, joining: true };
 
+  // A message that was only meant for a turn that was running, sent a moment too
+  // late: that turn is over, and what it asked is not a new turn for nobody to watch.
+  if (req.headers.get(REMOTE_HEADERS.steer) === "1") {
+    return refusal(new RemoteError("not-running", "No turn is running in this chat to join.", { home: from }), from);
+  }
+
   const want = input.head ?? null;
   if (input.chatId && want) {
     const gaps = await waitForCover(input.chatId, want, { timeoutMs: coverWaitMs(), signal: req.signal });
@@ -83,6 +89,13 @@ export async function prepareRelayedTurn(
     if (!found) {
       return refusal(new RemoteError("not-synced", "The project has not arrived yet.", { home: from }), from);
     }
+  }
+
+  // The sender gave up while this side was getting ready - it pressed stop, or its
+  // patience ran out. The files may well have arrived in the same moment, and
+  // starting the turn now would run what the person had just taken back.
+  if (req.signal.aborted) {
+    return refusal(new RemoteError("failed", "The request was withdrawn before the turn started.", { home: from }), from);
   }
 
   return { ok: true, from, joining: false };

@@ -46,6 +46,13 @@ export interface ChatHead {
   /** The id of the last entry in the agent's own record, or null when there is none yet. */
   sessionLeaf: string | null;
   /**
+   * When the stored chat was last changed, as the chat itself says. A switch of
+   * where the chat runs is a change to the file and adds no message, so without
+   * this a side that had not received it yet would run the turn and write its
+   * older copy over the switch - two writers, and the sync's conflict copy.
+   */
+  updatedAt: string | null;
+  /**
    * What is attached to the chat, by name and size. A file uploaded and then
    * asked about straight away is on the side that took the upload and nowhere
    * else until the sync brings it, and a turn that runs without it answers about
@@ -54,7 +61,7 @@ export interface ChatHead {
   files: Array<{ name: string; size: number }>;
 }
 
-export const EMPTY_HEAD: ChatHead = { messages: 0, lastMessageId: null, sessionLeaf: null, files: [] };
+export const EMPTY_HEAD: ChatHead = { messages: 0, lastMessageId: null, sessionLeaf: null, updatedAt: null, files: [] };
 
 const MAX_HEAD_FILES = 64;
 
@@ -76,6 +83,7 @@ export function cleanHead(value: unknown): ChatHead | null {
     messages: typeof raw.messages === "number" && Number.isFinite(raw.messages) ? raw.messages : 0,
     lastMessageId: typeof raw.lastMessageId === "string" && raw.lastMessageId ? raw.lastMessageId : null,
     sessionLeaf: typeof raw.sessionLeaf === "string" && raw.sessionLeaf ? raw.sessionLeaf : null,
+    updatedAt: typeof raw.updatedAt === "string" && Number.isFinite(Date.parse(raw.updatedAt)) ? raw.updatedAt : null,
     files,
   };
 }
@@ -123,6 +131,14 @@ export const REMOTE_HEADERS = {
   title: "x-eggent-chat-title",
   /** "0" when nobody is looking at the screen of this turn (a messenger asked): a question cannot be put to anyone. */
   interactive: "x-eggent-interactive",
+  /**
+   * "1" when the message is only meant for a turn that is already running over
+   * there. If that turn has ended in the meantime the answer is "not running",
+   * not a turn of its own that nobody is watching.
+   */
+  steer: "x-eggent-steer",
+  /** On the stream's response: how many messages the chat held before this turn wrote anything. */
+  chatBefore: "x-eggent-chat-before",
 } as const;
 
 export type RemoteFailureCode =
@@ -132,6 +148,7 @@ export type RemoteFailureCode =
   | "not-ready"
   | "not-synced"
   | "busy"
+  | "not-running"
   | "failed"
   | "timeout";
 

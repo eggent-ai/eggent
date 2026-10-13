@@ -3,7 +3,7 @@ import { getServerTranslator } from "@/i18n/server";
 import { getActiveRun } from "@/lib/pi/active-runs";
 import { getLiveRun } from "@/lib/pi/live-run";
 import { localNode, remoteEnabled } from "@/lib/remote/config";
-import { remoteFailureMessage, whereLabel } from "@/lib/remote/proxy-turn";
+import { remoteFailureMessage, remoteTurnRunning, forgetHandOver, whereLabel } from "@/lib/remote/proxy-turn";
 import { listDevices } from "@/lib/remote/relay-client";
 import { isDeviceHome, parseHome, RemoteError, type ChatHome } from "@/lib/remote/types";
 import { getChat, saveChat } from "@/lib/storage/chat-store";
@@ -64,13 +64,26 @@ export async function POST(req: NextRequest) {
 
   if (!chatId) return Response.json({ ok: true, home, stored: false });
   const chat = await getChat(chatId);
-  if (!chat) return Response.json({ ok: true, home, stored: false });
+  if (!chat) {
+    // Moved before it exists: what this side remembered of handing it over is no longer the plan.
+    forgetHandOver(chatId);
+    return Response.json({ ok: true, home, stored: false });
+  }
 
   if (getActiveRun(chatId) || getLiveRun(chatId)) {
     return refuse(new RemoteError("busy", "This chat is working right now.", { home: home ?? undefined }), home ?? undefined);
   }
 
   if ((chat.home ?? null) === home) return Response.json({ ok: true, home, stored: true });
+
+  // A turn on the other side is the chat working too, and nothing here can see it:
+  // moving the chat under it would put a second agent in the same conversation.
+  const otherSide: ChatHome | null =
+    me !== "cloud" ? "cloud" : isDeviceHome(chat.home) ? chat.home : home && isDeviceHome(home) ? home : null;
+  if (otherSide && (await remoteTurnRunning(chatId, otherSide)) === true) {
+    return refuse(new RemoteError("busy", "This chat is working right now.", { home: home ?? undefined }), home ?? undefined);
+  }
+  forgetHandOver(chatId);
 
   if (home) chat.home = home;
   else delete chat.home;

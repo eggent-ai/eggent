@@ -69,6 +69,12 @@ export async function startModel() {
       res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
       res.write(chunk({ role: "assistant" }));
 
+      if (last.includes("HANG") && !toolAnswered) {
+        // Two words, then silence for good: a model call that never ends.
+        res.write(chunk({ content: "partial words " }));
+        return;
+      }
+
       if (last.includes("ASK-ME") && !toolAnswered) {
         res.write(chunk({
           tool_calls: [{
@@ -231,6 +237,11 @@ export interface RelayState {
   carried: Array<{ from: "cloud" | "device"; method: string; path: string; status: number }>;
   /** Make the next carried response of this path end early, to look like a lost connection. */
   cutStreamOf?: string;
+  /**
+   * After this path's response has carried a little, nothing more reaches the caller - not even
+   * the end - though the connection stays open: the other side's last bytes never arrive.
+   */
+  stallStreamOf?: string;
 }
 
 /**
@@ -297,6 +308,18 @@ export async function startRelay(sides: { cloud: () => Side; device: () => Side 
             if (done) break;
             res.write(value);
             sent += value.length;
+            if (state.stallStreamOf && spec.path === state.stallStreamOf && sent > 200) {
+              state.stallStreamOf = undefined;
+              const timer = setInterval(() => {
+                try {
+                  res.write(": keepalive\n\n");
+                } catch {
+                  clearInterval(timer);
+                }
+              }, 500);
+              res.on("close", () => clearInterval(timer));
+              return;
+            }
             if (state.cutStreamOf && spec.path === state.cutStreamOf && sent > 200) {
               // A connection that drops mid-answer: what was sent has arrived, then the stream just stops.
               state.cutStreamOf = undefined;
@@ -348,6 +371,13 @@ export function startSyncer(a: string, b: string, options: { delayMs: number }) 
   let paused = false;
   let delayMs = options.delayMs;
   const copied: string[] = [];
+  /**
+   * Files that changed on both sides since they were last the same: the lost updates
+   * a real sync would turn into conflict copies. A handover that works never makes one.
+   */
+  const conflicts: string[] = [];
+  /** The time a file had on both sides when it was last brought level. */
+  const level = new Map<string, number>();
   const dirs = ["data/chats", "data/pi-sessions", "data/chat-files"];
 
   /** Every file under a directory, as paths relative to it (attachments sit one folder down). */
@@ -369,6 +399,8 @@ export function startSyncer(a: string, b: string, options: { delayMs: number }) 
       for (const dir of dirs) {
         const source = path.join(from, dir);
         for (const name of listFiles(source)) {
+          // What the real folders' ignore lists leave out (the app's DEFAULT_IGNORE for the attachments).
+          if (path.basename(name) === ".DS_Store" || name.includes(".stversions") || name.endsWith(".sync-tmp")) continue;
           const file = path.join(source, name);
           const target = path.join(to, dir, name);
           let sourceStat: fs.Stats;
@@ -385,11 +417,15 @@ export function startSyncer(a: string, b: string, options: { delayMs: number }) 
             targetStat = null;
           }
           if (targetStat && targetStat.mtimeMs >= sourceStat.mtimeMs - 1) continue;
+          // The other side's copy was written too since the two were last alike: one of the two writes is about to be lost.
+          const key = `${dir}/${name}`;
+          if (targetStat && (level.get(key) === undefined || targetStat.mtimeMs > level.get(key)! + 1)) conflicts.push(key);
           fs.mkdirSync(path.dirname(target), { recursive: true });
           const temp = `${target}.sync-tmp`;
           fs.copyFileSync(file, temp);
           fs.utimesSync(temp, sourceStat.atime, sourceStat.mtime);
           fs.renameSync(temp, target);
+          level.set(key, sourceStat.mtimeMs);
           copied.push(`${path.relative(from, file)}`);
         }
       }
@@ -398,6 +434,7 @@ export function startSyncer(a: string, b: string, options: { delayMs: number }) 
   const timer = setInterval(pass, 120);
   return {
     copied,
+    conflicts,
     pause: () => {
       paused = true;
     },

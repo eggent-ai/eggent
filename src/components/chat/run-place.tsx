@@ -10,7 +10,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { useI18n } from "@/i18n/provider";
 import type { MessageKey } from "@/i18n/messages";
-import { choiceFor, placeChoices, type PlaceChoice } from "@/lib/remote/client";
+import { choiceFor, nothingToChoose, placeChoices, type PlaceChoice } from "@/lib/remote/client";
 import type { ChatHome, RemoteStatus } from "@/lib/remote/types";
 
 export interface RunPlaceProps {
@@ -50,6 +50,7 @@ function PlaceIcon({ choice }: { choice: PlaceChoice | null }) {
 export function RunPlaceControl({ status, home, busy, onSelect, onOpen }: RunPlaceProps) {
   const { t } = useI18n();
   if (!status?.enabled || !status.node) return null;
+  if (nothingToChoose(status, home)) return null;
 
   const choices = placeChoices(status);
   const current = choiceFor(status, home);

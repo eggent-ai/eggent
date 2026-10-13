@@ -34,10 +34,14 @@ const repoRoot = path.resolve(import.meta.dirname, "..");
 
 let failed = 0;
 let ran = 0;
+// For trying a change against the checks written for the review's findings alone (see mutate-core.py).
+let inReviewSection = false;
+const onlyReviewSection = process.env.EGGENT_TEST_ONLY_REVIEW === "1";
 // A check that never comes back is a failure, not a hang: the thing most likely to go wrong in a
 // handover is a turn waiting for an answer nobody can give.
 const CHECK_TIMEOUT_MS = 100_000;
 async function check(name: string, fn: () => void | Promise<void>): Promise<void> {
+  if (onlyReviewSection && !inReviewSection) return;
   ran += 1;
   try {
     let timer: ReturnType<typeof setTimeout> | undefined;
@@ -83,6 +87,32 @@ async function until(label: string, predicate: () => boolean | Promise<boolean>,
 }
 
 const messagesOf = (side: Side, chatId: string) => readChatFile(side.root, chatId)?.messages ?? [];
+
+/** Another workspace and computer, set up differently, for the checks that need a setting the first pair does not have. */
+async function startPair(name: string, env: Record<string, string>, delayMs: number) {
+  let c: Side;
+  let d: Side;
+  const r = await startRelay({ cloud: () => c, device: () => d }, session);
+  c = await startSide({ name: `${name}cloud`, node: "cloud", relayUrl: r.url("cloud"), modelUrl: model.url, repoRoot, env });
+  d = await startSide({ name: `${name}device`, node: "device:test-mac", relayUrl: r.url("device"), modelUrl: model.url, repoRoot, env });
+  const s = startSyncer(c.root, d.root, { delayMs });
+  return {
+    cloud: c,
+    device: d,
+    relay: r,
+    syncer: s,
+    async stop() {
+      s.stop();
+      await c.stop();
+      await d.stop();
+      await r.close();
+      fs.rmSync(c.root, { recursive: true, force: true });
+      fs.rmSync(d.root, { recursive: true, force: true });
+    },
+  };
+}
+
+const spare: { pair: Awaited<ReturnType<typeof startPair>> | null } = { pair: null };
 
 try {
   // ------------------------------------------------------------------ 1
@@ -286,11 +316,31 @@ try {
     const callsBefore = model.callsBy("cloud").length;
     const steer = await readChatStream(await post(device, "/api/chat", { chatId: chat7, message: "also mention the weather" }));
     assert.match(steer.text, /taking that into account/);
+    // The id alone was enough: this side did not make a chat of its own out of a file that has not arrived.
+    assert.equal(readChatFile(device.root, chat7), null, "this side wrote the chat itself");
     const read = await pending;
-    assert.ok(read.text.includes("slow15") || read.text.length > 0);
+    assert.match(read.text, /slow15/, "the turn that was steered did not run to its end");
     await until("the steered message to reach the model", () => model.callsBy("cloud").slice(callsBefore).some((call) => call.userTexts.join(" ").includes("also mention the weather")));
     assert.equal(model.callsBy("device").filter((call) => call.userTexts.join(" ").includes("also mention the weather")).length, 0, "the computer ran the steered message itself");
-    assert.equal(readChatFile(device.root, chat7)?.home ?? "cloud", "cloud");
+    // Its file arrives with the sync, and says where the chat lives.
+    await until("the chat's file on the computer", () => readChatFile(device.root, chat7) !== null);
+    assert.equal(readChatFile(device.root, chat7)?.home, "cloud");
+  });
+
+  await check("a message for a turn that is already running is not held up by what its sender thinks the chat looks like", async () => {
+    const chat = crypto.randomUUID();
+    const running = post(cloud, "/api/chat", { chatId: chat, message: "SLOW a long one", projectId: "none" }).then((response) => readChatStream(response));
+    await sleep(900);
+    // The sender's idea of the chat names a message this side has never had - as after a question was asked and its half-written answer replaced.
+    const steer = await fetch(`${cloud.url}/api/chat`, {
+      method: "POST",
+      headers: { ...JSON_HEADERS, "x-eggent-relayed": "1", "x-eggent-from": "device:test-mac" },
+      body: JSON.stringify({ chatId: chat, message: "and the colour too", projectId: "none", expectHead: { messages: 9, lastMessageId: "never-existed", sessionLeaf: "deadbeef", files: [] } }),
+    });
+    const read = await readChatStream(steer);
+    assert.equal(steer.status, 200, read.text);
+    assert.match(read.text, /taking that into account/);
+    await running;
   });
 
   // ------------------------------------------------------------------ 8
@@ -324,6 +374,35 @@ try {
     assert.equal(questionAnswered, true, "the card never arrived");
     assert.match(read.text, /cloud got the answer/, read.text);
     assert.match(read.text, /blue/, read.text);
+  });
+
+  await check("a request over the relay can answer the questions of a turn that was handed over, and of no other", async () => {
+    // A turn the person is running on this computer themselves, not one the cloud handed over.
+    const chat = crypto.randomUUID();
+    let relayedStatus = 0;
+    let both: Promise<void> | null = null;
+    let seen = false;
+    const read = await readChatStream(
+      await post(device, "/api/chat", { chatId: chat, message: "ASK-ME on my own", projectId: "none" }),
+      (part) => {
+        if (part.type !== "data-piInteraction" || seen) return;
+        const interaction = part.data as { id: string; runId: string; status: string };
+        if (interaction.status !== "pending") return;
+        seen = true;
+        const route = `/api/pi-runs/${encodeURIComponent(interaction.runId)}/interactions/${encodeURIComponent(interaction.id)}/respond`;
+        both = (async () => {
+          const refused = await post(device, route, { value: "red" }, { "x-eggent-relayed": "1", "x-eggent-from": "cloud" });
+          relayedStatus = refused.status;
+          // The person's own window still can.
+          await post(device, route, { value: "blue" });
+        })();
+      }
+    );
+    await both;
+    assert.equal(seen, true, "the card never arrived");
+    assert.equal(relayedStatus, 404, "the other side answered a question of a turn it did not hand over");
+    assert.match(read.text, /blue/, read.text);
+    assert.doesNotMatch(read.text, /red/, read.text);
   });
 
   // ------------------------------------------------------------------ 10
@@ -551,7 +630,305 @@ try {
     assert.equal(model.callsBy("cloud").filter((call) => call.userTexts.join(" ").includes("SLOW telegram turn")).length, 0, "the cloud ran it");
     assert.ok(model.callsBy("device").length > callsBefore);
   });
+
+  // ------------------------------------------------------------------ after the review
+  inReviewSection = true;
+  const stalledEnv = {
+    EGGENT_TURN_WATCHDOG: "on",
+    EGGENT_TURN_SILENCE_MODEL_SECONDS: "3",
+    EGGENT_TURN_SILENCE_START_SECONDS: "3",
+    EGGENT_TURN_SILENCE_SOFT_SECONDS: "2",
+    EGGENT_TURN_WATCHDOG_TICK_MS: "300",
+    EGGENT_REMOTE_SETTLE_WAIT_SECONDS: "25",
+  };
+  const pairB = async () => (spare.pair ??= await startPair("b", stalledEnv, 500));
+
+  await check("a chat refused for a computer that is away runs here when the person asks for that, and the refusal is not remembered", async () => {
+    const chat = crypto.randomUUID();
+    relay.state.deviceOnline = false;
+    try {
+      const first = await post(cloud, "/api/chat", { chatId: chat, message: "hello, computer", home: "device:test-mac", projectId: "none" });
+      assert.equal(first.status, 409);
+      assert.equal(((await first.json()) as { code?: string }).code, "offline");
+      // "Run it here instead": the same chat, with this side as its home.
+      const here = await post(cloud, "/api/chat", { chatId: chat, message: "hello, computer", home: "cloud", projectId: "none" });
+      assert.equal(here.status, 200, "the person asked to run it here and was handed to the computer again");
+      assert.match((await readChatStream(here)).text, /cloud answered\./);
+    } finally {
+      relay.state.deviceOnline = true;
+    }
+    // With the computer back, it is still where the person put it.
+    const next = await readChatStream(await post(cloud, "/api/chat", { chatId: chat, message: "and again", home: "cloud", projectId: "none" }));
+    assert.match(next.text, /cloud answered\./);
+    assert.equal(readChatFile(cloud.root, chat)?.home, "cloud");
+    // A refusal leaves nothing behind that sends the next message the same way.
+    const refused = crypto.randomUUID();
+    relay.state.deviceOnline = false;
+    try {
+      assert.equal((await post(cloud, "/api/chat", { chatId: refused, message: "to nobody", home: "device:test-mac", projectId: "none" })).status, 409);
+    } finally {
+      relay.state.deviceOnline = true;
+    }
+    const plain = await post(cloud, "/api/chat", { chatId: refused, message: "now without saying where", projectId: "none" });
+    assert.equal(plain.status, 200, "a message that says nothing about where was handed to the computer on the strength of a refusal");
+    assert.match((await readChatStream(plain)).text, /cloud answered\./);
+  });
+
+  await check("pressing stop while the other side is still getting ready stops the turn before it starts", async () => {
+    const chat = crypto.randomUUID();
+    await readChatStream(await post(cloud, "/api/chat", { chatId: chat, message: "plain cloud turn" }));
+    syncer.pause();
+    try {
+      assert.equal((await post(cloud, "/api/chat/home", { chatId: chat, home: "device:test-mac" })).status, 200);
+      const controller = new AbortController();
+      const sending = fetch(`${cloud.url}/api/chat`, {
+        method: "POST",
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ chatId: chat, message: "SLOW do the dangerous thing", projectId: "none" }),
+        signal: controller.signal,
+      }).catch(() => null);
+      await sleep(1500);
+      // What the screen does: lets go of the request, and says so.
+      controller.abort();
+      const stop = await post(cloud, `/api/chat/${chat}/stop`, {});
+      assert.equal(((await stop.json()) as { stopped?: boolean }).stopped, true, "there was nothing registered to stop");
+      await sending;
+    } finally {
+      syncer.resume();
+    }
+    // Long enough for the chat to arrive and for the computer to start the turn, were it going to.
+    await sleep(5000);
+    assert.equal(model.callsBy("device").filter((call) => call.userTexts.join(" ").includes("dangerous")).length, 0, "the turn the person stopped ran on their computer anyway");
+    const runs = (await (await get(device, "/api/chat/active-runs")).json()) as { runs: unknown[] };
+    assert.equal(runs.runs.length, 0);
+  });
+
+  await check("a message meant for a turn that has just ended starts a turn of its own that someone is watching", async () => {
+    const first = await tell(cloud, "tg-late", "first from the messenger");
+    const chat = first.body.context.activeChatId as string;
+    assert.equal((await post(cloud, "/api/chat/home", { chatId: chat, home: "device:test-mac" })).status, 200);
+    await until("the chat on the computer", () => messagesOf(device, chat).length >= 2);
+
+    // The computer finishes its answer, but the end of the stream never reaches the cloud.
+    relay.state.stallStreamOf = "/api/chat";
+    void tell(cloud, "tg-late", "SLOW the first long request").catch(() => undefined);
+    await sleep(7500);
+
+    const before = model.callsBy("device").length;
+    const late = await tell(cloud, "tg-late", "and also add the second thing");
+    assert.equal(late.status, 200, JSON.stringify(late.body));
+    assert.doesNotMatch(String(late.body.reply), /taking that into account/, "told it was folded into a turn that was over");
+    assert.match(String(late.body.reply), /device answered\./, "the message did not get an answer of its own");
+    assert.equal(model.callsBy("device").length, before + 1);
+  });
+
+  await check("a chat is not moved from under a turn that is running on the other side", async () => {
+    const chat = crypto.randomUUID();
+    // The computer's own chat, with the computer as its home; the cloud has its file.
+    await readChatStream(await post(device, "/api/chat", { chatId: chat, message: "first, on the computer", home: "device:test-mac", projectId: "none" }));
+    await until("the chat on the cloud", () => messagesOf(cloud, chat).length === 2);
+    const long = post(device, "/api/chat", { chatId: chat, message: "SLOW long job on the computer", projectId: "none" }).then((response) => readChatStream(response));
+    await sleep(1200);
+    const onCloud = (await (await get(cloud, "/api/chat/active-runs")).json()) as { runs: unknown[] };
+    assert.equal(onCloud.runs.length, 0, "the cloud can see the turn by itself, which is not what this is about");
+    const flip = await post(cloud, "/api/chat/home", { chatId: chat, home: "cloud" });
+    assert.equal(flip.status, 409, "the cloud took the chat from a turn that was running on the computer");
+    assert.equal(((await flip.json()) as { code?: string }).code, "busy");
+    assert.equal(readChatFile(cloud.root, chat)?.home, "device:test-mac");
+    await long;
+    // Once it is over, the same switch is fine.
+    await until("the end of the turn on the cloud", () => messagesOf(cloud, chat).length === 4);
+    assert.equal((await post(cloud, "/api/chat/home", { chatId: chat, home: "cloud" })).status, 200);
+  });
+
+  await check("/here does not bring a chat back to the messenger while a turn is working on it, here or over there", async () => {
+    const created = await tell(cloud, "tg-busy", "first from the messenger");
+    const chat = created.body.context.activeChatId as string;
+    assert.equal((await post(cloud, "/api/chat/home", { chatId: chat, home: "device:test-mac" })).status, 200);
+    await until("the chat on the computer", () => messagesOf(device, chat).length >= 2);
+
+    // A turn this side relays.
+    const slow = tell(cloud, "tg-busy", "SLOW a job for the computer");
+    await sleep(1500);
+    const refusedHere = await tell(cloud, "tg-busy", "/here");
+    assert.match(String(refusedHere.body.reply), /working right now/, JSON.stringify(refusedHere.body));
+    assert.equal(readChatFile(cloud.root, chat)?.home, "device:test-mac");
+    await slow;
+
+    // A turn the person started on the computer itself, which this side knows nothing about.
+    const onTheComputer = post(device, "/api/chat", { chatId: chat, message: "SLOW typed on the computer", projectId: "none" }).then((response) => readChatStream(response));
+    await sleep(1500);
+    const refusedAgain = await tell(cloud, "tg-busy", "/here");
+    assert.match(String(refusedAgain.body.reply), /working right now/, JSON.stringify(refusedAgain.body));
+    await onTheComputer;
+    await until("the chat settled on the cloud", () => messagesOf(cloud, chat).length >= 6);
+    const done = await tell(cloud, "tg-busy", "/here");
+    assert.match(String(done.body.reply), /runs here now/, JSON.stringify(done.body));
+  });
+
+  await check("what a messenger's turn did is found from where the computer's copy began, not from this side's older one", async () => {
+    const first = await tell(cloud, "tg-count", "first from the messenger");
+    const chat = first.body.context.activeChatId as string;
+    assert.equal((await post(cloud, "/api/chat/home", { chatId: chat, home: "device:test-mac" })).status, 200);
+    await until("the chat on the computer", () => messagesOf(device, chat).length >= 2);
+    syncer.pause();
+    try {
+      // The person worked in this chat on the computer a moment ago, and one of those turns moved the agent to another project.
+      const file = path.join(device.root, "data", "chats", `${chat}.json`);
+      const stored = JSON.parse(fs.readFileSync(file, "utf-8"));
+      const at = new Date().toISOString();
+      stored.messages.push(
+        { id: "dev-u2", role: "user", content: "(on the computer) go to the shop project", createdAt: at },
+        { id: "dev-t2", role: "tool", content: '{"success":true,"action":"switch_project","projectId":"none"}', toolName: "switch_project", toolCallId: "tc-old", toolResult: { success: true, action: "switch_project", projectId: "none" }, createdAt: at },
+        { id: "dev-a2", role: "assistant", content: "Moved.", createdAt: at }
+      );
+      stored.updatedAt = new Date(Date.now() + 1000).toISOString();
+      fs.writeFileSync(file, JSON.stringify(stored));
+      await sleep(150);
+      // The sync catches up while the turn runs.
+      setTimeout(() => syncer.resume(), 1500);
+      const second = await tell(cloud, "tg-count", "SLOW and what is the weather");
+      assert.equal(second.status, 200, JSON.stringify(second.body));
+      assert.equal(second.body.switchedProject, null, "an old switch from before this message moved the messenger's session");
+    } finally {
+      syncer.resume();
+    }
+  });
+
+  await check("a switch made a moment ago is waited for like the rest of the chat, so the side that runs the turn never writes over it", async () => {
+    const chat = crypto.randomUUID();
+    await readChatStream(await post(cloud, "/api/chat", { chatId: chat, message: "a plain cloud turn" }));
+    await until("the chat on the computer", () => messagesOf(device, chat).length === 2 && sessionFilesOf(device.root, chat).length === 1);
+    syncer.pause();
+    try {
+      // The switch changes the chat's file and adds no message.
+      assert.equal((await post(cloud, "/api/chat/home", { chatId: chat, home: "device:test-mac" })).status, 200);
+      const calls = model.callsBy("device").length;
+      const early = await post(cloud, "/api/chat", { chatId: chat, message: "run on the computer" });
+      assert.equal(early.status, 409, "the computer ran the turn on a copy that does not know the chat was switched to it");
+      assert.equal(((await early.json()) as { code?: string }).code, "not-synced");
+      assert.equal(model.callsBy("device").length, calls);
+    } finally {
+      syncer.resume();
+    }
+    const read = await readChatStream(await post(cloud, "/api/chat", { chatId: chat, message: "and now?" }));
+    assert.match(read.text, /device answered\./, read.text);
+  });
+
+  await check("a file the sync never sends is not waited for", async () => {
+    const chat = crypto.randomUUID();
+    await readChatStream(await post(cloud, "/api/chat", { chatId: chat, message: "a plain cloud turn" }));
+    await until("the chat on the computer", () => messagesOf(device, chat).length === 2 && sessionFilesOf(device.root, chat).length === 1);
+    fs.mkdirSync(path.join(cloud.root, "data", "chat-files", chat), { recursive: true });
+    // What a Mac leaves in a folder it has opened in Finder.
+    fs.writeFileSync(path.join(cloud.root, "data", "chat-files", chat, ".DS_Store"), "finder");
+    assert.equal((await post(cloud, "/api/chat/home", { chatId: chat, home: "device:test-mac" })).status, 200);
+    const started = Date.now();
+    const response = await post(cloud, "/api/chat", { chatId: chat, message: "run on the computer" });
+    assert.equal(response.status, 200, "the computer waited for a file that never arrives");
+    assert.match((await readChatStream(response)).text, /device answered\./);
+    assert.ok(Date.now() - started < 5000, "it was held up all the same");
+  });
+
+  await check("the side that only relays writes nothing: with the sync held, the chat and the agent's record exist where the turn ran and nowhere else", async () => {
+    // A messenger's chat that is already on the computer; the rest starts from nothing.
+    const created = await tell(cloud, "tg-writes", "hello");
+    const messengerChat = created.body.context.activeChatId as string;
+    assert.equal((await post(cloud, "/api/chat/home", { chatId: messengerChat, home: "device:test-mac" })).status, 200);
+    await until("the messenger's chat on the computer", () => messagesOf(device, messengerChat).length >= 2 && sessionFilesOf(device.root, messengerChat).length === 1);
+    syncer.pause();
+    try {
+      const held = (side: Side, chat: string) => ({
+        chat: readChatFile(side.root, chat) !== null,
+        session: sessionFilesOf(side.root, chat).length,
+        attachments: fs.existsSync(path.join(side.root, "data", "chat-files", chat)),
+      });
+      const nothing = { chat: false, session: 0, attachments: false };
+
+      const plain = crypto.randomUUID();
+      const stopped = crypto.randomUUID();
+      const refused = crypto.randomUUID();
+      const runs = await Promise.all([
+        // A plain turn of a new chat, typed on the computer.
+        post(device, "/api/chat", { chatId: plain, message: "plain handed-over turn", home: "cloud", projectId: "none" }).then((response) => readChatStream(response)),
+        // A turn that is stopped.
+        (async () => {
+          const pending = post(device, "/api/chat", { chatId: stopped, message: "SLOW then stop", home: "cloud", projectId: "none" }).then((response) => readChatStream(response));
+          await sleep(1400);
+          await post(device, `/api/chat/${stopped}/stop`, {});
+          return pending;
+        })(),
+      ]);
+      assert.match(runs[0].text, /cloud answered\./);
+      assert.deepEqual(held(device, plain), nothing, "the side that relayed a plain turn wrote something down");
+      assert.deepEqual(held(device, stopped), nothing, "the side that relayed a stopped turn wrote something down");
+      assert.equal(held(cloud, plain).chat, true);
+      assert.equal(held(cloud, stopped).chat, true);
+
+      // A handover that is refused.
+      relay.state.deviceOnline = false;
+      try {
+        const answer = await post(cloud, "/api/chat", { chatId: refused, message: "to a computer that is off", home: "device:test-mac", projectId: "none" });
+        assert.equal(answer.status, 409);
+      } finally {
+        relay.state.deviceOnline = true;
+      }
+      assert.deepEqual(held(cloud, refused), nothing, "a refused handover left a chat behind");
+
+      // A messenger's turn: this side's copy of the chat does not move.
+      const before = messagesOf(cloud, messengerChat).length;
+      const reply = await tell(cloud, "tg-writes", "second, to the computer");
+      assert.match(String(reply.body.reply), /device answered\./, JSON.stringify(reply.body));
+      assert.equal(messagesOf(cloud, messengerChat).length, before, "the side that relayed a messenger's turn wrote it down");
+    } finally {
+      syncer.resume();
+    }
+  });
+
+  await check("a turn given up on for going quiet says so to a messenger, as it does when it runs here", async () => {
+    const b = await pairB();
+    const local = await tell(b.cloud, "tg-hang-local", "HANG on this one");
+    assert.match(String(local.body.reply), /I stopped this: nothing had happened/, String(local.body.reply));
+    const first = await tell(b.cloud, "tg-hang", "hello");
+    const chat = first.body.context.activeChatId as string;
+    assert.equal((await post(b.cloud, "/api/chat/home", { chatId: chat, home: "device:test-mac" })).status, 200);
+    await until("the chat on the computer", () => messagesOf(b.device, chat).length >= 2);
+    const remote = await tell(b.cloud, "tg-hang", "HANG on this one too");
+    assert.match(String(remote.body.reply), /partial words/, "what was said before it went quiet is lost");
+    assert.match(String(remote.body.reply), /I stopped this: nothing had happened/, `the messenger was not told why: ${JSON.stringify(remote.body.reply)}`);
+  });
+
+  await check("stopping a turn that ran on the other side answers when the stored chat is here, however long the sync takes", async () => {
+    const b = await pairB();
+    b.syncer.setDelay(13_000);
+    try {
+      const chat = crypto.randomUUID();
+      const pending = post(b.cloud, "/api/chat", { chatId: chat, message: "SLOW stop me later", home: "device:test-mac", projectId: "none" }).then((response) => readChatStream(response));
+      await sleep(1500);
+      const stop = await post(b.cloud, `/api/chat/${chat}/stop`, {});
+      assert.equal(((await stop.json()) as { stopped?: boolean }).stopped, true);
+      const history = (await (await get(b.cloud, `/api/chat/history?id=${chat}`)).json().catch(() => null)) as { messages?: unknown[] } | null;
+      const onComputer = messagesOf(b.device, chat).length;
+      assert.ok(onComputer >= 2, "the computer did not write the stopped turn down");
+      assert.ok((history?.messages?.length ?? 0) >= onComputer, "the stop came back before the half-written turn was in this side's stored chat");
+      await pending;
+    } finally {
+      b.syncer.setDelay(500);
+    }
+  });
+
+  await check("no file was written on both sides at once in any of this", () => {
+    // What each side held of a chat that was written on both, so that a failure says which one it was.
+    const describe = (pair: { cloud: Side; device: Side }, key: string) => {
+      const id = path.basename(key).replace(/\.json$/, "");
+      const lines = (side: Side) => (readChatFile(side.root, id)?.messages ?? []).map((message) => `${message.role[0]}:${message.content.slice(0, 24)}`).join(" | ");
+      return `${key}\n      cloud : ${lines(pair.cloud)}\n      device: ${lines(pair.device)}`;
+    };
+    assert.deepEqual(syncer.conflicts, [], `written on both sides:\n    ${syncer.conflicts.map((key) => describe({ cloud, device }, key)).join("\n    ")}`);
+    if (spare.pair) assert.deepEqual(spare.pair.syncer.conflicts, [], `written on both sides:\n    ${spare.pair.syncer.conflicts.map((key) => describe(spare.pair!, key)).join("\n    ")}`);
+  });
 } finally {
+  await spare.pair?.stop();
   syncer.stop();
   await cloud.stop();
   await device.stop();

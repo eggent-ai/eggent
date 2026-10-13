@@ -10,7 +10,7 @@ export interface HandoverFailure {
   home?: ChatHome;
 }
 
-const CODES = new Set(["disabled", "offline", "denied", "not-ready", "not-synced", "busy", "failed", "timeout"]);
+const CODES = new Set(["disabled", "offline", "denied", "not-ready", "not-synced", "busy", "not-running", "failed", "timeout"]);
 
 /**
  * A failed send, as a refusal to hand the message over - or null when it was
@@ -67,6 +67,18 @@ function deviceChoice(device: RemoteDevice, here: ChatHome): PlaceChoice {
   if (!device.online || !device.accept) return { ...base, available: false, reason: "offline" };
   if (!device.historyShared) return { ...base, available: false, reason: "not-ready" };
   return { ...base, available: true };
+}
+
+/**
+ * Whether there is nothing to choose between, so the control is left out.
+ *
+ * A workspace with no computer paired to it has one place to run a chat. A chat
+ * that is left pointing at a computer that has since been unpaired is the
+ * exception: it needs the way back to the cloud, so it keeps the control.
+ */
+export function nothingToChoose(status: RemoteStatus, home: ChatHome | null | undefined): boolean {
+  if (placeChoices(status).length >= 2) return false;
+  return home == null || choiceFor(status, home) !== null;
 }
 
 /** The choice a stored home stands for, or null when it names a place that is not on the list (an unpaired computer). */

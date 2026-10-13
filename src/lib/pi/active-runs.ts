@@ -37,6 +37,12 @@ interface ActiveRun {
    * pending questions cancelled, nothing diagnosed that did not happen.
    */
   requestStop?: () => void;
+  /**
+   * This run was handed over from the other side of a workspace and computer
+   * pair. Only a request that came over that road may answer its questions, and
+   * only its questions - see `isRunServedForRemote`.
+   */
+  servedForRemote?: boolean;
 }
 
 /**
@@ -68,6 +74,7 @@ export function registerActiveRun(
     runId: string;
     surface: ActiveRun["surface"];
     requestStop?: () => void;
+    servedForRemote?: boolean;
   }
 ): void {
   if (!chatId) return;
@@ -84,6 +91,21 @@ export function clearActiveRun(chatId: string, runId: string): void {
   const runs = activeRuns();
   const current = runs.get(chatId);
   if (current && current.runId === runId) runs.delete(chatId);
+}
+
+/**
+ * Whether the run with this id is one that was handed over from the other side.
+ *
+ * A request that arrives over the relay may answer a question card, but only a
+ * card of a turn that came the same way: the other side is trusted with the
+ * chats it was allowed to hand over, not with whatever else is asking something
+ * on this machine - another chat the person is working in, for one.
+ */
+export function isRunServedForRemote(runId: string): boolean {
+  for (const run of activeRuns().values()) {
+    if (run.runId === runId && run.servedForRemote === true) return true;
+  }
+  return false;
 }
 
 export function getActiveRun(chatId: string): ActiveRun | undefined {
