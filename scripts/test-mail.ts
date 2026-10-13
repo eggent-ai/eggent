@@ -309,6 +309,19 @@ await check("reading a conversation to the person reads it; a scheduled run read
   }
 });
 
+await check("a call to the mcp proxy meant for the messages tool is turned back to it, and nothing else is", async () => {
+  const { meantForMessages, createMailToolGuardExtension } = await import("../src/lib/mail/tool-guard.ts");
+  assert.ok(meantForMessages("mcp", { action: "inbox", limit: 20 }));
+  assert.ok(meantForMessages("mcp", { action: "Contacts" }));
+  assert.ok(!meantForMessages("mcp", { action: "ui-messages" }));
+  assert.ok(!meantForMessages("mcp", { connect: "github" }));
+  assert.ok(!meantForMessages("eggent_messages", { action: "inbox" }));
+  let hook: ((event: { toolName: string; input: unknown }) => unknown) | null = null;
+  (createMailToolGuardExtension() as unknown as { factory: (pi: unknown) => void }).factory({ on: (name: string, fn: typeof hook) => { if (name === "tool_call") hook = fn; } });
+  assert.match(String((hook!({ toolName: "mcp", input: { action: "send", to: "x" } }) as { reason?: string })?.reason), /call eggent_messages directly/);
+  assert.equal(hook!({ toolName: "mcp", input: { search: "issues" } }), undefined);
+});
+
 console.log("\nFiles copied into the workspace\n");
 
 const borisDir = path.join(root, "data", "projects", "Messages", "Boris");

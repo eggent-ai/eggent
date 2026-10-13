@@ -27,6 +27,7 @@ import { getChatFiles } from "@/lib/storage/chat-files-store";
 import { getChat } from "@/lib/storage/chat-store";
 import { mailEnabled } from "@/lib/mail/config";
 import { formatMailReplyContext } from "@/lib/mail/reply-context";
+import { createMailToolGuardExtension } from "@/lib/mail/tool-guard";
 import type { MailReplyInfo } from "@/lib/mail/types";
 import type { ChatContextMode, ChatFile, ProjectSkillMetadata } from "@/lib/types";
 import {
@@ -713,6 +714,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
         monitor: subagentMonitor,
         ...(options.visit ? { maxParallel: VISIT_MAX_PARALLEL_SUBAGENTS } : {}),
       }),
+      ...(!options.visit && mailEnabled() ? [createMailToolGuardExtension()] : []),
     ],
     additionalSkillPaths: projectSkillPaths,
     noExtensions: corePiToolsOnly,
