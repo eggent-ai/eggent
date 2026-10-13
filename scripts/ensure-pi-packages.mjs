@@ -3,6 +3,7 @@ import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import os from "node:os";
+import { ensureWebSearchDefaults } from "./web-search-defaults.mjs";
 
 // EGGENT_PI_PACKAGES replaces this list rather than extending it, so anything
 // set there must repeat every entry it still wants.
@@ -343,3 +344,8 @@ process.env.PI_CODING_AGENT_DIR = agentDir;
 fs.mkdirSync(agentDir, { recursive: true });
 
 await withInstallLock(agentDir, () => ensureWithRetries({ agentDir, packages }));
+
+// After the install, because the route depends on the version it left behind.
+if (!["0", "false", "off", "no"].includes(String(process.env.EGGENT_WEB_SEARCH_DEFAULTS || "").toLowerCase())) {
+  ensureWebSearchDefaults(agentDir);
+}

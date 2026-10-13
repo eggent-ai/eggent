@@ -146,7 +146,7 @@ RUN find /app/node_modules -path '*pi-ai/dist/providers/data/*.json' -exec touch
 # workspace's settings still name the packages without versions, as before, so
 # nothing already installed is touched by a change here.
 ARG EGGENT_SEED_PI_PACKAGES="npm:pi-web-access@0.35.0 npm:pi-mcp-adapter@4.0.0 npm:@tintinweb/pi-subagents@0.19.0"
-COPY scripts/ensure-pi-packages.mjs ./scripts/ensure-pi-packages.mjs
+COPY scripts/ensure-pi-packages.mjs scripts/web-search-defaults.mjs ./scripts/
 RUN PI_CODING_AGENT_DIR=/opt/eggent-pi-seed TMPDIR=/tmp npm_config_cache=/tmp/eggent-pi-seed-npm-cache \
     EGGENT_PI_PACKAGES="$EGGENT_SEED_PI_PACKAGES" \
     node ./scripts/ensure-pi-packages.mjs \
