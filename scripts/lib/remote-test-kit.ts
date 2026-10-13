@@ -348,20 +348,27 @@ export function startSyncer(a: string, b: string, options: { delayMs: number }) 
   let paused = false;
   let delayMs = options.delayMs;
   const copied: string[] = [];
-  const dirs = ["data/chats", "data/pi-sessions"];
+  const dirs = ["data/chats", "data/pi-sessions", "data/chat-files"];
+
+  /** Every file under a directory, as paths relative to it (attachments sit one folder down). */
+  const listFiles = (directory: string, prefix = ""): string[] => {
+    let entries: fs.Dirent[];
+    try {
+      entries = fs.readdirSync(directory, { withFileTypes: true });
+    } catch {
+      return [];
+    }
+    return entries.flatMap((entry) =>
+      entry.isDirectory() ? listFiles(path.join(directory, entry.name), path.join(prefix, entry.name)) : [path.join(prefix, entry.name)]
+    );
+  };
 
   const pass = () => {
     if (paused) return;
     for (const [from, to] of [[a, b], [b, a]] as const) {
       for (const dir of dirs) {
         const source = path.join(from, dir);
-        let names: string[];
-        try {
-          names = fs.readdirSync(source);
-        } catch {
-          continue;
-        }
-        for (const name of names) {
+        for (const name of listFiles(source)) {
           const file = path.join(source, name);
           const target = path.join(to, dir, name);
           let sourceStat: fs.Stats;

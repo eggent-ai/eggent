@@ -4,10 +4,10 @@ import { coverWaitMs, localNode, remoteEnabled } from "@/lib/remote/config";
 import { waitForCover } from "@/lib/remote/head";
 import { whereLabel, remoteFailureMessage } from "@/lib/remote/proxy-turn";
 import {
-  decodeHead,
   parseHome,
   REMOTE_HEADERS,
   RemoteError,
+  type ChatHead,
   type ChatHome,
 } from "@/lib/remote/types";
 import { getChat, saveChat } from "@/lib/storage/chat-store";
@@ -55,7 +55,7 @@ function waitUntil(check: () => Promise<boolean>, timeoutMs: number, signal?: Ab
 
 export async function prepareRelayedTurn(
   req: Request,
-  input: { chatId?: string; projectId?: string }
+  input: { chatId?: string; projectId?: string; head?: ChatHead | null }
 ): Promise<RelayedPrep> {
   if (!remoteEnabled()) return refusal(new RemoteError("disabled", "Handing chats over is not set up here."), undefined);
 
@@ -68,7 +68,7 @@ export async function prepareRelayedTurn(
   // steers that one, and what it needs is the run, not the files.
   if (input.chatId && getActiveRun(input.chatId)) return { ok: true, from, joining: true };
 
-  const want = decodeHead(req.headers.get(REMOTE_HEADERS.expectHead));
+  const want = input.head ?? null;
   if (input.chatId && want) {
     const gaps = await waitForCover(input.chatId, want, { timeoutMs: coverWaitMs(), signal: req.signal });
     if (gaps.length > 0) {

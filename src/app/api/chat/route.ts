@@ -6,7 +6,7 @@ import type { ChatContextMode } from "@/lib/types";
 import { isRemoteHome, localNode, remoteEnabled } from "@/lib/remote/config";
 import { ensureChatHomeIsHere, prepareRelayedTurn } from "@/lib/remote/executing";
 import { recallHandOver, runHandedOverTurn } from "@/lib/remote/proxy-turn";
-import { parseHome, REMOTE_HEADERS, type ChatHome } from "@/lib/remote/types";
+import { cleanHead, parseHome, REMOTE_HEADERS, type ChatHome } from "@/lib/remote/types";
 import { getServerTranslator } from "@/i18n/server";
 import type { MessageKey } from "@/i18n/messages";
 
@@ -78,6 +78,7 @@ export async function POST(req: NextRequest) {
       const prep = await prepareRelayedTurn(req, {
         chatId: typeof chatId === "string" && chatId ? chatId : undefined,
         projectId,
+        head: cleanHead(body.expectHead),
       });
       if (!prep.ok) return prep.response;
       relayedFrom = prep.from;

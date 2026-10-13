@@ -9,7 +9,7 @@ import { readChatHead, waitForCover } from "@/lib/remote/head";
 import { errorFromResponse, listDevices, relayJson, relayRequest } from "@/lib/remote/relay-client";
 import { readSseData } from "@/lib/remote/sse";
 import {
-  encodeHead,
+  cleanHead,
   REMOTE_HEADERS,
   RemoteError,
   type ChatHead,
@@ -184,12 +184,11 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
-function handoverHeaders(home: ChatHome, head: ChatHead | null, title?: string): Record<string, string> {
+function handoverHeaders(home: ChatHome, title?: string): Record<string, string> {
   const from = localNode();
   return {
     [REMOTE_HEADERS.relayed]: "1",
     ...(from ? { [REMOTE_HEADERS.from]: from } : {}),
-    ...(head ? { [REMOTE_HEADERS.expectHead]: encodeHead(head) } : {}),
     ...(title ? { [REMOTE_HEADERS.title]: encodeURIComponent(title.slice(0, 120)) } : {}),
     "content-type": "application/json",
     // Which side this is for; the receiving end ignores it, and the log shows it.
@@ -197,11 +196,13 @@ function handoverHeaders(home: ChatHome, head: ChatHead | null, title?: string):
   };
 }
 
-function forwardBody(turn: HandedOverTurn, message: string): string {
+function forwardBody(turn: HandedOverTurn, message: string, head?: ChatHead): string {
   const currentPath = turn.currentPath && !/^([A-Za-z]:)?[\\/]/.test(turn.currentPath) ? turn.currentPath : undefined;
   return JSON.stringify({
     chatId: turn.chatId,
     message,
+    // Where this side stands with the chat; the other side holds the turn until it has that much too.
+    ...(head ? { expectHead: head } : {}),
     projectId: turn.projectId ?? "none",
     ...(turn.contextMode ? { contextMode: turn.contextMode } : {}),
     ...(currentPath ? { currentPath } : {}),
@@ -267,7 +268,7 @@ async function driveHandedOver(input: DriveInput): Promise<DriveResult> {
         const answer = await relayJson<{ stopped?: boolean }>(home, {
           method: "POST",
           path: `/api/chat/${encodeURIComponent(chatId)}/stop`,
-          headers: handoverHeaders(home, null),
+          headers: handoverHeaders(home),
           body: "{}",
         });
         if (answer.stopped) return;
@@ -349,7 +350,7 @@ async function openHandedOver(
   options: { interactive: boolean; message: string }
 ): Promise<{ upstream: Response; abort: AbortController }> {
   const head = await readChatHead(turn.chatId);
-  const headers = { ...handoverHeaders(turn.home, head, turn.chatTitle), ...(options.interactive ? {} : { [REMOTE_HEADERS.interactive]: "0" }) };
+  const headers = { ...handoverHeaders(turn.home, turn.chatTitle), ...(options.interactive ? {} : { [REMOTE_HEADERS.interactive]: "0" }) };
   // Its own signal: letting go of the other side's stream has to be possible
   // without the caller's request being the thing that ends.
   const abort = new AbortController();
@@ -357,7 +358,7 @@ async function openHandedOver(
     method: "POST",
     path: "/api/chat",
     headers,
-    body: forwardBody(turn, options.message),
+    body: forwardBody(turn, options.message, head),
     signal: abort.signal,
   });
   if (!upstream.ok || !upstream.body) throw await errorFromResponse(upstream, turn.home);
@@ -369,7 +370,7 @@ function steerer(turn: HandedOverTurn, interactive: boolean): (text: string) => 
     const response = await relayRequest(turn.home, {
       method: "POST",
       path: "/api/chat",
-      headers: { ...handoverHeaders(turn.home, null, turn.chatTitle), ...(interactive ? {} : { [REMOTE_HEADERS.interactive]: "0" }) },
+      headers: { ...handoverHeaders(turn.home, turn.chatTitle), ...(interactive ? {} : { [REMOTE_HEADERS.interactive]: "0" }) },
       body: forwardBody(turn, text),
     });
     // The answer is only the receiving side's "got it"; the turn it joined is
@@ -557,12 +558,14 @@ export async function runHandedOverText(
 async function settleLocalCopy(chatId: string, home: ChatHome): Promise<void> {
   let want: ChatHead | null = null;
   try {
-    want = await relayJson<ChatHead>(home, {
-      method: "GET",
-      path: `/api/chat/${encodeURIComponent(chatId)}/head`,
-      headers: handoverHeaders(home, null),
-      signal: AbortSignal.timeout(10_000),
-    });
+    want = cleanHead(
+      await relayJson<unknown>(home, {
+        method: "GET",
+        path: `/api/chat/${encodeURIComponent(chatId)}/head`,
+        headers: handoverHeaders(home),
+        signal: AbortSignal.timeout(10_000),
+      })
+    );
   } catch (error) {
     console.warn(`[remote] could not ask ${home} where the chat stands:`, error instanceof Error ? error.message : error);
   }

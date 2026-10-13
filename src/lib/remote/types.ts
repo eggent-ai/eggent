@@ -45,9 +45,40 @@ export interface ChatHead {
   lastMessageId: string | null;
   /** The id of the last entry in the agent's own record, or null when there is none yet. */
   sessionLeaf: string | null;
+  /**
+   * What is attached to the chat, by name and size. A file uploaded and then
+   * asked about straight away is on the side that took the upload and nowhere
+   * else until the sync brings it, and a turn that runs without it answers about
+   * a file it cannot find.
+   */
+  files: Array<{ name: string; size: number }>;
 }
 
-export const EMPTY_HEAD: ChatHead = { messages: 0, lastMessageId: null, sessionLeaf: null };
+export const EMPTY_HEAD: ChatHead = { messages: 0, lastMessageId: null, sessionLeaf: null, files: [] };
+
+const MAX_HEAD_FILES = 64;
+
+/** A head read from a request or an answer, whatever shape it arrives in. */
+export function cleanHead(value: unknown): ChatHead | null {
+  if (!value || typeof value !== "object") return null;
+  const raw = value as Partial<ChatHead>;
+  const files: ChatHead["files"] = [];
+  if (Array.isArray(raw.files)) {
+    for (const entry of raw.files.slice(0, MAX_HEAD_FILES)) {
+      if (!entry || typeof entry !== "object") continue;
+      const { name, size } = entry as { name?: unknown; size?: unknown };
+      if (typeof name === "string" && name && !name.includes("/") && !name.includes("\\") && typeof size === "number" && Number.isFinite(size) && size >= 0) {
+        files.push({ name, size });
+      }
+    }
+  }
+  return {
+    messages: typeof raw.messages === "number" && Number.isFinite(raw.messages) ? raw.messages : 0,
+    lastMessageId: typeof raw.lastMessageId === "string" && raw.lastMessageId ? raw.lastMessageId : null,
+    sessionLeaf: typeof raw.sessionLeaf === "string" && raw.sessionLeaf ? raw.sessionLeaf : null,
+    files,
+  };
+}
 
 /** A computer the workspace can hand a chat to, as the control plane reports it. */
 export interface RemoteDevice {
@@ -86,8 +117,6 @@ export const REMOTE_HEADERS = {
   relayed: "x-eggent-relayed",
   /** The side that handed it over. */
   from: "x-eggent-from",
-  /** The sender's `ChatHead`, JSON in base64url. */
-  expectHead: "x-eggent-expect-head",
   /** The home to record on the chat, so a stale copy of the file cannot lose a switch. */
   home: "x-eggent-home",
   /** The chat's title, URI-encoded, for the question a computer asks before it runs it. */
@@ -133,25 +162,5 @@ function statusFor(code: RemoteFailureCode): number {
       return 502;
     default:
       return 409;
-  }
-}
-
-export function encodeHead(head: ChatHead): string {
-  return Buffer.from(JSON.stringify(head), "utf-8").toString("base64url");
-}
-
-/** The head a request carries, or null when it carries none or one that does not parse. */
-export function decodeHead(value: string | null | undefined): ChatHead | null {
-  if (!value) return null;
-  try {
-    const parsed = JSON.parse(Buffer.from(value, "base64url").toString("utf-8")) as Partial<ChatHead>;
-    if (!parsed || typeof parsed !== "object") return null;
-    return {
-      messages: typeof parsed.messages === "number" && Number.isFinite(parsed.messages) ? parsed.messages : 0,
-      lastMessageId: typeof parsed.lastMessageId === "string" && parsed.lastMessageId ? parsed.lastMessageId : null,
-      sessionLeaf: typeof parsed.sessionLeaf === "string" && parsed.sessionLeaf ? parsed.sessionLeaf : null,
-    };
-  } catch {
-    return null;
   }
 }

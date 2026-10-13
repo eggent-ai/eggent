@@ -409,6 +409,30 @@ try {
     assert.ok(!/Where this chat runs/.test(call.system));
   });
 
+  // ------------------------------------------------------------------ 12b (attachments)
+  await check("a file attached to a chat is waited for like the chat is, and the agent is told it is there", async () => {
+    const chat = crypto.randomUUID();
+    await readChatStream(await post(cloud, "/api/chat", { chatId: chat, message: "plain cloud turn" }));
+    // Everything so far reaches the computer; then the line goes quiet and a file is attached.
+    await until("the chat on the computer", () => sessionFilesOf(device.root, chat).length === 1 && messagesOf(device, chat).length === 2);
+    syncer.pause();
+    fs.mkdirSync(path.join(cloud.root, "data", "chat-files", chat), { recursive: true });
+    fs.writeFileSync(path.join(cloud.root, "data", "chat-files", chat, "note.txt"), "attached text");
+    assert.equal((await post(cloud, "/api/chat/home", { chatId: chat, home: "device:test-mac" })).status, 200);
+
+    const deviceCalls = model.callsBy("device").length;
+    const refused = await post(cloud, "/api/chat", { chatId: chat, message: "read the attachment" });
+    assert.equal(refused.status, 409);
+    assert.equal(((await refused.json()) as { code?: string }).code, "not-synced");
+    assert.equal(model.callsBy("device").length, deviceCalls, "the agent was let in without the file");
+
+    syncer.resume();
+    const read = await readChatStream(await post(cloud, "/api/chat", { chatId: chat, message: "read the attachment, now" }));
+    assert.match(read.text, /device answered\./, read.text);
+    const system = model.callsBy("device").at(-1)!.system;
+    assert.match(system, /note\.txt/, "the agent was not told about the attachment");
+  });
+
   // ------------------------------------------------------------------ 13 (a messenger)
   const TELEGRAM = { telegram: { chatId: 4242, botToken: "123:fake" } };
   async function tell(side: Side, session: string, message: string): Promise<{ status: number; body: Record<string, any> }> {

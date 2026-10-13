@@ -1,5 +1,6 @@
 import fs from "fs/promises";
 import { chatFileIdentity, getChat } from "@/lib/storage/chat-store";
+import { getChatFiles } from "@/lib/storage/chat-files-store";
 import { findChatSessionFile } from "@/lib/pi/session-files";
 import type { ChatHead } from "@/lib/remote/types";
 
@@ -80,6 +81,16 @@ export async function sessionHasEntry(file: string, entryId: string): Promise<bo
   }
 }
 
+/** What is attached to the chat here, newest names last, as many as a head carries. */
+async function attachedFiles(chatId: string): Promise<ChatHead["files"]> {
+  try {
+    const files = await getChatFiles(chatId);
+    return files.map((file) => ({ name: file.name, size: file.size })).sort((a, b) => a.name.localeCompare(b.name)).slice(0, 64);
+  } catch {
+    return [];
+  }
+}
+
 export async function readChatHead(chatId: string): Promise<ChatHead> {
   const chat = await getChat(chatId);
   const messages = chat?.messages ?? [];
@@ -88,15 +99,27 @@ export async function readChatHead(chatId: string): Promise<ChatHead> {
     messages: messages.length,
     lastMessageId: messages.length > 0 ? messages[messages.length - 1].id : null,
     sessionLeaf: file ? await readSessionLeaf(file) : null,
+    files: await attachedFiles(chatId),
   };
 }
 
-export type CoverGap = "chat" | "session";
+export type CoverGap = "chat" | "session" | "files";
 
 /** What an earlier look found, so a file that has not changed is not read again. */
 interface Memo {
   chat?: { identity: string | null; found: boolean };
   session?: { identity: string | null; found: boolean };
+}
+
+/**
+ * Whether every attachment the head names is here, whole. Compared by name and
+ * size, which is what a file still arriving is not: it is either absent or
+ * short.
+ */
+async function hasAttachments(chatId: string, want: ChatHead["files"]): Promise<boolean> {
+  if (want.length === 0) return true;
+  const held = new Map((await attachedFiles(chatId)).map((file) => [file.name, file.size]));
+  return want.every((file) => held.get(file.name) === file.size);
 }
 
 async function fileIdentity(file: string): Promise<string | null> {
@@ -127,6 +150,7 @@ export async function chatGaps(chatId: string, want: ChatHead, memo: Memo = {}):
     }
     if (!memo.session.found) gaps.push("session");
   }
+  if (want.files.length > 0 && !(await hasAttachments(chatId, want.files))) gaps.push("files");
   return gaps;
 }
 
