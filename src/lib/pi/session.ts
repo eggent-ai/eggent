@@ -25,6 +25,10 @@ import type { PiPendingInteraction } from "@/lib/pi/interaction-types";
 import type { PiSessionOptions } from "@/lib/pi/types";
 import type { ChatHome } from "@/lib/remote/types";
 import { getChatFiles } from "@/lib/storage/chat-files-store";
+import { getChat } from "@/lib/storage/chat-store";
+import { mailEnabled } from "@/lib/mail/config";
+import { formatMailReplyContext } from "@/lib/mail/reply-context";
+import type { MailReplyInfo } from "@/lib/mail/types";
 import type { ChatContextMode, ChatFile, ProjectSkillMetadata } from "@/lib/types";
 import {
   ensureOrchestratorDiskLayout,
@@ -223,6 +227,8 @@ function buildEggentProjectContext(options: {
   visit?: { parentChatId: string; parentTitle?: string };
   /** The other side handed this turn over; says where it is running so the agent does not guess. */
   remote?: { servedFor: ChatHome };
+  /** This chat answers a colleague's message: see eggent_messages. */
+  mailReply?: MailReplyInfo;
 }): string {
   // Ordering here is load-bearing, not cosmetic.
   //
@@ -422,6 +428,8 @@ function buildEggentProjectContext(options: {
     options.chatFiles?.length
       ? "- Uploaded chat files are listed above. Read them by absolute path when the user asks about attached/uploaded files."
       : "- No uploaded chat files are currently attached to this chat.",
+    // Last: it is this one chat's, and changes nothing before it.
+    ...(options.mailReply ? formatMailReplyContext(options.mailReply, path.join(process.cwd(), "data", "projects")) : []),
   ];
 
   return [...shared, ...thisWorkspace].filter(Boolean).join("\n");
@@ -663,6 +671,9 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
   // servers as its own.
   const mcpServerIds = liteMode || publicShare ? [] : loadConfiguredMcpServerIds(getWorkDir(scopeId));
   const chatFiles = !liteMode && !publicShare && options.chatId ? await getChatFiles(options.chatId) : [];
+  const mailReply = !liteMode && !publicShare && options.chatId && mailEnabled()
+    ? (await getChat(options.chatId))?.mailReply
+    : undefined;
   const corePiToolsOnly = options.corePiToolsOnly === true || liteMode !== null || publicShare;
 
   const projectContext = liteMode || publicShare ? "" : buildEggentProjectContext({
@@ -700,6 +711,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     budgetLevel: await currentBudgetLevel(),
     visit: options.visit,
     remote: options.remote,
+    mailReply,
   });
   const explicitContextFiles = liteMode || publicShare ? [] : loadEggentContextFiles(cwd, agentDir);
 

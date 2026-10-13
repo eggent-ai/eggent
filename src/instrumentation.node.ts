@@ -4,6 +4,7 @@ import { managedGatewayBaseUrl, refreshManagedCatalog } from "@/lib/pi/managed-m
 import { restorePiSchedules } from "@/lib/pi/schedule-host";
 import { sweepStoredChats } from "@/lib/secrets/sweep";
 import { startChatsWatcher } from "@/lib/storage/chats-watcher";
+import { startMailSync } from "@/lib/mail/sync";
 
 // A chat written by the sync with a paired workspace or computer shows up on screen as it arrives.
 startChatsWatcher();
@@ -30,6 +31,9 @@ function sweepChats(retryLater: boolean): void {
     });
 }
 sweepChats(true);
+
+// Files sent with messages are copied here while the workspace is up (lib/mail).
+startMailSync();
 
 // A scheduled job is armed inside a live session and dies with it, so without
 // this every restart ends every schedule while its store still says enabled.

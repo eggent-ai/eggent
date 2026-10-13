@@ -6,6 +6,7 @@ import type { LearnedNotice } from "@/lib/learning/types";
 import type { ProducedGroup } from "@/lib/files/produced";
 import type { PiRuntimeStats, SubagentSnapshot } from "@/lib/pi/types";
 import type { ChatHome } from "@/lib/remote/types";
+import type { MailReplyInfo } from "@/lib/mail/types";
 
 // --- Settings ---
 
@@ -150,6 +151,8 @@ export interface Chat {
    * been switched, and then it runs where the message was written.
    */
   home?: ChatHome;
+  /** Set on a chat opened to answer a colleague's message: see lib/mail. */
+  mailReply?: MailReplyInfo;
   messages: ChatMessage[];
   createdAt: string;
   updatedAt: string;
@@ -193,6 +196,8 @@ export interface ChatListItem {
   visitFrom?: string;
   /** Where the chat runs, when it has been switched to a place of its own. */
   home?: ChatHome;
+  /** Who this chat answers, when it was opened to answer a colleague's message. */
+  mailReplyTo?: string;
   createdAt: string;
   updatedAt: string;
   messageCount: number;
