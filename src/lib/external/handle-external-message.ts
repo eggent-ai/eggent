@@ -875,6 +875,9 @@ export async function handleExternalMessage(
     runtimeData,
     toolRuntimeData: input.toolRuntimeData,
     enableEggentTools: input.publicMode ? false : undefined,
+    // A visitor of a public link may ask and be answered, and nothing else: no
+    // shell, no writing, no web, nothing outside the project. See public-share.ts.
+    publicShare: input.publicMode === true,
     onProgress: input.onProgress,
   });
 

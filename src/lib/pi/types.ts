@@ -16,6 +16,12 @@ export interface PiSessionOptions {
   chatContextMode?: ChatContextMode;
   enableEggentTools?: boolean;
   /**
+   * A visitor of a public link to one project is writing: the session can read
+   * that project's files and nothing else, and its prompt carries the project's
+   * instructions and nothing about the workspace. See public-share.ts.
+   */
+  publicShare?: boolean;
+  /**
    * This session is a project doing work for another chat, which is where its
    * answer goes; see project-visit.ts. A visit cannot visit, runs no more than
    * two helpers at once, does not learn from the exchange, and whatever it

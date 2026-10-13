@@ -860,7 +860,8 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
   let session: Awaited<ReturnType<typeof createEggentPiSession>>;
   try {
     // A session kept for its schedules is built for the turn that made them: it serves this one now.
-    const lent = takeRetainedPiScheduleSession(options.chatId);
+    // Never for a public share, whose session is built narrower than any the workspace keeps.
+    const lent = options.publicShare ? null : takeRetainedPiScheduleSession(options.chatId);
     if (lent) rebindSessionTurn(lent, { runId, abortSignal: runAbort.signal, toolRuntimeData: options.toolRuntimeData });
     session = lent ?? await raceAbort(
       createEggentPiSession({
@@ -874,6 +875,7 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
         // accepted here and read by the learning gate below, but never reached the
         // session, so a shared chat built the full tool set.
         enableEggentTools: options.enableEggentTools,
+        publicShare: options.publicShare,
         toolRuntimeData: options.toolRuntimeData,
         visit: options.visit,
         runId,

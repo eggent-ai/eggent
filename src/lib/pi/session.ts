@@ -14,6 +14,7 @@ import { formatLearnedForPrompt, learnedSnapshot } from "@/lib/learning/notes";
 import { createEggentPiTools } from "@/lib/pi/eggent-tools";
 import { createEggentPiExtensionUIContext } from "@/lib/pi/interaction-ui-context";
 import { createEggentInteractiveBashTool } from "@/lib/pi/interactive-bash-tool";
+import { buildPublicSharePrompt, createPublicShareTools, PUBLIC_SHARE_TOOL_NAMES } from "@/lib/pi/public-share";
 import { normalizePiScheduleStore } from "@/lib/pi/schedule-host";
 import { openChatSessionManager } from "@/lib/pi/session-files";
 import { logExtensionError, ownsScheduleStore, shutdownSessionExtensions } from "@/lib/pi/session-lifecycle";
@@ -529,9 +530,14 @@ export function releaseSessionTurn(session: object): void {
  * extensions, context files, retry/compaction, and session behavior.
  */
 export async function createEggentPiSession(options: PiSessionOptions = {}) {
-  const liteMode = resolveLiteMode(options.chatContextMode);
+  // A public share is narrower than any light mode and takes their place.
+  const publicShare = options.publicShare === true;
+  const liteMode = publicShare ? null : resolveLiteMode(options.chatContextMode);
   const projectId = normalizeProjectId(options.projectId);
-  const cwd = resolveCwd({ ...options, projectId });
+  // The project folder is the whole world of a public share, so it has to be a
+  // project's, and a working directory asked for alongside is not honoured.
+  if (publicShare && !projectId) throw new Error("A public share answers for one project, and none was named.");
+  const cwd = publicShare ? getWorkDir(projectId as string) : resolveCwd({ ...options, projectId });
   const agentDir = options.agentDir || getAgentDir();
   await ensureWebSearchWorkflow();
   const modelRuntime = await getPiModelRuntime();
@@ -620,10 +626,10 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     : project
       ? project.instructions
       : await readProjectContext(scopeId);
-  const ownSkills = liteMode ? [] : await loadProjectSkillsMetadata(scopeId);
+  const ownSkills = liteMode || publicShare ? [] : await loadProjectSkillsMetadata(scopeId);
   // What the agent has learned is learned for the person, not for one project,
   // so a project sees those skills too. Its own skills win a clash of names.
-  const sharedLearnedSkills = liteMode || !projectId
+  const sharedLearnedSkills = liteMode || publicShare || !projectId
     ? []
     : (await loadProjectSkillsMetadata(GLOBAL_PROJECT_ID)).filter(
         (skill) => skill.learned && !ownSkills.some((own) => own.name.toLowerCase() === skill.name.toLowerCase())
@@ -633,11 +639,11 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
   // Read the scope's own file rather than the session cwd: an orchestrator run
   // started inside a project directory would otherwise report that project's
   // servers as its own.
-  const mcpServerIds = liteMode ? [] : loadConfiguredMcpServerIds(getWorkDir(scopeId));
-  const chatFiles = !liteMode && options.chatId ? await getChatFiles(options.chatId) : [];
-  const corePiToolsOnly = options.corePiToolsOnly === true || liteMode !== null;
+  const mcpServerIds = liteMode || publicShare ? [] : loadConfiguredMcpServerIds(getWorkDir(scopeId));
+  const chatFiles = !liteMode && !publicShare && options.chatId ? await getChatFiles(options.chatId) : [];
+  const corePiToolsOnly = options.corePiToolsOnly === true || liteMode !== null || publicShare;
 
-  const projectContext = liteMode ? "" : buildEggentProjectContext({
+  const projectContext = liteMode || publicShare ? "" : buildEggentProjectContext({
     projectId,
     projectName: project?.name,
     projectDescription: project?.description,
@@ -672,7 +678,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     budgetLevel: await currentBudgetLevel(),
     visit: options.visit,
   });
-  const explicitContextFiles = liteMode ? [] : loadEggentContextFiles(cwd, agentDir);
+  const explicitContextFiles = liteMode || publicShare ? [] : loadEggentContextFiles(cwd, agentDir);
 
   // Helpers started with the Agent tool report back inside the turn that started
   // them; see subagents.ts for why they cannot be left detached here.
@@ -695,7 +701,16 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     // pi's own preamble opens by calling itself a coding assistant and closes
     // with the path to its README inside node_modules - 945 tokens of it, on
     // every turn. A light chat replaces it outright rather than appending to it.
-    ...(liteMode
+    ...(publicShare
+      ? {
+          systemPromptOverride: () =>
+            buildPublicSharePrompt({
+              projectName: project?.name,
+              projectDescription: project?.description,
+              projectInstructions: workspaceInstructions,
+            }),
+        }
+      : liteMode
       ? {
           systemPromptOverride: () =>
             buildLiteSystemPrompt({ mode: liteMode, cwd, projectId, projectName: project?.name }),
@@ -704,8 +719,9 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     agentsFilesOverride: (current) => {
       // A light chat carries no context files at all: not the Eggent runtime
       // context, not context.md, not an AGENTS.md the loader found on the way
-      // up. The whole prompt is the one built above.
-      if (liteMode) return { agentsFiles: [] };
+      // up. The whole prompt is the one built above. Nor does a public share,
+      // whose prompt carries the project's instructions itself.
+      if (liteMode || publicShare) return { agentsFiles: [] };
       const seen = new Set<string>();
       const agentsFiles = [
         ...current.agentsFiles,
@@ -765,7 +781,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     onPiInteraction: options.onPiInteraction,
     toolRuntimeData: options.toolRuntimeData,
   };
-  const eggentTools = options.enableEggentTools === false || liteMode === "plain"
+  const eggentTools = options.enableEggentTools === false || liteMode === "plain" || publicShare
     ? { tools: [], cleanup: async () => {} }
     : await createEggentPiTools({
         chatId: options.chatId,
@@ -785,7 +801,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
         // external API do not, so asking there would block until timeout.
         get interactive() { return Boolean(turn.onPiInteraction); },
       });
-  const customTools = [
+  const customTools = publicShare ? await createPublicShareTools(cwd) : [
     ...eggentTools.tools,
     // ls is not among the runtime's default tools, and read without it is a
     // tool that can only open a path somebody already knew.
@@ -809,7 +825,9 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
 
   // noTools "all" leaves the request without a tools field at all, which is
   // what "plain" means; an allowlist is what every other mode narrows through.
-  const toolSelection = liteMode === "plain"
+  const toolSelection = publicShare
+    ? { tools: PUBLIC_SHARE_TOOL_NAMES }
+    : liteMode === "plain"
     ? { noTools: "all" as const }
     : liteMode === "files"
       ? { tools: LITE_TOOL_NAMES.files }
