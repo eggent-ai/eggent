@@ -29,6 +29,7 @@ export const RESERVED_DASHBOARD_SEGMENTS: readonly string[] = [
   "files",
   "mcp",
   "memory",
+  "messages",
   "messengers",
   "onboarding",
   "pipeline-runs",

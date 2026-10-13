@@ -9,6 +9,7 @@ import {
   CalendarClock,
   CornerDownRight,
   FolderOpen,
+  Mail,
   LifeBuoy,
   LogOut,
   MessageSquarePlus,
@@ -37,6 +38,7 @@ import {
 } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
 import { UsageWidget } from "@/components/usage-widget";
+import { MailNav } from "@/components/mail/mail-nav";
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { t } = useI18n();
@@ -233,6 +235,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 
       <SidebarContent>
 
+        {/* Messages with the company's people, when this workspace has them. */}
+        <MailNav />
+
         {/* Project selector */}
         <SidebarGroup>
           <SidebarGroupLabel>{t("nav.project")}</SidebarGroupLabel>
@@ -296,7 +301,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                       ? t("nav.scheduledChat", { job: chat.scheduledJob })
                       : chat.visitFrom
                         ? t("nav.visitChat", { chat: chat.visitFrom })
-                        : undefined
+                        : chat.mailReplyTo
+                          ? t("nav.mailReplyChat", { name: chat.mailReplyTo })
+                          : undefined
                   }
                 >
                   {/* A scheduled task reports into a chat a day, so these
@@ -306,6 +313,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                   ) : chat.visitFrom ? (
                     // Work this project did when another chat asked it with @.
                     <CornerDownRight aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+                  ) : chat.mailReplyTo ? (
+                    // A chat opened to answer a colleague's message.
+                    <Mail aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
                   ) : null}
                   <span className="truncate">{chat.title}</span>
                 </SidebarMenuButton>

@@ -12,6 +12,7 @@ import type { SubagentSnapshot } from "@/lib/pi/types";
 import { FileMention } from "./file-mention";
 import { LearnedNote } from "./learned-note";
 import { FilesProduced } from "./files-produced";
+import { SendToContact, useMailReply } from "@/components/mail/mail-reply";
 import { cleanProducedGroups, type ProducedGroup } from "@/lib/files/produced-shape";
 import type { LearnedNotice } from "@/lib/learning/types";
 import { embeddedAudioPath, embeddedImageUrl, fileMentionPath } from "@/lib/files/openable";
@@ -134,6 +135,8 @@ const AVATAR_TOOL_CARD_OFFSET = "mt-[5px]";
 
 export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
   const isUser = message.role === "user";
+  // Before any return: a chat that answers a colleague's message offers to send each answer.
+  const mailReply = useMailReply();
 
   if (isUser) {
     const visibleTextContent = normalizeVisibleText(
@@ -309,9 +312,41 @@ export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
         {renderedParts}
         {producedFiles.length > 0 ? <FilesProduced groups={producedFiles} /> : null}
         {learned ? <LearnedNote notice={learned} /> : null}
+        {/* Only once the answer is complete: the scope is withheld from the one still streaming. */}
+        {mailReply && shellScope ? (
+          <SendToContact
+            info={mailReply}
+            answerKey={`${shellScope}:${message.id}`}
+            text={finalAnswerText(message.parts)}
+            produced={producedFiles}
+          />
+        ) : null}
       </div>
     </div>
   );
+}
+
+/**
+ * What an answer says once its work is done: the text after its last tool
+ * call, or all of its text when it called none. What goes to a colleague is
+ * the answer, not the narration on the way to it.
+ */
+function finalAnswerText(parts: UIMessage["parts"]): string {
+  let lastTool = -1;
+  parts.forEach((part, index) => {
+    if (toolPartInfo(part)) lastTool = index;
+  });
+  const texts = parts
+    .slice(lastTool + 1)
+    .filter((part): part is { type: "text"; text: string } => part.type === "text")
+    .map((part) => part.text.trim())
+    .filter(Boolean);
+  if (texts.length) return texts.join("\n\n");
+  return parts
+    .filter((part): part is { type: "text"; text: string } => part.type === "text")
+    .map((part) => part.text.trim())
+    .filter(Boolean)
+    .join("\n\n");
 }
 
 /** The files this answer made, when it made any: the row under it. */

@@ -5,6 +5,7 @@
 import type { LearnedNotice } from "@/lib/learning/types";
 import type { ProducedGroup } from "@/lib/files/produced";
 import type { PiRuntimeStats, SubagentSnapshot } from "@/lib/pi/types";
+import type { MailReplyInfo } from "@/lib/mail/types";
 
 // --- Settings ---
 
@@ -143,6 +144,8 @@ export interface Chat {
   scheduledRun?: ScheduledRunInfo;
   /** Set on a chat a project was asked to work in, from another chat: see eggent_ask_project. */
   visit?: ProjectVisitInfo;
+  /** Set on a chat opened to answer a colleague's message: see lib/mail. */
+  mailReply?: MailReplyInfo;
   messages: ChatMessage[];
   createdAt: string;
   updatedAt: string;
@@ -184,6 +187,8 @@ export interface ChatListItem {
   scheduledJob?: string;
   /** The title of the chat that asked this project, when this chat is a visit. */
   visitFrom?: string;
+  /** Who this chat answers, when it was opened to answer a colleague's message. */
+  mailReplyTo?: string;
   createdAt: string;
   updatedAt: string;
   messageCount: number;

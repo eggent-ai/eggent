@@ -3,6 +3,7 @@ import { getManagedGatewayToken, refreshPiModelCatalog, syncManagedProviderCatal
 import { managedGatewayBaseUrl, refreshManagedCatalog } from "@/lib/pi/managed-models";
 import { restorePiSchedules } from "@/lib/pi/schedule-host";
 import { sweepStoredChats } from "@/lib/secrets/sweep";
+import { startMailSync } from "@/lib/mail/sync";
 
 initTelegramLifecycle().catch((error) => {
   console.error("Failed to initialize Telegram lifecycle:", error);
@@ -26,6 +27,9 @@ function sweepChats(retryLater: boolean): void {
     });
 }
 sweepChats(true);
+
+// Files sent with messages are copied here while the workspace is up (lib/mail).
+startMailSync();
 
 // A scheduled job is armed inside a live session and dies with it, so without
 // this every restart ends every schedule while its store still says enabled.
