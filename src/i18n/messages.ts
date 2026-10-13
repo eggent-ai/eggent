@@ -1200,6 +1200,24 @@ const enMessages = {
   "remote.error.disabled": "Running chats on another side isn't set up here.",
   "remote.error.failed": "The message couldn't be handed to {where}: {reason}",
   "remote.error.lost": "The connection to {where} was lost. The turn may still be running there; its answer will appear in this chat when it syncs.",
+
+  // The control under the composer that says where a chat runs.
+  "chat.runPlace.trigger": "Where this chat runs",
+  "chat.runPlace.hint": "Where this chat runs. Messages go there whichever side you type them on, and the answer comes back here.",
+  "chat.runPlace.thisComputer": "This computer",
+  "chat.runPlace.cloud": "Cloud",
+  "chat.runPlace.yourComputer": "Your computer",
+  "chat.runPlace.here": "here",
+  "chat.runPlace.unavailable": "not available",
+  "chat.runPlace.unavailableReason": "The app is closed, offline, or not set to take tasks from the cloud.",
+  "chat.runPlace.notReadyReason": "Its chat history isn't shared with the cloud yet.",
+  "chat.runPlace.cloudUnreachable": "The cloud can't be reached right now.",
+  "chat.runPlace.busy": "Wait for the current turn to finish first.",
+  "chat.runPlace.switchFailed": "Couldn't switch: {reason}",
+  "chat.runPlace.runHere": "Run it here instead",
+  "chat.runPlace.tryAgain": "Try again",
+  "nav.homeCloud": "Runs in the cloud",
+  "nav.homeDevice": "Runs on {name}",
 } as const;
 
 export type MessageKey = keyof typeof enMessages;

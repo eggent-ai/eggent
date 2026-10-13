@@ -14,6 +14,7 @@
     "test:schedules": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/test-schedule-policy.mjs",
     "test:active-runs": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-active-runs.ts",
     "test:remote-turn": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-remote-turn.ts",
+    "test:chats-watcher": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-chats-watcher.ts",
     "test:live-runs": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-live-runs.ts",
     "test:dashboard-routes": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-dashboard-routes.ts",
     "test:provider-failure": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-provider-failure.ts",

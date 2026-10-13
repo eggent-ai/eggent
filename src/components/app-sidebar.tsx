@@ -7,8 +7,10 @@ import { useRouter, usePathname } from "next/navigation";
 import {
   Bot,
   CalendarClock,
+  Cloud,
   CornerDownRight,
   FolderOpen,
+  Laptop,
   LifeBuoy,
   LogOut,
   MessageSquarePlus,
@@ -20,6 +22,7 @@ import { useAppStore } from "@/store/app-store";
 import { chatPath } from "@/lib/dashboard-routes";
 import { useBackgroundSync } from "@/hooks/use-background-sync";
 import { useActiveRuns } from "@/hooks/use-active-runs";
+import { useRemoteStatus } from "@/hooks/use-remote-status";
 import { useI18n } from "@/i18n/provider";
 
 import {
@@ -60,6 +63,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     projectId: activeProjectId ?? null,
   });
   const activeRuns = useActiveRuns();
+  const remote = useRemoteStatus(chatsTick);
+  // Whether a chat's home is the other side of the pair, from where this list is read.
+  const isOtherSide = (home: string | undefined) => Boolean(home && remote.status?.enabled && home !== remote.status.node);
 
   /**
    * Open a conversation, in the store and in the address bar.
@@ -296,7 +302,11 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                       ? t("nav.scheduledChat", { job: chat.scheduledJob })
                       : chat.visitFrom
                         ? t("nav.visitChat", { chat: chat.visitFrom })
-                        : undefined
+                        : isOtherSide(chat.home)
+                          ? chat.home === "cloud"
+                            ? t("nav.homeCloud")
+                            : t("nav.homeDevice", { name: remote.status?.devices.find((device) => device.node === chat.home)?.name ?? t("chat.runPlace.yourComputer") })
+                          : undefined
                   }
                 >
                   {/* A scheduled task reports into a chat a day, so these
@@ -306,6 +316,11 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                   ) : chat.visitFrom ? (
                     // Work this project did when another chat asked it with @.
                     <CornerDownRight aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+                  ) : isOtherSide(chat.home) ? (
+                    // A chat that runs on the other side of the pair, not where this list is read.
+                    chat.home === "cloud"
+                      ? <Cloud aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+                      : <Laptop aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
                   ) : null}
                   <span className="truncate">{chat.title}</span>
                 </SidebarMenuButton>

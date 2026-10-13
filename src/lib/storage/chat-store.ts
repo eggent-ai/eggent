@@ -89,10 +89,30 @@ export async function chatFileIdentity(chatId: string): Promise<string | null> {
   }
 }
 
+// Chats this process wrote itself, and when. Whatever changes a chat's file
+// after that is somebody else - the file sync, a second process - and the
+// screen has to be told, because nothing else will.
+const OWN_WRITES_KEY = "__EGGENT_OWN_CHAT_WRITES__";
+
+function ownWrites(): Map<string, number> {
+  const holder = globalThis as typeof globalThis & { [OWN_WRITES_KEY]?: Map<string, number> };
+  if (!holder[OWN_WRITES_KEY]) holder[OWN_WRITES_KEY] = new Map<string, number>();
+  return holder[OWN_WRITES_KEY];
+}
+
+/** Whether this process wrote the chat's file a moment ago. */
+export function wroteChatHereLately(chatId: string, withinMs = 2500): boolean {
+  const at = ownWrites().get(chatId);
+  return at !== undefined && Date.now() - at < withinMs;
+}
+
 export async function saveChat(chat: Chat): Promise<void> {
   await ensureDir(CHATS_DIR);
   const filePath = path.join(CHATS_DIR, `${chat.id}.json`);
   await fs.writeFile(filePath, JSON.stringify(withoutSecrets(withoutInlineImages(chat)), null, 2), "utf-8");
+  const writes = ownWrites();
+  if (writes.size > 500) writes.clear();
+  writes.set(chat.id, Date.now());
   publishUiSyncEvent({
     topic: "chat",
     chatId: chat.id,

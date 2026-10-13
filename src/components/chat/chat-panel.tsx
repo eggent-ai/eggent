@@ -13,6 +13,9 @@ import type { PiRuntimeStats } from "@/lib/pi/types";
 import type { PiPendingInteraction } from "@/lib/pi/interaction-types";
 import { useBackgroundSync } from "@/hooks/use-background-sync";
 import { useActiveRuns } from "@/hooks/use-active-runs";
+import { useRemoteStatus } from "@/hooks/use-remote-status";
+import { canRunHereInstead, parseHandoverFailure, type HandoverFailure } from "@/lib/remote/client";
+import { parseHome, type ChatHome } from "@/lib/remote/types";
 import { useI18n } from "@/i18n/provider";
 import type { MessageKey } from "@/i18n/messages";
 import { DASHBOARD_CHAT_ROOT, chatPath } from "@/lib/dashboard-routes";
@@ -475,6 +478,11 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
   // will be created with, plus what the footer shows for one that exists.
   const [contextMode, setContextMode] = useState<ChatContextMode>("full");
   const [chatError, setChatError] = useState<string | null>(null);
+  // The last message could not be handed to the side the chat runs on; what the person can do about it.
+  const [handoverFailure, setHandoverFailure] = useState<HandoverFailure | null>(null);
+  // Where the chat runs: what is stored on it, or - for a chat that does not
+  // exist yet - what it will be started with. Null means wherever it is typed.
+  const [chatHome, setChatHome] = useState<ChatHome | null>(null);
   const [inputFocusSignal, setInputFocusSignal] = useState(0);
   const [configuredRuntimeStats, setConfiguredRuntimeStats] = useState<PiRuntimeStats | null>(null);
   const [quickSkills, setQuickSkills] = useState<QuickSkillAction[]>(initialQuickSkills);
@@ -520,6 +528,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     projectId: activeProjectId ?? null,
     chatId: activeChatId ?? undefined,
   });
+  const remote = useRemoteStatus(syncTick);
   const internalChatIdRef = useRef(internalChatId);
   internalChatIdRef.current = internalChatId;
 
@@ -531,6 +540,9 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
 
   const contextModeRef = useRef(contextMode);
   contextModeRef.current = contextMode;
+
+  const chatHomeRef = useRef(chatHome);
+  chatHomeRef.current = chatHome;
 
   // Track the last activeChatId we've seen to detect external navigation
   const prevActiveChatId = useRef(activeChatId);
@@ -570,7 +582,9 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         // A light chat is a deliberate choice for one conversation, so the next
         // one starts full again rather than inheriting it.
         setContextMode("full");
+        setChatHome(null);
       }
+      setHandoverFailure(null);
     }
   }, [activeChatId]);
 
@@ -618,17 +632,22 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
           projectId: activeProjectIdRef.current,
           contextMode: contextModeRef.current,
           currentPath: currentPathRef.current,
+          // Read by the server only for a chat it has not got yet.
+          ...(chatHomeRef.current ? { home: chatHomeRef.current } : {}),
         }),
       }),
     []
   );
 
-  const { messages, sendMessage, status, stop, setMessages, resumeStream } = useChat({
+  const { messages, sendMessage, status, stop, setMessages, resumeStream, regenerate } = useChat({
     id: internalChatId,
     transport,
     onError: (error) => {
       console.error("Chat error:", error);
-      setChatError(formatChatErrorMessage(error, t));
+      // A message that could not be handed to the side the chat runs on comes back as a reason, not a failure.
+      const refusal = parseHandoverFailure(error);
+      setHandoverFailure(refusal);
+      setChatError(refusal ? refusal.message : formatChatErrorMessage(error, t));
     },
   });
   stopStreamRef.current = stop;
@@ -707,7 +726,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
           return null;
         }
         if (!r.ok) throw new Error("Failed to load chat");
-        return r.json() as Promise<{ messages?: ChatMessage[]; contextMode?: ChatContextMode }>;
+        return r.json() as Promise<{ messages?: ChatMessage[]; contextMode?: ChatContextMode; home?: string }>;
       })
       .then((chat) => {
         if (cancelled) return;
@@ -718,6 +737,9 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         if (stopSettlingRef.current) return;
 
         setContextMode(chat?.contextMode ?? "full");
+        // Only a chat that exists says where it lives: for one that does not yet,
+        // the choice made on this screen is all there is.
+        if (chat?.messages) setChatHome(parseHome(chat.home) ?? null);
 
         if (!chat?.messages) {
           setMessages([]);
@@ -1175,6 +1197,63 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     setTimeout(() => setMessages(snapshot), 0);
   }, [setMessages, stop]);
 
+  // Choosing where the chat runs. For a chat that is stored this is a write the
+  // server may refuse (the computer is gone, the chat is working); for one that
+  // is not stored yet it is only what the first message will carry.
+  const selectHome = useCallback(async (target: ChatHome): Promise<boolean> => {
+    setChatError(null);
+    setHandoverFailure(null);
+    if (activeChatId === null) {
+      chatHomeRef.current = target;
+      setChatHome(target);
+      return true;
+    }
+    try {
+      const response = await fetch("/api/chat/home", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chatId: internalChatIdRef.current, home: target }),
+      });
+      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+      if (!response.ok) {
+        setChatError(t("chat.runPlace.switchFailed", { reason: payload?.error || response.statusText }));
+        void remote.refresh();
+        return false;
+      }
+      // Set at once, not on the next render: a message re-sent straight after reads it from here.
+      chatHomeRef.current = target;
+      setChatHome(target);
+      return true;
+    } catch (error) {
+      setChatError(t("chat.runPlace.switchFailed", { reason: error instanceof Error ? error.message : String(error) }));
+      return false;
+    }
+  }, [activeChatId, remote, t]);
+
+  const retryHandedOverMessage = useCallback(() => {
+    setChatError(null);
+    setHandoverFailure(null);
+    void regenerate();
+  }, [regenerate]);
+
+  const runHereInstead = useCallback(async () => {
+    const here = remote.status?.node;
+    if (!here) return;
+    if (await selectHome(here)) {
+      void regenerate();
+    }
+  }, [regenerate, remote.status?.node, selectHome]);
+
+  const errorActions = useMemo(() => {
+    if (!handoverFailure) return undefined;
+    const actions: Array<{ label: string; onClick: () => void }> = [];
+    if (canRunHereInstead(handoverFailure) && remote.status?.enabled) {
+      actions.push({ label: t("chat.runPlace.runHere"), onClick: () => void runHereInstead() });
+    }
+    actions.push({ label: t("chat.runPlace.tryAgain"), onClick: retryHandedOverMessage });
+    return actions;
+  }, [handoverFailure, remote.status?.enabled, retryHandedOverMessage, runHereInstead, t]);
+
   const showQuickSkills = !activeProjectId && activeChatId === null && messages.length === 0 ? quickSkills : [];
 
   return (
@@ -1184,6 +1263,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         messages={messages}
         isLoading={isLoading}
         errorMessage={chatError}
+        errorActions={errorActions}
         compactionStatus={compactionStatus}
         actionNotice={actionNotice}
         pendingInteraction={pendingInteraction}
@@ -1211,6 +1291,13 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         // and a history of calls to tools that are no longer offered is not
         // worth what it costs at the provider.
         contextModeLocked={messages.length > 0 || isLoading}
+        runPlace={{
+          status: remote.status,
+          home: chatHome,
+          busy: isLoading,
+          onSelect: (home) => void selectHome(home),
+          onOpen: () => void remote.refresh(),
+        }}
       />
     </div>
     </ShellActionsProvider>

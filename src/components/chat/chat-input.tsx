@@ -22,6 +22,7 @@ import { mentionHandleFor, resolveProjectMention, suggestProjects, type Mentiona
 import { firstSecret, type SecretKind } from "@/lib/secrets/shapes";
 import { SPOKEN_CREDENTIAL } from "@/lib/secrets/spoken";
 import { SecretNotice } from "@/components/chat/secret-notice";
+import { RunPlaceControl, type RunPlaceProps } from "@/components/chat/run-place";
 import { useAppStore } from "@/store/app-store";
 
 function formatTokenCount(value?: number | null) {
@@ -226,6 +227,8 @@ interface ChatInputProps {
   contextMode?: ChatContextMode;
   onContextModeChange?: (mode: ChatContextMode) => void;
   contextModeLocked?: boolean;
+  /** Where the chat runs, when this install can run it on the other side of a pair. */
+  runPlace?: RunPlaceProps;
 }
 
 export function ChatInput({
@@ -245,6 +248,7 @@ export function ChatInput({
   contextMode = "full",
   onContextModeChange,
   contextModeLocked = false,
+  runPlace,
 }: ChatInputProps) {
   const { t } = useI18n();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -1141,6 +1145,7 @@ export function ChatInput({
           </div>
         )}
         <div className="mt-2 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
+          {runPlace ? <RunPlaceControl {...runPlace} /> : null}
           <ContextModeControl
             mode={contextMode}
             locked={contextModeLocked}
