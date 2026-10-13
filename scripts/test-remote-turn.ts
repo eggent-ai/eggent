@@ -697,6 +697,30 @@ try {
     }
   });
 
+  await check("a refusal does not make this side forget that it handed the chat over a moment ago", async () => {
+    const chat = crypto.randomUUID();
+    syncer.pause();
+    try {
+      // A new chat handed to the computer; its file has not come back yet, so this side has only its memory of it.
+      const first = await readChatStream(await post(cloud, "/api/chat", { chatId: chat, message: "start it on the computer", home: "device:test-mac", projectId: "none" }));
+      assert.match(first.text, /device answered\./);
+      assert.equal(readChatFile(cloud.root, chat), null);
+      relay.state.deviceOnline = false;
+      try {
+        const refused = await post(cloud, "/api/chat", { chatId: chat, message: "while it is away", projectId: "none" });
+        assert.equal(refused.status, 409);
+      } finally {
+        relay.state.deviceOnline = true;
+      }
+      // Back again: still the computer's chat, not a new one started here from a file that has not arrived.
+      const next = await readChatStream(await post(cloud, "/api/chat", { chatId: chat, message: "and now it is back", projectId: "none" }));
+      assert.match(next.text, /device answered\./, "a chat that had been handed over was started again here after a refusal");
+      assert.equal(readChatFile(cloud.root, chat), null, "this side wrote a chat of its own");
+    } finally {
+      syncer.resume();
+    }
+  });
+
   await check("pressing stop while the other side is still getting ready stops the turn before it starts", async () => {
     const chat = crypto.randomUUID();
     await readChatStream(await post(cloud, "/api/chat", { chatId: chat, message: "plain cloud turn" }));

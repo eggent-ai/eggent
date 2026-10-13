@@ -504,8 +504,9 @@ export async function runHandedOverTurn(turn: HandedOverTurn): Promise<Response>
     const t = await getServerTranslator();
     // Stopped before it started: that is the answer, not a failure to hand it over.
     if (handover.state.stopRequested) return noticeStream(t("external.run.stopped"), chatId);
-    // Nothing was handed over, so nothing is remembered as having been.
-    forgetHandOver(chatId);
+    // Nothing was handed over, so nothing is remembered as having been: the memory
+    // is made only once the other side has answered (below), and a refusal does not
+    // undo what an earlier message of the same chat left.
     return remoteFailureResponse(error, home);
   }
   rememberHandOver(chatId, home);
@@ -577,7 +578,6 @@ export async function runHandedOverText(
     handover.release();
     // Stopped before it started: nothing to report but that.
     if (handover.state.stopRequested) return { text: "", finalText: "", stopped: true, chatBefore: null };
-    forgetHandOver(chatId);
     const failure = error instanceof RemoteError ? error : new RemoteError("failed", error instanceof Error ? error.message : String(error), { home });
     const where = await whereLabel(home, t);
     console.warn(`[remote] could not hand the turn to ${home}: ${failure.code} - ${failure.message}`);
