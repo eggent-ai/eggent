@@ -43,6 +43,7 @@ const service = {
   inCompany: true,
   sent: [] as Array<Record<string, unknown>>,
   reads: [] as Array<Record<string, unknown>>,
+  abouts: [] as Array<Record<string, unknown>>,
   downloads: 0,
   copied: [] as string[],
   pending: [FILE_A, FILE_B],
@@ -124,6 +125,12 @@ const stub = http.createServer(async (req, res) => {
         attachments: sentFiles.map((file, index) => ({ id: `bbbbbbbb-0000-4000-8000-00000000000${index}`, name: file.name, size: Buffer.from(file.data, "base64").length, mime: "application/octet-stream" })),
       },
     });
+    return;
+  }
+  if (route === "/about" && req.method === "POST") {
+    const body = JSON.parse(await readBody(req)) as Record<string, unknown>;
+    service.abouts.push(body);
+    json({ person: { id: body.who || "acme", name: body.who === "acme-boris" ? "Boris" : "Ilia", about: body.about } });
     return;
   }
   if (route === "/read" && req.method === "POST") {
@@ -278,6 +285,14 @@ await check("a file of the workspace goes with a message; one outside it, or one
   assert.equal(secret.success, false);
   assert.match(String(secret.error), /credentials/);
   assert.equal(service.sent.length, before + 1);
+});
+await check("describe writes down what a named person does, or the agent's own person when nobody is named", async () => {
+  const named = await run(tools, { action: "describe", to: "Boris", text: "Runs purchasing and the warehouse" });
+  assert.equal(named.success, true, JSON.stringify(named));
+  assert.deepEqual(service.abouts.at(-1), { who: "acme-boris", about: "Runs purchasing and the warehouse" });
+  const own = await run(tools, { action: "describe", text: "Runs the company" });
+  assert.equal(own.success, true);
+  assert.ok(!("who" in service.abouts.at(-1)!), "describing oneself named somebody");
 });
 await check("reading a conversation to the person reads it; a scheduled run reads for nobody", async () => {
   const before = service.reads.length;

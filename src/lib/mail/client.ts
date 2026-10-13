@@ -115,6 +115,12 @@ export async function sendMailMessage(input: {
   return data.message;
 }
 
+/** Writes down what a person does: the administrator for anyone in the company, a person for themselves (no `who`). */
+export async function setMailAbout(who: string | null, about: string): Promise<{ id: string; name: string; about: string | null }> {
+  const data = await json<{ person: { id: string; name: string; about: string | null } }>("POST", "/about", { ...(who ? { who } : {}), about });
+  return data.person;
+}
+
 export async function markMailThreadRead(contactId: string, upTo?: number): Promise<{ readUpTo: number }> {
   return await json("POST", "/read", { with: contactId, ...(upTo ? { upTo } : {}) });
 }
