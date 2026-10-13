@@ -1,5 +1,6 @@
 import type { UIMessage, UIMessageStreamWriter } from "ai";
 import { publishUiSyncEvent } from "@/lib/realtime/event-bus";
+import type { ChatHome } from "@/lib/remote/types";
 
 /**
  * What a run is producing right now, kept where a second reader can find it.
@@ -31,6 +32,12 @@ export interface LiveRunSummary {
   runId: string;
   startedAt: number;
   surface: LiveRunSurface;
+  /**
+   * Set when the turn is running on the other side of a paired workspace and
+   * computer and this side is only relaying it. Quitting this side does not stop
+   * it, which is what a caller deciding whether work would be lost needs to know.
+   */
+  home?: ChatHome;
 }
 
 /** The writing end, held by the run that owns it. */
@@ -51,6 +58,7 @@ interface LiveRunState {
   runId: string;
   projectId: string | null;
   surface: LiveRunSurface;
+  home?: ChatHome;
   startedAt: number;
   chunks: LiveRunChunk[];
   /** Where each keyed data part sits in `chunks`, so a newer copy replaces it. */
@@ -126,6 +134,7 @@ export function startLiveRun(input: {
   runId: string;
   projectId?: string | null;
   surface: LiveRunSurface;
+  home?: ChatHome;
 }): LiveRunSink {
   const runs = registry();
 
@@ -142,6 +151,7 @@ export function startLiveRun(input: {
     runId: input.runId,
     projectId: input.projectId ?? null,
     surface: input.surface,
+    ...(input.home ? { home: input.home } : {}),
     startedAt: Date.now(),
     chunks: [],
     dataPositions: new Map<string, number>(),
@@ -298,6 +308,7 @@ export function getLiveRun(chatId: string): LiveRunSummary | null {
     runId: run.runId,
     startedAt: run.startedAt,
     surface: run.surface,
+    ...(run.home ? { home: run.home } : {}),
   };
 }
 
@@ -309,6 +320,7 @@ export function listLiveRuns(): LiveRunSummary[] {
       runId: run.runId,
       startedAt: run.startedAt,
       surface: run.surface,
+      ...(run.home ? { home: run.home } : {}),
     }));
 }
 

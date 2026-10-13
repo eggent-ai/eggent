@@ -34,10 +34,19 @@ const repoRoot = path.resolve(import.meta.dirname, "..");
 
 let failed = 0;
 let ran = 0;
+// A check that never comes back is a failure, not a hang: the thing most likely to go wrong in a
+// handover is a turn waiting for an answer nobody can give.
+const CHECK_TIMEOUT_MS = 100_000;
 async function check(name: string, fn: () => void | Promise<void>): Promise<void> {
   ran += 1;
   try {
-    await fn();
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([
+      Promise.resolve().then(fn),
+      new Promise<never>((_resolve, reject) => {
+        timer = setTimeout(() => reject(new Error(`no answer in ${CHECK_TIMEOUT_MS / 1000}s`)), CHECK_TIMEOUT_MS);
+      }),
+    ]).finally(() => clearTimeout(timer));
     console.log(`  ok    ${name}`);
   } catch (error) {
     failed += 1;
@@ -236,6 +245,11 @@ try {
   await check("stopping a chat that runs on the other side stops it there and keeps what it had said", async () => {
     const pending = post(device, "/api/chat", { chatId: chat6, message: "SLOW stop me", home: "cloud", projectId: "none" }).then((response) => readChatStream(response));
     await sleep(1100);
+    // While it runs, the side that only relays it says so: quitting that side loses nothing.
+    const relaying = ((await (await get(device, "/api/chat/active-runs")).json()) as { runs: Array<{ chatId: string; home?: string }> }).runs;
+    assert.deepEqual(relaying.map((run) => [run.chatId, run.home]), [[chat6, "cloud"]]);
+    const running = ((await (await get(cloud, "/api/chat/active-runs")).json()) as { runs: Array<{ chatId: string; home?: string }> }).runs;
+    assert.deepEqual(running.map((run) => [run.chatId, run.home]), [[chat6, undefined]], "the side that runs it must not say it is relaying");
     const stop = await post(device, `/api/chat/${chat6}/stop`, {});
     assert.equal(((await stop.json()) as { stopped?: boolean }).stopped, true);
     const read = await pending;
@@ -440,6 +454,7 @@ try {
       method: "POST",
       headers: { "content-type": "application/json", authorization: "Bearer test-external-token" },
       body: JSON.stringify({ sessionId: session, message, toolRuntimeData: TELEGRAM }),
+      signal: AbortSignal.timeout(80_000),
     });
     return { status: response.status, body: (await response.json()) as Record<string, any> };
   }

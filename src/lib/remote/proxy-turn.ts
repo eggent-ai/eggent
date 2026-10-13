@@ -302,7 +302,7 @@ async function driveHandedOver(input: DriveInput): Promise<DriveResult> {
     steer: input.steer,
   };
 
-  const live = startLiveRun({ chatId, runId, projectId: input.projectId ?? null, surface: input.surface });
+  const live = startLiveRun({ chatId, runId, projectId: input.projectId ?? null, surface: input.surface, home });
   registerActiveRun(chatId, { session: run, runId, surface: input.surface, requestStop });
   attachToLiveRun(chatId, { onChunk: input.onChunk, onFinish: () => {} });
 
