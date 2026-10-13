@@ -28,6 +28,7 @@ import { getChatFiles } from "@/lib/storage/chat-files-store";
 import { getChat } from "@/lib/storage/chat-store";
 import { mailEnabled } from "@/lib/mail/config";
 import { formatMailReplyContext } from "@/lib/mail/reply-context";
+import { createMailToolGuardExtension } from "@/lib/mail/tool-guard";
 import type { MailReplyInfo } from "@/lib/mail/types";
 import type { ChatContextMode, ChatFile, ProjectSkillMetadata } from "@/lib/types";
 import {
@@ -229,6 +230,8 @@ function buildEggentProjectContext(options: {
   remote?: { servedFor: ChatHome };
   /** This chat answers a colleague's message: see eggent_messages. */
   mailReply?: MailReplyInfo;
+  /** The workspace has messages with its company's people (EGGENT_MAIL_API_URL). */
+  mailAvailable?: boolean;
 }): string {
   // Ordering here is load-bearing, not cosmetic.
   //
@@ -397,6 +400,12 @@ function buildEggentProjectContext(options: {
       : "Configured MCP servers in this workspace: none",
     options.mcpServerIds?.includes("higgsfield")
       ? "- Higgsfield is configured as an MCP server in this project. For Higgsfield image/video generation in Eggent cloud/web, prefer the `mcp` proxy (`connect`, `search`, `describe`, then tool call) over the `higgsfield` CLI. Do not run `higgsfield auth login`, `higgsfield account status`, or `higgsfield workspace set` unless the user explicitly asks for CLI setup; MCP OAuth is separate from CLI auth and is already persisted after successful authentication."
+      : "",
+    // Only in a company's workspaces, so it stays out of the prefix everybody
+    // shares. Named as one of the agent's own tools: told about it only in the
+    // operator's block, a model reached for the mcp proxy with its arguments.
+    options.mailAvailable
+      ? "Messages: eggent_messages is one of your own tools - call it directly, never through mcp. The other people of this workspace's company are its contacts: when your person asks you to write, tell, answer or send something to one of them, look them up there and send it with eggent_messages - that is where colleagues are written to, so do not ask which channel. It also reads what they wrote (inbox, read) and keeps what each does (describe)."
       : "",
     // Supplied by the operator of this deployment. Eggent does not know what it
     // says, so it is quoted rather than summarized, and it outranks guesswork.
@@ -712,6 +721,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     visit: options.visit,
     remote: options.remote,
     mailReply,
+    mailAvailable: !options.visit && mailEnabled(),
   });
   const explicitContextFiles = liteMode || publicShare ? [] : loadEggentContextFiles(cwd, agentDir);
 
@@ -727,6 +737,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
         monitor: subagentMonitor,
         ...(options.visit ? { maxParallel: VISIT_MAX_PARALLEL_SUBAGENTS } : {}),
       }),
+      ...(!options.visit && mailEnabled() ? [createMailToolGuardExtension()] : []),
     ],
     additionalSkillPaths: projectSkillPaths,
     noExtensions: corePiToolsOnly,

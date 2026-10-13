@@ -43,6 +43,7 @@ const service = {
   inCompany: true,
   sent: [] as Array<Record<string, unknown>>,
   reads: [] as Array<Record<string, unknown>>,
+  abouts: [] as Array<Record<string, unknown>>,
   downloads: 0,
   copied: [] as string[],
   pending: [FILE_A, FILE_B],
@@ -124,6 +125,12 @@ const stub = http.createServer(async (req, res) => {
         attachments: sentFiles.map((file, index) => ({ id: `bbbbbbbb-0000-4000-8000-00000000000${index}`, name: file.name, size: Buffer.from(file.data, "base64").length, mime: "application/octet-stream" })),
       },
     });
+    return;
+  }
+  if (route === "/about" && req.method === "POST") {
+    const body = JSON.parse(await readBody(req)) as Record<string, unknown>;
+    service.abouts.push(body);
+    json({ person: { id: body.who || "acme", name: body.who === "acme-boris" ? "Boris" : "Ilia", about: body.about } });
     return;
   }
   if (route === "/read" && req.method === "POST") {
@@ -279,6 +286,14 @@ await check("a file of the workspace goes with a message; one outside it, or one
   assert.match(String(secret.error), /credentials/);
   assert.equal(service.sent.length, before + 1);
 });
+await check("describe writes down what a named person does, or the agent's own person when nobody is named", async () => {
+  const named = await run(tools, { action: "describe", to: "Boris", text: "Runs purchasing and the warehouse" });
+  assert.equal(named.success, true, JSON.stringify(named));
+  assert.deepEqual(service.abouts.at(-1), { who: "acme-boris", about: "Runs purchasing and the warehouse" });
+  const own = await run(tools, { action: "describe", text: "Runs the company" });
+  assert.equal(own.success, true);
+  assert.ok(!("who" in service.abouts.at(-1)!), "describing oneself named somebody");
+});
 await check("reading a conversation to the person reads it; a scheduled run reads for nobody", async () => {
   const before = service.reads.length;
   const answer = await run(tools, { action: "read", to: "Boris" });
@@ -292,6 +307,19 @@ await check("reading a conversation to the person reads it; a scheduled run read
   } finally {
     unmarkScheduledRunSession("chat-1");
   }
+});
+
+await check("a call to the mcp proxy meant for the messages tool is turned back to it, and nothing else is", async () => {
+  const { meantForMessages, createMailToolGuardExtension } = await import("../src/lib/mail/tool-guard.ts");
+  assert.ok(meantForMessages("mcp", { action: "inbox", limit: 20 }));
+  assert.ok(meantForMessages("mcp", { action: "Contacts" }));
+  assert.ok(!meantForMessages("mcp", { action: "ui-messages" }));
+  assert.ok(!meantForMessages("mcp", { connect: "github" }));
+  assert.ok(!meantForMessages("eggent_messages", { action: "inbox" }));
+  let hook: ((event: { toolName: string; input: unknown }) => unknown) | null = null;
+  (createMailToolGuardExtension() as unknown as { factory: (pi: unknown) => void }).factory({ on: (name: string, fn: typeof hook) => { if (name === "tool_call") hook = fn; } });
+  assert.match(String((hook!({ toolName: "mcp", input: { action: "send", to: "x" } }) as { reason?: string })?.reason), /call eggent_messages directly \(not mcp\)/);
+  assert.equal(hook!({ toolName: "mcp", input: { search: "issues" } }), undefined);
 });
 
 console.log("\nFiles copied into the workspace\n");
@@ -397,6 +425,9 @@ await check("a turn in that chat is told so in its system prompt, and no other c
   assert.match(assigned, /> Will send the report tomorrow\./);
   assert.match(assigned, /Messages\/Boris\/report\.txt/);
   assert.ok(!plain.includes("This chat answers a message"), "another chat was told about the message");
+  assert.match(plain, /eggent_messages is one of your own tools - call it directly, never through mcp/);
+  assert.match(plain, /do not ask which channel/);
+  assert.match(plain, /- eggent_messages: messages with the other people of this workspace's company/, "the tool is missing from the runtime's list of available tools");
 });
 
 stub.close();

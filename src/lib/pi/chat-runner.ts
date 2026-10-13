@@ -544,9 +544,13 @@ function preparePromptForRuntime(text: string): string {
   }
 
   if (!hasScheduleIntent(text)) return text;
+  // A word like "tomorrow" is how a reminder is asked for, and just as often
+  // part of what is to be said or done now: "tell Ann the meeting is tomorrow
+  // at 10" was scheduled for tomorrow at 10 when the directive said outright
+  // that the request asked for later execution. The model reads which it is.
   return [
     "Eggent scheduling directive:",
-    "- This user request asks for delayed/scheduled execution.",
+    "- This request mentions a time. If the user wants something done later or repeatedly, schedule it as below. If the time is only part of what to do or say now - a message to send, a date in a text - do it now and schedule nothing.",
     "- Do not emulate scheduling with bash, sleep, shell loops, at, or OS cron.",
     "- Use pi-subagents by calling the Agent tool with its schedule parameter (for example schedule=\"+30s\" or a 6-field cron expression).",
     "- The scheduled Agent prompt should contain only the actual work to perform at fire time, not instructions to create or modify a schedule.",
