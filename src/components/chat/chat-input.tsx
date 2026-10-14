@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useCallback, useState, useEffect, useMemo } from "react";
-import { Send, Square, Paperclip, X, FileIcon, ImageIcon, Mic, MicOff, Loader2, Sparkles, Check, Gauge, SquareTerminal, FolderOpen } from "lucide-react";
+import { Send, Square, Paperclip, X, FileIcon, ImageIcon, Sparkles, Check, Gauge, SquareTerminal, FolderOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -11,7 +11,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ModelPicker } from "@/components/chat/model-picker";
-import { MicLevelRings } from "@/components/chat/mic-level-rings";
+import { DictationButton, DictationStatus, useDictation } from "@/components/chat/dictation";
 import { useI18n } from "@/i18n/provider";
 import { formatUploadSize, MAX_UPLOAD_BYTES, MAX_UPLOAD_LABEL } from "@/lib/files/upload-limits";
 import type { MessageKey } from "@/i18n/messages";
@@ -77,34 +77,6 @@ function mergeUniqueChatFiles(current: ChatFile[], incoming: ChatFile[]): ChatFi
     next.push(file);
   }
   return next;
-}
-
-function getVoiceInputUnavailableMessage(t: (key: MessageKey) => string): string | null {
-  if (typeof window !== "undefined" && !window.isSecureContext) {
-    return t("chat.voiceHttpsRequired");
-  }
-  if (typeof navigator === "undefined" || !navigator.mediaDevices?.getUserMedia) {
-    return t("chat.voiceUnsupportedBrowser");
-  }
-  if (typeof MediaRecorder === "undefined") {
-    return t("chat.audioUnsupportedBrowser");
-  }
-  return null;
-}
-
-function getVoiceInputErrorMessage(error: unknown, t: (key: MessageKey) => string): string {
-  if (error instanceof DOMException) {
-    if (error.name === "NotAllowedError" || error.name === "SecurityError") {
-      return t("chat.microphoneBlocked");
-    }
-    if (error.name === "NotFoundError" || error.name === "DevicesNotFoundError") {
-      return t("chat.microphoneMissing");
-    }
-    if (error.name === "NotReadableError" || error.name === "TrackStartError") {
-      return t("chat.microphoneBusy");
-    }
-  }
-  return error instanceof Error ? error.message : t("chat.recordingFailed");
 }
 
 interface SlashCommand {
@@ -252,18 +224,10 @@ export function ChatInput({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const slashMenuRef = useRef<HTMLDivElement>(null);
   const slashCommandItemRefs = useRef<Array<HTMLButtonElement | null>>([]);
-  const mediaRecorderRef = useRef<MediaRecorder | null>(null);
-  const audioChunksRef = useRef<Blob[]>([]);
-  const audioStreamRef = useRef<MediaStream | null>(null);
   const latestInputRef = useRef(input);
   const [isDragging, setIsDragging] = useState(false);
   const [uploadingFiles, setUploadingFiles] = useState<string[]>([]);
   const [uploadedFiles, setUploadedFiles] = useState<ChatFile[]>([]);
-  const [isRecording, setIsRecording] = useState(false);
-  /** The live microphone, for the rings that show it is hearing. */
-  const [recordingStream, setRecordingStream] = useState<MediaStream | null>(null);
-  const [isTranscribing, setIsTranscribing] = useState(false);
-  const [speechError, setSpeechError] = useState<string | null>(null);
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
   const [slashCommandsLoading, setSlashCommandsLoading] = useState(false);
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
@@ -713,108 +677,7 @@ export function ChatInput({
     });
   }, [setInput]);
 
-  const stopAudioTracks = useCallback(() => {
-    audioStreamRef.current?.getTracks().forEach((track) => track.stop());
-    audioStreamRef.current = null;
-    setRecordingStream(null);
-  }, []);
-
-  const transcribeRecording = useCallback(async (blob: Blob) => {
-    setIsTranscribing(true);
-    setSpeechError(null);
-    try {
-      const ext = blob.type.includes("ogg") ? "ogg" : blob.type.includes("webm") ? "webm" : "audio";
-      const file = new File([blob], `dictation-${Date.now()}.${ext}`, { type: blob.type || "audio/webm" });
-      const formData = new FormData();
-      formData.append("file", file);
-      formData.append("language", "auto");
-
-      const response = await fetch("/api/speech/transcribe", {
-        method: "POST",
-        body: formData,
-      });
-      const data = await response.json().catch(() => null) as { transcript?: string; error?: string } | null;
-      if (!response.ok || !data?.transcript) {
-        throw new Error(data?.error || "Failed to transcribe audio");
-      }
-      appendTranscriptToInput(data.transcript);
-    } catch (error) {
-      setSpeechError(error instanceof Error ? error.message : "Failed to transcribe audio");
-    } finally {
-      setIsTranscribing(false);
-    }
-  }, [appendTranscriptToInput]);
-
-  const startRecording = useCallback(async () => {
-    if (disabled || isLoading || isRecording || isTranscribing) return;
-    const unavailableMessage = getVoiceInputUnavailableMessage(t);
-    if (unavailableMessage) {
-      setSpeechError(unavailableMessage);
-      return;
-    }
-
-    setSpeechError(null);
-    let stream: MediaStream;
-    try {
-      stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    } catch (error) {
-      setSpeechError(getVoiceInputErrorMessage(error, t));
-      return;
-    }
-    audioStreamRef.current = stream;
-    setRecordingStream(stream);
-    audioChunksRef.current = [];
-
-    const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
-      ? "audio/webm;codecs=opus"
-      : MediaRecorder.isTypeSupported("audio/ogg;codecs=opus")
-        ? "audio/ogg;codecs=opus"
-        : "";
-    const recorder = new MediaRecorder(stream, mimeType ? { mimeType } : undefined);
-    mediaRecorderRef.current = recorder;
-    recorder.ondataavailable = (event) => {
-      if (event.data.size > 0) audioChunksRef.current.push(event.data);
-    };
-    recorder.onstop = () => {
-      const blob = new Blob(audioChunksRef.current, { type: recorder.mimeType || "audio/webm" });
-      audioChunksRef.current = [];
-      stopAudioTracks();
-      if (blob.size > 0) void transcribeRecording(blob);
-    };
-    recorder.start();
-    setIsRecording(true);
-  }, [disabled, isLoading, isRecording, isTranscribing, stopAudioTracks, transcribeRecording, t]);
-
-  const stopRecording = useCallback(() => {
-    const recorder = mediaRecorderRef.current;
-    if (recorder && recorder.state !== "inactive") {
-      recorder.stop();
-    } else {
-      stopAudioTracks();
-    }
-    setIsRecording(false);
-  }, [stopAudioTracks]);
-
-  const toggleRecording = useCallback(() => {
-    if (isRecording) {
-      stopRecording();
-    } else {
-      void startRecording().catch((error) => {
-        stopAudioTracks();
-        setIsRecording(false);
-        setSpeechError(getVoiceInputErrorMessage(error, t));
-      });
-    }
-  }, [isRecording, startRecording, stopAudioTracks, stopRecording, t]);
-
-  useEffect(() => {
-    return () => {
-      if (mediaRecorderRef.current && mediaRecorderRef.current.state !== "inactive") {
-        mediaRecorderRef.current.stop();
-      }
-      stopAudioTracks();
-    };
-  }, [stopAudioTracks]);
+  const dictation = useDictation(appendTranscriptToInput, disabled || isLoading);
 
   const removeUploadedFile = useCallback(
     async (filename: string) => {
@@ -1059,26 +922,7 @@ export function ChatInput({
               <Paperclip className="size-4" />
             </Button>
 
-            <span className="relative isolate shrink-0 rounded-xl">
-            {isRecording && recordingStream && <MicLevelRings stream={recordingStream} />}
-            <Button
-              variant={isRecording ? "destructive" : "ghost"}
-              size="icon"
-              onClick={toggleRecording}
-              disabled={disabled || Boolean(pendingInteraction) || isLoading || isTranscribing}
-              className={`relative h-10 w-10 shrink-0 rounded-xl disabled:opacity-50 ${isRecording ? "" : "text-muted-foreground hover:text-foreground"}`}
-              title={isRecording ? t("chat.stopDictation") : t("chat.dictate")}
-              aria-pressed={isRecording}
-            >
-              {isTranscribing ? (
-                <Loader2 className="size-4 animate-spin" />
-              ) : isRecording ? (
-                <MicOff className="size-4" />
-              ) : (
-                <Mic className="size-4" />
-              )}
-            </Button>
-            </span>
+            <DictationButton dictation={dictation} disabled={disabled || Boolean(pendingInteraction) || isLoading} />
 
             <div className="relative flex-1">
             <textarea
@@ -1144,11 +988,7 @@ export function ChatInput({
             )}
           </div>
         </div>
-        {(isRecording || isTranscribing || speechError) && (
-          <div className={`mt-2 text-center text-xs ${speechError ? "text-destructive" : "text-muted-foreground"}`}>
-            {speechError || (isRecording ? t("chat.recording") : t("chat.transcribing"))}
-          </div>
-        )}
+        <DictationStatus dictation={dictation} className="mt-2 text-center" />
         <div className="mt-2 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
           <ContextModeControl
             mode={contextMode}

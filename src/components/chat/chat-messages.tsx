@@ -4,6 +4,8 @@ import { Fragment, useCallback, useEffect, useMemo, useRef, useState } from "rea
 import { MessageBubble } from "./message-bubble";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { DictationButton, DictationStatus, useDictation } from "@/components/chat/dictation";
 import { ArrowRight, CheckCircle2, ExternalLink, Loader2, MessageCircle, Sparkle, Sparkles, SquareTerminal, TriangleAlert } from "lucide-react";
 import type { UIMessage } from "ai";
 import { Badge } from "@/components/ui/badge";
@@ -106,6 +108,22 @@ function InteractionCard({
     interaction.kind === "select";
   const question = interaction.message?.trim() || interaction.title;
   const heading = interaction.message?.trim() && interaction.title !== interaction.message ? interaction.title : null;
+  // A secret is never spoken aloud, and a terminal prompt wants keystrokes.
+  const speakable = interaction.kind === "text" || interaction.kind === "select";
+  const appendSpoken = useCallback((text: string) => {
+    setDraft((current) => (current.trim() ? `${current.trimEnd()} ${text}` : text));
+  }, []);
+  const dictation = useDictation(appendSpoken, !speakable);
+  // Options are sentences as often as they are words. A row of chips that
+  // cannot wrap ran off the card; long ones read as a list instead, each
+  // button the width of the card and wrapping inside itself.
+  const longOptions = (interaction.options ?? []).some((option) => option.length > 36);
+  const submitDraft = () => {
+    const value = draft.trim();
+    if (!value) return;
+    setDraft("");
+    onRespond(value);
+  };
 
   return (
     <div className="flex min-w-0 flex-1 flex-col gap-3 rounded-2xl border bg-card p-4 shadow-sm">
@@ -117,9 +135,19 @@ function InteractionCard({
       <p className="whitespace-pre-wrap text-base font-medium leading-6">{question}</p>
 
       {interaction.options?.length ? (
-        <div className="flex flex-wrap gap-2">
+        <div className={longOptions ? "flex flex-col items-stretch gap-2" : "flex flex-wrap gap-2"}>
           {interaction.options.map((option) => (
-            <Button key={option} type="button" variant="outline" size="sm" onClick={() => onRespond(option)}>
+            <Button
+              key={option}
+              type="button"
+              variant="outline"
+              size="sm"
+              onClick={() => onRespond(option)}
+              className={cn(
+                "h-auto min-h-8 max-w-full whitespace-normal py-1.5 text-left leading-5",
+                longOptions && "w-full justify-start"
+              )}
+            >
               {option}
             </Button>
           ))}
@@ -139,28 +167,48 @@ function InteractionCard({
 
       {acceptsText ? (
         <form
-          className="flex flex-col gap-2 sm:flex-row"
+          className="flex flex-col gap-1.5"
           onSubmit={(event) => {
             event.preventDefault();
-            const value = draft.trim();
-            if (!value) return;
-            setDraft("");
-            onRespond(value);
+            submitDraft();
           }}
         >
-          <Input
-            value={draft}
-            onChange={(event) => setDraft(event.target.value)}
-            placeholder={
-              interaction.placeholder ||
-              t(interaction.options?.length ? "chat.interaction.orTypeYourOwn" : "chat.interaction.answerPlaceholder")
-            }
-            type={interaction.kind === "secret" ? "password" : "text"}
-            autoFocus={!interaction.options?.length}
-          />
-          <Button type="submit" size="sm" disabled={!draft.trim()} className="sm:w-auto">
-            {t("chat.interaction.send")}
-          </Button>
+          <div className="flex items-end gap-2">
+            {interaction.kind === "secret" ? (
+              <Input
+                value={draft}
+                onChange={(event) => setDraft(event.target.value)}
+                placeholder={interaction.placeholder || t("chat.interaction.answerPlaceholder")}
+                type="password"
+                autoFocus
+              />
+            ) : (
+              // Grows with the answer: a dictated one is a paragraph, and a
+              // single line hid all but its last few words.
+              <Textarea
+                value={draft}
+                rows={1}
+                onChange={(event) => setDraft(event.target.value)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter" && !event.shiftKey && !event.nativeEvent.isComposing) {
+                    event.preventDefault();
+                    submitDraft();
+                  }
+                }}
+                placeholder={
+                  interaction.placeholder ||
+                  t(interaction.options?.length ? "chat.interaction.orTypeYourOwn" : "chat.interaction.answerPlaceholder")
+                }
+                className="min-h-9 max-h-40 resize-none py-1.5"
+                autoFocus={!interaction.options?.length}
+              />
+            )}
+            {speakable ? <DictationButton dictation={dictation} className="h-9 w-9 rounded-md" /> : null}
+            <Button type="submit" size="sm" disabled={!draft.trim()} className="h-9 shrink-0">
+              {t("chat.interaction.send")}
+            </Button>
+          </div>
+          <DictationStatus dictation={dictation} />
         </form>
       ) : null}
 
