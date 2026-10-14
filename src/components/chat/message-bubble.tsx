@@ -10,7 +10,7 @@ import { SubagentGroup, type HelperItem } from "./subagent-group";
 import { isAgentToolName, isProjectToolName } from "@/lib/pi/subagent-format";
 import type { SubagentSnapshot } from "@/lib/pi/types";
 import { FileMention } from "./file-mention";
-import { UserMessageFooter } from "./user-message-footer";
+import { StickyCopyButton, UserMessageFooter } from "./user-message-footer";
 import { LearnedNote } from "./learned-note";
 import { FilesProduced } from "./files-produced";
 import { SendToContact, useMailReply } from "@/components/mail/mail-reply";
@@ -148,12 +148,19 @@ export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
     );
 
     if (!visibleTextContent) return null;
+    // Taller than a screen or so: its copy button has to follow the reader down.
+    const longMessage = visibleTextContent.length > 1200 || visibleTextContent.split("\n").length > 15;
 
     return (
       // The person's words sit in a grey box on the right and the answer runs
       // full width on the left, so who said what reads at a glance.
       <div className="group/user flex flex-col items-end py-2" data-message-role="user">
-        <div className="max-w-[85%] min-w-0 rounded-2xl bg-muted px-4 py-2 text-sm leading-7 [overflow-wrap:anywhere]">
+        <div
+          className={`max-w-[85%] min-w-0 rounded-2xl bg-muted py-2 pl-4 text-sm leading-7 [overflow-wrap:anywhere] ${
+            longMessage ? "pr-10" : "pr-4"
+          }`}
+        >
+          {longMessage ? <StickyCopyButton text={visibleTextContent} /> : null}
           <p className="whitespace-pre-wrap"><UserText text={visibleTextContent} /></p>
         </div>
         <UserMessageFooter text={visibleTextContent} createdAt={messageCreatedAt(message)} />

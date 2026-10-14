@@ -15,8 +15,7 @@ interface UserMessageFooterProps {
  * Shown on hover where there is a mouse, always on a touch screen.
  */
 export function UserMessageFooter({ text, createdAt }: UserMessageFooterProps) {
-  const { t, locale } = useI18n();
-  const [copied, setCopied] = useState(false);
+  const { locale } = useI18n();
   // The time is drawn after mount: the server's clock and time zone are not the reader's.
   const [time, setTime] = useState<{ label: string; full: string } | null>(null);
 
@@ -24,29 +23,59 @@ export function UserMessageFooter({ text, createdAt }: UserMessageFooterProps) {
     setTime(createdAt ? formatSentAt(createdAt, locale) : null);
   }, [createdAt, locale]);
 
+  return (
+    <div className={`mt-1 flex items-center gap-1 text-xs text-muted-foreground ${HOVER_REVEAL}`}>
+      {time ? (
+        <time dateTime={createdAt} title={time.full} className="px-1 tabular-nums">
+          {time.label}
+        </time>
+      ) : null}
+      <CopyMessageButton text={text} className="size-7 hover:bg-muted hover:text-foreground" />
+    </div>
+  );
+}
+
+// Hidden until the message is hovered or focused where there is a mouse; always shown on touch.
+const HOVER_REVEAL =
+  "transition-opacity duration-150 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/user:opacity-100 [@media(hover:hover)]:group-focus-within/user:opacity-100";
+
+/**
+ * A copy button that stays in view while a long message scrolls past: it
+ * sticks to the top of the transcript inside the box, so a prompt of hundreds
+ * of lines can be copied without scrolling back to either end of it.
+ */
+export function StickyCopyButton({ text }: { text: string }) {
+  return (
+    <div className="pointer-events-none sticky top-2 z-10 -mr-9 flex h-0 justify-end">
+      <CopyMessageButton
+        text={text}
+        className={`pointer-events-auto size-7 border border-border bg-background/90 text-muted-foreground shadow-sm backdrop-blur hover:text-foreground ${HOVER_REVEAL}`}
+      />
+    </div>
+  );
+}
+
+function CopyMessageButton({ text, className }: { text: string; className: string }) {
+  const { t } = useI18n();
+  const [copied, setCopied] = useState(false);
+
   const handleCopy = async () => {
     if (!(await copyTextToClipboard(text))) return;
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
   };
 
+  const label = copied ? t("chat.code.copied") : t("chat.code.copy");
   return (
-    <div className="mt-1 flex items-center gap-1 text-xs text-muted-foreground transition-opacity duration-150 [@media(hover:hover)]:opacity-0 [@media(hover:hover)]:group-hover/user:opacity-100 [@media(hover:hover)]:group-focus-within/user:opacity-100">
-      {time ? (
-        <time dateTime={createdAt} title={time.full} className="px-1 tabular-nums">
-          {time.label}
-        </time>
-      ) : null}
-      <button
-        type="button"
-        onClick={handleCopy}
-        aria-label={copied ? t("chat.code.copied") : t("chat.code.copy")}
-        title={copied ? t("chat.code.copied") : t("chat.code.copy")}
-        className="flex size-7 items-center justify-center rounded-md hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-      >
-        {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
-      </button>
-    </div>
+    <button
+      type="button"
+      onClick={handleCopy}
+      aria-label={label}
+      title={label}
+      className={`flex items-center justify-center rounded-md focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${className}`}
+    >
+      {copied ? <Check className="size-3.5" /> : <Copy className="size-3.5" />}
+    </button>
   );
 }
 
