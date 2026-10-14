@@ -14,6 +14,7 @@ import {
   LogOut,
   MessageSquarePlus,
   MessagesSquare,
+  Plus,
   Settings,
   Trash2,
 } from "lucide-react";
@@ -28,6 +29,7 @@ import {
   SidebarContent,
   SidebarFooter,
   SidebarGroup,
+  SidebarGroupAction,
   SidebarGroupLabel,
   SidebarHeader,
   SidebarMenu,
@@ -35,15 +37,19 @@ import {
   SidebarMenuBadge,
   SidebarMenuButton,
   SidebarMenuItem,
+  useSidebar,
 } from "@/components/ui/sidebar";
 import { Button } from "@/components/ui/button";
 import { UsageWidget } from "@/components/usage-widget";
 import { MailNav } from "@/components/mail/mail-nav";
+import { CreateProjectForm } from "@/components/create-project-form";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { t } = useI18n();
   const router = useRouter();
   const pathname = usePathname();
+  const { isMobile } = useSidebar();
   const {
     chats,
     setChats,
@@ -178,6 +184,26 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       });
   };
 
+  // The wizard from Settings -> Projects, one click from where projects are
+  // picked: no trip to settings, and no agent turn spent on making a folder.
+  const [createOpen, setCreateOpen] = React.useState(false);
+  const handleProjectCreated = async (projectId: string) => {
+    setCreateOpen(false);
+    try {
+      const data = await fetch("/api/projects").then((r) => r.json());
+      if (Array.isArray(data)) setProjects(data);
+    } catch {
+      // the background sync brings the list in shortly
+    }
+    // A new project has no chats yet: open an empty one in it, ready to type.
+    setChats([]);
+    goToChat(null, projectId);
+    if (typeof window !== "undefined") {
+      window.sessionStorage.setItem("eggent-focus-chat-input", "1");
+      window.dispatchEvent(new Event("eggent:focus-chat-input"));
+    }
+  };
+
   const handleDeleteChat = async (id: string, e: React.MouseEvent) => {
     e.stopPropagation();
     const wasOpen = activeChatId === id;
@@ -241,6 +267,28 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         {/* Project selector */}
         <SidebarGroup>
           <SidebarGroupLabel>{t("nav.project")}</SidebarGroupLabel>
+          <Popover open={createOpen} onOpenChange={setCreateOpen}>
+            <PopoverTrigger asChild>
+              <SidebarGroupAction title={t("projects.new")}>
+                <Plus />
+                <span className="sr-only">{t("projects.new")}</span>
+              </SidebarGroupAction>
+            </PopoverTrigger>
+            <PopoverContent
+              side={isMobile ? "bottom" : "right"}
+              align="start"
+              collisionPadding={16}
+              className="w-80 max-w-[calc(100vw-2rem)]"
+            >
+              <h3 className="mb-3 text-sm font-medium">{t("projects.createTitle")}</h3>
+              <CreateProjectForm
+                idPrefix="sidebar-project"
+                autoFocus
+                onCreated={handleProjectCreated}
+                onCancel={() => setCreateOpen(false)}
+              />
+            </PopoverContent>
+          </Popover>
           <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton

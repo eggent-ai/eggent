@@ -6,21 +6,17 @@ import { SiteHeader } from "@/components/site-header";
 import { SettingsNavigation } from "@/components/settings-navigation";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { SidePanels } from "@/components/side-panels";
-import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/components/ui/empty";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import {
   Bot,
   FolderOpen,
-  Loader2,
   Plus,
   Trash2,
   X,
 } from "lucide-react";
+import { CreateProjectForm } from "@/components/create-project-form";
 import { OrchestratorFilesNavigation } from "@/components/orchestrator-files-navigation";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useAppStore } from "@/store/app-store";
@@ -37,11 +33,6 @@ function ProjectsPageClient() {
   const [projectsLoading, setProjectsLoading] = useState(true);
 
   const [showCreate, setShowCreate] = useState(false);
-  const [creatingProject, setCreatingProject] = useState(false);
-  const [createError, setCreateError] = useState<string | null>(null);
-  const [newName, setNewName] = useState("");
-  const [newDescription, setNewDescription] = useState("");
-  const [newInstructions, setNewInstructions] = useState("");
 
   const isCreateOpen = showCreate;
 
@@ -71,46 +62,6 @@ function ProjectsPageClient() {
       setShowCreate(true);
     }
   }, [shouldOpenCreate]);
-
-  async function handleCreate() {
-    const trimmedName = newName.trim();
-    if (!trimmedName) return;
-
-    try {
-      setCreatingProject(true);
-      setCreateError(null);
-
-      const res = await fetch("/api/projects", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          name: trimmedName,
-          description: newDescription.trim(),
-          instructions: newInstructions.trim(),
-          memoryMode: "isolated",
-        }),
-      });
-
-      const payload = (await res.json()) as { id?: string; error?: string };
-      if (!res.ok || !payload?.id) {
-        throw new Error(payload?.error || t("projects.errors.create"));
-      }
-
-      setNewName("");
-      setNewDescription("");
-      setNewInstructions("");
-      setActiveProjectId(payload.id);
-      setShowCreate(false);
-
-      await loadProjects();
-    } catch (error) {
-      setCreateError(
-        error instanceof Error ? error.message : t("projects.errors.create")
-      );
-    } finally {
-      setCreatingProject(false);
-    }
-  }
 
   async function handleDelete(id: string) {
     if (!confirm(t("projects.deleteConfirm"))) return;
@@ -152,64 +103,16 @@ function ProjectsPageClient() {
 
               {isCreateOpen && (
                 <div className="border rounded-lg p-4 bg-card space-y-4">
-                  <div className="space-y-1">
-                    <h3 className="font-medium">{t("projects.createTitle")}</h3>
-                  </div>
-
-                  <div className="space-y-2">
-                    <Label htmlFor="name">{t("projects.projectName")}</Label>
-                    <Input
-                      id="name"
-                      value={newName}
-                      onChange={(e) => setNewName(e.target.value)}
-                      placeholder={t("projects.projectNamePlaceholder")}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="desc">{t("projects.descriptionLabel")}</Label>
-                    <Input
-                      id="desc"
-                      value={newDescription}
-                      onChange={(e) => setNewDescription(e.target.value)}
-                      placeholder={t("projects.descriptionPlaceholder")}
-                    />
-                  </div>
-                  <div className="space-y-2">
-                    <Label htmlFor="instructions">{t("projects.instructions")}</Label>
-                    <Textarea
-                      id="instructions"
-                      value={newInstructions}
-                      onChange={(e) => setNewInstructions(e.target.value)}
-                      placeholder={t("projects.instructionsPlaceholder")}
-                      className="min-h-24"
-                    />
-                  </div>
-
-                  {createError ? (
-                    <Alert variant="destructive">
-                      <AlertDescription>{createError}</AlertDescription>
-                    </Alert>
-                  ) : null}
-
-                  <div className="flex items-center gap-2">
-                    <Button
-                      onClick={handleCreate}
-                      disabled={!newName.trim() || creatingProject}
-                      className="gap-2"
-                    >
-                      {creatingProject ? (
-                        <>
-                          <Loader2 className="size-4 animate-spin" />
-                          {t("common.creating")}
-                        </>
-                      ) : (
-                        t("projects.createTitle")
-                      )}
-                    </Button>
-                    <Button variant="ghost" onClick={() => setShowCreate(false)}>
-                      {t("common.close")}
-                    </Button>
-                  </div>
+                  <h3 className="font-medium">{t("projects.createTitle")}</h3>
+                  <CreateProjectForm
+                    autoFocus
+                    onCreated={async (id) => {
+                      setActiveProjectId(id);
+                      setShowCreate(false);
+                      await loadProjects();
+                    }}
+                    onCancel={() => setShowCreate(false)}
+                  />
                 </div>
               )}
 
