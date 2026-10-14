@@ -3,6 +3,7 @@ import path from "path";
 import { execFile } from "child_process";
 import { promisify } from "util";
 import crypto from "node:crypto";
+import { cloudTranscriptionTarget, transcribeInCloud } from "@/lib/speech/cloud-transcriber";
 
 const execFileAsync = promisify(execFile);
 
@@ -18,6 +19,7 @@ const MODEL_URLS: Record<string, string> = {
 
 export interface SpeechTranscriptionResult {
   transcript: string;
+  /** The local model file, or "cloud" when the gateway transcribed it. */
   modelPath: string;
   language: string;
 }
@@ -224,6 +226,14 @@ export async function transcribeAudioBuffer(params: {
   const outputPrefix = path.join(SPEECH_TMP_DIR, `${id}`);
   const keepAudio = envFlag("EGGENT_STT_KEEP_AUDIO", false);
   const language = normalizeLanguage(params.language || process.env.EGGENT_STT_LANGUAGE);
+
+  // The included model's gateway first, when this workspace runs on it; local
+  // whisper for everyone else and whenever the gateway does not answer.
+  const target = await cloudTranscriptionTarget().catch(() => null);
+  if (target) {
+    const transcript = await transcribeInCloud(target, { buffer: params.buffer, extension: ext, mimeType: params.mimeType, language });
+    if (transcript) return { transcript: normalizeTranscript(transcript), modelPath: "cloud", language };
+  }
 
   try {
     const modelPath = await ensureModel();

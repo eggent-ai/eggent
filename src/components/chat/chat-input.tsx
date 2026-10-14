@@ -11,6 +11,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ModelPicker } from "@/components/chat/model-picker";
+import { MicLevelRings } from "@/components/chat/mic-level-rings";
 import { useI18n } from "@/i18n/provider";
 import { formatUploadSize, MAX_UPLOAD_BYTES, MAX_UPLOAD_LABEL } from "@/lib/files/upload-limits";
 import type { MessageKey } from "@/i18n/messages";
@@ -259,6 +260,8 @@ export function ChatInput({
   const [uploadingFiles, setUploadingFiles] = useState<string[]>([]);
   const [uploadedFiles, setUploadedFiles] = useState<ChatFile[]>([]);
   const [isRecording, setIsRecording] = useState(false);
+  /** The live microphone, for the rings that show it is hearing. */
+  const [recordingStream, setRecordingStream] = useState<MediaStream | null>(null);
   const [isTranscribing, setIsTranscribing] = useState(false);
   const [speechError, setSpeechError] = useState<string | null>(null);
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
@@ -713,6 +716,7 @@ export function ChatInput({
   const stopAudioTracks = useCallback(() => {
     audioStreamRef.current?.getTracks().forEach((track) => track.stop());
     audioStreamRef.current = null;
+    setRecordingStream(null);
   }, []);
 
   const transcribeRecording = useCallback(async (blob: Blob) => {
@@ -758,6 +762,7 @@ export function ChatInput({
       return;
     }
     audioStreamRef.current = stream;
+    setRecordingStream(stream);
     audioChunksRef.current = [];
 
     const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
@@ -1054,13 +1059,16 @@ export function ChatInput({
               <Paperclip className="size-4" />
             </Button>
 
+            <span className="relative isolate shrink-0 rounded-xl">
+            {isRecording && recordingStream && <MicLevelRings stream={recordingStream} />}
             <Button
               variant={isRecording ? "destructive" : "ghost"}
               size="icon"
               onClick={toggleRecording}
               disabled={disabled || Boolean(pendingInteraction) || isLoading || isTranscribing}
-              className="h-10 w-10 shrink-0 rounded-xl text-muted-foreground hover:text-foreground disabled:opacity-50"
+              className={`relative h-10 w-10 shrink-0 rounded-xl disabled:opacity-50 ${isRecording ? "" : "text-muted-foreground hover:text-foreground"}`}
               title={isRecording ? t("chat.stopDictation") : t("chat.dictate")}
+              aria-pressed={isRecording}
             >
               {isTranscribing ? (
                 <Loader2 className="size-4 animate-spin" />
@@ -1070,6 +1078,7 @@ export function ChatInput({
                 <Mic className="size-4" />
               )}
             </Button>
+            </span>
 
             <div className="relative flex-1">
             <textarea

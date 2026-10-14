@@ -266,6 +266,13 @@
     animation-duration: 3.2s !important;
     animation-iteration-count: infinite !important;
   }
+  /* The microphone's breath while it listens: a ring that stops says the
+     microphone stopped. Slower, never still. The rings that follow the voice
+     are not animations and are untouched by any of this. */
+  .mic-level-ring-1 {
+    animation-duration: 3.2s !important;
+    animation-iteration-count: infinite !important;
+  }
 }
 
 /* The authored moment: a result confirming itself.
@@ -384,6 +391,37 @@
    time, and a fast blink there is an alarm, not a status. */
 [data-eggent-live] {
   animation: eggent-live-pulse 1.8s var(--ease-in-out) infinite;
+}
+
+/* Dictation: rings around the microphone that follow the voice.
+   --mic-level (0..1) is written every frame by MicLevelRings, so these carry
+   no transition; `scale` follows the voice while the first ring's own
+   `transform` breathes, and the two compose. Each ring reaches further and
+   fades sooner than the one inside it, which reads as a wave leaving. */
+.mic-level-ring {
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--destructive);
+  will-change: scale, opacity;
+}
+.mic-level-ring-1 {
+  scale: calc(1 + var(--mic-level, 0) * 0.3);
+  opacity: calc(0.18 + var(--mic-level, 0) * 0.22);
+  animation: mic-listening 1.6s var(--ease-in-out) infinite;
+}
+.mic-level-ring-2 {
+  scale: calc(1 + var(--mic-level, 0) * 0.65);
+  opacity: calc(var(--mic-level, 0) * 0.22);
+}
+.mic-level-ring-3 {
+  scale: calc(1 + var(--mic-level, 0) * 1);
+  opacity: calc(var(--mic-level, 0) * 0.12);
+}
+
+@keyframes mic-listening {
+  0%, 100% { transform: scale(1); }
+  50%      { transform: scale(1.12); }
 }
 
 /* Feedback lives at a tenth of a second: fast enough to feel like the control
