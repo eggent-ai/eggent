@@ -55,6 +55,9 @@ function chunk(delta: Record<string, unknown>, finish: string | null = null, id 
  * on a real workspace does it: the agent sends the reminder with the Telegram
  * tool, then closes with a remark.
  */
+/** What the model was sent in each report turn, and in every other turn. */
+const reportRequests: string[] = [];
+const otherRequests: string[] = [];
 const provider = http.createServer((req, res) => {
   if (req.method === "GET") {
     res.writeHead(200, { "content-type": "application/json" });
@@ -71,6 +74,7 @@ const provider = http.createServer((req, res) => {
     const last = [...messages].reverse().find((message) => message.role === "user");
     const lastText = JSON.stringify(last?.content ?? "");
     const toolAnswered = messages[messages.length - 1]?.role === "tool";
+    (lastText.includes("task-notification") ? reportRequests : otherRequests).push(JSON.stringify(messages));
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
     // The deployment's gateway answers a request it turns away with a reply of its
     // own, under an id of its own, that finishes normally and spends nothing.
@@ -157,6 +161,8 @@ const { rememberTelegramDestination } = await import("../src/lib/telegram/outbou
 const { chatForTelegramMessage, RELAY_BOT_KEY } = await import("../src/lib/telegram/conversation.ts");
 const { getExternalSession } = await import("../src/lib/storage/external-session-store.ts");
 const { createEggentPiTools } = await import("../src/lib/pi/eggent-tools.ts");
+const { createSchedulePolicyExtension } = await import("../src/lib/pi/schedule-policy.ts");
+const { isScheduledRunSessionId, SCHEDULED_RUN_REFUSAL } = await import("../src/lib/pi/scheduled-run-state.ts");
 
 const runtime = await ModelRuntime.create({
   authPath: path.join(agentDir, "auth.json"),
@@ -175,17 +181,30 @@ let sessionRef: Awaited<ReturnType<typeof createAgentSession>>["session"] | null
 const eggentTools = await createEggentPiTools({ chatId: OWNER, cwd, getAgentSession: () => sessionRef });
 const sendTool = eggentTools.tools.find((tool) => tool.name === "telegram_send_message");
 assert.ok(sendTool, "the Telegram tool is missing");
+// The workspace's own schedule policy, as every real session carries it, loaded
+// before the session is built as session.ts does.
+const resourceLoader = new DefaultResourceLoader({
+  cwd,
+  agentDir,
+  noExtensions: true,
+  noSkills: true,
+  extensionFactories: [createSchedulePolicyExtension(isScheduledRunSessionId, SCHEDULED_RUN_REFUSAL)],
+});
+await resourceLoader.reload();
 const { session } = await createAgentSession({
   cwd,
   agentDir,
   model,
   modelRuntime: runtime,
-  resourceLoader: new DefaultResourceLoader({ cwd, agentDir, noExtensions: true, noSkills: true }),
+  resourceLoader,
   tools: ["telegram_send_message"],
   customTools: [sendTool],
   sessionManager: openChatSessionManager(OWNER, cwd),
 });
 sessionRef = session;
+// A real session binds its extensions when it is built; without it none of
+// their hooks run until the first reload.
+await session.bindExtensions({ onError: () => {} });
 await session.prompt(SETUP);
 
 // What pi-subagents keeps: the job, stamped when its helper finished.
@@ -257,6 +276,29 @@ await fireRun();
 const [runChatItem] = await runChats();
 const today = new Date();
 const monthShort = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"][today.getUTCMonth()];
+
+await check("the report turn is told its reply is the result itself, and nothing else is", () => {
+  assert.ok(reportRequests.length > 0, "no report turn reached the model");
+  assert.ok(
+    reportRequests.every((request) => request.includes("this turn reports a scheduled run")),
+    "the report turn was not told that its reply is what the person receives"
+  );
+  assert.ok(
+    otherRequests.every((request) => !request.includes("this turn reports a scheduled run")),
+    "a turn that is not a report was given the report guidance"
+  );
+});
+
+await check("the guidance is sent, never stored", () => {
+  const sessionDir = getEggentPiSessionDir();
+  const stored = fs.readdirSync(sessionDir, { recursive: true })
+    .map((name) => path.join(sessionDir, String(name)))
+    .filter((file) => file.endsWith(".jsonl"))
+    .map((file) => fs.readFileSync(file, "utf-8"))
+    .join("\n");
+  assert.ok(stored.includes("todo: finish the platform"), "the run's notification was not stored where the test looks");
+  assert.ok(!stored.includes("this turn reports a scheduled run"), "the guidance was written into the session");
+});
 
 await check("the run makes a chat named after the task and the day", () => {
   assert.ok(runChatItem, "no chat was made for the run");

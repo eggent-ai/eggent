@@ -26,7 +26,7 @@ await fs.mkdir(path.join(workDir, "data", "projects"), { recursive: true });
 process.chdir(workDir);
 
 const { managePiSchedules, retainPiScheduleSession, takeRetainedPiScheduleSession } = await import("../src/lib/pi/schedule-host.ts");
-const { SCHEDULE_EXECUTION_MARKER } = await import("../src/lib/pi/schedule-policy.ts");
+const { SCHEDULE_EXECUTION_MARKER, withScheduleExecutionDirective } = await import("../src/lib/pi/schedule-policy.ts");
 
 const storeDir = path.join(workDir, ".pi", "subagent-schedules");
 const storePath = path.join(storeDir, "chat-1.json");
@@ -77,7 +77,9 @@ const BASE = {
   schedule: "0 40 21 * * *",
   scheduleType: "cron",
   subagent_type: "general-purpose",
-  prompt: `${SCHEDULE_EXECUTION_MARKER} do not reschedule\n\nScheduled work:\nSend the single most important task.`,
+  // Stored under the current directive, as a task made today is: an older one
+  // is rewritten (and its scheduler reloaded) the first time it is armed.
+  prompt: withScheduleExecutionDirective("Send the single most important task."),
   enabled: true,
   nextRun: "2099-01-01T00:00:00.000Z",
 };

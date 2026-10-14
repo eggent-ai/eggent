@@ -4,13 +4,21 @@ import type { InlineExtension } from "@earendil-works/pi-coding-agent";
 
 export const SCHEDULE_EXECUTION_MARKER = "[Eggent scheduled execution]";
 
+// A run is a helper that starts from nothing: it does not know today's date
+// (a morning brief once searched for yesterday and headed itself with
+// yesterday), and it spent a turn of its few reading the skill the task was
+// written from. What it answers last is what the person is sent.
 const SCHEDULE_EXECUTION_DIRECTIVE = [
   SCHEDULE_EXECUTION_MARKER,
   "This schedule has already fired.",
   "Do not create, edit, update, or reschedule scheduled tasks.",
   "Execute the requested work now.",
   "Ignore schedule or timing wording in the stored task; it is context, not a request to configure another schedule.",
+  "First learn today's date (run `date`); \"today\", \"the last 24 hours\" and any date you write mean that date, not one found in earlier notes.",
+  "The work below is complete as written; do not open skill files to look for more.",
+  "Your final answer is what the person receives: make it the finished result itself, not a description of what you did.",
 ].join("\n");
+const SCHEDULED_WORK_SEPARATOR = "\n\nScheduled work:\n";
 
 const SCHEDULE_STORE_SEGMENT = "/.pi/subagent-schedules";
 const SCHEDULE_GUARD_REASON =
@@ -65,8 +73,60 @@ export function detectSchedule(schedule: string): {
 
 export function withScheduleExecutionDirective(prompt: string): string {
   const trimmed = prompt.trim();
-  if (trimmed.startsWith(SCHEDULE_EXECUTION_MARKER)) return trimmed;
-  return `${SCHEDULE_EXECUTION_DIRECTIVE}\n\nScheduled work:\n${trimmed}`;
+  if (trimmed.startsWith(SCHEDULE_EXECUTION_MARKER)) {
+    // A task stored under an older directive gets the current one, so what is
+    // learned about runs reaches the tasks people already have. Only the
+    // header is replaced; a prompt without the separator is not ours to cut.
+    const at = trimmed.indexOf(SCHEDULED_WORK_SEPARATOR);
+    if (at < 0 || trimmed.slice(0, at) === SCHEDULE_EXECUTION_DIRECTIVE) return trimmed;
+    return `${SCHEDULE_EXECUTION_DIRECTIVE}${trimmed.slice(at)}`;
+  }
+  return `${SCHEDULE_EXECUTION_DIRECTIVE}${SCHEDULED_WORK_SEPARATOR}${trimmed}`;
+}
+
+/**
+ * What the report of a scheduled run is told about its reply.
+ *
+ * The report turn is the owner session answering the helper's notification,
+ * with nobody in it, and its reply is what Eggent sends the person. Left to
+ * itself it described the run ("the second run prepared only 3 items") and
+ * the brief the person asked for never reached them.
+ */
+export const SCHEDULED_REPORT_GUIDANCE = [
+  "[Eggent: this turn reports a scheduled run]",
+  "Nobody is in this turn. Your reply is sent to the person as this run's message, for example in Telegram.",
+  "If the run produced what the task asked for (a brief, a summary, a list, a draft), your reply is that result itself, complete and unchanged; fetch it with get_subagent_result first if it is not shown in full. Do not describe the run, and do not comment on how many items it found.",
+  "Only if the run produced nothing usable, say in one or two plain sentences what did not work.",
+].join("\n");
+
+type ContextMessage = { role?: unknown; customType?: unknown; content?: unknown };
+
+/** The messages of a report turn with the guidance after the run's notification. */
+export function withScheduledReportGuidance<T>(messages: T[]): T[] {
+  let at = -1;
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index] as ContextMessage;
+    if (message?.role === "custom" && message.customType === "subagent-notification") {
+      at = index;
+      break;
+    }
+  }
+  if (at < 0) return messages;
+  const message = messages[at] as ContextMessage;
+  const content = message.content;
+  let next: unknown;
+  if (typeof content === "string") {
+    if (content.includes(SCHEDULED_REPORT_GUIDANCE)) return messages;
+    next = `${content}\n\n${SCHEDULED_REPORT_GUIDANCE}`;
+  } else if (Array.isArray(content)) {
+    if (content.some((part) => (part as { text?: unknown })?.text === SCHEDULED_REPORT_GUIDANCE)) return messages;
+    next = [...content, { type: "text", text: SCHEDULED_REPORT_GUIDANCE }];
+  } else {
+    return messages;
+  }
+  const copy = [...messages];
+  copy[at] = { ...(message as object), content: next } as T;
+  return copy;
 }
 
 export function isScheduleStorePath(rawPath: string, cwd: string): boolean {
@@ -96,6 +156,14 @@ export function createSchedulePolicyExtension(
     name: "eggent-schedule-policy",
     hidden: true,
     factory: (pi) => {
+      // Every model call of a report turn sees the guidance; it is added to
+      // what is sent, never to what is stored.
+      pi.on("context", (event, ctx) => {
+        if (!inScheduledRun(ctx.sessionManager?.getSessionId?.())) return undefined;
+        const messages = withScheduledReportGuidance(event.messages);
+        return messages === event.messages ? undefined : { messages };
+      });
+
       pi.on("tool_call", (event, ctx) => {
         const toolName = event.toolName.toLowerCase();
         const input = event.input as Record<string, unknown>;
