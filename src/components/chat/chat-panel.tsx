@@ -164,6 +164,7 @@ function chatMessagesToUIMessages(chatMessages: ChatMessage[]): UIMessage[] {
       result.push({
         id: m.id,
         role: "user",
+        metadata: { createdAt: m.createdAt },
         parts: [{ type: "text" as const, text: m.content }],
       });
     } else if (m.role === "assistant") {
@@ -1055,7 +1056,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
 
     registerOutgoingChat(messageText, activeProjectId);
 
-    sendMessage({ text: messageText });
+    sendMessage({ text: messageText, metadata: { createdAt: new Date().toISOString() } });
     setInput("");
   }, [
     input,
@@ -1123,7 +1124,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
       }
 
       registerOutgoingChat(messageText, projectId);
-      sendMessage({ text: messageText });
+      sendMessage({ text: messageText, metadata: { createdAt: new Date().toISOString() } });
     } catch (error) {
       setChatError(error instanceof Error ? error.message : t("chat.errors.launchSkill"));
     } finally {

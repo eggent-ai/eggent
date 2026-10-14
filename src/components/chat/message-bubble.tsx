@@ -2,7 +2,7 @@
 
 import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
-import { Bot, User } from "lucide-react";
+import { Bot } from "lucide-react";
 import { CodeBlock } from "./code-block";
 import { ToolOutput } from "./tool-output";
 import { ToolGroup } from "./tool-group";
@@ -10,6 +10,7 @@ import { SubagentGroup, type HelperItem } from "./subagent-group";
 import { isAgentToolName, isProjectToolName } from "@/lib/pi/subagent-format";
 import type { SubagentSnapshot } from "@/lib/pi/types";
 import { FileMention } from "./file-mention";
+import { UserMessageFooter } from "./user-message-footer";
 import { LearnedNote } from "./learned-note";
 import { FilesProduced } from "./files-produced";
 import { SendToContact, useMailReply } from "@/components/mail/mail-reply";
@@ -149,13 +150,13 @@ export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
     if (!visibleTextContent) return null;
 
     return (
-      <div className="flex items-start gap-3 py-2" data-message-role="user">
-        <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-secondary text-secondary-foreground">
-          <User className="size-4" />
-        </div>
-        <div className="min-w-0 flex-1 pt-0.5 text-sm leading-7">
+      // The person's words sit in a grey box on the right and the answer runs
+      // full width on the left, so who said what reads at a glance.
+      <div className="group/user flex flex-col items-end py-2" data-message-role="user">
+        <div className="max-w-[85%] min-w-0 rounded-2xl bg-muted px-4 py-2 text-sm leading-7 [overflow-wrap:anywhere]">
           <p className="whitespace-pre-wrap"><UserText text={visibleTextContent} /></p>
         </div>
+        <UserMessageFooter text={visibleTextContent} createdAt={messageCreatedAt(message)} />
       </div>
     );
   }
@@ -324,6 +325,14 @@ export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
       </div>
     </div>
   );
+}
+
+/** When the person sent it: stored chats carry it as metadata, a new message gets it at send time. */
+function messageCreatedAt(message: UIMessage): string | undefined {
+  const metadata = message.metadata;
+  if (typeof metadata !== "object" || metadata === null) return undefined;
+  const value = (metadata as { createdAt?: unknown }).createdAt;
+  return typeof value === "string" ? value : undefined;
 }
 
 /**
