@@ -19,6 +19,7 @@ import { normalizePiScheduleStore } from "@/lib/pi/schedule-host";
 import { openChatSessionManager } from "@/lib/pi/session-files";
 import { logExtensionError, ownsScheduleStore, shutdownSessionExtensions } from "@/lib/pi/session-lifecycle";
 import { createSchedulePolicyExtension } from "@/lib/pi/schedule-policy";
+import { ensureHelperToolsExtension, withoutHelperTools } from "@/lib/pi/helper-tools";
 import { isScheduledRunSessionId, SCHEDULED_RUN_REFUSAL } from "@/lib/pi/scheduled-run-state";
 import { bindSubagentMonitor, createSubagentPolicyExtension, MAX_PARALLEL_SUBAGENTS, SubagentMonitor, VISIT_MAX_PARALLEL_SUBAGENTS } from "@/lib/pi/subagents";
 import type { PiPendingInteraction } from "@/lib/pi/interaction-types";
@@ -708,6 +709,13 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
   // Filled once the tools exist: the guard below answers a misdirected mcp call
   // with the messages tool itself.
   let messagesRunner: MessagesRunner | null = null;
+  // Helpers this session starts find their Eggent tools through a file in the
+  // agent's extensions folder; this session has them already and leaves it out.
+  try {
+    ensureHelperToolsExtension(agentDir);
+  } catch (error) {
+    console.warn("[helper-tools] could not write the extension file:", error);
+  }
   const resourceLoader = new DefaultResourceLoader({
     cwd,
     agentDir,
@@ -720,6 +728,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
       ...(!options.visit && mailEnabled() ? [createMailToolGuardExtension(() => messagesRunner)] : []),
     ],
     additionalSkillPaths: projectSkillPaths,
+    extensionsOverride: withoutHelperTools,
     noExtensions: corePiToolsOnly,
     noSkills: corePiToolsOnly,
     noPromptTemplates: corePiToolsOnly,
