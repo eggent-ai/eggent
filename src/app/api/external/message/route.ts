@@ -61,7 +61,10 @@ export async function POST(req: NextRequest) {
     }
 
     const providedToken = parseBearerToken(req);
-    if (!providedToken || !safeTokenMatch(providedToken, expectedToken)) {
+    if (!providedToken ||
+      // A token made in Settings must not lock out the deployment's own one,
+      // which a hosting relay (the shared Telegram bot) keeps sending.
+      ![storedToken, envToken].some((token) => token && safeTokenMatch(providedToken, token))) {
       return Response.json(
         { error: t("api.error.unauthorized") },
         {

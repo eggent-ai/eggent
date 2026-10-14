@@ -38,12 +38,16 @@ function safeTokenMatch(actual: string, expected: string): boolean {
 export async function POST(req: NextRequest) {
   const t = await getServerTranslator(req.headers.get("accept-language"));
   const storedToken = await getExternalApiToken();
-  const expectedToken = storedToken || process.env.EXTERNAL_API_TOKEN?.trim();
+  const envToken = process.env.EXTERNAL_API_TOKEN?.trim();
+  const expectedToken = storedToken || envToken;
   if (!expectedToken) {
     return Response.json({ error: t("api.error.externalTokenMissing") }, { status: 503 });
   }
   const providedToken = parseBearerToken(req);
-  if (!providedToken || !safeTokenMatch(providedToken, expectedToken)) {
+  if (!providedToken ||
+      // A token made in Settings must not lock out the deployment's own one,
+      // which a hosting relay (the shared Telegram bot) keeps sending.
+      ![storedToken, envToken].some((token) => token && safeTokenMatch(providedToken, token))) {
     return Response.json(
       { error: t("api.error.unauthorized") },
       { status: 401, headers: { "WWW-Authenticate": 'Bearer realm="external-telegram-sent"' } }
