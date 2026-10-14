@@ -287,7 +287,8 @@ export function ChatMessages({ messages, isLoading, errorMessage, compactionStat
             </div>
             <h2 className="mt-4 text-2xl font-semibold tracking-tight">{t("chat.emptyTitle")}</h2>
             <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
-              {t("chat.emptyDescription")}
+              {/* Without cards (a self-hosted install has none) the line must not promise them. */}
+              {quickSkills.length > 0 ? t("chat.emptyDescription") : t("chat.emptyDescriptionPlain")}
             </p>
           </div>
 

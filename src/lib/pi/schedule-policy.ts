@@ -84,6 +84,23 @@ export function withScheduleExecutionDirective(prompt: string): string {
   return `${SCHEDULE_EXECUTION_DIRECTIVE}${SCHEDULED_WORK_SEPARATOR}${trimmed}`;
 }
 
+const TERMINAL_SCHEDULE_HINT = /Manage via \/agents\s*(?:→|->)\s*Scheduled jobs\.?/g;
+const EGGENT_SCHEDULE_HINT = "Manage it in Settings → Schedules, or with eggent_manage_schedules.";
+
+/** A tool result with pi's terminal-only pointer replaced by where Eggent keeps tasks. */
+export function withEggentScheduleManagement<T>(content: T[]): T[] {
+  let changed = false;
+  const next = content.map((part) => {
+    const text = (part as { type?: unknown; text?: unknown })?.text;
+    if ((part as { type?: unknown })?.type !== "text" || typeof text !== "string") return part;
+    const replaced = text.replace(TERMINAL_SCHEDULE_HINT, EGGENT_SCHEDULE_HINT);
+    if (replaced === text) return part;
+    changed = true;
+    return { ...(part as object), text: replaced } as T;
+  });
+  return changed ? next : content;
+}
+
 /**
  * The fewest turns a scheduled run is given.
  *
@@ -180,6 +197,15 @@ export function createSchedulePolicyExtension(
         if (!inScheduledRun(ctx.sessionManager?.getSessionId?.())) return undefined;
         const messages = withScheduledReportGuidance(event.messages);
         return messages === event.messages ? undefined : { messages };
+      });
+
+      // The extension tells the model to manage a task "via /agents", a command
+      // of pi's terminal interface that Eggent does not have, and the model
+      // passes it on to the person.
+      pi.on("tool_result", (event) => {
+        if (event.toolName.toLowerCase() !== "agent") return undefined;
+        const content = withEggentScheduleManagement(event.content);
+        return content === event.content ? undefined : { content };
       });
 
       pi.on("tool_call", (event, ctx) => {

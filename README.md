@@ -109,7 +109,7 @@ Open:
 http://localhost:3000
 ```
 
-On first launch, configure login/model credentials in the UI. Provider API keys do not have to be placed in `.env`.
+On first launch, sign in with `admin` / `admin`; you are asked to replace that login at once, then to pick a model. Provider API keys do not have to be placed in `.env`.
 
 Optional local helper:
 

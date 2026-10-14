@@ -211,6 +211,7 @@ const enMessages = {
   "chat.attachmentOnlyPrompt": "Look at the attached image.",
   "chat.emptyTitle": "What should we start with?",
   "chat.emptyDescription": "Write in the box below — a question, a file, a link. Or take one of the ready paths: Eggent asks what it needs and sets it up itself.",
+  "chat.emptyDescriptionPlain": "Write in the box below — a question, a task, a file, a link.",
   "chat.bundledSkills": "Bundled skills",
   "chat.tools.group": "Tools",
   "chat.tools.running": "running…",

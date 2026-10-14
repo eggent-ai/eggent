@@ -184,6 +184,12 @@ APP_BIND_HOST="${APP_BIND_HOST:-$(get_env_value "$ENV_FILE" "APP_BIND_HOST")}"
 APP_BIND_HOST="${APP_BIND_HOST:-127.0.0.1}"
 upsert_env "$ENV_FILE" "APP_PORT" "$APP_PORT"
 upsert_env "$ENV_FILE" "APP_BIND_HOST" "$APP_BIND_HOST"
+# The example's address names port 3000; an install on another port kept it and
+# told Telegram and the settings screens a wrong address. One somebody set is kept.
+APP_BASE_URL_VALUE="$(get_env_value "$ENV_FILE" "APP_BASE_URL")"
+if [[ -z "$APP_BASE_URL_VALUE" || "$APP_BASE_URL_VALUE" == "http://localhost:3000" ]]; then
+  upsert_env "$ENV_FILE" "APP_BASE_URL" "http://localhost:${APP_PORT}"
+fi
 PI_AGENT_DIR_VALUE="$(get_env_value "$ENV_FILE" "PI_CODING_AGENT_DIR")"
 if looks_placeholder "$PI_AGENT_DIR_VALUE"; then
   upsert_env "$ENV_FILE" "PI_CODING_AGENT_DIR" "/app/data/pi-agent"
@@ -215,6 +221,8 @@ if [[ "$APP_BIND_HOST" == "0.0.0.0" ]]; then
 else
   echo "  http://localhost:${APP_PORT}"
 fi
+echo ""
+echo "First sign-in: admin / admin. You will be asked to replace it right away."
 echo ""
 echo "Useful commands:"
 echo "  docker compose logs -f app"

@@ -218,7 +218,9 @@ export async function transcribeAudioBuffer(params: {
   const id = crypto.randomUUID();
   const ext = safeExtension(params.filename, params.mimeType);
   const inputPath = path.join(SPEECH_TMP_DIR, `${id}${ext}`);
-  const wavPath = path.join(SPEECH_TMP_DIR, `${id}.wav`);
+  // Its own name: an uploaded .wav is saved as `${id}.wav`, and ffmpeg refuses
+  // to write its output over its input.
+  const wavPath = path.join(SPEECH_TMP_DIR, `${id}.16k.wav`);
   const outputPrefix = path.join(SPEECH_TMP_DIR, `${id}`);
   const keepAudio = envFlag("EGGENT_STT_KEEP_AUDIO", false);
   const language = normalizeLanguage(params.language || process.env.EGGENT_STT_LANGUAGE);

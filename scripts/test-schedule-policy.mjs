@@ -8,6 +8,7 @@ import {
   MIN_SCHEDULED_TURNS,
   SCHEDULE_EXECUTION_MARKER,
   SCHEDULED_REPORT_GUIDANCE,
+  withEggentScheduleManagement,
   withScheduleExecutionDirective,
   withScheduledReportGuidance,
 } from "../src/lib/pi/schedule-policy.ts";
@@ -51,6 +52,14 @@ assert.ok(guided[1].content.endsWith(SCHEDULED_REPORT_GUIDANCE));
 assert.equal(withScheduledReportGuidance(guided), guided, "the guidance is added once");
 const arrayNote = { role: "custom", customType: "subagent-notification", content: [{ type: "text", text: "r" }] };
 assert.equal(withScheduledReportGuidance([arrayNote])[0].content.at(-1).text, SCHEDULED_REPORT_GUIDANCE);
+// pi's terminal-only pointer is replaced by where Eggent keeps tasks.
+const scheduled = [{ type: "text", text: 'Scheduled "x" (id: A1, type: cron). Next run: soon. Manage via /agents → Scheduled jobs.' }];
+const pointed = withEggentScheduleManagement(scheduled);
+assert.match(pointed[0].text, /Settings → Schedules/);
+assert.doesNotMatch(pointed[0].text, /\/agents/);
+assert.match(pointed[0].text, /id: A1/);
+const plain = [{ type: "text", text: "no pointer here" }];
+assert.equal(withEggentScheduleManagement(plain), plain);
 const noNote = [{ role: "user", content: "hi" }];
 assert.equal(withScheduledReportGuidance(noNote), noNote);
 

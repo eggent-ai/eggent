@@ -361,4 +361,11 @@ class TelegramPollingService {
     }
 }
 
-export const telegramPollingService = new TelegramPollingService();
+// One poller per process. Next compiles the boot hook and each route on its
+// own, and a module-level instance is one copy per compiled module: the boot
+// hook's copy polled while the routes' copy said "stopped", and its Start
+// button would have started a second poller against the first (409).
+const POLLING_SERVICE_KEY = Symbol.for("eggent.telegram.pollingService");
+const pollingGlobal = globalThis as typeof globalThis & { [POLLING_SERVICE_KEY]?: TelegramPollingService };
+export const telegramPollingService: TelegramPollingService =
+  pollingGlobal[POLLING_SERVICE_KEY] ??= new TelegramPollingService();
