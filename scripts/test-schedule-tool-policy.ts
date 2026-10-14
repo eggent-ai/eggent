@@ -12,7 +12,7 @@
  * the model reported the scheduling tool was unavailable.
  */
 import assert from "node:assert/strict";
-import { applySchedulingToolPolicy } from "../src/lib/pi/schedule-intent.ts";
+import { applySchedulingToolPolicy, hasScheduleIntent, hasScheduleManagementIntent } from "../src/lib/pi/schedule-intent.ts";
 import { SUPPORTED_LOCALES } from "../src/i18n/locales.ts";
 
 /** The vocabulary a build ships decides which phrasings it can recognise. */
@@ -101,6 +101,52 @@ check(`the same sequence in Russian, recognised only where it ships (ru: ${ships
   assert.equal(s.active.includes("Agent"), !shipsRussian, "withheld only where the phrase is understood");
   applySchedulingToolPolicy(s, "Ещё одну разовую задачу. Через три минуты то же самое, напомни мне про самые важные задачи.");
   assert.ok(s.active.includes("Agent"), "and it comes back either way");
+});
+
+check("a schedule word and a verb in different sentences are not a request", () => {
+  const s = makeSession();
+  applySchedulingToolPolicy(s, "This job deploys the stack on a fresh server.\nIf a step fails, show the error and ask what to do.");
+  assert.ok(s.active.includes("bash"), "bash was withheld");
+  assert.ok(s.active.includes("Agent"), "Agent was withheld");
+});
+
+check("a long pasted runbook keeps the terminal", () => {
+  // What broke: a 25 KB deployment brief whose heading named the task, whose
+  // rules said "stop and show the error" and whose steps said "check every
+  // image". The turn lost bash and the agent said it had no terminal.
+  const step = "Step: pull every image, check it on the server, show the user the result without secrets. ";
+  const runbook = "ROLE AND JOB\nYou are a DevOps assistant with a terminal. " + step.repeat(40) + "Then remind me tomorrow to rotate the keys.";
+  assert.ok(hasScheduleManagementIntent(runbook) === false);
+  assert.ok(hasScheduleIntent(runbook) === false);
+  const s = makeSession();
+  applySchedulingToolPolicy(s, runbook);
+  assert.ok(s.active.includes("bash"));
+  assert.ok(s.active.includes("Agent"));
+});
+
+check("a short request in one sentence is still read", () => {
+  assert.ok(hasScheduleManagementIntent("Please show me my scheduled jobs."));
+  assert.ok(hasScheduleIntent("Remind me tomorrow at 9 to call Ann."));
+});
+
+check("powershell is withheld off Windows and kept on it", () => {
+  const withPs = [...ALL, "powershell"];
+  const mk = () => {
+    let current = [...withPs];
+    return {
+      get active() { return current; },
+      getActiveToolNames: () => [...current],
+      setActiveToolsByName: (names: string[]) => { current = [...names]; },
+      getAllTools: () => withPs.map((name) => ({ name })),
+    };
+  };
+  const linux = mk();
+  applySchedulingToolPolicy(linux, "what is two plus two", "linux");
+  assert.ok(!linux.active.includes("powershell"));
+  assert.ok(linux.active.includes("bash"));
+  const windows = mk();
+  applySchedulingToolPolicy(windows, "what is two plus two", "win32");
+  assert.ok(windows.active.includes("powershell"));
 });
 
 check("a session that never had a tool does not gain one", () => {

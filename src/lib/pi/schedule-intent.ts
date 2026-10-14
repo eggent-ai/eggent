@@ -20,11 +20,36 @@ const MANAGEMENT_VERB_RE = wordMatcher(SCHEDULE_MANAGEMENT_VERBS);
 const RETIME_VERB_RE = wordMatcher(SCHEDULE_RETIME_VERBS);
 const CLOCK_TIME_RE = /\b\d{1,2}(?::|\s)\d{2}\b/;
 
+/**
+ * Past this length a message is a document - pasted instructions, a brief, a
+ * transcript - not a request about schedules, and is not read for one.
+ *
+ * The words below are common: a 25 KB deployment runbook said "ЗАДАЧА" in its
+ * heading, "покажи" in a rule and "каждый образ" in a step, so the turn lost
+ * `bash` and the agent told the person it had no terminal. Somebody who wants
+ * to see or change a schedule asks in a sentence or two. A long message that
+ * does ask for one still has every tool, `Agent` with its schedule parameter
+ * included; only the extra guard is skipped.
+ */
+export const MAX_SCHEDULE_INTENT_CHARS = 1500;
+
+function readableForIntent(text: string): boolean {
+  return text.trim().length <= MAX_SCHEDULE_INTENT_CHARS;
+}
+
+/** Sentences, so a noun in one and a verb in another do not make a request. */
+function sentences(text: string): string[] {
+  return text.split(/(?<=[.!?\u2026])\s+|\n+/).filter((part) => part.trim().length > 0);
+}
+
 export function hasScheduleManagementIntent(text: string): boolean {
-  const mentionsSchedules = SCHEDULE_NOUN_RE.test(text);
-  const managementVerb = MANAGEMENT_VERB_RE.test(text);
-  const changesScheduledTime = RETIME_VERB_RE.test(text) && CLOCK_TIME_RE.test(text);
-  return (mentionsSchedules && managementVerb) || changesScheduledTime;
+  if (!readableForIntent(text)) return false;
+  return sentences(text).some((sentence) => {
+    const mentionsSchedules = SCHEDULE_NOUN_RE.test(sentence);
+    const managementVerb = MANAGEMENT_VERB_RE.test(sentence);
+    const changesScheduledTime = RETIME_VERB_RE.test(sentence) && CLOCK_TIME_RE.test(sentence);
+    return (mentionsSchedules && managementVerb) || changesScheduledTime;
+  });
 }
 
 const CREATION_PHRASE_RE = wordMatcher(SCHEDULE_CREATION_PHRASES);
@@ -36,6 +61,7 @@ const RELATIVE_DELAY_RE = new RegExp(
 const CLOCK_AT_RE = /\b(?:at)\s+\d{1,2}(?::\d{2})?\s*(?:am|pm)?\b/i;
 
 export function hasScheduleIntent(text: string): boolean {
+  if (!readableForIntent(text)) return false;
   if (hasScheduleManagementIntent(text)) return false;
   return RELATIVE_DELAY_RE.test(text) || CREATION_PHRASE_RE.test(text) || CLOCK_AT_RE.test(text);
 }
@@ -66,7 +92,8 @@ export function applySchedulingToolPolicy(
     getAllTools?: () => Array<{ name: string }>;
     getToolDefinition?: (toolName: string) => unknown;
   },
-  text: string
+  text: string,
+  platform: string = process.platform
 ) {
   const activeTools = session.getActiveToolNames();
   // The full set is the baseline; without it we can only ever take away.
@@ -76,6 +103,11 @@ export function applySchedulingToolPolicy(
     : hasScheduleIntent(text)
       ? new Set(["bash"])
       : new Set<string>();
+  // The runtime offers `powershell` on every platform and it answers only
+  // "available on Windows" elsewhere. A model that finds `bash` withheld
+  // reaches for it, gets that sentence, and tells the person there is no
+  // terminal. Its schema is also billed every turn for nothing.
+  if (platform !== "win32") withheld.add("powershell");
 
   const next = allTools.filter((toolName) => !withheld.has(toolName));
   const unchanged =
