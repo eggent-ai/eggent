@@ -60,7 +60,10 @@ export function TerminalPanel() {
   const { t } = useI18n();
   const open = useAppStore((state) => state.terminalPanelOpen);
   const width = useAppStore((state) => state.terminalPanelWidth);
-  const filesOpen = useAppStore((state) => state.filesPanelOpen);
+  // A file open in the files panel widens it; the terminal gives that room back.
+  const filesWidth = useAppStore((state) =>
+    state.filesPanelOpen ? (state.filePreview ? `${state.filePreviewWidth}px` : "20rem") : null
+  );
   const setOpen = useAppStore((state) => state.setTerminalPanelOpen);
   const setWidth = useAppStore((state) => state.setTerminalPanelWidth);
   const activeProjectId = useAppStore((state) => state.activeProjectId);
@@ -152,7 +155,7 @@ export function TerminalPanel() {
           // However wide it was left, it never takes the room the conversation
           // needs: on a narrow window the chosen width is a wish, and the
           // terminal gives way down to a floor of its own.
-          ["--terminal-max" as string]: `calc(100vw - var(--sidebar-width, 16rem) - 24rem${filesOpen ? " - 20rem" : ""})`,
+          ["--terminal-max" as string]: `calc(100vw - var(--sidebar-width, 16rem) - 24rem${filesWidth ? ` - ${filesWidth}` : ""})`,
         }}
         className={[
           "sticky top-[var(--header-height,3.5rem)] h-[calc(100svh-var(--header-height,3.5rem))] shrink-0 overflow-hidden border-l bg-background",

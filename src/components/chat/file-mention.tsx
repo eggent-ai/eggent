@@ -3,7 +3,8 @@
 import { useEffect, useState } from "react";
 import { ExternalLink } from "lucide-react";
 import { useI18n } from "@/i18n/provider";
-import { fileDownloadUrl, filesPageUrl, isAudioFile, isOpenableFile } from "@/lib/files/openable";
+import { fileDownloadUrl, filesPageUrl, isAudioFile, isModifiedClick, isOpenableFile } from "@/lib/files/openable";
+import { useAppStore } from "@/store/app-store";
 import { AudioMention } from "./audio-mention";
 
 /**
@@ -66,6 +67,7 @@ export function FileMention({ projectId, path, children, fallback }: {
   fallback?: React.ReactNode;
 }) {
   const { t } = useI18n();
+  const openFilePreview = useAppStore((state) => state.openFilePreview);
   const [exists, setExists] = useState<Existence>("unknown");
 
   useEffect(() => {
@@ -87,8 +89,9 @@ export function FileMention({ projectId, path, children, fallback }: {
 
   const openable = isOpenableFile(path);
   const audio = isAudioFile(path);
-  // A page opens rendered, in its own tab. Anything else goes to the file's own
-  // screen, where it can be read, edited, played and downloaded.
+  // A page opens rendered, in its own tab. Anything else opens in the files
+  // panel beside the conversation - it used to replace the conversation with
+  // the file's screen, which is still the link's address for a new tab.
   const href = openable ? fileDownloadUrl(projectId, path, { inline: true }) : filesPageUrl(projectId, path);
 
   const link = (
@@ -96,6 +99,11 @@ export function FileMention({ projectId, path, children, fallback }: {
       href={href}
       target={openable ? "_blank" : undefined}
       rel={openable ? "noopener noreferrer" : undefined}
+      onClick={openable ? undefined : (event) => {
+        if (isModifiedClick(event)) return;
+        event.preventDefault();
+        openFilePreview(projectId, path);
+      }}
       title={openable || audio ? t("files.open") : t("files.openInEditor")}
       className="bg-muted hover:bg-accent inline-flex items-center gap-1 rounded px-1.5 py-0.5 align-baseline font-mono text-sm underline decoration-dotted underline-offset-2 transition-colors"
     >

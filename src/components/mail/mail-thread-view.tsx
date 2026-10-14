@@ -9,7 +9,8 @@ import { Textarea } from "@/components/ui/textarea";
 import { SkeletonList } from "@/components/ui/skeleton-list";
 import { useI18n } from "@/i18n/provider";
 import { chatPath } from "@/lib/dashboard-routes";
-import { fileDownloadUrl, filesPageUrl } from "@/lib/files/openable";
+import { fileDownloadUrl, filesPageUrl, isModifiedClick } from "@/lib/files/openable";
+import { useAppStore } from "@/store/app-store";
 import type { MailMessage, MailThreadAnswer } from "@/lib/mail/types";
 import { refreshMailContacts } from "./use-mail-contacts";
 
@@ -294,7 +295,15 @@ export function MailThreadView({ contactId }: { contactId: string }) {
                         <FileText className="mt-0.5 size-3.5 shrink-0 text-muted-foreground" aria-hidden />
                         <div className="min-w-0">
                           {file.localPath ? (
-                            <Link className="block truncate font-medium underline-offset-2 hover:underline" href={filesPageUrl("none", file.localPath)}>
+                            <Link
+                              className="block truncate font-medium underline-offset-2 hover:underline"
+                              href={filesPageUrl("none", file.localPath)}
+                              onClick={(event) => {
+                                if (isModifiedClick(event) || !file.localPath) return;
+                                event.preventDefault();
+                                useAppStore.getState().openFilePreview("none", file.localPath);
+                              }}
+                            >
                               {file.name}
                             </Link>
                           ) : (

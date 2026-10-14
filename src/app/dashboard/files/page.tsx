@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useSearchParams } from "next/navigation";
 import { Download, ExternalLink, FileAudio, FileText, ImageIcon, Loader2, Save } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
@@ -10,42 +10,17 @@ import { SiteHeader } from "@/components/site-header";
 import { Button } from "@/components/ui/button";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { SidePanels } from "@/components/side-panels";
-import { Textarea } from "@/components/ui/textarea";
+import { FileBody, formatFileSize, useFileContent } from "@/components/file-view";
 import { useI18n } from "@/i18n/provider";
 import { fileDownloadUrl, isOpenableFile } from "@/lib/files/openable";
-
-type FilePayload = {
-  projectId: string;
-  path: string;
-  filename: string;
-  content: string;
-  contentType?: string;
-  previewUrl?: string;
-  binary?: boolean;
-  size?: number;
-  updatedAt?: string;
-};
-
-function formatFileSize(bytes?: number) {
-  if (bytes === undefined) return "";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
 
 export default function GenericFileEditorPage() {
   const { t } = useI18n();
   const searchParams = useSearchParams();
   const projectId = searchParams.get("project") || "none";
   const filePath = searchParams.get("path") || "";
-
-  const [content, setContent] = useState("");
-  const [draft, setDraft] = useState("");
-  const [metadata, setMetadata] = useState<FilePayload | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [status, setStatus] = useState<string | null>(null);
-  const [error, setError] = useState<string | null>(null);
+  const file = useFileContent(projectId, filePath);
+  const { metadata, loading, saving, status, error, save, dirty, title } = file;
 
   const downloadHref = useMemo(() => fileDownloadUrl(projectId, filePath), [projectId, filePath]);
 
@@ -58,70 +33,9 @@ export default function GenericFileEditorPage() {
   );
 
   const isOpenable = isOpenableFile(filePath);
-
-  useEffect(() => {
-    let cancelled = false;
-    async function load() {
-      if (!filePath) {
-        setError(t("files.noFileSelected"));
-        setLoading(false);
-        return;
-      }
-      setLoading(true);
-      setStatus(null);
-      setError(null);
-      try {
-        const params = new URLSearchParams({ project: projectId, path: filePath });
-        const res = await fetch(`/api/files/content?${params.toString()}`, { cache: "no-store" });
-        const json = await res.json();
-        if (!res.ok) throw new Error(json.error || t("files.loadFailed"));
-        if (cancelled) return;
-        const payload = json as FilePayload;
-        setMetadata(payload);
-        setContent(payload.content || "");
-        setDraft(payload.content || "");
-      } catch (loadError) {
-        if (!cancelled) setError(loadError instanceof Error ? loadError.message : t("files.loadFailed"));
-      } finally {
-        if (!cancelled) setLoading(false);
-      }
-    }
-    void load();
-    return () => {
-      cancelled = true;
-    };
-  }, [projectId, filePath]);
-
-  async function save() {
-    setSaving(true);
-    setStatus(null);
-    setError(null);
-    try {
-      const params = new URLSearchParams({ project: projectId, path: filePath });
-      const res = await fetch(`/api/files/content?${params.toString()}`, {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ content: draft }),
-      });
-      const json = await res.json();
-      if (!res.ok) throw new Error(json.error || t("files.saveFailed"));
-      const payload = json as FilePayload;
-      setMetadata(payload);
-      setContent(payload.content || draft);
-      setDraft(payload.content || draft);
-      setStatus(t("files.saved"));
-    } catch (saveError) {
-      setError(saveError instanceof Error ? saveError.message : t("files.saveFailed"));
-    } finally {
-      setSaving(false);
-    }
-  }
-
-  const dirty = draft !== content;
-  const title = metadata?.filename || filePath.split("/").pop() || t("files.defaultTitle");
-  const isImagePreview = Boolean(metadata?.previewUrl && metadata.contentType?.startsWith("image/"));
-  const isAudioPreview = Boolean(metadata?.previewUrl && metadata.contentType?.startsWith("audio/"));
-  const isMediaPreview = isImagePreview || isAudioPreview;
+  const isImagePreview = file.isImage;
+  const isAudioPreview = file.isAudio;
+  const isMediaPreview = file.isMedia;
 
   return (
     <div className="[--header-height:calc(--spacing(14))]">
@@ -171,7 +85,7 @@ export default function GenericFileEditorPage() {
                       </a>
                     </Button>
                     {!isMediaPreview ? (
-                      <Button onClick={save} disabled={loading || saving || !dirty} className="gap-2">
+                      <Button onClick={() => void save()} disabled={loading || saving || !dirty} className="gap-2">
                         {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
                         {t("common.save")}
                       </Button>
@@ -180,45 +94,13 @@ export default function GenericFileEditorPage() {
                 </div>
 
                 {status ? <Badge variant="secondary">{status}</Badge> : null}
-                {error ? (
+                {error && metadata ? (
                   <Alert variant="destructive">
                     <AlertDescription>{error}</AlertDescription>
                   </Alert>
                 ) : null}
 
-                {loading ? (
-                  <div className="flex items-center gap-2 text-sm text-muted-foreground">
-                    <Loader2 className="size-4 animate-spin" /> {t("common.loadingFile")}
-                  </div>
-                ) : error ? null : isImagePreview && metadata?.previewUrl ? (
-                  <div className="overflow-hidden rounded-lg border bg-muted/20 p-3">
-                    <img
-                      src={metadata.previewUrl}
-                      alt={title}
-                      className="mx-auto max-h-[70vh] max-w-full rounded object-contain"
-                    />
-                  </div>
-                ) : isAudioPreview && metadata?.previewUrl ? (
-                  // The browser's own player: seeking, volume and speed come
-                  // with it, and it is the screen a chat mention links to.
-                  <div className="rounded-lg border bg-muted/20 p-3">
-                    <audio
-                      controls
-                      preload="metadata"
-                      src={metadata.previewUrl}
-                      aria-label={title}
-                      className="w-full dark:scheme-dark"
-                    />
-                  </div>
-                ) : (
-                  <Textarea
-                    value={draft}
-                    onChange={(event) => setDraft(event.target.value)}
-                    disabled={saving}
-                    rows={24}
-                    className="min-h-[560px] font-mono text-sm"
-                  />
-                )}
+                <FileBody file={file} />
               </section>
             </div>
           </SidebarInset>

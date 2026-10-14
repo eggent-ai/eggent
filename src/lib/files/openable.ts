@@ -175,3 +175,11 @@ export function filesPageUrl(projectId: string, path: string): string {
   const params = new URLSearchParams({ project: projectId, path });
   return `/dashboard/files?${params.toString()}`;
 }
+
+/**
+ * Whether a click on a link should be left to the browser: a new tab, a new
+ * window, a download. Anything else on a file link opens it in the panel.
+ */
+export function isModifiedClick(event: { button: number; metaKey: boolean; ctrlKey: boolean; shiftKey: boolean; altKey: boolean }): boolean {
+  return event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey;
+}

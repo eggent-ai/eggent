@@ -58,6 +58,20 @@ interface AppState {
   setFilesPanelOpen: (open: boolean) => void;
   toggleFilesPanel: () => void;
   /**
+   * A file shown inside the files panel, beside the conversation.
+   *
+   * Clicking a file used to open the editor over the whole screen, so looking
+   * something up in the middle of a session took the session away. It opens
+   * in the panel now, and the panel widens for it; the full page is one
+   * button further for when the file is the work. Not remembered across loads:
+   * a file left open would greet the next visit with something stale.
+   */
+  filePreview: { projectId: string; path: string } | null;
+  openFilePreview: (projectId: string, path: string) => void;
+  closeFilePreview: () => void;
+  filePreviewWidth: number;
+  setFilePreviewWidth: (width: number, remember?: boolean) => void;
+  /**
    * The terminal, in a panel of its own beside the file tree.
    *
    * Remembered per browser like the tree, and for the same reason: it is
@@ -88,6 +102,26 @@ interface AppState {
 const FILES_PANEL_KEY = "eggent.filesPanelOpen";
 const TERMINAL_PANEL_KEY = "eggent.terminalPanelOpen";
 const TERMINAL_WIDTH_KEY = "eggent.terminalPanelWidth";
+
+const FILE_PREVIEW_WIDTH_KEY = "eggent.filePreviewWidth";
+export const FILE_PREVIEW_MIN_WIDTH = 360;
+export const FILE_PREVIEW_MAX_WIDTH = 1200;
+export const FILE_PREVIEW_DEFAULT_WIDTH = 560;
+
+export function clampFilePreviewWidth(width: number): number {
+  if (!Number.isFinite(width)) return FILE_PREVIEW_DEFAULT_WIDTH;
+  return Math.min(FILE_PREVIEW_MAX_WIDTH, Math.max(FILE_PREVIEW_MIN_WIDTH, Math.round(width)));
+}
+
+export function readFilePreviewWidth(): number {
+  if (typeof window === "undefined") return FILE_PREVIEW_DEFAULT_WIDTH;
+  try {
+    const stored = Number.parseInt(window.localStorage.getItem(FILE_PREVIEW_WIDTH_KEY) ?? "", 10);
+    return Number.isFinite(stored) ? clampFilePreviewWidth(stored) : FILE_PREVIEW_DEFAULT_WIDTH;
+  } catch {
+    return FILE_PREVIEW_DEFAULT_WIDTH;
+  }
+}
 
 export const TERMINAL_PANEL_MIN_WIDTH = 320;
 export const TERMINAL_PANEL_MAX_WIDTH = 960;
@@ -170,6 +204,23 @@ export const useAppStore = create<AppState>((set) => ({
       if (closeTerminal) rememberTerminalPanel(TERMINAL_PANEL_KEY, "0");
       return { filesPanelOpen: next, terminalPanelOpen: closeTerminal ? false : state.terminalPanelOpen };
     }),
+  filePreview: null,
+  openFilePreview: (projectId, path) => {
+    rememberFilesPanel(true);
+    if (isNarrowScreen()) rememberTerminalPanel(TERMINAL_PANEL_KEY, "0");
+    set((state) => ({
+      filePreview: { projectId, path },
+      filesPanelOpen: true,
+      terminalPanelOpen: isNarrowScreen() ? false : state.terminalPanelOpen,
+    }));
+  },
+  closeFilePreview: () => set({ filePreview: null }),
+  filePreviewWidth: FILE_PREVIEW_DEFAULT_WIDTH,
+  setFilePreviewWidth: (width, remember = true) => {
+    const next = clampFilePreviewWidth(width);
+    if (remember) rememberTerminalPanel(FILE_PREVIEW_WIDTH_KEY, String(next));
+    set({ filePreviewWidth: next });
+  },
   terminalPanelOpen: false,
   terminalPanelWidth: TERMINAL_PANEL_DEFAULT_WIDTH,
   setTerminalPanelOpen: (open) => {

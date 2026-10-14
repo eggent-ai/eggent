@@ -68,6 +68,9 @@ function enclosingFolders(path: string): string[] {
  */
 function useOpenedFile(projectId: string): string | null {
   const searchParams = useSearchParams();
+  // A file open in the panel is the one being looked at, wherever the page is.
+  const preview = useAppStore((state) => state.filePreview);
+  if (preview) return preview.projectId === projectId ? preview.path : null;
   const path = searchParams.get("path");
   if (!path) return null;
   return (searchParams.get("project") || "none") === projectId ? path : null;
@@ -422,6 +425,7 @@ function TreeNode({
   onCreated,
 }: TreeNodeProps) {
   const router = useRouter();
+  const openFilePreview = useAppStore((state) => state.openFilePreview);
   const { t } = useI18n();
   const currentPath = useAppStore((state) => state.currentPath);
   const panelOpen = useAppStore((state) => state.filesPanelOpen);
@@ -534,10 +538,7 @@ function TreeNode({
     setExpanded(true);
     await loadChildren(true, true);
     onCreated?.();
-    if (entryType === "file") {
-      const params = new URLSearchParams({ project: projectId, path: nextPath });
-      router.push(`/dashboard/files?${params.toString()}`);
-    }
+    if (entryType === "file") openFilePreview(projectId, nextPath);
   };
 
   // The whole folder as one archive. Refused archives say why; saying nothing
@@ -562,7 +563,14 @@ function TreeNode({
     }
 
     onCreated?.();
-    router.push("/dashboard");
+    // The thing deleted may be what is on screen: the panel lets go of it,
+    // and the file's own page, which would show an error, is left.
+    const gone = (path: string) => path === relativePath || path.startsWith(`${relativePath}/`);
+    const { filePreview, closeFilePreview } = useAppStore.getState();
+    if (filePreview?.projectId === projectId && gone(filePreview.path)) closeFilePreview();
+    if (window.location.pathname.startsWith("/dashboard/files") && openedFile && gone(openedFile)) {
+      router.push("/dashboard");
+    }
   };
 
   const uploadDroppedItems = async (items: DroppedUploadItems) => {
@@ -599,8 +607,9 @@ function TreeNode({
 
   const handleClick = () => {
     if (type === "file") {
-      const params = new URLSearchParams({ project: projectId, path: relativePath });
-      router.push(`/dashboard/files?${params.toString()}`);
+      // Beside the conversation, not over it: the full page is a button in
+      // the preview for when the file is the work.
+      openFilePreview(projectId, relativePath);
       return;
     }
 
@@ -836,7 +845,7 @@ interface FileTreeProps {
 }
 
 export function FileTree({ projectId }: FileTreeProps) {
-  const router = useRouter();
+  const openFilePreview = useAppStore((state) => state.openFilePreview);
   const { t } = useI18n();
   const currentPath = useAppStore((state) => state.currentPath);
   const setCurrentPath = useAppStore((state) => state.setCurrentPath);
@@ -927,10 +936,7 @@ export function FileTree({ projectId }: FileTreeProps) {
     }
 
     await loadRootEntries();
-    if (entryType === "file") {
-      const params = new URLSearchParams({ project: projectId, path: trimmed });
-      router.push(`/dashboard/files?${params.toString()}`);
-    }
+    if (entryType === "file") openFilePreview(projectId, trimmed);
   };
 
   // The attribute that turns the second picker into a folder picker. React

@@ -50,6 +50,7 @@ function keyOf(project: string, path: string): string {
 export function FilesProduced({ groups }: { groups: ProducedGroup[] }) {
   const { t } = useI18n();
   const chatId = useAppStore((state) => state.activeChatId);
+  const openFilePreview = useAppStore((state) => state.openFilePreview);
   const [existence, setExistence] = useState<Existence | null>(null);
   const [telegram, setTelegram] = useState(false);
   const [sent, setSent] = useState<Record<string, "sending" | "sent" | "failed">>({});
@@ -145,7 +146,14 @@ export function FilesProduced({ groups }: { groups: ProducedGroup[] }) {
             <li key={key} className="flex items-center gap-2 py-1.5">
               <Icon className="size-4 shrink-0 text-muted-foreground" aria-hidden />
               <span className="min-w-0 flex-1">
-                <span className="block truncate text-sm text-foreground">{name}</span>
+                <button
+                  type="button"
+                  onClick={() => openFilePreview(project, item.path)}
+                  className="block max-w-full truncate text-left text-sm text-foreground underline-offset-2 hover:underline focus-visible:underline focus-visible:outline-none"
+                  title={item.path}
+                >
+                  {name}
+                </button>
                 <span className="block truncate text-muted-foreground">
                   {[folder, formatSize(item.size)].filter(Boolean).join(" · ")}
                 </span>
