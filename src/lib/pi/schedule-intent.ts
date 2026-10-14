@@ -24,8 +24,8 @@ const CLOCK_TIME_RE = /\b\d{1,2}(?::|\s)\d{2}\b/;
  * Past this length a message is a document - pasted instructions, a brief, a
  * transcript - not a request about schedules, and is not read for one.
  *
- * The words below are common: a 25 KB deployment runbook said "ЗАДАЧА" in its
- * heading, "покажи" in a rule and "каждый образ" in a step, so the turn lost
+ * The words below are common: a 25 KB deployment runbook (in Russian) said
+ * "task" in its heading, "show" in a rule and "every image" in a step, so the turn lost
  * `bash` and the agent told the person it had no terminal. Somebody who wants
  * to see or change a schedule asks in a sentence or two. A long message that
  * does ask for one still has every tool, `Agent` with its schedule parameter
