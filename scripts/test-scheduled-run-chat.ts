@@ -387,6 +387,33 @@ await check("the run, closing remark included, is kept in the run's chat", async
   assert.ok(runChat?.messages.some((message) => message.role === "tool" && message.toolName === "telegram_send_message"));
 });
 
+console.log("\nA run whose helper already wrote to the person\n");
+
+// The helper did the work and sent the result itself, before the report turn
+// began: that is when a helper's tool records what it sent (helper-tools.ts).
+const { noteHelperDelivery } = await import("../src/lib/pi/helper-deliveries.ts");
+noteHelperDelivery(OWNER, {
+  destination: { kind: "relay", chatId: 42 },
+  result: { success: true, via: "relay", messageIds: [9001] },
+  kind: "text",
+});
+const beforeHelperSend = relayed.length;
+await fireRun("HELPER-SENT", { sends: false });
+
+await check("the host does not send the report a second time", () => {
+  assert.equal(relayed.length, beforeHelperSend, relayed.slice(beforeHelperSend).map((entry) => String(entry.body.text)).join(" | "));
+});
+
+await check("a reply to what the helper sent reaches the run's chat", async () => {
+  assert.equal(await chatForTelegramMessage({ botKey: RELAY_BOT_KEY, telegramChatId: 42, messageId: 9001 }), runChatItem.id);
+});
+
+await check("the next run, whose helper sent nothing, is delivered as usual", async () => {
+  const before = relayed.length;
+  await fireRun("PLAIN-AFTER-HELPER");
+  assert.equal(relayed.length, before + 1);
+});
+
 console.log("\nA task that meets the wall every time\n");
 
 const jobFile = path.join(storeDir, `${session.sessionId}.json`);

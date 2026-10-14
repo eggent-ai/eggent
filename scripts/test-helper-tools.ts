@@ -1,5 +1,6 @@
 /**
- * A helper started with the Agent tool can message a colleague.
+ * A helper started with the Agent tool can message a colleague and write to
+ * Telegram.
  *
  * The failure this exists for: "write to Pyotr at ten" was scheduled, fired on
  * time, and the helper that runs every scheduled task answered that it had no
@@ -7,7 +8,11 @@
  * extensions it finds on disk, and the messages tool lived only in the chat's
  * own session. Eggent now writes a small extension into the agent's folder that
  * hands helpers the tool, and keeps it out of the chat's own session, which has
- * the tool already.
+ * the tool already. The same goes for the Telegram tools: a daily post was
+ * done by reading the bot token and calling the Bot API by hand. What a helper
+ * sends to the person's own chat is kept under the chat that started it, for
+ * the scheduled run's report to find (test-scheduled-run-chat.ts covers that
+ * side).
  *
  * The real runtime, the real pi-subagents extension, a stub model and a
  * stand-in for the messages service. Needs an installed copy of
@@ -30,11 +35,17 @@ import {
 } from "@earendil-works/pi-coding-agent";
 import { ensureHelperToolsExtension, HELPER_TOOLS_FILE, withoutHelperTools } from "../src/lib/pi/helper-tools.ts";
 import { createMessagesTool } from "../src/lib/mail/tool.ts";
+import { takeHelperDeliveries } from "../src/lib/pi/helper-deliveries.ts";
 
 const PROVIDER = "stub";
 const MODEL = "stub-model";
 const HELPER_MARK = "HELPER-TASK";
 const MESSAGE = "Meeting tomorrow at 10";
+const TELEGRAM_TEXT = "Digest: three items today";
+
+const workRoot = fs.mkdtempSync(path.join(os.tmpdir(), "eggent-helper-tools-run-"));
+// The workspace's data (the Telegram outbox among it) sits under the working directory.
+process.chdir(workRoot);
 
 let failed = 0;
 let ran = 0;
@@ -111,6 +122,25 @@ await new Promise<void>((resolve) => mail.listen(0, "127.0.0.1", resolve));
 process.env.EGGENT_MAIL_API_URL = `http://127.0.0.1:${(mail.address() as { port: number }).port}`;
 process.env.EGGENT_MAIL_API_TOKEN = TOKEN;
 
+// ---- the deployment's Telegram relay ----------------------------------------------
+
+const relayed: Array<Record<string, unknown>> = [];
+const relay = http.createServer((req, res) => {
+  let body = "";
+  req.on("data", (part) => { body += String(part); });
+  req.on("end", () => {
+    relayed.push(JSON.parse(body || "{}") as Record<string, unknown>);
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify({ success: true, messageIds: [500 + relayed.length] }));
+  });
+});
+await new Promise<void>((resolve) => relay.listen(0, "127.0.0.1", resolve));
+process.env.EGGENT_TELEGRAM_RELAY_URL = `http://127.0.0.1:${(relay.address() as { port: number }).port}`;
+process.env.EGGENT_TELEGRAM_RELAY_TOKEN = "relay-test-token";
+delete process.env.TELEGRAM_BOT_TOKEN;
+const { rememberTelegramDestination } = await import("../src/lib/telegram/outbound.ts");
+await rememberTelegramDestination({ chatId: 42, via: "relay" });
+
 // ---- the model -------------------------------------------------------------------
 
 function chunk(delta: Record<string, unknown>, finish: string | null = null): string {
@@ -148,10 +178,13 @@ const provider = http.createServer((req, res) => {
       res.write(chunk({ tool_calls: [{ index: 0, id: `call-${name}`, type: "function", function: { name, arguments: JSON.stringify(args) } }] }));
       res.write(chunk({}, "tool_calls"));
     };
-    if (isHelper && !toolAnswered && names.includes("eggent_messages")) {
+    const called = (name: string) => JSON.stringify(messages).includes(`"name":"${name}"`);
+    if (isHelper && toolAnswered) helperToolResults.push(textOf(messages[messages.length - 1]?.content));
+    if (isHelper && names.includes("eggent_messages") && !called("eggent_messages")) {
       call("eggent_messages", { action: "send", to: "Pyotr", text: MESSAGE });
+    } else if (isHelper && names.includes("telegram_send_message") && !called("telegram_send_message")) {
+      call("telegram_send_message", { text: TELEGRAM_TEXT });
     } else if (isHelper) {
-      if (toolAnswered) helperToolResults.push(textOf(messages[messages.length - 1]?.content));
       res.write(chunk({ content: toolAnswered ? "Sent to Pyotr." : "No tool for messages here." }));
       res.write(chunk({}, "stop"));
     } else if (!toolAnswered) {
@@ -169,7 +202,7 @@ const providerUrl = `http://127.0.0.1:${(provider.address() as { port: number })
 
 // ---- a chat turn that starts one helper -------------------------------------------
 
-async function runTurn(options: { filterBridge: boolean }): Promise<{ agentDir: string; helperReply: string; chatToolIsOwn: boolean }> {
+async function runTurn(options: { filterBridge: boolean }): Promise<{ agentDir: string; helperReply: string; chatToolIsOwn: boolean; parentId: string }> {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "eggent-helper-tools-"));
   const agentDir = path.join(root, "agent");
   const cwd = path.join(root, "work");
@@ -204,7 +237,8 @@ async function runTurn(options: { filterBridge: boolean }): Promise<{ agentDir: 
     model,
     modelRuntime: runtime,
     resourceLoader,
-    sessionManager: SessionManager.inMemory(cwd),
+    // On disk, as a chat's session is: the helper records it as its parent.
+    sessionManager: SessionManager.create(cwd, path.join(root, "sessions")),
     // The chat's own session has the tool from Eggent, as in eggent-tools.ts.
     customTools: [ownTool as never],
   });
@@ -220,7 +254,7 @@ async function runTurn(options: { filterBridge: boolean }): Promise<{ agentDir: 
   await session.prompt("Tell Pyotr about the meeting.");
   unsubscribe();
   session.dispose();
-  return { agentDir, helperReply, chatToolIsOwn };
+  return { agentDir, helperReply, chatToolIsOwn, parentId: session.sessionId };
 }
 
 console.log(`Helpers get the messages tool (${path.basename(path.dirname(extension))}/${path.basename(extension)} ${JSON.parse(fs.readFileSync(path.join(extension, "package.json"), "utf8")).version})\n`);
@@ -254,21 +288,35 @@ check("the chat's own session offers the tool once, and it is the chat's own cop
   }
 });
 
-// Without messages in this deployment nothing of ours is left in the folder.
-delete process.env.EGGENT_MAIL_API_URL;
-ensureHelperToolsExtension(first.agentDir);
-check("without messages the bridge file is removed", () => {
-  assert.ok(!fs.existsSync(path.join(first.agentDir, "extensions", HELPER_TOOLS_FILE)));
+check("the helper is offered both Telegram tools", () => {
+  assert.ok(offered.helper[0].includes("telegram_send_message"), offered.helper[0].join(", "));
+  assert.ok(offered.helper[0].includes("telegram_send_file"), offered.helper[0].join(", "));
 });
-const foreign = path.join(first.agentDir, "extensions", HELPER_TOOLS_FILE);
-fs.mkdirSync(path.dirname(foreign), { recursive: true });
-fs.writeFileSync(foreign, "export default function () {}\n");
-ensureHelperToolsExtension(first.agentDir);
-check("a file of the same name that is not ours is left alone", () => {
-  assert.ok(fs.existsSync(foreign));
+check("the helper's Telegram message reaches the person's chat through the relay", () => {
+  assert.equal(relayed.length, 1, JSON.stringify(relayed));
+  assert.equal(String(relayed[0].text), TELEGRAM_TEXT);
+  assert.equal(String(relayed[0].chatId), "42");
+});
+check("what it sent waits for the report of the chat that started it", () => {
+  const waiting = takeHelperDeliveries(first.parentId);
+  assert.equal(waiting.length, 1, `nothing kept under ${first.parentId}`);
+  assert.equal(waiting[0].kind, "text");
+  assert.deepEqual(waiting[0].result.messageIds, [501]);
+});
+
+// A deployment without messages: the helper still gets Telegram.
+delete process.env.EGGENT_MAIL_API_URL;
+offered.helper.length = 0;
+await runTurn({ filterBridge: true });
+check("without messages the helper gets Telegram and not the messages tool", () => {
+  assert.ok(offered.helper.length > 0, "no helper request reached the model");
+  assert.ok(!offered.helper[0].includes("eggent_messages"), offered.helper[0].join(", "));
+  assert.ok(offered.helper[0].includes("telegram_send_message"), offered.helper[0].join(", "));
+  assert.equal(relayed.length, 2);
 });
 
 mail.close();
 provider.close();
+relay.close();
 console.log(`\n${ran - failed}/${ran} passed`);
 process.exit(failed ? 1 : 0);

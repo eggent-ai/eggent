@@ -19,17 +19,9 @@ import { managePiSchedules, noteScheduledRunReachedTelegram, scheduledRunChatFor
 import { formatUsageMeter, getUsageSnapshot, isUsageProviderConfigured } from "@/lib/usage/usage-provider";
 import { createPendingInteraction } from "@/lib/pi/pending-interactions";
 import { DEFER_INTERACTION_ANSWER, type PiPendingInteraction } from "@/lib/pi/interaction-types";
-import {
-  looksLikePhoto,
-  resolveTelegramDestination,
-  sendTelegramDocument,
-  sendTelegramPhoto,
-  sendTelegramText,
-  type TelegramDestination,
-  type TelegramSendResult,
-} from "@/lib/telegram/outbound";
+import { resolveTelegramDestination } from "@/lib/telegram/outbound";
 import { afterTelegramDelivery } from "@/lib/telegram/conversation";
-import { withChatFooter } from "@/lib/telegram/format";
+import { createTelegramTools } from "@/lib/telegram/tools";
 import { createChat, getChat } from "@/lib/storage/chat-store";
 import { squashName } from "@/lib/pi/project-mention";
 import { describeVisitResult, runProjectVisit, visitChatIdFor, visitGranted, visitProgressDetails } from "@/lib/pi/project-visit";
@@ -49,7 +41,6 @@ import {
   upsertProjectMcpServer,
 } from "@/lib/storage/project-store";
 
-const TELEGRAM_SEND_FILE_MAX_BYTES = 45 * 1024 * 1024;
 
 const IMAGE_REFERENCE_MAX_BYTES = 20 * 1024 * 1024;
 
@@ -82,10 +73,6 @@ function resolveLocalFilePath(options: { cwd?: string }, rawPath: string): strin
   if (!value) throw new Error("file path is required");
   if (path.isAbsolute(value)) return path.resolve(value);
   return path.resolve(options.cwd || process.cwd(), value);
-}
-
-function resolveOutgoingTelegramFilePath(options: { cwd?: string }, rawPath: string): string {
-  return resolveLocalFilePath(options, rawPath);
 }
 
 function imageMimeType(filePath: string): string | null {
@@ -1223,8 +1210,6 @@ export async function createEggentPiTools(options: {
       chat ? { chat } : {}
     );
   };
-  // Naming a chat fails for its own reasons, and "no chat to send to" would send
-  // the user off connecting a bot they already have.
   // A message to the person's own chat is remembered with the chat it came
   // from - the scheduled run's chat when one is going on - so that answering it
   // continues there, and the conversation moves there. A post to a channel is
@@ -1232,97 +1217,20 @@ export async function createEggentPiTools(options: {
   //
   // Only a text counts as the run having spoken for itself: after a file alone
   // the host still sends the run's closing words, as it always has.
-  const afterOwnChatDelivery = async (
-    destination: TelegramDestination,
-    result: TelegramSendResult,
-    kind: "text" | "file"
-  ) => {
-    if (!result.success) return;
-    const session = options.getAgentSession?.();
-    const runChat = await scheduledRunChatFor(session);
-    if (runChat && kind === "text") noteScheduledRunReachedTelegram(session);
-    // A visit's own chat is not where the person is: what it sends belongs to the chat that asked.
-    await afterTelegramDelivery({ destination, result, chatId: runChat?.id ?? options.visit?.parentChatId ?? options.chatId });
-  };
-  const noDestinationResult = (chat?: string) => textResult(JSON.stringify(
-    chat
-      ? {
-          success: false,
-          error: `Cannot publish to ${chat} from this workspace.`,
-          note: "Publishing to a named chat needs this workspace's own bot, connected in Settings -> Messengers, and that bot must be an administrator there. Give the channel as @name, a t.me link, or its numeric id.",
-        }
-      : {
-          success: false,
-          error: "This workspace has no Telegram chat to send to.",
-          note: "Tell the user to connect a bot in Settings -> Messengers, or to write to the bot once so the workspace learns where to reply.",
-        },
-    null,
-    2
-  ));
-
-  tools.push(defineTool({
-      name: "telegram_send_message",
-      label: "Send Telegram Message",
-      description: "Send a plain text message to Telegram. Without `chat` it goes to this workspace's own chat: use that when the user asks to be written to, notified, reminded, or sent a result - including from a scheduled or background run. Pass `chat` to publish somewhere else, such as a channel the bot administers. Do not write the text into a file and send the file instead: that is what this tool exists to avoid.",
-      parameters: Type.Object({
-        text: Type.String({ description: "Message text. Plain text; keep it short enough for a chat message." }),
-        chat: Type.Optional(Type.String({ description: "Where to publish, when it is not this workspace's own chat: @channelname, a t.me link, or the numeric id. The workspace's own bot must be an administrator there." })),
-      }),
-      execute: async (_toolCallId, params) => {
-        const destination = await telegramDestination(params.chat);
-        if (!destination) return noDestinationResult(params.chat);
-        // A scheduled run's message says which chat it comes from, as the
-        // host's own delivery of a run does.
-        const runChat = params.chat ? null : await scheduledRunChatFor(options.getAgentSession?.());
-        const result = await sendTelegramText(destination, runChat ? withChatFooter(params.text, runChat.title) : params.text);
-        if (!params.chat) await afterOwnChatDelivery(destination, result, "text");
-        return textResult(JSON.stringify({ success: result.success, via: result.via, ...(result.error ? { error: result.error } : {}) }, null, 2), { via: result.via });
-      },
-  }));
-
-  tools.push(defineTool({
-      name: "telegram_send_file",
-      label: "Send File to Telegram",
-      description: "Send a local file to Telegram. Images go as pictures with the caption under them, which is what a post looks like; everything else goes as a document. Pass `chat` to publish somewhere other than this workspace's own chat, such as a channel the bot administers. Set `as_file` only when the user explicitly wants an image delivered as a downloadable file.",
-      parameters: Type.Object({
-        file_path: Type.String({ description: "Absolute path to the file, or path relative to the current project cwd." }),
-        caption: Type.Optional(Type.String({ description: "Optional caption. For an image this becomes the post text under the picture." })),
-        chat: Type.Optional(Type.String({ description: "Where to publish, when it is not this workspace's own chat: @channelname, a t.me link, or the numeric id. The workspace's own bot must be an administrator there." })),
-        as_file: Type.Optional(Type.Boolean({ description: "Send an image as a document instead of a picture. Only when the user asked for the original file." })),
-      }),
-      execute: async (_toolCallId, params) => {
-        const destination = await telegramDestination(params.chat);
-        if (!destination) return noDestinationResult(params.chat);
-        try {
-          const resolvedPath = resolveOutgoingTelegramFilePath(options, params.file_path);
-          const stat = await fs.stat(resolvedPath);
-          if (!stat.isFile()) {
-            return textResult(JSON.stringify({ success: false, error: `Path is not a file: ${resolvedPath}` }, null, 2));
-          }
-          if (stat.size > TELEGRAM_SEND_FILE_MAX_BYTES) {
-            return textResult(JSON.stringify({ success: false, error: `File is too large (${stat.size} bytes). Max allowed is ${TELEGRAM_SEND_FILE_MAX_BYTES} bytes.` }, null, 2));
-          }
-
-          const name = path.basename(resolvedPath);
-          const asPhoto = !params.as_file && looksLikePhoto(name);
-          const payload = { buffer: await fs.readFile(resolvedPath), name, caption: params.caption };
-          const result = asPhoto
-            ? await sendTelegramPhoto(destination, payload)
-            : await sendTelegramDocument(destination, payload);
-          if (!params.chat) await afterOwnChatDelivery(destination, result, "file");
-          return textResult(JSON.stringify({
-            success: result.success,
-            via: result.via,
-            ...(result.error ? { error: result.error } : {}),
-            path: resolvedPath,
-            name,
-            size: stat.size,
-            sentAs: asPhoto ? "photo" : "document",
-          }, null, 2), { via: result.via });
-        } catch (error) {
-          return textResult(JSON.stringify({ success: false, error: error instanceof Error ? error.message : "Failed to send file to Telegram." }, null, 2));
-        }
-      },
+  tools.push(...createTelegramTools({
+    cwd: options.cwd,
+    destination: telegramDestination,
+    // A scheduled run's message says which chat it comes from, as the host's
+    // own delivery of a run does.
+    footerTitle: async () => (await scheduledRunChatFor(options.getAgentSession?.()))?.title ?? null,
+    afterOwnChat: async (destination, result, kind) => {
+      if (!result.success) return;
+      const session = options.getAgentSession?.();
+      const runChat = await scheduledRunChatFor(session);
+      if (runChat && kind === "text") noteScheduledRunReachedTelegram(session);
+      // A visit's own chat is not where the person is: what it sends belongs to the chat that asked.
+      await afterTelegramDelivery({ destination, result, chatId: runChat?.id ?? options.visit?.parentChatId ?? options.chatId });
+    },
   }));
 
   tools.push(defineTool({

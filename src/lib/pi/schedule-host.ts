@@ -5,7 +5,8 @@ import type { AgentSession, SessionManager } from "@earendil-works/pi-coding-age
 import { getChat, saveChat } from "@/lib/storage/chat-store";
 import { getAllProjects, getWorkDir } from "@/lib/storage/project-store";
 import type { Chat, ChatMessage } from "@/lib/types";
-import { deliverChatToTelegram } from "@/lib/telegram/conversation";
+import { afterTelegramDelivery, deliverChatToTelegram } from "@/lib/telegram/conversation";
+import { takeHelperDeliveries, type HelperDelivery } from "@/lib/pi/helper-deliveries";
 import { getActiveRun } from "@/lib/pi/active-runs";
 import { detectSchedule, raiseScheduledTurns, withScheduleExecutionDirective } from "@/lib/pi/schedule-policy";
 import { piScheduleStorePath } from "@/lib/pi/session-lifecycle";
@@ -307,6 +308,8 @@ interface ScheduledRun {
   chat?: Promise<Chat>;
   /** The agent already wrote to the person's own Telegram chat itself. */
   reachedTelegram: boolean;
+  /** What the task's helper sent to the person's own chat before this turn began. */
+  helperDeliveries?: HelperDelivery[];
   /** The model service turned the report's own request away: a limit the deployment enforces. */
   refused?: boolean;
   /** What it said, in the person's language. */
@@ -524,6 +527,14 @@ async function noteInRunContext(session: AgentSession, chatId: string, text: str
   openChatSessionManager(chatId, session.sessionManager.getCwd()).appendCustomMessageEntry("eggent-schedule-notice", text, true, undefined);
 }
 
+async function routeHelperDeliveries(run: ScheduledRun, chatId: string): Promise<void> {
+  for (const delivery of run.helperDeliveries ?? []) {
+    await afterTelegramDelivery({ destination: delivery.destination, result: delivery.result, chatId }).catch((error) => {
+      console.warn("Could not remember what the scheduled task's helper sent:", error);
+    });
+  }
+}
+
 async function finishScheduledRun(
   session: AgentSession,
   run: ScheduledRun,
@@ -536,13 +547,19 @@ async function finishScheduledRun(
     console.warn("Could not review the scheduled run:", error);
     return { delivery: "report" };
   });
-  if (!hasReport && !review.notice) return;
+  if (!hasReport && !review.notice) {
+    // No report to put them under: a reply to them continues the owner chat.
+    await routeHelperDeliveries(run, run.ownerChatId);
+    return;
+  }
 
   const text = review.notice ?? assistantText;
   const reported = review.notice ? [] : completedTools;
 
   const runChat = await ensureRunChat(session, run);
   const chat = (await getChat(runChat.id)) ?? runChat;
+  // What the helper sent is answered in the run's chat, like the report itself.
+  await routeHelperDeliveries(run, runChat.id);
 
   const now = new Date().toISOString();
   const assistantMessage: ChatMessage = {
@@ -677,11 +694,14 @@ function subscribeForScheduledOutput(session: AgentSession, chatId: string, proj
     // A retried turn starts again inside the same run, so keep the first start.
     if (record.type === "agent_start") {
       if (!scheduledRuns.has(session)) {
+        // The helper that did the work may have written to the person already.
+        const helperDeliveries = takeHelperDeliveries(chatId);
         scheduledRuns.set(session, {
           ownerChatId: chatId,
           projectId,
           startLeafId: session.sessionManager.getLeafId(),
-          reachedTelegram: false,
+          reachedTelegram: helperDeliveries.some((delivery) => delivery.kind === "text"),
+          helperDeliveries,
         });
         // From here until it settles, this session's tools refuse to touch the schedules.
         markScheduledRunSession(session.sessionId);
