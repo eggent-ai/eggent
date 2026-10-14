@@ -5,6 +5,7 @@ import {
   detectSchedule,
   eggentSchedulePolicyExtension,
   isScheduleStorePath,
+  MIN_SCHEDULED_TURNS,
   SCHEDULE_EXECUTION_MARKER,
   SCHEDULED_REPORT_GUIDANCE,
   withScheduleExecutionDirective,
@@ -76,6 +77,20 @@ const scheduledAgent = {
 };
 assert.equal(toolCallHandler(scheduledAgent, { cwd: "/workspace" }), undefined);
 assert.ok(scheduledAgent.input.prompt.startsWith(SCHEDULE_EXECUTION_MARKER));
+
+// A scheduled run gets enough turns to finish; a helper run now keeps its own number.
+const shortScheduled = { toolName: "Agent", input: { schedule: "0 0 6 * * *", prompt: "brief", max_turns: 3 } };
+toolCallHandler(shortScheduled, { cwd: "/workspace" });
+assert.equal(shortScheduled.input.max_turns, MIN_SCHEDULED_TURNS);
+const longScheduled = { toolName: "Agent", input: { schedule: "0 0 6 * * *", prompt: "brief", max_turns: 30 } };
+toolCallHandler(longScheduled, { cwd: "/workspace" });
+assert.equal(longScheduled.input.max_turns, 30);
+const unsetScheduled = { toolName: "Agent", input: { schedule: "0 0 6 * * *", prompt: "brief" } };
+toolCallHandler(unsetScheduled, { cwd: "/workspace" });
+assert.equal(unsetScheduled.input.max_turns, undefined);
+const helperNow = { toolName: "Agent", input: { prompt: "look", max_turns: 3 } };
+toolCallHandler(helperNow, { cwd: "/workspace" });
+assert.equal(helperNow.input.max_turns, 3);
 
 const blockedWrite = toolCallHandler(
   { toolName: "write", input: { path: ".pi/subagent-schedules/a.json" } },

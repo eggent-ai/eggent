@@ -7,7 +7,7 @@ import { getAllProjects, getWorkDir } from "@/lib/storage/project-store";
 import type { Chat, ChatMessage } from "@/lib/types";
 import { deliverChatToTelegram } from "@/lib/telegram/conversation";
 import { getActiveRun } from "@/lib/pi/active-runs";
-import { detectSchedule, withScheduleExecutionDirective } from "@/lib/pi/schedule-policy";
+import { detectSchedule, raiseScheduledTurns, withScheduleExecutionDirective } from "@/lib/pi/schedule-policy";
 import { piScheduleStorePath } from "@/lib/pi/session-lifecycle";
 import { subagentMonitorFor } from "@/lib/pi/subagents";
 import { describeProviderFailure, redactSecrets } from "@/lib/pi/provider-failure";
@@ -251,6 +251,10 @@ export async function normalizePiScheduleStore(session: AgentSession): Promise<b
   return mutateScheduleStore(filePath, (data) => {
     let changed = false;
     for (const job of data.jobs ?? []) {
+      // A task made with too few turns to finish gets the floor new ones get.
+      const turns = job.max_turns;
+      raiseScheduledTurns(job as Record<string, unknown>);
+      if (job.max_turns !== turns) changed = true;
       if (!job.prompt) continue;
       const normalized = withScheduleExecutionDirective(job.prompt);
       if (normalized === job.prompt) continue;

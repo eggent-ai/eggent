@@ -85,6 +85,24 @@ export function withScheduleExecutionDirective(prompt: string): string {
 }
 
 /**
+ * The fewest turns a scheduled run is given.
+ *
+ * A run starts from nothing: reading its notes, a couple of searches, a page
+ * or two and writing a file back already take six. Models setting up a task
+ * pick small numbers (3 and 6 were seen), and a run stopped at its limit is
+ * wrapped up with half the work - a brief of three items out of seven.
+ */
+export const MIN_SCHEDULED_TURNS = 12;
+
+/** Raises a scheduled Agent call's turn limit to the floor; an unset one is left to the extension. */
+export function raiseScheduledTurns(input: Record<string, unknown>): void {
+  const turns = input.max_turns;
+  if (typeof turns === "number" && Number.isFinite(turns) && turns > 0 && turns < MIN_SCHEDULED_TURNS) {
+    input.max_turns = MIN_SCHEDULED_TURNS;
+  }
+}
+
+/**
  * What the report of a scheduled run is told about its reply.
  *
  * The report turn is the owner session answering the helper's notification,
@@ -179,6 +197,7 @@ export function createSchedulePolicyExtension(
           if (schedule && prompt) {
             input.prompt = withScheduleExecutionDirective(prompt);
           }
+          if (schedule) raiseScheduledTurns(input);
           return undefined;
         }
 
