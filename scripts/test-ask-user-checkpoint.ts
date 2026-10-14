@@ -31,6 +31,9 @@ const MODEL = "stub-model";
 const BEFORE = "I went through all 19 statements.";
 const QUESTION = "When was the petition accepted?";
 const AFTER = "Then three payments fall inside the look-back period.";
+const DEPLOY = "Deploy the stack to the server";
+const STEP = "Step five: writing the secrets on the server.";
+const hanging: http.ServerResponse[] = [];
 
 function chunk(delta: Record<string, unknown>, finish: string | null = null): string {
   return `data: ${JSON.stringify({
@@ -53,11 +56,35 @@ const provider = http.createServer((req, res) => {
     body += String(part);
   });
   req.on("end", () => {
-    const payload = JSON.parse(body || "{}") as { messages?: Array<{ role?: string }> };
+    const payload = JSON.parse(body || "{}") as { messages?: Array<{ role?: string; content?: unknown }> };
     const messages = payload.messages ?? [];
     const answered = messages[messages.length - 1]?.role === "tool";
     res.writeHead(200, { "content-type": "text/event-stream", "cache-control": "no-cache", connection: "keep-alive" });
     res.write(chunk({ role: "assistant" }));
+    const deploying = JSON.stringify(messages).includes(DEPLOY);
+    const toolResults = messages.filter((message) => message.role === "tool").length;
+    if (deploying && toolResults === 1) {
+      // The question is answered: run one step, as a long job would.
+      res.write(chunk({ content: STEP }));
+      res.write(chunk({
+        tool_calls: [{
+          index: 0,
+          id: "stub-bash-1",
+          type: "function",
+          function: { name: "bash", arguments: JSON.stringify({ command: "echo step-five-done" }) },
+        }],
+      }));
+      res.write(chunk({}, "tool_calls"));
+      res.write("data: [DONE]\n\n");
+      res.end();
+      return;
+    }
+    if (deploying && toolResults >= 2) {
+      // The next model call never answers: the turn is still running when
+      // something outside it (a container recreated) would end it.
+      hanging.push(res);
+      return;
+    }
     if (!answered) {
       res.write(chunk({ content: BEFORE }));
       res.write(chunk({
@@ -103,6 +130,8 @@ fs.writeFileSync(path.join(agentDir, "models.json"), JSON.stringify({
 fs.writeFileSync(path.join(agentDir, "auth.json"), JSON.stringify({ [PROVIDER]: { type: "api_key", key: "test-key" } }, null, 2));
 fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ defaultProvider: PROVIDER, defaultModel: MODEL, packages: [] }, null, 2));
 
+// Short, so the test sees a progress checkpoint without waiting ten seconds.
+process.env.EGGENT_TURN_CHECKPOINT_MS = "300";
 const { createPiChatUIMessageStream } = await import("../src/lib/pi/chat-runner.ts");
 const { listPendingInteractions, respondToPendingInteraction } = await import("../src/lib/pi/pending-interactions.ts");
 const { createChat, getChat } = await import("../src/lib/storage/chat-store.ts");
@@ -256,6 +285,60 @@ await check("a stopped turn leaves the chat's schedule armed", async () => {
     listRetainedPiScheduleSessions().some((entry) => entry.chatId === SCHEDULED) || null, 5_000);
 });
 
+// A turn that goes on working after the question is answered keeps the stored
+// chat up to date. On 2026-10-14 a deployment ran eleven minutes past an
+// answered question and was killed with its container; the chat still showed
+// the question, as if the answer had never arrived.
+const DEPLOYING = "0000eeee-1111-4222-8333-444455556666";
+const DEPLOY_RUN = "run-ask-progress";
+await createChat(DEPLOYING, "Deploy");
+const deployReader = createPiChatUIMessageStream({
+  chatId: DEPLOYING,
+  userMessage: DEPLOY,
+  cwd,
+  agentDir,
+  runId: DEPLOY_RUN,
+}).getReader();
+const deployDrained = (async () => {
+  for (;;) {
+    const { done } = await deployReader.read();
+    if (done) return;
+  }
+})();
+const deployQuestion = await waitFor("the deployment's question", () => listPendingInteractions(DEPLOY_RUN)[0] ?? null);
+respondToPendingInteraction(DEPLOY_RUN, deployQuestion.id, { value: "2026-03-01" });
+const progressed = await waitFor("progress after the answer", async () => {
+  const chat = await getChat(DEPLOYING);
+  const turn = chat?.messages.find((message) => message.role === "assistant");
+  return turn?.inProgress && turn.content.includes(STEP) ? chat : null;
+}, 8_000).catch(() => null);
+
+await check("work done after an answered question is in the stored chat while the turn still runs", () => {
+  assert.ok(progressed, "the stored chat still ends at the question");
+  const assistants = progressed.messages.filter((message) => message.role === "assistant");
+  assert.equal(assistants.length, 1, `expected one stored turn, found ${assistants.length}`);
+  const turn = assistants[0];
+  assert.equal(turn.inProgress, true);
+  assert.ok(!turn.content.includes(QUESTION), "the answered question is still shown as the last word");
+  const toolNames = progressed.messages.filter((message) => message.role === "tool").map((message) => message.toolName);
+  assert.ok(toolNames.includes("eggent_ask_user"), "the answer is missing");
+  assert.ok(toolNames.includes("bash"), "the step after the answer is missing");
+});
+
+const deployStopped = await stopActiveRun(DEPLOYING);
+if (deployStopped) await whenLiveRunFinished(DEPLOYING);
+await deployDrained;
+
+await check("the turn ended later replaces the progress checkpoint", async () => {
+  const chat = await getChat(DEPLOYING);
+  assert.ok(chat);
+  const assistants = chat.messages.filter((message) => message.role === "assistant");
+  assert.equal(assistants.length, 1, `expected one stored turn, found ${assistants.length}`);
+  assert.ok(!assistants[0].inProgress, "still marked in progress after the turn ended");
+  assert.equal(chat.messages.filter((message) => message.role === "tool" && message.toolName === "bash").length, 1);
+});
+
+for (const res of hanging) res.destroy();
 provider.close();
 fs.rmSync(root, { recursive: true, force: true });
 console.log(failed ? `\n${failed} failed` : "\nall passed");

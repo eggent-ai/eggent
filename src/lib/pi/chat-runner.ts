@@ -626,6 +626,9 @@ async function persistUserMessage(options: PiChatRunOptions, userMessageId: stri
   await saveChat(chat);
 }
 
+/** How often a running turn's progress is written to the stored chat; see checkpointProgress. */
+const CHECKPOINT_EVERY_MS = Number(process.env.EGGENT_TURN_CHECKPOINT_MS) || 10_000;
+
 async function persistAssistantMessage(options: {
   chatId: string;
   assistantText: string;
@@ -1410,11 +1413,42 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
           persistAssistantMessage({ chatId: options.chatId, replaceMessageId: checkpointId, ...message })
         );
 
+      // Progress is written down as the turn goes, not only at a question:
+      // a turn killed mid-command (a container recreated under it) used to
+      // leave the chat at its last question, already answered, with eleven
+      // minutes of work after it visible nowhere but the pi session. At most
+      // one write per CHECKPOINT_EVERY_MS, the last step always covered.
+      let lastCheckpointAt = 0;
+      let checkpointTimer: ReturnType<typeof setTimeout> | null = null;
+      const cancelProgressCheckpoint = () => {
+        if (checkpointTimer) clearTimeout(checkpointTimer);
+        checkpointTimer = null;
+      };
+      function checkpointProgress() {
+        if (persisted || aborted || checkpointTimer) return;
+        const wait = lastCheckpointAt + CHECKPOINT_EVERY_MS - Date.now();
+        if (wait <= 0) {
+          checkpointTurn();
+          return;
+        }
+        checkpointTimer = setTimeout(() => {
+          checkpointTimer = null;
+          checkpointTurn();
+        }, wait);
+        checkpointTimer.unref?.();
+      }
+
       function checkpointBeforeQuestion(interaction: PiPendingInteraction) {
+        cancelProgressCheckpoint();
+        checkpointTurn(interaction);
+      }
+
+      function checkpointTurn(interaction?: PiPendingInteraction) {
         if (persisted || aborted) return;
+        lastCheckpointAt = Date.now();
         checkpointId ??= crypto.randomUUID();
         const id = checkpointId;
-        const question = describeInteractionForTranscript(interaction);
+        const question = interaction ? describeInteractionForTranscript(interaction) : "";
         // Copied now: by the time the write runs the turn may have moved on.
         // Helper snapshots are left out on purpose - attaching them marks a
         // helper that is still working as stopped.
@@ -1441,6 +1475,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
       const persistPartialAssistant = async (runtimeStats: PiRuntimeStats = currentStats()) => {
         if (persisted) return;
         persisted = true;
+        cancelProgressCheckpoint();
         closeTextPart();
         if (stall.stalled) {
           // Given up on for going quiet: the stored turn says so, in the person's words.
@@ -1633,6 +1668,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
           }
           tools.set(toolCallId, toolRecord);
           upsertTimelineTool(timelineParts, toolRecord);
+          checkpointProgress();
 
           if (isError) {
             safeWrite({
@@ -1700,6 +1736,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         const finalStats = buildPiRuntimeStats(session, currentPromptUsage, addUsage(baselineUsage, currentPromptUsage));
         emitStats(finalStats);
         closeTextPart();
+        cancelProgressCheckpoint();
         const producedFiles = await producedForTurn({
           chatId: options.chatId,
           tools: tools.values(),
@@ -1758,6 +1795,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         }
         console.error("Pi chat stream execution error:", error);
         persisted = true;
+        cancelProgressCheckpoint();
         await persistTurn({
           assistantText: errorText,
           tools: [...tools.values()],
