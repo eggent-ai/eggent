@@ -228,6 +228,15 @@ export function ChatInput({
   const [isDragging, setIsDragging] = useState(false);
   const [uploadingFiles, setUploadingFiles] = useState<string[]>([]);
   const [uploadedFiles, setUploadedFiles] = useState<ChatFile[]>([]);
+  // Files attached while a question card is open: they are the answer, or part of it,
+  // so a card can be sent with nothing typed once one has arrived.
+  const [cardFileNames, setCardFileNames] = useState<string[]>([]);
+  const pendingInteractionRef = useRef(pendingInteraction);
+  pendingInteractionRef.current = pendingInteraction;
+  const pendingInteractionId = pendingInteraction?.id;
+  useEffect(() => {
+    setCardFileNames([]);
+  }, [pendingInteractionId]);
   const [slashCommands, setSlashCommands] = useState<SlashCommand[]>([]);
   const [slashCommandsLoading, setSlashCommandsLoading] = useState(false);
   const [selectedCommandIndex, setSelectedCommandIndex] = useState(0);
@@ -430,7 +439,7 @@ export function ChatInput({
   }, [mentionable, setInput]);
 
   const canSubmit = pendingInteraction
-    ? Boolean(input.trim()) || pendingInteraction.kind === "confirm"
+    ? Boolean(input.trim()) || pendingInteraction.kind === "confirm" || cardFileNames.length > 0
     : Boolean(input.trim()) || uploadedFiles.length > 0;
   // `!command` runs in the shell and has nothing to do with the agent's turn,
   // so it may be sent while one is going.
@@ -439,7 +448,7 @@ export function ChatInput({
     if (!canSubmit) return;
     if (!pendingInteraction && isLoading && !shellMode) return;
     if (pendingInteraction) {
-      onSubmit();
+      onSubmit(input.trim() || cardFileNames.length === 0 ? undefined : t("chat.card.attachedOnly"));
       return;
     }
     // A credential is stored in the chat's history, so the person is asked once.
@@ -453,7 +462,7 @@ export function ChatInput({
       }
     }
     onSubmit(input.trim() ? undefined : t("chat.attachmentOnlyPrompt"));
-  }, [canSubmit, input, isLoading, onSubmit, pendingInteraction, shellMode, t]);
+  }, [canSubmit, cardFileNames.length, input, isLoading, onSubmit, pendingInteraction, shellMode, t]);
 
   // Editing the message ends the warning about it.
   useEffect(() => {
@@ -573,6 +582,7 @@ export function ChatInput({
         const uploadedFile = data.file as ChatFile;
 
         setUploadedFiles((prev) => mergeUniqueChatFiles(prev, [uploadedFile]));
+        if (pendingInteractionRef.current) setCardFileNames((prev) => [...prev, uploadedFile.name]);
         onFilesUploaded?.([uploadedFile]);
       } catch (error) {
         console.error("Failed to upload file:", error);
@@ -602,7 +612,8 @@ export function ChatInput({
 
   const handlePaste = useCallback(
     async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-      if (disabled || isLoading || !chatId) return;
+      // A question card may be asking for exactly this picture.
+      if (disabled || (isLoading && !pendingInteraction) || !chatId) return;
 
       const clipboardFiles = Array.from(e.clipboardData.files).filter(isImageFile);
       const itemFiles = Array.from(e.clipboardData.items)
@@ -633,7 +644,7 @@ export function ChatInput({
         await uploadFile(upload);
       }
     },
-    [chatId, disabled, isLoading, uploadFile]
+    [chatId, disabled, isLoading, pendingInteraction, uploadFile]
   );
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -915,7 +926,7 @@ export function ChatInput({
               variant="ghost"
               size="icon"
               onClick={() => fileInputRef.current?.click()}
-              disabled={disabled || Boolean(pendingInteraction) || !chatId}
+              disabled={disabled || !chatId}
               className="h-10 w-10 shrink-0 rounded-xl text-muted-foreground hover:text-foreground"
               title={chatId ? t("chat.attachFiles") : t("chat.attachFilesDisabled")}
             >

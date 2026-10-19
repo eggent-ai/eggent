@@ -23,6 +23,7 @@ import { resolveTelegramDestination } from "@/lib/telegram/outbound";
 import { afterTelegramDelivery } from "@/lib/telegram/conversation";
 import { createTelegramTools } from "@/lib/telegram/tools";
 import { createChat, getChat } from "@/lib/storage/chat-store";
+import { getChatFiles } from "@/lib/storage/chat-files-store";
 import { squashName } from "@/lib/pi/project-mention";
 import { describeVisitResult, runProjectVisit, visitChatIdFor, visitGranted, visitProgressDetails } from "@/lib/pi/project-visit";
 import { listChatSummaries, readChatConversation, searchChats } from "@/lib/storage/chat-browse";
@@ -200,6 +201,25 @@ async function writeGeneratedImages(options: { cwd?: string }, payload: unknown)
   return saved;
 }
 
+/**
+ * Files put into the chat while a question card was open. The composer's
+ * paperclip works under a card, and a card asking for a sample is answered by
+ * attaching it - often with no text at all - so what arrived is part of the
+ * answer. Told by upload time rather than by what the page says it sent: the
+ * files are on disk, wherever they came from (button, drop or paste).
+ */
+async function filesAttachedSince(chatId: string | undefined, sinceMs: number) {
+  if (!chatId) return [];
+  try {
+    const files = await getChatFiles(chatId);
+    return files
+      .filter((file) => Date.parse(file.uploadedAt) >= sinceMs - 1000)
+      .map((file) => ({ name: file.name, path: file.path, size: file.size }));
+  } catch {
+    return [];
+  }
+}
+
 export async function createEggentPiTools(options: {
   chatId?: string;
   projectId?: string;
@@ -230,7 +250,7 @@ export async function createEggentPiTools(options: {
       name: "eggent_ask_user",
       label: "Ask The User",
       description:
-        "Ask the user one question and wait for the answer, rendered as a card with buttons and an input field instead of plain chat text. Use for setup choices, confirmations before a destructive or expensive step, and any point where a skill or workflow needs a decision. ALWAYS pass `options` - two to four of them - even when the answer is free text: they render as one-tap answers, and a question with nothing to tap is the one people abandon. Write the question so it stands on its own, and put a concrete example in `placeholder`. The card adds \"decide for me\" and \"skip\" itself, so do not spend an option on those. Ask one question at a time; do not use this to interview the user through a long questionnaire.",
+        "Ask the user one question and wait for the answer, rendered as a card with buttons and an input field instead of plain chat text. Use for setup choices, confirmations before a destructive or expensive step, and any point where a skill or workflow needs a decision. ALWAYS pass `options` - two to four of them - even when the answer is free text: they render as one-tap answers, and a question with nothing to tap is the one people abandon. Write the question so it stands on its own, and put a concrete example in `placeholder`. The card adds \"decide for me\" and \"skip\" itself, so do not spend an option on those. The person can attach files while the card is open (the chat's paperclip works under it): to get a file, ask for it on the card, and whatever they attach comes back in `files` with the answer. Ask one question at a time; do not use this to interview the user through a long questionnaire.",
       parameters: Type.Object({
         question: Type.String({ description: "The question, in the user's language. Keep it to one sentence." }),
         kind: Type.Optional(
@@ -284,6 +304,7 @@ export async function createEggentPiTools(options: {
           // take only a title: the question itself was being dropped, leaving a
           // card with a heading and no question in it, and for a typed answer
           // the only trace of what was asked was the chat input placeholder.
+          const openedAt = Date.now();
           const answer = await createPendingInteraction({
             runId: options.runId ?? crypto.randomUUID(),
             kind: kind === "confirm" ? "confirm" : kind === "choice" ? "select" : "text",
@@ -325,6 +346,25 @@ export async function createEggentPiTools(options: {
                 null,
                 2
               )
+            );
+          }
+
+          const files = await filesAttachedSince(options.chatId, openedAt);
+          if (files.length > 0) {
+            const typed = typeof answer === "string" ? answer.trim() : answer;
+            return textResult(
+              JSON.stringify(
+                {
+                  success: true,
+                  kind,
+                  answer: typed,
+                  files,
+                  note: "The user attached these files while answering. They are the answer to this question (or part of it): open them by path, and do not ask for them again.",
+                },
+                null,
+                2
+              ),
+              { kind }
             );
           }
 
