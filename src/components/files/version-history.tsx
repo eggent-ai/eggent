@@ -97,6 +97,11 @@ export function useVersionAuthor() {
 
 type CompareWith = "previous" | "current" | `v${number}`;
 
+/** What identifies a version's content on screen: its number, and when and how big it was last written. */
+function textKey(version: VersionInfo): string {
+  return `${version.n}:${version.at}:${version.size}`;
+}
+
 export function VersionHistory({ projectId, path, fill = false, onRestored }: {
   projectId: string;
   path: string;
@@ -112,14 +117,15 @@ export function VersionHistory({ projectId, path, fill = false, onRestored }: {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [selected, setSelected] = useState<number | null>(null);
   const [compareWith, setCompareWith] = useState<CompareWith>("previous");
-  const [texts, setTexts] = useState<Record<number, VersionTextView | "error">>({});
+  // Keyed by what a version is, not only its number: a turn's later write rewrites its own version in place.
+  const [texts, setTexts] = useState<Record<string, VersionTextView | "error">>({});
   const [mode, setMode] = useState<DiffMode>(prefersProse(path) ? "text" : "lines");
   const [activeChange, setActiveChange] = useState(0);
   const [busy, setBusy] = useState<"restore" | "forget" | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const diffRef = useRef<HTMLDivElement>(null);
   // Each version's text is asked for once, whatever re-renders while the answer is on its way.
-  const requested = useRef<Set<number>>(new Set());
+  const requested = useRef<Set<string>>(new Set());
   const query = useCallback(
     (extra: Record<string, string> = {}) => new URLSearchParams({ project: projectId, path, ...extra }).toString(),
     [projectId, path]
@@ -177,16 +183,17 @@ export function VersionHistory({ projectId, path, fill = false, onRestored }: {
   }, [compareWith, selectedIndex, selectedVersion, versions]);
 
   const loadText = useCallback(
-    async (n: number) => {
-      if (requested.current.has(n)) return;
-      requested.current.add(n);
+    async (version: VersionInfo) => {
+      const id = textKey(version);
+      if (requested.current.has(id)) return;
+      requested.current.add(id);
       try {
-        const response = await fetch(`/api/files/versions/content?${query({ n: String(n) })}`, { cache: "no-store" });
+        const response = await fetch(`/api/files/versions/content?${query({ n: String(version.n) })}`, { cache: "no-store" });
         const payload = (await response.json()) as VersionTextView & { error?: string };
         if (!response.ok) throw new Error(payload.error);
-        setTexts((current) => ({ ...current, [n]: payload }));
+        setTexts((current) => ({ ...current, [id]: payload }));
       } catch {
-        setTexts((current) => ({ ...current, [n]: "error" }));
+        setTexts((current) => ({ ...current, [id]: "error" }));
       }
     },
     [query]
@@ -195,12 +202,12 @@ export function VersionHistory({ projectId, path, fill = false, onRestored }: {
   useEffect(() => {
     if (!pair || history?.comparison === "none") return;
     for (const version of [pair.older, pair.newer]) {
-      if (version && texts[version.n] === undefined) void loadText(version.n);
+      if (version && texts[textKey(version)] === undefined) void loadText(version);
     }
   }, [pair, history?.comparison, texts, loadText]);
 
-  const olderText = pair?.older ? texts[pair.older.n] : undefined;
-  const newerText = pair ? texts[pair.newer.n] : undefined;
+  const olderText = pair?.older ? texts[textKey(pair.older)] : undefined;
+  const newerText = pair ? texts[textKey(pair.newer)] : undefined;
   const ready = Boolean(pair && newerText !== undefined && (pair.older === null || olderText !== undefined));
   const failed = olderText === "error" || newerText === "error";
   // The first version kept has nothing before it: there is nothing to compare, not "everything added".
@@ -242,12 +249,20 @@ export function VersionHistory({ projectId, path, fill = false, onRestored }: {
     setBusy("restore");
     setNotice(null);
     try {
-      const response = await fetch("/api/files/versions/restore", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ project: projectId, path, n: selectedVersion.n }),
-      });
-      const payload = (await response.json().catch(() => ({}))) as { error?: string; version?: VersionInfo | null };
+      const send = (force: boolean) =>
+        fetch("/api/files/versions/restore", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ project: projectId, path, n: selectedVersion.n, ...(force ? { force: true } : {}) }),
+        });
+      let response = await send(false);
+      let payload = (await response.json().catch(() => ({}))) as { error?: string; code?: string; version?: VersionInfo | null };
+      // What the file holds now cannot be kept: said plainly, and done only if the person still wants it.
+      if (response.status === 409 && payload.code === "unkept") {
+        if (!window.confirm(t("files.history.restoreAnyway"))) return;
+        response = await send(true);
+        payload = (await response.json().catch(() => ({}))) as typeof payload;
+      }
       if (!response.ok) throw new Error(payload.error || t("files.history.restoreFailed"));
       setNotice(t("files.history.restored", { n: selectedVersion.n }));
       setCompareWith("previous");
@@ -349,6 +364,8 @@ export function VersionHistory({ projectId, path, fill = false, onRestored }: {
                     onClick={() => {
                       setSelected(version.n);
                       setNotice(null);
+                      // A version is never compared with itself: picking the one it was compared with starts over.
+                      if (compareWith === `v${version.n}` || (compareWith === "current" && version.n === versions[0]?.n)) setCompareWith("previous");
                     }}
                     aria-pressed={active}
                     className={cn(
@@ -369,7 +386,10 @@ export function VersionHistory({ projectId, path, fill = false, onRestored }: {
                         </span>
                       ) : null}
                     </span>
-                    <span className="truncate text-xs text-muted-foreground">
+                    <span
+                      className="truncate text-xs text-muted-foreground"
+                      title={version.fileTime ? t("files.history.fileTime", { date: formatWhen(version.fileTime, locale, t).full }) : undefined}
+                    >
                       {authorOf(version)}
                       {version.by.kind === "agent" && version.chatTitle ? ` · ${version.chatTitle}` : ""}
                     </span>
@@ -402,7 +422,10 @@ export function VersionHistory({ projectId, path, fill = false, onRestored }: {
                 ) : null}
               </span>
               {compareOptions.length > 1 ? (
-                <Select value={compareWith} onValueChange={(value) => setCompareWith(value as CompareWith)}>
+                <Select
+                  value={compareOptions.some((option) => option.value === compareWith) ? compareWith : "previous"}
+                  onValueChange={(value) => setCompareWith(value as CompareWith)}
+                >
                   <SelectTrigger size="sm" className="w-auto gap-1 px-2 text-xs" aria-label={t("files.history.compare.label")}>
                     <SelectValue />
                   </SelectTrigger>
@@ -506,7 +529,7 @@ export function VersionHistory({ projectId, path, fill = false, onRestored }: {
                 {[olderText, newerText].some((text) => typeof text === "object" && text.kind === "extracted") ? (
                   <p className="px-3 pb-1 text-xs text-muted-foreground">{t("files.history.extractedNote")}</p>
                 ) : null}
-                <VersionDiff model={model} mode={mode} activeChange={activeChange} />
+                <VersionDiff key={`${pair.older.n}:${pair.older.at}-${pair.newer.n}:${pair.newer.at}`} model={model} mode={mode} activeChange={activeChange} />
               </>
             ) : null}
           </div>

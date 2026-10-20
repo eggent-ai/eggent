@@ -7,8 +7,8 @@ import { isSecretFileName, pathIsSensitive } from "@/lib/files/zip-walk";
 import { openPlainFile } from "@/lib/files/safe-open";
 import { publishUiSyncEvent } from "@/lib/realtime/event-bus";
 import { maxVersionedFileBytes, versionsEnabled } from "@/lib/files/versions/config";
-import { comparisonOf, isDocumentForScan, versionedKindOf, type VersionedKind } from "@/lib/files/versions/rules";
-import { getVersionStore } from "@/lib/files/versions/store";
+import { comparisonOf, versionedKindOf, type VersionedKind } from "@/lib/files/versions/rules";
+import { getVersionStore, type Seen } from "@/lib/files/versions/store";
 import type { VersionAuthor, VersionInfo } from "@/lib/files/versions/shape";
 
 /**
@@ -22,9 +22,10 @@ import type { VersionAuthor, VersionInfo } from "@/lib/files/versions/shape";
  * write here (the state found is kept first, as made "outside"), and by a pass
  * over the files that already have a history (service.ts).
  *
- * Before a write, what the file holds is kept if the history does not already
- * have it. That is what makes "go back to how it was" possible for a file whose
- * history begins with the change somebody regrets.
+ * A history begins with a file's first change, not with the file: a file that
+ * is only created - uploaded, generated, written once - has nothing to go back
+ * to, and a copy of it would only double what it takes on the disk. Its first
+ * change keeps what it held before ("earlier") and what it holds after.
  */
 
 /** A file a history can be kept for: where it is, and what its history is called. */
@@ -44,8 +45,15 @@ const INTERNAL_TOP_LEVEL = new Set([
 const SKIPPED_SEGMENTS = new Set([
   "node_modules", ".git", "__pycache__", ".venv", "venv", ".cache", ".next", ".pi",
   ".pytest_cache", ".mypy_cache", ".ruff_cache", ".tox", ".gradle", ".idea", ".stversions",
+  // A company's shared folders are mounted here: `.shared/<name>` at the top and
+  // `<project>/shared/<name>` in a project (see isVersionablePath). They are the
+  // company's files, not this workspace's: a history of them here would fill this
+  // workspace's disk and outlive a grant taken back.
+  ".shared",
 ]);
 const SNIFF_MAX_BYTES = 1024 * 1024;
+// What a command line names is held in memory until the command has run.
+const SNAPSHOT_MAX_BYTES = 2 * 1024 * 1024;
 const MAX_SCAN_ENTRIES = 5000;
 const MAX_SCAN_DEPTH = 6;
 const START_SLACK_MS = 2000;
@@ -78,6 +86,8 @@ export function isVersionablePath(key: string): boolean {
   // In a project's own folder, one level down: its notes, its skills, its tools.
   if (segments.length > 1 && INTERNAL_TOP_LEVEL.has(segments[1].toLowerCase())) return false;
   if (segments.some((segment) => SKIPPED_SEGMENTS.has(segment.toLowerCase()) || isHiddenFileName(segment))) return false;
+  // A company folder granted to one project is mounted at `<project>/shared/<name>`.
+  if (segments.length >= 4 && segments[1] === "shared") return false;
   // A history of a credential would keep it after the person deleted it.
   if (pathIsSensitive(key) || isSecretFileName(segments[segments.length - 1])) return false;
   return true;
@@ -118,34 +128,38 @@ export async function versionTargetFor(projectId: string, filePath: string): Pro
   return versionTarget(absolute);
 }
 
-interface ReadFile {
-  content: Buffer;
-  seen: { mtimeMs: number; size: number };
+type ReadResult =
+  | { kind: "file"; content: Buffer; seen: Seen; fileTime: Date }
+  | { kind: "missing" }
+  | { kind: "too-large" }
+  | { kind: "unreadable" };
+
+function seenOf(stat: { mtimeMs: number; ctimeMs: number; size: number }): Seen {
+  return { mtimeMs: stat.mtimeMs, ctimeMs: stat.ctimeMs, size: stat.size };
 }
 
-/** What the file holds, read through a handle checked to be the plain file inside the folder; "missing" when it is not there. */
-async function readTarget(target: VersionTarget): Promise<ReadFile | "missing" | null> {
+/** What the file holds, read through a handle checked to be the plain file inside the folder. */
+async function readTarget(target: VersionTarget, limit = maxVersionedFileBytes()): Promise<ReadResult> {
   let stat;
   try {
     stat = await fs.lstat(target.absolute);
   } catch (error) {
-    return (error as NodeJS.ErrnoException)?.code === "ENOENT" ? "missing" : null;
+    return (error as NodeJS.ErrnoException)?.code === "ENOENT" ? { kind: "missing" } : { kind: "unreadable" };
   }
   // A link is not followed: it may lead out of the folder. A second name is the same door.
-  if (!stat.isFile() || stat.nlink > 1) return null;
-  if (stat.size > maxVersionedFileBytes()) return null;
-  if (target.kind === "sniff" && stat.size > SNIFF_MAX_BYTES) return null;
+  if (!stat.isFile() || stat.nlink > 1) return { kind: "unreadable" };
+  if (stat.size > limit || (target.kind === "sniff" && stat.size > SNIFF_MAX_BYTES)) return { kind: "too-large" };
   const handle = await openPlainFile(target.absolute, { root: await projectsRoot() });
-  if (!handle) return null;
+  if (!handle) return { kind: "unreadable" };
   try {
     const opened = await handle.stat();
-    if (opened.size > maxVersionedFileBytes()) return null;
+    if (opened.size > limit) return { kind: "too-large" };
     const content = await handle.readFile();
     // A file without an extension is text only if it reads as text.
-    if (target.kind === "sniff" && content.subarray(0, 8192).includes(0)) return null;
-    return { content, seen: { mtimeMs: opened.mtimeMs, size: opened.size } };
+    if (target.kind === "sniff" && content.subarray(0, 8192).includes(0)) return { kind: "unreadable" };
+    return { kind: "file", content, seen: seenOf(opened), fileTime: opened.mtime };
   } catch {
-    return null;
+    return { kind: "unreadable" };
   } finally {
     await handle.close().catch(() => undefined);
   }
@@ -158,8 +172,9 @@ function sha256(content: Buffer): string {
 // Many writes in a moment - a turn that writes ten files - make one event per project.
 const PUBLISH_DELAY_MS = 400;
 const PENDING_KEY = Symbol.for("eggent.fileVersions.pendingEvents");
-function pendingEvents(): Map<string, { keys: Set<string>; timer: ReturnType<typeof setTimeout> }> {
-  const holder = globalThis as unknown as Record<symbol, Map<string, { keys: Set<string>; timer: ReturnType<typeof setTimeout> }> | undefined>;
+type PendingEvents = Map<string, { keys: Set<string>; timer: ReturnType<typeof setTimeout> }>;
+function pendingEvents(): PendingEvents {
+  const holder = globalThis as unknown as Record<symbol, PendingEvents | undefined>;
   if (!holder[PENDING_KEY]) holder[PENDING_KEY] = new Map();
   return holder[PENDING_KEY]!;
 }
@@ -188,59 +203,88 @@ function announce(key: string): void {
   pending.set(bucket, { keys, timer });
 }
 
-/**
- * Keep what the file holds now, if its history does not have it yet. Called
- * before something here writes to it: what it held is then a version too, made
- * "earlier" (the history begins here) or "outside" (it changed since).
- */
-export async function captureBefore(absolute: string): Promise<void> {
-  if (!(await versionsEnabled())) return;
-  const target = await versionTarget(absolute);
-  if (!target) return;
-  const read = await readTarget(target);
-  if (!read || read === "missing") return;
+// Something was recorded: the service checks the history's size against its ceiling a moment later.
+const RECORDED_KEY = Symbol.for("eggent.fileVersions.onRecorded");
+function noteRecorded(): void {
+  const listener = (globalThis as unknown as Record<symbol, (() => void) | undefined>)[RECORDED_KEY];
+  listener?.();
+}
+export function onVersionRecorded(listener: () => void): void {
+  (globalThis as unknown as Record<symbol, (() => void) | undefined>)[RECORDED_KEY] = listener;
+}
+
+/** Keeps a state found on disk, as made before the history began or outside it. */
+async function keepFound(target: VersionTarget, content: Buffer, seen: Seen, fileTime: Date): Promise<"kept" | "unchanged"> {
   const store = getVersionStore();
   const journal = await store.journal(target.key);
   const last = journal?.versions[journal.versions.length - 1];
-  if (last && !last.deleted && last.sha === sha256(read.content)) return;
-  const kind = journal && journal.versions.length > 0 ? "outside" : "earlier";
+  if (last && !last.deleted && last.sha === sha256(content)) return "unchanged";
   const result = await store.record({
     key: target.key,
-    content: read.content,
-    by: { kind },
-    at: new Date(Math.min(read.seen.mtimeMs, Date.now())),
-    seen: read.seen,
+    content,
+    by: { kind: journal && journal.versions.length > 0 ? "outside" : "earlier" },
+    fileTime,
+    seen,
     textual: comparisonOf(target.name) === "text",
   });
-  if (result.created) announce(target.key);
+  if (result.created) {
+    announce(target.key);
+    noteRecorded();
+  }
+  return "kept";
 }
 
-/** Keep what the file holds after a write here, made by `by`. A file that is gone is recorded as deleted. */
-export async function captureAfter(absolute: string, by: VersionAuthor): Promise<VersionInfo | null> {
+/**
+ * What became of a file's current state before something here writes over it.
+ *
+ * - `kept`: it is in the history now; `unchanged`: it was already.
+ * - `missing`: there is no file yet; `not-versioned` / `off`: no history is kept for it.
+ * - `too-large`, `unreadable`: there is a file and it could not be kept. A
+ *   restore must not write over it then, or "what the file holds stays in the
+ *   history" would not be true.
+ */
+export type BeforeStatus = "kept" | "unchanged" | "missing" | "not-versioned" | "off" | "too-large" | "unreadable";
+
+export async function captureBefore(absolute: string): Promise<BeforeStatus> {
+  if (!(await versionsEnabled())) return "off";
+  const target = await versionTarget(absolute);
+  if (!target) return "not-versioned";
+  const read = await readTarget(target);
+  if (read.kind !== "file") return read.kind;
+  return keepFound(target, read.content, read.seen, read.fileTime);
+}
+
+/**
+ * Keep what the file holds after a write here, made by `by`. A file that is
+ * gone is recorded as deleted. `onlyIfTracked`: only for a file whose history
+ * has begun - a file the write created has none, and gets none.
+ */
+export async function captureAfter(absolute: string, by: VersionAuthor, options: { onlyIfTracked?: boolean } = {}): Promise<VersionInfo | null> {
   if (!(await versionsEnabled())) return null;
   const target = await versionTarget(absolute);
   if (!target) return null;
+  if (options.onlyIfTracked && !(await getVersionStore().journal(target.key))) return null;
   return captureTarget(target, by);
 }
 
-async function captureTarget(target: VersionTarget, by: VersionAuthor, at?: Date): Promise<VersionInfo | null> {
+async function captureTarget(target: VersionTarget, by: VersionAuthor): Promise<VersionInfo | null> {
   const store = getVersionStore();
   const read = await readTarget(target);
-  if (read === null) return null;
-  if (read === "missing") {
-    if (await store.markDeleted({ key: target.key, by, ...(at ? { at } : {}) })) announce(target.key);
+  if (read.kind === "missing") {
+    if (await store.markDeleted({ key: target.key, by })) announce(target.key);
     return null;
   }
-  const result = await store.record({
-    key: target.key,
-    content: read.content,
-    by,
-    ...(at ? { at } : {}),
-    seen: read.seen,
-    textual: comparisonOf(target.name) === "text",
-  });
+  if (read.kind !== "file") return null;
+  const result = await store.record({ key: target.key, content: read.content, by, seen: read.seen, textual: comparisonOf(target.name) === "text" });
   announce(target.key);
+  if (result.created) noteRecorded();
   return result.entry;
+}
+
+/** Whether a file has a history yet. */
+export async function hasHistory(absolute: string): Promise<boolean> {
+  const target = await versionTarget(absolute);
+  return Boolean(target && (await getVersionStore().journal(target.key)));
 }
 
 /**
@@ -253,7 +297,8 @@ export async function checkTracked(key: string): Promise<"same" | "changed" | "d
   const store = getVersionStore();
   const journal = await store.journal(key);
   const last = journal?.versions[journal.versions.length - 1];
-  if (!target || !journal || !last) return "gone";
+  // A folder on the way that has become a link leads to another file: that file is not this history's.
+  if (!target || target.key !== key || !journal || !last) return "gone";
   let stat;
   try {
     stat = await fs.lstat(target.absolute);
@@ -264,32 +309,29 @@ export async function checkTracked(key: string): Promise<"same" | "changed" | "d
     return "deleted";
   }
   if (!stat.isFile()) return "same";
-  if (!last.deleted && journal.seen && journal.seen.mtimeMs === stat.mtimeMs && journal.seen.size === stat.size) return "same";
+  const seen = journal.seen;
+  if (!last.deleted && seen && seen.mtimeMs === stat.mtimeMs && seen.ctimeMs === stat.ctimeMs && seen.size === stat.size) return "same";
   const read = await readTarget(target);
-  if (!read || read === "missing") return "same";
+  if (read.kind !== "file") return "same";
   if (!last.deleted && last.sha === sha256(read.content)) {
     await store.confirmSeen(key, read.seen);
     return "same";
   }
-  await store.record({
-    key,
-    content: read.content,
-    by: { kind: "outside" },
-    at: new Date(Math.min(read.seen.mtimeMs, Date.now())),
-    seen: read.seen,
-    textual: comparisonOf(target.name) === "text",
-  });
+  await store.record({ key, content: read.content, by: { kind: "outside" }, fileTime: read.fileTime, seen: read.seen, textual: comparisonOf(target.name) === "text" });
   announce(key);
+  noteRecorded();
   return "changed";
 }
 
 /**
- * What a turn's commands changed: every file under the folder the turn worked in
- * that was written while it ran. A document gets a version even with no history
- * yet; any other file only if it already has one (see isDocumentForScan).
- * In the orchestrator's folder, which holds every project and whatever the sync
- * brings, only the files lying directly in it are looked at - the same rule the
- * card of an answer's files keeps.
+ * What a turn's commands changed among the files that already have a history:
+ * every one under the folder the turn worked in whose status changed while it
+ * ran. The status time (ctime), not the modification time, which a command can
+ * set back (`cp -p`, unpacking an archive). A file with no history yet is left
+ * to the next change made where it can be seen (a command that names it, the
+ * editor, the agent's own tools). In the orchestrator's folder, which holds
+ * every project and whatever the sync brings, only the files lying directly in
+ * it are looked at - the same rule the card of an answer's files keeps.
  */
 export async function captureRunChanges(input: { cwd: string; since: number; by: VersionAuthor }): Promise<number> {
   if (!(await versionsEnabled())) return 0;
@@ -302,6 +344,8 @@ export async function captureRunChanges(input: { cwd: string; since: number; by:
   }
   if (!inside(cwd, root)) return 0;
   const store = getVersionStore();
+  const tracked = await store.tracked();
+  if (tracked.size === 0) return 0;
   const maxDepth = cwd === root ? 0 : MAX_SCAN_DEPTH;
   const found: string[] = [];
   let visited = 0;
@@ -323,8 +367,10 @@ export async function captureRunChanges(input: { cwd: string; since: number; by:
         if (depth + 1 > maxDepth) continue;
         await walk(absolute, depth + 1);
       } else if (entry.isFile()) {
+        const key = path.relative(root, absolute).split(path.sep).join("/");
+        if (!tracked.has(key)) continue;
         const stat = await fs.lstat(absolute).catch(() => null);
-        if (stat && stat.mtimeMs >= input.since - START_SLACK_MS) found.push(absolute);
+        if (stat && Math.max(stat.mtimeMs, stat.ctimeMs) >= input.since - START_SLACK_MS) found.push(absolute);
       }
     }
   };
@@ -333,7 +379,6 @@ export async function captureRunChanges(input: { cwd: string; since: number; by:
   for (const absolute of found.sort()) {
     const target = await versionTarget(absolute);
     if (!target) continue;
-    if (!isDocumentForScan(target.name) && !(await store.journal(target.key))) continue;
     if (await captureTarget(target, input.by)) recorded += 1;
   }
   return recorded;
@@ -341,6 +386,7 @@ export async function captureRunChanges(input: { cwd: string; since: number; by:
 
 const PATH_LIKE = /(["'`])((?:(?!\1)[^\n])+)\1|[^\s"'`;|&<>()]+/g;
 const MAX_COMMAND_PATHS = 20;
+const MAX_SNAPSHOT_TOTAL = 16 * 1024 * 1024;
 
 function expandHome(value: string): string {
   if (value === "~") return os.homedir();
@@ -349,10 +395,9 @@ function expandHome(value: string): string {
 }
 
 /**
- * Files a command names, so what they hold can be kept before it runs: `sed -i
- * … notes.md`, `python fill.py contract.docx`, a script that opens
- * `Document("contract.docx")`. Only names that would get a history, and at most
- * a few: this runs before every command.
+ * Files a command names: `sed -i … notes.md`, `python fill.py contract.docx`,
+ * a script that opens `Document("contract.docx")`. Only names that would get a
+ * history, and at most a few: this runs before every command.
  */
 export function pathsInCommand(command: string, cwd: string): string[] {
   const found: string[] = [];
@@ -368,11 +413,73 @@ export function pathsInCommand(command: string, cwd: string): string[] {
   return found;
 }
 
+/** A file a command named, as it was just before the command ran - in memory, not yet in the history. */
+export interface CommandSnapshot {
+  target: VersionTarget;
+  /** Null: there was no file. */
+  content: Buffer | null;
+  seen: Seen | null;
+  fileTime: Date | null;
+}
+
+/**
+ * What the files a command names hold before it runs, kept in memory. Most
+ * commands only read (`cat`, `head`, `grep`): a copy kept for each of them would
+ * only fill the disk, so the history gets one only if the command changed the
+ * file (settleCommandSnapshots).
+ */
+export async function snapshotsForCommand(command: string, cwd: string): Promise<CommandSnapshot[]> {
+  if (!command || !(await versionsEnabled())) return [];
+  const snapshots: CommandSnapshot[] = [];
+  let total = 0;
+  for (const absolute of pathsInCommand(command, cwd)) {
+    const target = await versionTarget(absolute);
+    if (!target) continue;
+    const read = await readTarget(target, Math.min(SNAPSHOT_MAX_BYTES, MAX_SNAPSHOT_TOTAL - total));
+    if (read.kind === "missing") snapshots.push({ target, content: null, seen: null, fileTime: null });
+    else if (read.kind === "file") {
+      total += read.content.length;
+      snapshots.push({ target, content: read.content, seen: read.seen, fileTime: read.fileTime });
+    }
+  }
+  return snapshots;
+}
+
+/**
+ * After the command: a file it changed keeps what it held before (now that it
+ * is worth keeping) and what it holds now; a file it deleted keeps what it held
+ * and a record of the deletion. A file it created gets nothing - a history
+ * begins with a change.
+ */
+export async function settleCommandSnapshots(snapshots: CommandSnapshot[], by: VersionAuthor): Promise<void> {
+  const store = getVersionStore();
+  for (const snapshot of snapshots) {
+    if (!snapshot.content || !snapshot.seen || !snapshot.fileTime) continue;
+    const now = await readTarget(snapshot.target);
+    if (now.kind === "file" && sha256(now.content) === sha256(snapshot.content)) continue;
+    if (now.kind !== "file" && now.kind !== "missing") continue;
+    await keepFound(snapshot.target, snapshot.content, snapshot.seen, snapshot.fileTime);
+    if (now.kind === "missing") {
+      if (await store.markDeleted({ key: snapshot.target.key, by })) announce(snapshot.target.key);
+    } else {
+      await captureTarget(snapshot.target, by);
+    }
+  }
+}
+
+/** A write that would leave the folder, or go through a link: refused, and said as such. */
+export class OutsideFolderError extends Error {
+  constructor() {
+    super("outside the folder");
+  }
+}
+
 /**
  * Write a file inside a folder without following a link at its name, and in
  * one step: the new content goes to a temporary file beside it, which then
  * takes the file's place. A reader - the sync, an editor, the agent - sees the
- * old file or the new one, never half of it.
+ * old file or the new one, never half of it. A file nobody may write to stays
+ * that way: the rename would otherwise replace it as if it were not read-only.
  */
 export async function writeFileInside(absolute: string, content: Buffer | string, root: string): Promise<void> {
   const realRootDir = await fs.realpath(root);
@@ -386,20 +493,21 @@ export async function writeFileInside(absolute: string, content: Buffer | string
       break;
     } catch {
       const up = path.dirname(existing);
-      if (up === existing) throw new Error("outside the folder");
+      if (up === existing) throw new OutsideFolderError();
       existing = up;
     }
   }
-  if (!inside(await fs.realpath(existing), realRootDir)) throw new Error("outside the folder");
+  if (!inside(await fs.realpath(existing), realRootDir)) throw new OutsideFolderError();
   await fs.mkdir(path.dirname(resolved), { recursive: true });
   const parent = await fs.realpath(path.dirname(resolved));
-  if (!inside(parent, realRootDir)) throw new Error("outside the folder");
+  if (!inside(parent, realRootDir)) throw new OutsideFolderError();
   const target = path.join(parent, path.basename(resolved));
   let mode = 0o644;
   try {
     const current = await fs.lstat(target);
-    if (!current.isFile()) throw new Error("not a plain file");
+    if (!current.isFile()) throw new OutsideFolderError();
     mode = current.mode & 0o777;
+    if ((mode & 0o200) === 0) throw Object.assign(new Error("read-only"), { code: "EACCES" });
   } catch (error) {
     if ((error as NodeJS.ErrnoException)?.code !== "ENOENT") throw error;
   }
@@ -432,5 +540,5 @@ export async function forgetHistory(projectId: string, filePath: string, options
     key = path.relative(projectsDirectory(), absolute).split(path.sep).join("/");
   }
   if (key.startsWith("..")) return;
-  await getVersionStore().forget(key === "" ? "" : key, { withChildren: options.folder });
+  await getVersionStore().forget(key, { withChildren: options.folder });
 }

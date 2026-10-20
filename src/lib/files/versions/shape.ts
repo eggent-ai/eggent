@@ -29,9 +29,16 @@ export interface VersionAuthor {
 }
 
 export interface VersionInfo {
-  /** Counted per file from 1; never reused, so "version 7" stays version 7. */
+  /**
+   * Counted per file from 1, and never reused while the file's history lasts,
+   * so "version 7" stays version 7. A history deleted and begun again starts
+   * from 1 once more.
+   */
   n: number;
+  /** When the version was seen here: what the retention and the order go by. */
   at: string;
+  /** For a state found rather than made here (`earlier`, `outside`): the file's own modification time. */
+  fileTime?: string;
   size: number;
   by: VersionAuthor;
   /** The file was deleted here: this version holds nothing. */
@@ -83,5 +90,7 @@ export interface VersionUsageView {
   bytes: number;
   files: number;
   versions: number;
+  /** The most the history may take before the oldest versions go. */
+  capBytes: number;
   retention: VersionRetention;
 }

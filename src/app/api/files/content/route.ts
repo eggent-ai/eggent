@@ -5,7 +5,7 @@ import { getWorkDir } from "@/lib/storage/project-store";
 import { publishUiSyncEvent } from "@/lib/realtime/event-bus";
 import { getServerTranslator } from "@/i18n/server";
 import { audioContentType, fileDownloadUrl } from "@/lib/files/openable";
-import { captureAfter, captureBefore, writeFileInside } from "@/lib/files/versions/capture";
+import { captureAfter, captureBefore, OutsideFolderError, writeFileInside } from "@/lib/files/versions/capture";
 
 const MAX_TEXT_FILE_BYTES = 1024 * 1024;
 
@@ -122,16 +122,22 @@ export async function PUT(req: NextRequest) {
   }
 
   // What the file held is kept as a version first, if its history does not have
-  // it, and what is saved becomes the next one: a save can always be undone.
-  await captureBefore(resolved.filePath).catch(() => undefined);
+  // it, and what is saved becomes the next one: a save can always be undone. A
+  // file that has grown past what a history keeps since it was opened is not
+  // written over unseen: the editor shows the error and the person reloads.
+  const before = await captureBefore(resolved.filePath).catch(() => "unreadable" as const);
+  if (before === "too-large") {
+    return Response.json({ error: t("files.history.saveWouldLose") }, { status: 409 });
+  }
   try {
     // Into the file's place in one step, and never through a link at its name:
     // the agent can leave one there, pointing anywhere.
     await writeFileInside(resolved.filePath, body.content, await fs.realpath(resolved.workDir));
-  } catch {
-    return Response.json({ error: t("api.error.invalidFilePath") }, { status: 403 });
+  } catch (error) {
+    if (error instanceof OutsideFolderError) return Response.json({ error: t("api.error.invalidFilePath") }, { status: 403 });
+    return Response.json({ error: t("api.error.failedWriteFile") }, { status: 500 });
   }
-  await captureAfter(resolved.filePath, { kind: "person" }).catch(() => undefined);
+  await captureAfter(resolved.filePath, { kind: "person" }, { onlyIfTracked: true }).catch(() => undefined);
   const stat = await fs.stat(resolved.filePath);
   publishUiSyncEvent({
     topic: "files",

@@ -7,8 +7,9 @@ import type { VersionRetention } from "@/lib/files/versions/shape";
  * Every version is kept for `EGGENT_VERSIONS_KEEP_DAYS` (30) after a newer one
  * replaced it, then one a day until `EGGENT_VERSIONS_DAILY_DAYS` (90), and never
  * more than `EGGENT_VERSIONS_MAX_PER_FILE` (200) for one file. A file over
- * `EGGENT_VERSIONS_MAX_FILE_MB` (10) gets none. `EGGENT_VERSIONS=off` turns the
- * whole thing off for a deployment; the workspace's own switch is in Settings.
+ * `EGGENT_VERSIONS_MAX_FILE_MB` (10) gets none. The whole history stays under a
+ * ceiling (service.ts). `EGGENT_VERSIONS=off` turns the whole thing off for a
+ * deployment; the workspace's own switch is in Settings.
  */
 
 function positiveNumber(raw: string | undefined, fallback: number): number {
@@ -32,6 +33,16 @@ export function versionRetention(): VersionRetention {
 
 export function maxVersionedFileBytes(): number {
   return Math.floor(positiveNumber(process.env.EGGENT_VERSIONS_MAX_FILE_MB, 10) * 1024 * 1024);
+}
+
+/** The most the whole history may take, whatever the disk: `EGGENT_VERSIONS_MAX_TOTAL_MB` (1024). */
+export function maxHistoryBytes(): number {
+  return Math.floor(positiveNumber(process.env.EGGENT_VERSIONS_MAX_TOTAL_MB, 1024) * 1024 * 1024);
+}
+
+/** The share of the disk a deployment reports that the history may take: `EGGENT_VERSIONS_DISK_SHARE` (0.25). */
+export function historyDiskShare(): number {
+  return Math.min(1, Math.max(0.01, positiveNumber(process.env.EGGENT_VERSIONS_DISK_SHARE, 0.25)));
 }
 
 /** How often files that already have a history are looked at for changes nobody here made. */

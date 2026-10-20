@@ -104,10 +104,22 @@ const provider = http.createServer((req, res) => {
       : lastUser.includes("BASH-SED") ? [
         ["bash", { command: "sed -i.bak 's/alpha/beta/' plain.txt && rm -f plain.txt.bak" }],
       ]
+      : lastUser.includes("WRITE-NEW") ? [
+        ["write", { path: "brand-new.md", content: "made from nothing\n" }],
+      ]
+      : lastUser.includes("BASH-READ") ? [
+        ["bash", { command: "cat read-only-notes.md && head -n 1 read-only-notes.md" }],
+      ]
+      : lastUser.includes("WRITE-SYNC-WRITE") ? [
+        ["write", { path: "shared-draft.md", content: "first\n" }],
+        ["write", { path: "shared-draft.md", content: "second\n" }],
+      ]
       : lastUser.includes("BASH-JSON") ? [
         ["bash", { command: "printf '{\"a\":2}' > data.json" }],
       ]
       : null;
+    // Between the two writes, the sync brings the file as it was edited on a laptop.
+    if (lastUser.includes("WRITE-SYNC-WRITE") && step === 1) fs.writeFileSync(path.join(shopDir, "shared-draft.md"), "from the laptop\n");
     if (script && step < script.length) return call(script[step][0], script[step][1]);
     return reply("done");
   });
@@ -115,6 +127,7 @@ const provider = http.createServer((req, res) => {
 await new Promise<void>((resolve) => provider.listen(0, "127.0.0.1", resolve));
 
 const root = fs.mkdtempSync(path.join(os.tmpdir(), "eggent-versions-"));
+const root_ = root;
 process.chdir(root);
 const agentDir = path.join(root, "agent");
 fs.mkdirSync(agentDir);
@@ -215,7 +228,7 @@ const docx = (paragraphs: string[], table?: string[][]) =>
   makeZip({
     "word/document.xml": `<?xml version="1.0"?><w:document><w:body>${paragraphs
       .map((text) => `<w:p><w:pPr><w:pStyle w:val="Normal"/></w:pPr><w:r><w:t xml:space="preserve">${text.replace(/&/g, "&amp;").replace(/</g, "&lt;")}</w:t></w:r></w:p>`)
-      .join("")}${table ? `<w:tbl>${table.map((row) => `<w:tr>${row.map((cell) => `<w:tc><w:p><w:r><w:t>${cell}</w:t></w:r></w:p></w:tc>`).join("")}</w:tr>`).join("")}</w:tbl>` : ""}<w:p><w:r><w:delText>gone</w:delText></w:r></w:p></w:body></w:document>`,
+      .join("")}${table ? `<w:tbl>${table.map((row) => `<w:tr>${row.map((cell) => `<w:tc><w:p><w:r><w:t>${cell}</w:t></w:r></w:p></w:tc>`).join("")}</w:tr>`).join("")}</w:tbl>` : ""}<w:p><w:del w:id="1" w:author="x"><w:r><w:t>gone</w:t></w:r><w:r><w:delText>gone too</w:delText></w:r></w:del></w:p></w:body></w:document>`,
   });
 
 console.log("Which files get a history\n");
@@ -324,8 +337,9 @@ await check("before a write the file's state is kept; after it the new one; the 
   const journal = await journalOf("contract.md");
   assert.equal(journal?.versions[1].added, 1);
   assert.equal(journal?.versions[1].removed, 1);
-  // The state found before the first change is dated when it was made, not now.
-  assert.ok(Date.parse(journal!.versions[0].at) < Date.now() - 2 * DAY);
+  // The state found before the first change is dated when it was seen; the file's own date is kept beside it.
+  assert.ok(Date.parse(journal!.versions[0].at) > Date.now() - 60_000);
+  assert.ok(Date.parse(journal!.versions[0].fileTime ?? "") < Date.now() - 2 * DAY);
   assert.equal((await store.content("shop/contract.md", 1))?.toString(), "price 100\n");
 });
 await check("a change nobody here made is noticed before the next write, as made outside", async () => {
@@ -403,35 +417,72 @@ await check("a write into the folder never goes through a link, nor makes folder
   await capture.writeFileInside(path.join(shopDir, "fresh", "made.md"), "made", shopDir);
   assert.equal(fs.readFileSync(path.join(shopDir, "fresh", "made.md"), "utf8"), "made");
 });
-await check("a command's files: documents get a version, other files only once they have a history", async () => {
+await check("a turn's commands: files with a history get a version; files only created get none", async () => {
   const since = Date.now() - 1000;
   put("out/summary.md", "summary\n");
   put("out/data.csv", "a,b\n");
-  put("out/cache.json", "{}");
   put("contract.md", "price 140\n");
   await capture.captureRunChanges({ cwd: shopDir, since, by: { kind: "agent", chat: "chat-2", run: "run-x" } });
-  assert.ok(await journalOf("out/summary.md"));
-  assert.ok(await journalOf("out/data.csv"));
-  assert.equal(await journalOf("out/cache.json"), null);
+  assert.equal(await journalOf("out/summary.md"), null);
+  assert.equal(await journalOf("out/data.csv"), null);
   assert.equal((await journalOf("contract.md"))?.versions.at(-1)?.by.chat, "chat-2");
 });
-await check("in the orchestrator's folder only the files lying in it are looked at", async () => {
+await check("a command that set a file's date back is still seen: by its status time", async () => {
+  const file = path.join(shopDir, "contract.md");
   const since = Date.now() - 1000;
-  put("synced-from-laptop.md", "arrived\n");
-  fs.writeFileSync(path.join(projectsDir, "top-note.md"), "top\n");
+  fs.writeFileSync(file, "price 145 - copied with its old date\n");
+  const old = new Date(Date.now() - 300 * DAY);
+  fs.utimesSync(file, old, old);
+  await capture.captureRunChanges({ cwd: shopDir, since, by: { kind: "agent", chat: "chat-2", run: "run-y" } });
+  const journal = await journalOf("contract.md");
+  assert.equal((await store.content("shop/contract.md", journal!.versions.at(-1)!.n))?.toString(), "price 145 - copied with its old date\n");
+  // Dated when seen: the version it replaced is young, not 300 days old, and is kept.
+  assert.ok(journal!.versions.some((item) => item.by.run === "run-x"));
+});
+await check("in the orchestrator's folder only the files lying in it are looked at", async () => {
+  const top = path.join(projectsDir, "top-note.md");
+  fs.writeFileSync(top, "top\n");
+  const inProject = put("synced-from-laptop.md", "arrived\n");
+  for (const file of [top, inProject]) {
+    await capture.captureBefore(file);
+    fs.appendFileSync(file, "more\n");
+    await capture.captureAfter(file, { kind: "person" });
+  }
+  const before = (await journalOf("synced-from-laptop.md"))!.versions.length;
+  const since = Date.now() - 1000;
+  fs.appendFileSync(top, "from a command\n");
+  fs.appendFileSync(inProject, "from the laptop\n");
   await capture.captureRunChanges({ cwd: projectsDir, since, by: { kind: "agent", run: "run-o" } });
-  assert.ok(await store.journal("top-note.md"));
-  assert.equal(await journalOf("synced-from-laptop.md"), null);
+  assert.equal((await store.journal("top-note.md"))!.versions.at(-1)!.by.kind, "agent");
+  assert.equal((await journalOf("synced-from-laptop.md"))!.versions.length, before);
+});
+await check("a company's shared folders get no history here, at the top or in a project", () => {
+  assert.equal(capture.isVersionablePath(".shared/finance/q3.docx"), false);
+  assert.equal(capture.isVersionablePath("shop/shared/finance/q3.docx"), false);
+  assert.equal(capture.isVersionablePath("shop/shared/notes.md"), true);
 });
 await check("files a command line names are found, so they can be kept before it runs", () => {
   const found = capture.pathsInCommand(`sed -i 's/a/b/' notes.md && python3 - <<'EOF'\nfrom docx import Document\nd = Document("contract.docx")\nEOF`, shopDir);
   assert.deepEqual(found, [path.join(shopDir, "notes.md"), path.join(shopDir, "contract.docx")]);
   assert.deepEqual(capture.pathsInCommand("curl https://example.test/a.md -o b.txt", shopDir), [path.join(shopDir, "b.txt")]);
 });
-await check("forgetting a folder forgets every file in it; the store knows which files it tracks", async () => {
+await check("forgetting a folder forgets every file in it, and frees what only they held at once", async () => {
+  for (const name of ["out/summary.md", "out/data.csv"]) {
+    const file = path.join(shopDir, name);
+    await capture.captureBefore(file);
+    fs.appendFileSync(file, `${name} changed\n`);
+    await capture.captureAfter(file, { kind: "person" });
+  }
+  // Older than the moment a deletion lets go of things.
+  await new Promise((resolve) => setTimeout(resolve, 5200));
+  const shas = [...((await journalOf("out/summary.md"))?.versions ?? []), ...((await journalOf("out/data.csv"))?.versions ?? [])].map((item) => item.sha);
+  assert.equal(shas.length, 4);
+  const objectFile = (sha: string | null) => path.join(root_, "data", "versions", "objects", String(sha).slice(0, 2), `${sha}.gz`);
+  assert.ok(shas.every((sha) => fs.existsSync(objectFile(sha))));
   await capture.forgetHistory("shop", "out", { folder: true });
   assert.equal(await journalOf("out/summary.md"), null);
   assert.equal(await journalOf("out/data.csv"), null);
+  assert.deepEqual(shas.filter((sha) => fs.existsSync(objectFile(sha))), [], "what only these versions held is still on the disk");
   const tracked = await store.tracked();
   assert.ok(tracked.has("shop/contract.md"));
   assert.equal(tracked.has("shop/out/summary.md"), false);
@@ -474,6 +525,45 @@ await check("clearing what is older than a few days keeps every file's newest ve
   await store.clear({ olderThanDays: 7 });
   assert.deepEqual((await journalOf("old-history.md"))?.versions.map((item) => item.n), [2]);
 });
+await check("a journal that cannot be read for a moment is not taken for a broken one", async () => {
+  const file = put("permissions.md", "one\n");
+  await capture.captureBefore(file);
+  fs.writeFileSync(file, "two\n");
+  await capture.captureAfter(file, { kind: "person" });
+  const journals = path.join(root_, "data", "versions", "files");
+  let target = "";
+  for (const shard of fs.readdirSync(journals)) {
+    for (const name of fs.readdirSync(path.join(journals, shard))) {
+      const full = path.join(journals, shard, name);
+      if (JSON.parse(fs.readFileSync(full, "utf8")).key === "shop/permissions.md") target = full;
+    }
+  }
+  // Old enough that only its being unreadable, not its age, could keep it.
+  const old = new Date(Date.now() - 3 * 3600_000);
+  fs.utimesSync(target, old, old);
+  fs.chmodSync(target, 0o000);
+  try {
+    await store.sweep({ graceMs: 0 });
+  } finally {
+    fs.chmodSync(target, 0o644);
+  }
+  assert.ok(fs.existsSync(target), "the sweep deleted a journal it could not read");
+  assert.equal((await journalOf("permissions.md"))?.versions.length, 2);
+});
+await check("a folder on the way that has become a link is not followed into another file's history", async () => {
+  fs.mkdirSync(path.join(shopDir, "deals"), { recursive: true });
+  const file = put("deals/terms.md", "terms one\n");
+  await capture.captureBefore(file);
+  fs.writeFileSync(file, "terms two\n");
+  await capture.captureAfter(file, { kind: "person" });
+  const count = (await journalOf("deals/terms.md"))!.versions.length;
+  fs.mkdirSync(path.join(shopDir, "elsewhere"), { recursive: true });
+  fs.writeFileSync(path.join(shopDir, "elsewhere", "terms.md"), "a different file\n");
+  fs.renameSync(path.join(shopDir, "deals"), path.join(shopDir, "deals-old"));
+  fs.symlinkSync(path.join(shopDir, "elsewhere"), path.join(shopDir, "deals"));
+  assert.equal(await capture.checkTracked("shop/deals/terms.md"), "gone");
+  assert.equal((await journalOf("deals/terms.md"))!.versions.length, count);
+});
 await check("turned off in Settings, nothing is kept", async () => {
   await saveSettings({ fileHistory: { enabled: false } } as never);
   forgetVersionsSwitch();
@@ -508,6 +598,23 @@ await check("a presentation is read slide by slide", async () => {
   });
   const extracted = await textModule.extractVersionText("deck.pptx", deck, { slide: "Page" });
   assert.equal(extracted.text, "## Page 1\nTitle\nPoint\n\n## Page 2\nSecond");
+});
+await check("a document with thousands of tags that never close is read in a moment, not in minutes", async () => {
+  const hostile = [
+    makeZip({ "word/document.xml": `<w:document><w:body>${"<w:p><w:r><w:t>x".repeat(60_000)}</w:body></w:document>` }),
+    makeZip({ "word/document.xml": `<w:document><w:body>${"<w:tbl><w:tr><w:tc>".repeat(60_000)}</w:body></w:document>` }),
+    makeZip({
+      "xl/workbook.xml": `<workbook><sheets><sheet name="S" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+      "xl/_rels/workbook.xml.rels": `<Relationships><Relationship Id="rId1" Target="worksheets/sheet1.xml"/></Relationships>`,
+      "xl/worksheets/sheet1.xml": `<worksheet><sheetData>${"<row r=\"1\"><c r=\"A1\"><v>1".repeat(60_000)}</sheetData></worksheet>`,
+    }),
+  ];
+  for (const [index, data] of hostile.entries()) {
+    const started = Date.now();
+    await textModule.extractVersionText(index === 2 ? "sheet.xlsx" : "doc.docx", data);
+    const elapsed = Date.now() - started;
+    assert.ok(elapsed < 1500, `case ${index}: ${elapsed} ms`);
+  }
 });
 await check("a damaged document is not compared, and nothing breaks", async () => {
   assert.deepEqual(await textModule.extractVersionText("broken.docx", Buffer.from("not a zip")), { kind: "none", text: "" });
@@ -589,6 +696,49 @@ await check("the editor's save keeps what was there and what was saved; a link a
   assert.equal((await save("linked.md", "through the link")).status, 403);
   assert.equal(fs.readFileSync(path.join(root, "outside-secret.md"), "utf8"), "NOT YOURS");
 });
+await check("a restore that cannot keep what the file holds now asks first, and goes ahead only when told", async () => {
+  const file = put("grown.md", "small\n", DAY);
+  await capture.captureBefore(file);
+  fs.writeFileSync(file, "small, edited\n");
+  await capture.captureAfter(file, { kind: "person" });
+  // The file grew past what a history keeps.
+  fs.writeFileSync(file, "x".repeat(3000));
+  process.env.EGGENT_VERSIONS_MAX_FILE_MB = "0.001";
+  const restore = (force: boolean) => restoreRoute.POST(request("/api/files/versions/restore", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ project: "shop", path: "grown.md", n: 1, ...(force ? { force: true } : {}) }) }));
+  try {
+    const refused = await restore(false);
+    assert.equal(refused.status, 409);
+    assert.equal((await refused.json()).code, "unkept");
+    assert.equal(fs.readFileSync(file, "utf8").length, 3000);
+    assert.equal((await restore(true)).status, 200);
+    assert.equal(fs.readFileSync(file, "utf8"), "small\n");
+  } finally {
+    delete process.env.EGGENT_VERSIONS_MAX_FILE_MB;
+  }
+});
+await check("the editor does not write over a file that grew too large to keep while it was open", async () => {
+  const file = put("grew-while-open.md", "short\n", DAY);
+  fs.writeFileSync(file, "y".repeat(3000));
+  process.env.EGGENT_VERSIONS_MAX_FILE_MB = "0.001";
+  try {
+    const response = await fileContentRoute.PUT(request("/api/files/content?project=shop&path=grew-while-open.md", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ content: "short, edited\n" }) }));
+    assert.equal(response.status, 409);
+    assert.equal(fs.readFileSync(file, "utf8").length, 3000);
+  } finally {
+    delete process.env.EGGENT_VERSIONS_MAX_FILE_MB;
+  }
+});
+await check("a read-only file stays read-only: the save is refused, the file untouched", async () => {
+  const file = put("frozen.md", "frozen\n");
+  fs.chmodSync(file, 0o444);
+  try {
+    const response = await fileContentRoute.PUT(request("/api/files/content?project=shop&path=frozen.md", { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify({ content: "thawed\n" }) }));
+    assert.equal(response.status, 500);
+    assert.equal(fs.readFileSync(file, "utf8"), "frozen\n");
+  } finally {
+    fs.chmodSync(file, 0o644);
+  }
+});
 await check("deleting a file in the Files panel takes its history with it", async () => {
   const response = await filesRoute.DELETE(request("/api/files?project=shop&path=letter.md", { method: "DELETE" }));
   assert.equal(response.status, 200);
@@ -635,12 +785,38 @@ await check("the agent's write and edit in one turn make one version, signed wit
   assert.equal((await store.content("shop/notes.md", journal!.versions[1].n))?.toString(), "First line\nSecond line, edited\n");
   assert.equal((await store.content("shop/notes.md", journal!.versions[0].n))?.toString(), "Old notes\n");
 });
-await check("a command's document gets a version when the turn ends; a data file with no history does not", async () => {
+await check("a file the agent's write creates gets no history: a history begins with a change", async () => {
+  const chat = await newChat("New file", "shop");
+  await runPiAgentText({ chatId: chat, projectId: "shop", userMessage: "WRITE-NEW please" });
+  await settleFileVersionCaptures();
+  assert.equal(fs.readFileSync(path.join(shopDir, "brand-new.md"), "utf8"), "made from nothing\n");
+  assert.equal(await journalOf("brand-new.md"), null);
+});
+await check("files a command only creates get no history", async () => {
   const chat = await newChat("Report", "shop");
   await runPiAgentText({ chatId: chat, projectId: "shop", userMessage: "BASH-DOC please" });
   await settleFileVersionCaptures();
-  assert.equal((await journalOf("report.md"))?.versions.at(-1)?.by.chat, chat);
+  assert.ok(fs.existsSync(path.join(shopDir, "report.md")));
+  assert.equal(await journalOf("report.md"), null);
   assert.equal(await journalOf("data.json"), null);
+});
+await check("a command that only reads a file leaves no copy of it", async () => {
+  put("read-only-notes.md", "just read\n", DAY);
+  const chat = await newChat("Read", "shop");
+  await runPiAgentText({ chatId: chat, projectId: "shop", userMessage: "BASH-READ please" });
+  await settleFileVersionCaptures();
+  assert.equal(await journalOf("read-only-notes.md"), null);
+});
+await check("a change the sync brings between two writes of one turn is kept", async () => {
+  put("shared-draft.md", "original\n", DAY);
+  const chat = await newChat("Two writes", "shop");
+  await runPiAgentText({ chatId: chat, projectId: "shop", userMessage: "WRITE-SYNC-WRITE please" });
+  await settleFileVersionCaptures();
+  const journal = await journalOf("shared-draft.md");
+  const texts: string[] = [];
+  for (const item of journal!.versions) texts.push((await store.content("shop/shared-draft.md", item.n))?.toString() ?? "");
+  assert.deepEqual(journal!.versions.map((item) => item.by.kind), ["earlier", "agent", "outside", "agent"]);
+  assert.deepEqual(texts, ["original\n", "first\n", "from the laptop\n", "second\n"]);
 });
 await check("a file a command names is kept before the command changes it", async () => {
   put("plain.txt", "alpha\n", DAY);
@@ -684,6 +860,7 @@ await check("no note for a file outside the scope, a credential, or a folder", a
 });
 if (subagentsExtension) {
   await check("what a helper writes is a version too, signed as the helper of the chat that started it", async () => {
+    put("helper-notes.md", "before the helper\n", DAY);
     const chat = await newChat("Helper", "shop");
     await runPiAgentText({ chatId: chat, projectId: "shop", userMessage: "HELPER-WRITE please" });
     await settleFileVersionCaptures();
@@ -737,13 +914,72 @@ await check("it reads a document's text exactly as the screen does", async () =>
   }
   assert.match(runCli(["diff", "deal.docx", "1"]), /\+Δεύτερο σημείο/);
 });
+await check("it reads a spreadsheet, a presentation and an OpenDocument text as the screen does", async () => {
+  const samples: Array<[string, Buffer]> = [
+    ["book.xlsx", makeZip({
+      "xl/workbook.xml": `<workbook><sheets><sheet name="Prices &amp; stock" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+      "xl/_rels/workbook.xml.rels": `<Relationships><Relationship Id="rId1" Type="x" Target="worksheets/sheet1.xml"/></Relationships>`,
+      "xl/sharedStrings.xml": `<sst><si><t>Flour</t></si><si><r><t>Su</t></r><r><t>gar</t></r><rPh><t>hint</t></rPh></si></sst>`,
+      "xl/worksheets/sheet1.xml": `<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1"><v>100</v></c><c r="C1" t="b"><v>1</v></c></row><row r="2"><c r="A2" t="s"><v>1</v></c><c r="B2"><f>B1*2</f><v>200</v></c><c r="C2" t="inlineStr"><is><t>note</t></is></c></row></sheetData></worksheet>`,
+    })],
+    ["deck.pptx", makeZip({
+      "ppt/slides/slide1.xml": `<p:sld><a:p><a:r><a:t>Title</a:t></a:r><a:br/><a:r><a:t>second line</a:t></a:r></a:p><a:p/></p:sld>`,
+      "ppt/slides/slide2.xml": `<p:sld><a:p><a:r><a:t>Next</a:t></a:r></a:p></p:sld>`,
+    })],
+    ["letter.odt", makeZip({
+      "content.xml": `<office:document-content><text:h>Heading</text:h><text:p>One<text:tab/>two<text:s/>three<text:span> four</text:span></text:p><text:p/></office:document-content>`,
+    })],
+  ];
+  for (const [name, data] of samples) {
+    const file = put(name, data);
+    await capture.captureAfter(file, { kind: "upload" });
+    const n = (await journalOf(name))!.versions.at(-1)!.n;
+    const screen = (await textModule.extractVersionText(name, data)).text;
+    assert.notEqual(screen, "", name);
+    assert.equal(runCli(["text", name, String(n)]), screen.endsWith("\n") ? screen : `${screen}\n`, name);
+  }
+});
 await check("the agent is told the history exists and how to read it", () => {
   const guidance = service.fileHistoryGuidance();
-  assert.match(guidance, /File history: every change to a file in a project/);
+  assert.match(guidance, /File history: once a file in a project has been changed/);
   assert.match(guidance, /`eggent-history list <file>`/);
   assert.match(service.historyCliDir() ?? "", /scripts\/bin$/);
 });
 
+console.log("\nThe ceiling (last: it trims every file's history)\n");
+
+await check("over its ceiling the history lets go of the versions replaced longest ago, then of whole histories, never of a file", async () => {
+  await projectStore.createProject({ id: "ceiling", name: "Ceiling", description: "", instructions: "x", memoryMode: "isolated" } as never);
+  const dir = path.join(projectsDir, "ceiling");
+  const big = (seed: string) => Array.from({ length: 4000 }, (_, index) => `${seed} ${index} ${Math.random()}`).join("\n");
+  const files = ["a.md", "b.md"].map((name) => path.join(dir, name));
+  for (const file of files) {
+    fs.writeFileSync(file, big(`${file} one`));
+    await capture.captureBefore(file);
+    for (const round of ["two", "three"]) {
+      fs.writeFileSync(file, big(`${file} ${round}`));
+      await capture.captureAfter(file, { kind: "person" });
+    }
+  }
+  const live = files.map((file) => fs.readFileSync(file, "utf8"));
+  // Older than the moment a trim lets go of things, as it would be: the ceiling is checked a while after a write.
+  await new Promise((resolve) => setTimeout(resolve, 5200));
+  const before = await store.usage();
+  // Room for about half of what is kept: the oldest versions go, the newest of each file stays.
+  await store.trim(Math.floor(before.bytes / 2));
+  const a = await store.journal("ceiling/a.md");
+  const b = await store.journal("ceiling/b.md");
+  assert.ok((a?.versions.length ?? 0) < 3 || (b?.versions.length ?? 0) < 3, "nothing was let go of");
+  assert.ok((await store.usage()).bytes <= before.bytes / 2 + 4096);
+  for (const journal of [a, b]) {
+    if (journal) assert.equal((await store.content(journal.key, journal.versions.at(-1)!.n))?.toString(), fs.readFileSync(path.join(projectsDir, journal.key), "utf8"));
+  }
+  // Room for almost nothing: whole histories go, the files stay as they are.
+  await store.trim(1);
+  assert.equal(await store.journal("ceiling/a.md"), null);
+  assert.equal(await store.journal("ceiling/b.md"), null);
+  assert.deepEqual(files.map((file) => fs.readFileSync(file, "utf8")), live);
+});
 provider.close();
 console.log(`\n${ran - failed} of ${ran} checks passed`);
 process.exit(failed === 0 ? 0 : 1);

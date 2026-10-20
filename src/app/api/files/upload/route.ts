@@ -139,7 +139,8 @@ export async function POST(req: NextRequest) {
         Readable.fromWeb(file.stream() as Parameters<typeof Readable.fromWeb>[0]),
         createWriteStream(targetPath, { flags: target.overwrite ? "w" : "wx" })
       );
-      await captureAfter(targetPath, { kind: "upload" }).catch(() => undefined);
+      // A replaced file's history goes on; a new one has none until it changes.
+      await captureAfter(targetPath, { kind: "upload" }, { onlyIfTracked: true }).catch(() => undefined);
 
       const relativePath = path.posix
         .join(dirPath.replace(/\\/g, "/"), target.relativePath)

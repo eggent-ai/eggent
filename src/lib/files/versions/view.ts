@@ -3,6 +3,7 @@ import path from "node:path";
 import { versionRetention, versionsAvailable, versionsEnabled, versionsSwitchedOn } from "@/lib/files/versions/config";
 import { checkTracked, versionTargetFor, type VersionTarget } from "@/lib/files/versions/capture";
 import { comparisonOf } from "@/lib/files/versions/rules";
+import { historyCapBytes } from "@/lib/files/versions/service";
 import { getVersionStore } from "@/lib/files/versions/store";
 import { extractVersionText } from "@/lib/files/versions/text";
 import type { FileHistoryView, VersionInfo, VersionTextView, VersionUsageView } from "@/lib/files/versions/shape";
@@ -13,21 +14,32 @@ import type { FileHistoryView, VersionInfo, VersionTextView, VersionUsageView } 
  */
 
 const CHAT_ID = /^[A-Za-z0-9_-]{1,100}$/;
-const TITLE_TTL_MS = 60_000;
+const TITLE_TTL_MS = 10 * 60_000;
+// A chat's title is near the start of its file; the file itself can be tens of megabytes.
+const TITLE_READ_BYTES = 64 * 1024;
 const titles = new Map<string, { at: number; title: string | null }>();
 
-/** A chat's title for a version made in it, without loading the whole chat into the app. */
+/** A chat's title for a version made in it, read from the start of its file rather than by loading the chat. */
 async function chatTitle(chatId: string): Promise<string | null> {
   if (!CHAT_ID.test(chatId)) return null;
   const known = titles.get(chatId);
   if (known && Date.now() - known.at < TITLE_TTL_MS) return known.title;
   let title: string | null = null;
+  let handle: Awaited<ReturnType<typeof fs.open>> | null = null;
   try {
-    const raw = await fs.readFile(path.join(process.cwd(), "data", "chats", `${chatId}.json`), "utf8");
-    const parsed = JSON.parse(raw) as { title?: unknown };
-    title = typeof parsed.title === "string" && parsed.title.trim() ? parsed.title.trim().slice(0, 200) : null;
+    handle = await fs.open(path.join(process.cwd(), "data", "chats", `${chatId}.json`), "r");
+    const buffer = Buffer.alloc(TITLE_READ_BYTES);
+    const { bytesRead } = await handle.read(buffer, 0, TITLE_READ_BYTES, 0);
+    const head = buffer.subarray(0, bytesRead).toString("utf8");
+    const match = /"title"\s*:\s*("(?:[^"\\]|\\.){0,2000}")/.exec(head);
+    if (match) {
+      const parsed = JSON.parse(match[1]) as unknown;
+      if (typeof parsed === "string" && parsed.trim()) title = parsed.trim().slice(0, 200);
+    }
   } catch {
-    // Deleted, or never here: the version keeps its author without a name.
+    // Deleted, never here, or a title past the start of the file: the version keeps its author without a name.
+  } finally {
+    await handle?.close().catch(() => undefined);
   }
   if (titles.size > 500) titles.clear();
   titles.set(chatId, { at: Date.now(), title });
@@ -84,6 +96,7 @@ export async function versionUsage(): Promise<VersionUsageView> {
     available: versionsAvailable(),
     enabled: await versionsSwitchedOn(),
     ...usage,
+    capBytes: await historyCapBytes(),
     retention: versionRetention(),
   };
 }

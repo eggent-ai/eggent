@@ -3,19 +3,28 @@ import os from "node:os";
 import path from "node:path";
 import type { ExtensionAPI, ExtensionContext, InlineExtension } from "@earendil-works/pi-coding-agent";
 import { ownerChatIdOfHelper } from "@/lib/pi/helper-deliveries";
-import { captureAfter, captureBefore, captureRunChanges, pathsInCommand } from "@/lib/files/versions/capture";
+import {
+  captureAfter,
+  captureBefore,
+  captureRunChanges,
+  settleCommandSnapshots,
+  snapshotsForCommand,
+  type CommandSnapshot,
+} from "@/lib/files/versions/capture";
 import type { VersionAuthor } from "@/lib/files/versions/shape";
 
 /**
  * The agent's writes, kept as versions where they happen.
  *
  * Its `write` and `edit` tools name the file: what the file held is kept just
- * before the tool runs (if the history does not have it yet), and what it holds
- * after. A command is a different matter - nobody knows beforehand what `python
- * fill.py` will write - so the files a command line names are kept before it
- * runs, and when the turn ends the folder is looked through for files written
- * while it ran (capture.ts). Several writes of one turn to one file make one
- * version: what the turn left.
+ * before each call (if the history does not have it yet - so a change the sync
+ * made between two writes of one turn is kept too), and what it holds after,
+ * unless the call created the file. A command is a different matter - nobody
+ * knows beforehand what `python fill.py` will write - so the files a command
+ * line names are read into memory before it runs and become versions only if
+ * it changed them, and when the turn ends the folder is looked through for
+ * files with a history that changed while it ran (capture.ts). Several writes
+ * of one turn to one file make one version: what the turn left.
  *
  * Nothing here can fail a tool. A version that could not be kept is a version
  * missing from the history, not a write the agent was refused.
@@ -84,49 +93,52 @@ function commandOf(input: unknown): string {
  * nothing; it registers on `pi`.
  */
 export function registerVersionHooks(pi: ExtensionAPI, authorOf: (ctx: ExtensionContext, run: string) => VersionAuthor | null): void {
-  // One run of the agent loop: what it already kept before writing, and whether it ran commands.
+  // One run of the agent loop: when it began, whether it ran commands, and what its commands named.
   let run = crypto.randomUUID();
   let startedAt = Date.now();
   let ranCommands = false;
-  const keptBefore = new Set<string>();
+  const snapshots = new Map<string, CommandSnapshot[]>();
 
   pi.on("agent_start", () => {
     run = crypto.randomUUID();
     startedAt = Date.now();
     ranCommands = false;
-    keptBefore.clear();
+    snapshots.clear();
   });
 
   pi.on("tool_call", async (event, ctx) => {
     const name = event.toolName.toLowerCase();
     if (WRITE_TOOLS.has(name)) {
       const target = toolTarget(event.input, ctx.cwd);
-      // Marked before the wait: two calls on one file in one batch keep what was there once.
-      if (target && !keptBefore.has(target)) {
-        keptBefore.add(target);
-        await track(captureBefore(target));
-      }
+      if (target) await track(captureBefore(target));
     } else if (COMMAND_TOOLS.has(name)) {
       ranCommands = true;
       const command = commandOf(event.input);
-      for (const target of command ? pathsInCommand(command, ctx.cwd) : []) {
-        if (keptBefore.has(target)) continue;
-        keptBefore.add(target);
-        await track(captureBefore(target));
+      if (command) {
+        const taken = await snapshotsForCommand(command, ctx.cwd).catch(() => [] as CommandSnapshot[]);
+        if (taken.length > 0) snapshots.set(event.toolCallId, taken);
       }
     }
     return undefined;
   });
 
   pi.on("tool_result", async (event, ctx) => {
-    if (event.isError || !WRITE_TOOLS.has(event.toolName.toLowerCase())) return undefined;
-    const target = toolTarget(event.input, ctx.cwd);
+    const name = event.toolName.toLowerCase();
     const by = authorOf(ctx, run);
-    if (target && by) await track(captureAfter(target, by));
+    if (WRITE_TOOLS.has(name)) {
+      const target = toolTarget(event.input, ctx.cwd);
+      if (!event.isError && target && by) await track(captureAfter(target, by, { onlyIfTracked: true }));
+    } else if (COMMAND_TOOLS.has(name)) {
+      // A command that failed may still have written: what it named is looked at either way.
+      const taken = snapshots.get(event.toolCallId);
+      snapshots.delete(event.toolCallId);
+      if (taken && by) await track(settleCommandSnapshots(taken, by));
+    }
     return undefined;
   });
 
   pi.on("agent_end", (_event, ctx) => {
+    snapshots.clear();
     if (!ranCommands) return;
     ranCommands = false;
     const by = authorOf(ctx, run);

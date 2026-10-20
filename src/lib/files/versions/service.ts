@@ -1,7 +1,9 @@
 import fs from "node:fs";
 import path from "node:path";
-import { outsideScanIntervalMs, versionsAvailable, versionsEnabled } from "@/lib/files/versions/config";
-import { checkTracked, projectsDirectory } from "@/lib/files/versions/capture";
+import { activeRunCount } from "@/lib/pi/active-runs";
+import { getUsageSnapshot, isUsageProviderConfigured } from "@/lib/usage/usage-provider";
+import { historyDiskShare, maxHistoryBytes, outsideScanIntervalMs, versionsAvailable, versionsEnabled } from "@/lib/files/versions/config";
+import { checkTracked, onVersionRecorded, projectsDirectory } from "@/lib/files/versions/capture";
 import { getVersionStore, versionsDir } from "@/lib/files/versions/store";
 
 /**
@@ -10,7 +12,12 @@ import { getVersionStore, versionsDir } from "@/lib/files/versions/store";
  * - Every two minutes the files that already have a history are looked at for
  *   a change nobody here made: the sync bringing a file edited on a computer,
  *   a command typed in the terminal, a program writing into the folder. Only
- *   their size and time are read unless those moved.
+ *   their size and times are read unless those moved, a few thousand per pass,
+ *   taking turns. Not while a turn runs: what its commands are writing is the
+ *   agent's, and is credited to it when the turn ends.
+ * - The history has a ceiling (historyCapBytes), checked a little after
+ *   anything is recorded and once a day: past it, the versions replaced
+ *   longest ago go first.
  * - Once a day the retention is applied, the history of a project that no
  *   longer exists is dropped, and objects nothing names any more are deleted.
  * - The `eggent-history` command is put on the PATH of everything this process
@@ -22,16 +29,24 @@ const CLI_NAME = "eggent-history";
 const SWEEP_EVERY_MS = 24 * 60 * 60 * 1000;
 const FIRST_SWEEP_AFTER_MS = 10 * 60 * 1000;
 const MAX_CHECKS_PER_PASS = 4000;
+const CAP_CHECK_DELAY_MS = 30_000;
+// When the disk is this full, the history makes room for the files themselves.
+const DISK_NEARLY_FULL = 0.9;
+const NEARLY_FULL_SHARE = 0.1;
 
 const STATE_KEY = Symbol.for("eggent.fileVersions.service");
 interface ServiceState {
   started: boolean;
   cliDir: string | null | undefined;
   scanning: boolean;
+  /** Where the next pass over tracked files starts, so every file gets its turn. */
+  cursor: number;
+  capTimer: ReturnType<typeof setTimeout> | null;
+  enforcing: boolean;
 }
 function state(): ServiceState {
   const holder = globalThis as unknown as Record<symbol, ServiceState | undefined>;
-  if (!holder[STATE_KEY]) holder[STATE_KEY] = { started: false, cliDir: undefined, scanning: false };
+  if (!holder[STATE_KEY]) holder[STATE_KEY] = { started: false, cliDir: undefined, scanning: false, cursor: 0, capTimer: null, enforcing: false };
   return holder[STATE_KEY]!;
 }
 
@@ -74,20 +89,26 @@ function exportCliEnvironment(): void {
 }
 
 /** One pass over the files with a history, for changes made elsewhere. */
-export async function checkTrackedFiles(): Promise<{ checked: number; changed: number }> {
+export async function checkTrackedFiles(options: { evenDuringTurns?: boolean } = {}): Promise<{ checked: number; changed: number }> {
   const current = state();
   if (current.scanning || !(await versionsEnabled())) return { checked: 0, changed: 0 };
+  if (!options.evenDuringTurns && activeRunCount() > 0) return { checked: 0, changed: 0 };
   current.scanning = true;
   let checked = 0;
   let changed = 0;
   try {
     const tracked = await getVersionStore().tracked();
-    for (const key of [...tracked.keys()].slice(0, MAX_CHECKS_PER_PASS)) {
+    const keys = [...tracked.keys()];
+    if (keys.length === 0) return { checked, changed };
+    const start = current.cursor % keys.length;
+    const count = Math.min(MAX_CHECKS_PER_PASS, keys.length);
+    current.cursor = (start + count) % keys.length;
+    for (let offset = 0; offset < count; offset += 1) {
+      const key = keys[(start + offset) % keys.length];
       const seen = tracked.get(key);
-      const absolute = path.join(projectsDirectory(), ...key.split("/"));
       let stat: fs.Stats | null = null;
       try {
-        stat = fs.lstatSync(absolute);
+        stat = fs.lstatSync(path.join(projectsDirectory(), ...key.split("/")));
       } catch {
         stat = null;
       }
@@ -95,7 +116,7 @@ export async function checkTrackedFiles(): Promise<{ checked: number; changed: n
       // Recorded as deleted, and still not there.
       if (!stat && !seen) continue;
       // Unchanged since it was last confirmed: nothing is read.
-      if (stat && seen && stat.mtimeMs === seen.mtimeMs && stat.size === seen.size) continue;
+      if (stat && seen && stat.mtimeMs === seen.mtimeMs && stat.ctimeMs === seen.ctimeMs && stat.size === seen.size) continue;
       const outcome = await checkTracked(key).catch(() => "same" as const);
       if (outcome === "changed" || outcome === "deleted") changed += 1;
     }
@@ -103,6 +124,65 @@ export async function checkTrackedFiles(): Promise<{ checked: number; changed: n
     current.scanning = false;
   }
   return { checked, changed };
+}
+
+/** The disk the deployment says this workspace has, when it says so. */
+async function reportedDisk(): Promise<{ used: number; limit: number } | null> {
+  if (!isUsageProviderConfigured()) return null;
+  try {
+    const snapshot = await getUsageSnapshot();
+    const meters = (snapshot?.meters ?? []).filter((meter) => meter.unit === "bytes" && meter.limit > 0);
+    const disk = meters.find((meter) => meter.id === "storage") ?? meters[0];
+    return disk ? { used: disk.used, limit: disk.limit } : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The most the history may take: `EGGENT_VERSIONS_MAX_TOTAL_MB`, and no more
+ * than a share of the disk the deployment reports (a quarter by default). When
+ * that disk is nearly full the history shrinks to a tenth of it, so that the
+ * versions of files are never what stops the work on the files themselves.
+ */
+export async function historyCapBytes(): Promise<number> {
+  let cap = maxHistoryBytes();
+  const disk = await reportedDisk();
+  if (disk) {
+    cap = Math.min(cap, Math.floor(disk.limit * historyDiskShare()));
+    if (disk.used >= disk.limit * DISK_NEARLY_FULL) cap = Math.min(cap, Math.floor(disk.limit * NEARLY_FULL_SHARE));
+  }
+  return Math.max(0, cap);
+}
+
+/** Brings the history under its ceiling, if it is over. */
+export async function enforceHistoryCap(): Promise<{ versions: number; files: number } | null> {
+  const current = state();
+  if (current.enforcing) return null;
+  current.enforcing = true;
+  try {
+    const cap = await historyCapBytes();
+    const store = getVersionStore();
+    if ((await store.approximateBytes()) <= cap) return null;
+    // A little under the ceiling, so the next few versions do not start the trimming again.
+    const result = await store.trim(Math.floor(cap * 0.9));
+    if (result.versions || result.files) {
+      console.log(`[versions] over the ceiling of ${Math.round(cap / 1024 / 1024)} MB: ${result.versions} old version(s) and ${result.files} whole history(ies) let go of`);
+    }
+    return result;
+  } finally {
+    current.enforcing = false;
+  }
+}
+
+function scheduleCapCheck(): void {
+  const current = state();
+  if (current.capTimer) return;
+  current.capTimer = setTimeout(() => {
+    current.capTimer = null;
+    void enforceHistoryCap().catch((error) => console.warn("[versions] could not keep the history under its ceiling:", error));
+  }, CAP_CHECK_DELAY_MS);
+  (current.capTimer as { unref?: () => void }).unref?.();
 }
 
 /** Whether a history still belongs to something: a file in a project that was deleted belongs to nothing. */
@@ -117,7 +197,9 @@ async function belongsToSomething(key: string): Promise<boolean> {
 }
 
 export async function sweepFileVersions(): Promise<{ journals: number; dropped: number; objects: number }> {
-  return getVersionStore().sweep({ keepKey: belongsToSomething });
+  const result = await getVersionStore().sweep({ keepKey: belongsToSomething });
+  await enforceHistoryCap().catch(() => null);
+  return result;
 }
 
 export function startFileVersionsService(): void {
@@ -126,6 +208,7 @@ export function startFileVersionsService(): void {
   current.started = true;
   exportCliEnvironment();
   if (!versionsAvailable()) return;
+  onVersionRecorded(scheduleCapCheck);
 
   const scan = setInterval(() => {
     void checkTrackedFiles().catch((error) => console.warn("[versions] could not look for changes:", error));
@@ -150,7 +233,7 @@ export function startFileVersionsService(): void {
 /** The line the agent is told about file history, or nothing when there is none. */
 export function fileHistoryGuidance(): string {
   if (!versionsAvailable()) return "";
-  const where = "- File history: every change to a file in a project - saved by the user, written by you or by a command, or brought by the sync from a computer - is kept as a version, for 30 days by default. The user finds it under History beside a file open in the Files panel, where any two versions can be compared and any one restored.";
+  const where = "- File history: once a file in a project has been changed - saved by the user, written by you or by a command, or brought by the sync from a computer - every change to it is kept as a version, for 30 days by default. The user finds it under History beside a file open in the Files panel, where any two versions can be compared and any one restored.";
   if (!historyCliDir()) return `${where} Before telling the user a change cannot be undone, point them there.`;
   return `${where} You read it yourself with \`eggent-history list <file>\`, \`eggent-history show <file> <n>\` (that version, to standard output) and \`eggent-history diff <file> <a> [<b>]\`. To restore a version, write its content back; what it replaces stays in the history too. Before telling the user a change cannot be undone, look there.`;
 }

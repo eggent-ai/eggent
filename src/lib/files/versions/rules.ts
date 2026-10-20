@@ -85,17 +85,6 @@ export function prefersProse(name: string): boolean {
   return PROSE_EXTENSIONS.has(extensionOf(name));
 }
 
-/**
- * A document a command may have rewritten, worth a version even when it has no
- * history yet. A script that touches code or data files has no such claim: a
- * history of every file a build step rewrites would fill the disk with copies
- * nobody looks at, so those get one only once somebody edits them by hand.
- */
-export function isDocumentForScan(name: string): boolean {
-  const extension = extensionOf(name);
-  return DOCUMENT_EXTENSIONS.has(extension) || PROSE_EXTENSIONS.has(extension) || extension === "csv" || extension === "html" || extension === "htm";
-}
-
 /** The history key of a file the dashboard names by project and path: where it sits under the projects folder. */
 export function historyKeyOf(projectId: string, filePath: string): string {
   const clean = filePath.replace(/\\/g, "/").replace(/^\/+/, "").replace(/\/+$/, "");

@@ -116,10 +116,13 @@ export function FileHistorySettings({ enabled, onToggle }: { enabled: boolean; o
             : usage
               ? usage.files === 0
                 ? t("settings.fileHistory.usageEmpty")
-                : t("settings.fileHistory.usage", { size: formatBytes(usage.bytes), versions: usage.versions, files: usage.files })
+                : t("settings.fileHistory.usage", { size: formatBytes(usage.bytes), cap: formatBytes(usage.capBytes), versions: usage.versions, files: usage.files })
               : t("common.loading")}
         </p>
-        <p className="text-sm text-muted-foreground">{t("settings.fileHistory.countsToDisk")}</p>
+        <p className="text-sm text-muted-foreground">
+          {t("settings.fileHistory.countsToDisk")}
+          {usage ? ` ${t("settings.fileHistory.ceiling", { cap: formatBytes(usage.capBytes) })}` : ""}
+        </p>
         {usage && usage.files > 0 ? (
           <div className="flex flex-wrap items-center gap-2">
             <Button variant="outline" size="sm" onClick={() => void clear("old")} disabled={clearing !== null} className="gap-1.5">

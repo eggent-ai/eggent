@@ -23,6 +23,11 @@ import type { VersionAuthor, VersionInfo, VersionRetention } from "@/lib/files/v
  * lives in capture.ts. This module only keeps what it is given - which is the
  * part a deployment may one day keep somewhere else, out of the agent's reach
  * (`VersionStore`).
+ *
+ * A version is dated by when it was seen here, never by the file's own time:
+ * a copy restored with its old time (`cp -p`, an archive, the sync bringing an
+ * old file) would otherwise date its own replacement months back, and the
+ * retention would throw away the very version it replaced.
  */
 
 const gzip = promisify(zlib.gzip);
@@ -31,32 +36,36 @@ const gunzip = promisify(zlib.gunzip);
 const DAY_MS = 24 * 60 * 60 * 1000;
 // An object nothing names yet may be one a write is about to name.
 const OBJECT_GRACE_MS = 60 * 60 * 1000;
-// Stats are worked out for text up to this size; larger, the list just goes without them.
-const MAX_STATS_BYTES = 1024 * 1024;
+// What is let go of right after a deletion: objects older than this.
+const QUICK_GRACE_MS = 5000;
+// Lines added and removed are counted for text up to this size, briefly; larger, the list goes without.
+const MAX_STATS_BYTES = 512 * 1024;
+const STATS_TIMEOUT_MS = 150;
 
 export interface JournalEntry extends VersionInfo {
   /** The object holding this version; null for a deletion. */
   sha: string | null;
 }
 
+/** What the file was on disk when its newest version was last confirmed: a change made elsewhere moves one of these. */
+export type Seen = { mtimeMs: number; ctimeMs: number; size: number };
+
 export interface Journal {
   v: 1;
   key: string;
   /** The number the next version gets. */
   next: number;
-  /** What the file was on disk when its newest version was last confirmed, to notice a change made elsewhere. */
-  seen?: { mtimeMs: number; size: number };
+  seen?: Seen;
   versions: JournalEntry[];
 }
-
-export type Seen = { mtimeMs: number; size: number };
 
 export interface RecordInput {
   key: string;
   content: Buffer;
   by: VersionAuthor;
-  at?: Date;
-  seen?: { mtimeMs: number; size: number };
+  /** The file's own modification time, for a state found here rather than made here. Shown, never used to date the version. */
+  fileTime?: Date;
+  seen?: Seen;
   /** Text, so the lines it added and removed can be counted. */
   textual: boolean;
 }
@@ -77,16 +86,25 @@ export interface SweepOptions {
 /** What keeps the versions. Today one implementation, on this workspace's own disk. */
 export interface VersionStore {
   record(input: RecordInput): Promise<RecordResult>;
-  markDeleted(input: { key: string; by: VersionAuthor; at?: Date }): Promise<boolean>;
-  confirmSeen(key: string, seen: { mtimeMs: number; size: number }): Promise<void>;
+  markDeleted(input: { key: string; by: VersionAuthor }): Promise<boolean>;
+  confirmSeen(key: string, seen: Seen): Promise<void>;
   journal(key: string): Promise<Journal | null>;
   content(key: string, n: number): Promise<Buffer | null>;
   historyBytes(key: string): Promise<number>;
+  /** Drops a file's history (or everything under a folder) and lets go of the objects only it held. */
   forget(key: string, options?: { withChildren?: boolean }): Promise<number>;
   /** Every file with a history, and what it was on disk when last confirmed. Kept in memory after the first call. */
   tracked(): Promise<ReadonlyMap<string, Seen | null>>;
   usage(): Promise<{ bytes: number; files: number; versions: number }>;
+  /** Bytes the store takes, from memory after the first count. */
+  approximateBytes(): Promise<number>;
   clear(options?: { olderThanDays?: number }): Promise<{ files: number; versions: number }>;
+  /**
+   * Brings the store under `targetBytes`: the versions replaced longest ago go
+   * first; when only each file's newest copy is left, the histories of the
+   * files untouched longest go whole. What a file holds now is never touched.
+   */
+  trim(targetBytes: number): Promise<{ versions: number; files: number }>;
   /**
    * Applies the retention to every journal, drops the journals `keepKey` says no
    * longer belong to anything, and deletes the objects nothing names any more.
@@ -111,16 +129,25 @@ function objectPath(sha: string): string {
   return path.join(versionsDir(), "objects", sha.slice(0, 2), `${sha}.gz`);
 }
 
-// One writer per file's journal, across every copy of this module the bundler makes.
-const LOCKS_KEY = Symbol.for("eggent.fileVersions.locks");
-function locks(): Map<string, Promise<unknown>> {
-  const holder = globalThis as unknown as Record<symbol, Map<string, Promise<unknown>> | undefined>;
-  if (!holder[LOCKS_KEY]) holder[LOCKS_KEY] = new Map();
-  return holder[LOCKS_KEY] as Map<string, Promise<unknown>>;
+// Shared by every copy of this module the bundler makes: one writer per file's
+// journal, one store, one count of its size, one index of tracked files.
+interface StoreState {
+  locks: Map<string, Promise<unknown>>;
+  store: VersionStore | null;
+  bytes: number | null;
+  tracked: Promise<Map<string, Seen | null>> | null;
+  collecting: Promise<number> | null;
+  collectAgain: boolean;
+}
+const STATE_KEY = Symbol.for("eggent.fileVersions.storeState");
+function state(): StoreState {
+  const holder = globalThis as unknown as Record<symbol, StoreState | undefined>;
+  if (!holder[STATE_KEY]) holder[STATE_KEY] = { locks: new Map(), store: null, bytes: null, tracked: null, collecting: null, collectAgain: false };
+  return holder[STATE_KEY]!;
 }
 
 export async function withKeyLock<T>(key: string, work: () => Promise<T>): Promise<T> {
-  const map = locks();
+  const map = state().locks;
   const previous = map.get(key) ?? Promise.resolve();
   const run = previous.catch(() => undefined).then(work);
   const tail = run.catch(() => undefined);
@@ -156,6 +183,19 @@ function isEntry(value: unknown): value is JournalEntry {
   );
 }
 
+function isSeen(value: unknown): value is Seen {
+  const seen = value as Partial<Seen> | null;
+  return Boolean(seen) && typeof seen?.mtimeMs === "number" && typeof seen?.size === "number" && typeof seen?.ctimeMs === "number";
+}
+
+function parseJournal(raw: string, key: string): Journal | null {
+  const parsed = JSON.parse(raw) as Partial<Journal>;
+  if (parsed.key !== key || !Array.isArray(parsed.versions)) return null;
+  const versions = parsed.versions.filter(isEntry).sort((a, b) => a.n - b.n);
+  const next = Math.max(typeof parsed.next === "number" ? parsed.next : 1, (versions[versions.length - 1]?.n ?? 0) + 1);
+  return { v: 1, key, next, ...(isSeen(parsed.seen) ? { seen: parsed.seen } : {}), versions };
+}
+
 async function loadJournal(key: string): Promise<Journal | null> {
   let raw: string;
   try {
@@ -164,14 +204,18 @@ async function loadJournal(key: string): Promise<Journal | null> {
     return null;
   }
   try {
-    const parsed = JSON.parse(raw) as Partial<Journal>;
-    if (parsed.key !== key || !Array.isArray(parsed.versions)) return null;
-    const versions = parsed.versions.filter(isEntry).sort((a, b) => a.n - b.n);
-    const next = Math.max(typeof parsed.next === "number" ? parsed.next : 1, (versions[versions.length - 1]?.n ?? 0) + 1);
-    return { v: 1, key, next, ...(parsed.seen ? { seen: parsed.seen } : {}), versions };
+    return parseJournal(raw, key);
   } catch {
     return null;
   }
+}
+
+async function noteTracked(journal: Journal): Promise<void> {
+  const index = state().tracked;
+  if (!index) return;
+  const map = await index;
+  if (journal.versions.length === 0) map.delete(journal.key);
+  else map.set(journal.key, journal.seen ?? null);
 }
 
 async function saveJournal(journal: Journal): Promise<void> {
@@ -192,7 +236,10 @@ async function putObject(content: Buffer): Promise<string> {
   } catch {
     // Not there yet.
   }
-  await writeAtomic(target, await gzip(content, { level: 6 }));
+  const packed = await gzip(content, { level: 6 });
+  await writeAtomic(target, packed);
+  const current = state();
+  if (current.bytes !== null) current.bytes += packed.length;
   return sha;
 }
 
@@ -204,23 +251,16 @@ async function readObject(sha: string): Promise<Buffer | null> {
   }
 }
 
-// Which files have a history, in memory: the pass that looks for changes made
-// elsewhere asks every two minutes, and reading every journal to answer would
-// cost more than the look itself.
-const TRACKED_KEY = Symbol.for("eggent.fileVersions.tracked");
-type TrackedIndex = { ready: Promise<Map<string, Seen | null>> | null };
-function trackedHolder(): TrackedIndex {
-  const holder = globalThis as unknown as Record<symbol, TrackedIndex | undefined>;
-  if (!holder[TRACKED_KEY]) holder[TRACKED_KEY] = { ready: null };
-  return holder[TRACKED_KEY]!;
-}
-
-async function noteTracked(journal: Journal): Promise<void> {
-  const index = trackedHolder();
-  if (!index.ready) return;
-  const map = await index.ready;
-  if (journal.versions.length === 0) map.delete(journal.key);
-  else map.set(journal.key, journal.seen ?? null);
+/** The versions after `entries` lost some: one whose neighbour before it changed has counts about another pair. */
+function dropStaleStats(before: JournalEntry[], after: JournalEntry[]): JournalEntry[] {
+  for (let index = 0; index < after.length; index += 1) {
+    const comparedWith = before[before.indexOf(after[index]) - 1];
+    if (comparedWith !== after[index - 1]) {
+      delete after[index].added;
+      delete after[index].removed;
+    }
+  }
+  return after;
 }
 
 /**
@@ -256,15 +296,7 @@ export function pruneVersions(entries: JournalEntry[], now: number, retention: V
   let result = [...kept, ...lastOfDay.values()].sort((a, b) => a.n - b.n);
   result.push(last);
   if (result.length > retention.maxPerFile) result = result.slice(result.length - retention.maxPerFile);
-  // What a version was compared with may have gone: its counts are then about another pair.
-  for (let index = 0; index < result.length; index += 1) {
-    const comparedWith = entries[entries.indexOf(result[index]) - 1];
-    if (comparedWith !== result[index - 1]) {
-      delete result[index].added;
-      delete result[index].removed;
-    }
-  }
-  return result;
+  return dropStaleStats(entries, result);
 }
 
 function journalObjects(journal: Journal): Set<string> {
@@ -276,11 +308,11 @@ async function statsAgainst(previous: JournalEntry | undefined, content: Buffer,
   if (content.length > MAX_STATS_BYTES || previous.size > MAX_STATS_BYTES) return null;
   const older = await readObject(previous.sha);
   if (!older) return null;
-  return lineStats(older.toString("utf8"), content.toString("utf8"));
+  return lineStats(older.toString("utf8"), content.toString("utf8"), STATS_TIMEOUT_MS);
 }
 
-async function* walkJournals(): AsyncGenerator<string> {
-  const root = path.join(versionsDir(), "files");
+async function* walkArea(area: "files" | "objects"): AsyncGenerator<{ file: string; name: string; shard: string }> {
+  const root = path.join(versionsDir(), area);
   let shards: string[];
   try {
     shards = await fs.readdir(root);
@@ -294,18 +326,27 @@ async function* walkJournals(): AsyncGenerator<string> {
     } catch {
       continue;
     }
-    for (const name of names) {
-      if (name.endsWith(".json")) yield path.join(root, shard, name);
-    }
+    for (const name of names) yield { file: path.join(root, shard, name), name, shard: path.join(root, shard) };
   }
 }
 
-async function keyOfJournalFile(file: string): Promise<string | null> {
-  try {
-    const parsed = JSON.parse(await fs.readFile(file, "utf8")) as { key?: unknown };
-    return typeof parsed.key === "string" ? parsed.key : null;
-  } catch {
-    return null;
+/** Every journal on disk with its key; one that is not JSON is reported as such, one that cannot be read now is skipped. */
+async function* walkJournals(): AsyncGenerator<{ file: string; key: string | null; broken: boolean }> {
+  for await (const { file, name } of walkArea("files")) {
+    if (!name.endsWith(".json")) continue;
+    let raw: string;
+    try {
+      raw = await fs.readFile(file, "utf8");
+    } catch {
+      // Unreadable for now (a descriptor limit, a disk hiccup): not the same as broken.
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(raw) as { key?: unknown };
+      yield { file, key: typeof parsed.key === "string" ? parsed.key : null, broken: typeof parsed.key !== "string" };
+    } catch {
+      yield { file, key: null, broken: true };
+    }
   }
 }
 
@@ -325,19 +366,70 @@ async function directoryBytes(directory: string): Promise<number> {
   return total;
 }
 
+/**
+ * Deletes the objects no journal names, older than `graceMs`, and temporary
+ * files a write never finished. One at a time: a call while one runs asks for
+ * one more pass after it rather than a second one beside it.
+ */
+async function collectGarbage(graceMs: number): Promise<number> {
+  const current = state();
+  if (current.collecting) {
+    current.collectAgain = true;
+    return current.collecting;
+  }
+  const run = async (): Promise<number> => {
+    let deleted = 0;
+    do {
+      current.collectAgain = false;
+      const now = Date.now();
+      const referenced = new Set<string>();
+      for await (const { key } of walkJournals()) {
+        if (!key) continue;
+        const journal = await loadJournal(key);
+        if (journal) for (const sha of journalObjects(journal)) referenced.add(sha);
+      }
+      for (const area of ["objects", "files"] as const) {
+        const shards = new Set<string>();
+        for await (const { file, name, shard } of walkArea(area)) {
+          shards.add(shard);
+          const stat = await fs.stat(file).catch(() => null);
+          if (!stat) continue;
+          const young = now - stat.mtimeMs < graceMs;
+          if (name.endsWith(".tmp")) {
+            if (now - stat.mtimeMs > OBJECT_GRACE_MS) await fs.rm(file, { force: true }).catch(() => undefined);
+            continue;
+          }
+          if (area === "files") continue;
+          if (young || referenced.has(name.replace(/\.gz$/, ""))) continue;
+          await fs.rm(file, { force: true }).catch(() => undefined);
+          if (current.bytes !== null) current.bytes = Math.max(0, current.bytes - stat.size);
+          deleted += 1;
+        }
+        // Empty shards go; one with something left in it refuses, which is the point.
+        for (const shard of shards) await fs.rmdir(shard).catch(() => undefined);
+      }
+    } while (current.collectAgain);
+    return deleted;
+  };
+  current.collecting = run().finally(() => {
+    current.collecting = null;
+  });
+  return current.collecting;
+}
+
 function createLocalVersionStore(): VersionStore {
   const prune = (journal: Journal, now = Date.now()) => {
     journal.versions = pruneVersions(journal.versions, now, versionRetention());
   };
 
-  return {
+  const store: VersionStore = {
     async record(input) {
       return withKeyLock(input.key, async () => {
         const journal = (await loadJournal(input.key)) ?? { v: 1, key: input.key, next: 1, versions: [] };
         const last = journal.versions[journal.versions.length - 1];
         const sha = sha256(input.content);
         if (last && !last.deleted && last.sha === sha) {
-          if (input.seen && (journal.seen?.mtimeMs !== input.seen.mtimeMs || journal.seen?.size !== input.seen.size)) {
+          if (input.seen && (journal.seen?.mtimeMs !== input.seen.mtimeMs || journal.seen?.ctimeMs !== input.seen.ctimeMs || journal.seen?.size !== input.seen.size)) {
             journal.seen = input.seen;
             await saveJournal(journal);
           }
@@ -345,9 +437,9 @@ function createLocalVersionStore(): VersionStore {
         }
 
         await putObject(input.content);
-        let at = input.at ?? new Date();
-        // A time from another machine's clock is never put before what is already here.
-        if (last && at.getTime() < Date.parse(last.at)) at = new Date(Date.parse(last.at) + 1);
+        let at = new Date();
+        // A clock that stepped back never puts a version before the one it follows.
+        if (last && at.getTime() <= Date.parse(last.at)) at = new Date(Date.parse(last.at) + 1);
 
         // A turn that writes the same file several times leaves one version: what it ended with.
         const extendsTurn =
@@ -370,7 +462,14 @@ function createLocalVersionStore(): VersionStore {
           const stats = await statsAgainst(journal.versions[journal.versions.length - 2], input.content, input.textual);
           if (stats) Object.assign(entry, stats);
         } else {
-          entry = { n: journal.next, at: at.toISOString(), size: input.content.length, sha, by: { ...input.by } };
+          entry = {
+            n: journal.next,
+            at: at.toISOString(),
+            size: input.content.length,
+            sha,
+            by: { ...input.by },
+            ...(input.fileTime && Number.isFinite(input.fileTime.getTime()) ? { fileTime: input.fileTime.toISOString() } : {}),
+          };
           journal.next += 1;
           const stats = await statsAgainst(last, input.content, input.textual);
           if (stats) Object.assign(entry, stats);
@@ -388,8 +487,8 @@ function createLocalVersionStore(): VersionStore {
         const journal = await loadJournal(input.key);
         const last = journal?.versions[journal.versions.length - 1];
         if (!journal || !last || last.deleted) return false;
-        let at = input.at ?? new Date();
-        if (at.getTime() < Date.parse(last.at)) at = new Date(Date.parse(last.at) + 1);
+        let at = new Date();
+        if (at.getTime() <= Date.parse(last.at)) at = new Date(Date.parse(last.at) + 1);
         journal.versions.push({ n: journal.next, at: at.toISOString(), size: 0, sha: null, by: { ...input.by }, deleted: true });
         journal.next += 1;
         delete journal.seen;
@@ -438,160 +537,198 @@ function createLocalVersionStore(): VersionStore {
       await drop(key);
       if (options.withChildren) {
         const prefix = key ? `${key}/` : "";
-        for await (const file of walkJournals()) {
-          const candidate = await keyOfJournalFile(file);
+        for await (const { key: candidate } of walkJournals()) {
           if (candidate && candidate !== key && candidate.startsWith(prefix)) await drop(candidate);
         }
       }
+      // Deleting to make room has to make room: what only these versions held goes now.
+      if (removed > 0) await collectGarbage(QUICK_GRACE_MS);
       return removed;
     },
 
     async tracked() {
-      const index = trackedHolder();
-      if (!index.ready) {
-        index.ready = (async () => {
+      const current = state();
+      if (!current.tracked) {
+        current.tracked = (async () => {
           const map = new Map<string, Seen | null>();
-          for await (const file of walkJournals()) {
-            try {
-              const parsed = JSON.parse(await fs.readFile(file, "utf8")) as { key?: unknown; seen?: Seen; versions?: unknown[] };
-              if (typeof parsed.key === "string" && Array.isArray(parsed.versions) && parsed.versions.length > 0) {
-                map.set(parsed.key, parsed.seen && typeof parsed.seen.mtimeMs === "number" ? parsed.seen : null);
-              }
-            } catch {
-              // Unreadable: the sweep removes it.
-            }
+          for await (const { key } of walkJournals()) {
+            if (!key) continue;
+            const journal = await loadJournal(key);
+            if (journal && journal.versions.length > 0) map.set(key, journal.seen ?? null);
           }
           return map;
         })();
-        index.ready.catch(() => {
-          index.ready = null;
+        current.tracked.catch(() => {
+          current.tracked = null;
         });
       }
-      return index.ready;
+      return current.tracked;
     },
 
     async usage() {
       let files = 0;
       let versions = 0;
-      for await (const file of walkJournals()) {
-        try {
-          const parsed = JSON.parse(await fs.readFile(file, "utf8")) as { versions?: unknown[] };
-          files += 1;
-          versions += Array.isArray(parsed.versions) ? parsed.versions.length : 0;
-        } catch {
-          // A torn journal counts for nothing.
-        }
+      for await (const { key } of walkJournals()) {
+        if (!key) continue;
+        const journal = await loadJournal(key);
+        if (!journal) continue;
+        files += 1;
+        versions += journal.versions.length;
       }
-      return { bytes: await directoryBytes(versionsDir()), files, versions };
+      const bytes = await directoryBytes(versionsDir());
+      state().bytes = bytes;
+      return { bytes, files, versions };
+    },
+
+    async approximateBytes() {
+      const current = state();
+      if (current.bytes === null) current.bytes = await directoryBytes(versionsDir());
+      return current.bytes;
     },
 
     async clear(options = {}) {
       let files = 0;
       let versions = 0;
       const cutoff = options.olderThanDays === undefined ? null : Date.now() - options.olderThanDays * DAY_MS;
-      for await (const file of walkJournals()) {
-        const key = await keyOfJournalFile(file);
+      for await (const { key } of walkJournals()) {
         if (!key) continue;
         await withKeyLock(key, async () => {
           const journal = await loadJournal(key);
           if (!journal) return;
-          const before = journal.versions.length;
+          const before = journal.versions;
           if (cutoff === null) {
             journal.versions = [];
           } else {
             // Kept: the newest, and every version replaced after the cutoff.
-            journal.versions = journal.versions.filter((_entry, index, all) =>
-              index === all.length - 1 || Date.parse(all[index + 1].at) >= cutoff
-            );
-            if (journal.versions.length === 1 && journal.versions[0].deleted) journal.versions = [];
+            const kept = before.filter((_entry, index, all) => index === all.length - 1 || Date.parse(all[index + 1].at) >= cutoff);
+            journal.versions = kept.length === 1 && kept[0].deleted ? [] : dropStaleStats(before, kept);
           }
-          if (journal.versions.length === before) return;
-          versions += before - journal.versions.length;
+          if (journal.versions.length === before.length) return;
+          versions += before.length - journal.versions.length;
           if (journal.versions.length === 0) files += 1;
           await saveJournal(journal);
         });
       }
-      // Older than a few seconds: an object a write made a moment ago may not be named yet.
-      await sweep({ graceMs: 10_000 });
+      await collectGarbage(QUICK_GRACE_MS);
+      state().bytes = null;
       return { files, versions };
     },
 
-    sweep,
-  };
-
-  async function sweep(options: SweepOptions = {}): Promise<{ journals: number; dropped: number; objects: number }> {
-    const now = options.now ?? Date.now();
-    const graceMs = options.graceMs ?? OBJECT_GRACE_MS;
-    const referenced = new Set<string>();
-    let journals = 0;
-    let dropped = 0;
-    for await (const file of walkJournals()) {
-      const key = await keyOfJournalFile(file);
-      if (!key) {
-        // Unreadable: not ours to understand, and holding nothing anyone can open.
-        await fs.rm(file, { force: true }).catch(() => undefined);
-        continue;
-      }
-      await withKeyLock(key, async () => {
+    async trim(targetBytes) {
+      const current = state();
+      if ((await store.approximateBytes()) <= targetBytes) return { versions: 0, files: 0 };
+      // A plan made on a picture of the whole store, then applied journal by journal under its lock.
+      const journals = new Map<string, Journal>();
+      for await (const { key } of walkJournals()) {
+        if (!key) continue;
         const journal = await loadJournal(key);
-        if (!journal) return;
-        const before = journal.versions.length;
-        if (options.keepKey && !(await options.keepKey(key))) journal.versions = [];
-        else prune(journal, now);
-        if (journal.versions.length !== before) {
-          dropped += before - journal.versions.length;
-          await saveJournal(journal);
-        }
-        if (journal.versions.length > 0) journals += 1;
-        for (const sha of journalObjects(journal)) referenced.add(sha);
-      });
-    }
-
-    let objects = 0;
-    for (const area of ["objects", "files"] as const) {
-      const root = path.join(versionsDir(), area);
-      let shards: string[] = [];
-      try {
-        shards = await fs.readdir(root);
-      } catch {
-        // Nothing kept yet.
+        if (journal && journal.versions.length > 0) journals.set(key, journal);
       }
-      for (const shard of shards) {
-        let names: string[];
-        try {
-          names = await fs.readdir(path.join(root, shard));
-        } catch {
+      const references = new Map<string, number>();
+      for (const journal of journals.values()) {
+        for (const entry of journal.versions) if (entry.sha) references.set(entry.sha, (references.get(entry.sha) ?? 0) + 1);
+      }
+      const sizes = new Map<string, number>();
+      for (const sha of references.keys()) sizes.set(sha, (await fs.stat(objectPath(sha)).catch(() => null))?.size ?? 0);
+      let total = await directoryBytes(versionsDir());
+      const release = (sha: string | null) => {
+        if (!sha) return;
+        const left = (references.get(sha) ?? 1) - 1;
+        references.set(sha, left);
+        if (left === 0) total -= sizes.get(sha) ?? 0;
+      };
+
+      // First the versions replaced longest ago, whatever file they belong to.
+      const candidates: Array<{ key: string; entry: JournalEntry; replacedAt: number }> = [];
+      for (const [key, journal] of journals) {
+        journal.versions.forEach((entry, index, all) => {
+          if (index < all.length - 1) candidates.push({ key, entry, replacedAt: Date.parse(all[index + 1].at) || 0 });
+        });
+      }
+      candidates.sort((a, b) => a.replacedAt - b.replacedAt);
+      const dropped = new Map<string, Set<number>>();
+      let versions = 0;
+      for (const candidate of candidates) {
+        if (total <= targetBytes) break;
+        if (!dropped.has(candidate.key)) dropped.set(candidate.key, new Set());
+        dropped.get(candidate.key)!.add(candidate.entry.n);
+        release(candidate.entry.sha);
+        versions += 1;
+      }
+      // Then, if each file's newest copy alone is still too much, the histories of the files untouched longest.
+      const wholly = new Set<string>();
+      if (total > targetBytes) {
+        const byAge = [...journals.values()].sort((a, b) => Date.parse(a.versions[a.versions.length - 1].at) - Date.parse(b.versions[b.versions.length - 1].at));
+        for (const journal of byAge) {
+          if (total <= targetBytes) break;
+          wholly.add(journal.key);
+          const already = dropped.get(journal.key);
+          for (const entry of journal.versions) if (!already?.has(entry.n)) release(entry.sha);
+        }
+      }
+
+      for (const [key, numbers] of dropped) {
+        if (wholly.has(key)) continue;
+        await withKeyLock(key, async () => {
+          const journal = await loadJournal(key);
+          if (!journal) return;
+          const before = journal.versions;
+          const last = before[before.length - 1];
+          const kept = before.filter((entry) => entry === last || !numbers.has(entry.n));
+          if (kept.length === before.length) return;
+          journal.versions = dropStaleStats(before, kept);
+          await saveJournal(journal);
+        });
+      }
+      for (const key of wholly) {
+        await withKeyLock(key, async () => {
+          const journal = await loadJournal(key);
+          if (!journal) return;
+          journal.versions = [];
+          await saveJournal(journal);
+        });
+      }
+      await collectGarbage(QUICK_GRACE_MS);
+      current.bytes = null;
+      return { versions, files: wholly.size };
+    },
+
+    async sweep(options = {}) {
+      const now = options.now ?? Date.now();
+      const graceMs = options.graceMs ?? OBJECT_GRACE_MS;
+      let journals = 0;
+      let dropped = 0;
+      for await (const { file, key, broken } of walkJournals()) {
+        if (!key) {
+          // Not JSON, or not ours: nothing anyone can open. Left a while first: it may be mid-write.
+          const stat = await fs.stat(file).catch(() => null);
+          if (broken && stat && now - stat.mtimeMs > OBJECT_GRACE_MS) await fs.rm(file, { force: true }).catch(() => undefined);
           continue;
         }
-        for (const name of names) {
-          const full = path.join(root, shard, name);
-          const stat = await fs.stat(full).catch(() => null);
-          if (!stat) continue;
-          const young = now - stat.mtimeMs < graceMs;
-          if (name.endsWith(".tmp")) {
-            // A write that never finished.
-            if (!young) await fs.rm(full, { force: true }).catch(() => undefined);
-            continue;
+        await withKeyLock(key, async () => {
+          const journal = await loadJournal(key);
+          if (!journal) return;
+          const before = journal.versions.length;
+          if (options.keepKey && !(await options.keepKey(key))) journal.versions = [];
+          else prune(journal, now);
+          if (journal.versions.length !== before) {
+            dropped += before - journal.versions.length;
+            await saveJournal(journal);
           }
-          if (area === "files") continue;
-          const sha = name.replace(/\.gz$/, "");
-          if (referenced.has(sha) || young) continue;
-          await fs.rm(full, { force: true }).catch(() => undefined);
-          objects += 1;
-        }
-        // Empty shards go; one with something left in it refuses, which is the point.
-        await fs.rmdir(path.join(root, shard)).catch(() => undefined);
+          if (journal.versions.length > 0) journals += 1;
+        });
       }
-    }
-    return { journals, dropped, objects };
-  }
+      const objects = await collectGarbage(graceMs);
+      state().bytes = null;
+      return { journals, dropped, objects };
+    },
+  };
+  return store;
 }
-
-const STORE_KEY = Symbol.for("eggent.fileVersions.store");
 
 /** The store this workspace keeps its versions in. */
 export function getVersionStore(): VersionStore {
-  const holder = globalThis as unknown as Record<symbol, VersionStore | undefined>;
-  if (!holder[STORE_KEY]) holder[STORE_KEY] = createLocalVersionStore();
-  return holder[STORE_KEY] as VersionStore;
+  const current = state();
+  if (!current.store) current.store = createLocalVersionStore();
+  return current.store;
 }

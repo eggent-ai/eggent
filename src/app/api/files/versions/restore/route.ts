@@ -11,19 +11,22 @@ import { getVersionStore } from "@/lib/files/versions/store";
 /**
  * Bring an older version back:
  *
- *   POST /api/files/versions/restore  { project, path, n }  ->  { version }
+ *   POST /api/files/versions/restore  { project, path, n, force? }  ->  { version }
  *
  * Nothing is lost by it. What the file holds now is kept first if the history
  * does not have it yet - a change made elsewhere a moment ago included - and the
  * restored text becomes a new version of its own ("restored from 5"), so going
- * back can itself be undone.
+ * back can itself be undone. When what the file holds now cannot be kept (it
+ * has grown past the size a history is kept for, or cannot be read), the
+ * restore is refused with `code: "unkept"` unless the person said `force`
+ * after being told.
  */
 
 export async function POST(req: NextRequest) {
   const failure = await checkTerminalRequest(req, { write: true });
   if (failure) return jsonError("Not available.", guardStatus(failure));
   const t = await getServerTranslator(req.headers.get("accept-language"));
-  const body = (await req.json().catch(() => null)) as { project?: unknown; path?: unknown; n?: unknown } | null;
+  const body = (await req.json().catch(() => null)) as { project?: unknown; path?: unknown; n?: unknown; force?: unknown } | null;
   const project = typeof body?.project === "string" ? body.project.trim() : "";
   const filePath = typeof body?.path === "string" ? body.path.trim() : "";
   const n = typeof body?.n === "number" ? body.n : Number.NaN;
@@ -39,8 +42,11 @@ export async function POST(req: NextRequest) {
   const content = await store.content(target.key, n);
   if (!content) return jsonError(t("files.history.versionMissing"), 404);
 
+  const before = await captureBefore(target.absolute).catch(() => "unreadable" as const);
+  if ((before === "too-large" || before === "unreadable") && body?.force !== true) {
+    return Response.json({ error: t("files.history.restoreWouldLose"), code: "unkept" }, { status: 409, headers: { "Cache-Control": "no-store" } });
+  }
   try {
-    await captureBefore(target.absolute);
     await writeFileInside(target.absolute, content, await fs.realpath(getWorkDir(project)));
   } catch {
     return jsonError(t("files.history.restoreFailed"), 409);
