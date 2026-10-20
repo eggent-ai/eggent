@@ -16,6 +16,9 @@ import type { PiRuntimeStats } from "@/lib/pi/types";
 import type { PiPendingInteraction } from "@/lib/pi/interaction-types";
 import { useBackgroundSync } from "@/hooks/use-background-sync";
 import { useActiveRuns } from "@/hooks/use-active-runs";
+import { useRemoteStatus } from "@/hooks/use-remote-status";
+import { canRunHereInstead, parseHandoverFailure, type HandoverFailure } from "@/lib/remote/client";
+import { parseHome, type ChatHome } from "@/lib/remote/types";
 import { useI18n } from "@/i18n/provider";
 import type { MessageKey } from "@/i18n/messages";
 import { DASHBOARD_CHAT_ROOT, chatPath } from "@/lib/dashboard-routes";
@@ -483,6 +486,18 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
   // The chat is a card on the task board.
   const [boardCard, setBoardCard] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
+  // The last message could not be handed to the side the chat runs on; what the person can do about it.
+  const [handoverFailure, setHandoverFailure] = useState<HandoverFailure | null>(null);
+  // That message, since nothing else holds it: the side the chat runs on never
+  // received it and this side does not write it down until it has run. Without
+  // it the screen reloads the stored chat, the message is gone, and the buttons
+  // that offer to send it again send whatever the chat ended on before.
+  const lastSentRef = useRef<string | null>(null);
+  const unsentRef = useRef<UIMessage | null>(null);
+  const handoverFailureRef = useRef<HandoverFailure | null>(null);
+  // Where the chat runs: what is stored on it, or - for a chat that does not
+  // exist yet - what it will be started with. Null means wherever it is typed.
+  const [chatHome, setChatHome] = useState<ChatHome | null>(null);
   const [inputFocusSignal, setInputFocusSignal] = useState(0);
   const [configuredRuntimeStats, setConfiguredRuntimeStats] = useState<PiRuntimeStats | null>(null);
   const [quickSkills, setQuickSkills] = useState<QuickSkillAction[]>(initialQuickSkills);
@@ -528,6 +543,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     projectId: activeProjectId ?? null,
     chatId: activeChatId ?? undefined,
   });
+  const remote = useRemoteStatus(syncTick);
   const internalChatIdRef = useRef(internalChatId);
   internalChatIdRef.current = internalChatId;
 
@@ -539,6 +555,9 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
 
   const contextModeRef = useRef(contextMode);
   contextModeRef.current = contextMode;
+
+  const chatHomeRef = useRef(chatHome);
+  chatHomeRef.current = chatHome;
 
   // Track the last activeChatId we've seen to detect external navigation
   const prevActiveChatId = useRef(activeChatId);
@@ -578,7 +597,11 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         // A light chat is a deliberate choice for one conversation, so the next
         // one starts full again rather than inheriting it.
         setContextMode("full");
+        setChatHome(null);
       }
+      setHandoverFailure(null);
+      handoverFailureRef.current = null;
+      unsentRef.current = null;
     }
   }, [activeChatId]);
 
@@ -626,6 +649,8 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
           projectId: activeProjectIdRef.current,
           contextMode: contextModeRef.current,
           currentPath: currentPathRef.current,
+          // Read by the server only for a chat it has not got yet.
+          ...(chatHomeRef.current ? { home: chatHomeRef.current } : {}),
         }),
       }),
     []
@@ -636,7 +661,13 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     transport,
     onError: (error) => {
       console.error("Chat error:", error);
-      setChatError(formatChatErrorMessage(error, t));
+      // A message that could not be handed to the side the chat runs on comes back as a reason, not a failure.
+      const refusal = parseHandoverFailure(error);
+      setHandoverFailure(refusal);
+      handoverFailureRef.current = refusal;
+      // The message that was refused stays on the screen, as the last thing said.
+      unsentRef.current = refusal ? ([...messagesRef.current].reverse().find((message) => message.role === "user") ?? null) : null;
+      setChatError(refusal ? refusal.message : formatChatErrorMessage(error, t));
     },
   });
   stopStreamRef.current = stop;
@@ -708,6 +739,14 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     setBoardCard(false);
   }, [activeChatId]);
 
+  // What the stored chat does not have yet because the message was refused: it
+  // goes back at the end of what is shown, until the person does something about it.
+  const keepUnsent = useCallback((stored: UIMessage[]): UIMessage[] => {
+    const unsent = unsentRef.current;
+    if (!unsent || !handoverFailureRef.current) return stored;
+    return stored.some((message) => message.id === unsent.id) ? stored : [...stored, unsent];
+  }, []);
+
   // Keep active chat history synced with background updates.
   useEffect(() => {
     if (activeChatId === null) return;
@@ -721,7 +760,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
           return null;
         }
         if (!r.ok) throw new Error("Failed to load chat");
-        return r.json() as Promise<{ messages?: ChatMessage[]; contextMode?: ChatContextMode; mailReply?: MailReplyInfo; boardCard?: boolean }>;
+        return r.json() as Promise<{ messages?: ChatMessage[]; contextMode?: ChatContextMode; home?: string; mailReply?: MailReplyInfo; boardCard?: boolean }>;
       })
       .then((chat) => {
         if (cancelled) return;
@@ -732,11 +771,14 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         if (stopSettlingRef.current) return;
 
         setContextMode(chat?.contextMode ?? "full");
+        // Only a chat that exists says where it lives: for one that does not yet,
+        // the choice made on this screen is all there is.
+        if (chat?.messages) setChatHome(parseHome(chat.home) ?? null);
         setMailReply(chat?.mailReply ?? null);
         setBoardCard(chat?.boardCard === true);
 
         if (!chat?.messages) {
-          setMessages([]);
+          setMessages(keepUnsent([]));
           historyEndsOnUserRef.current = false;
           historyCheckpointIdRef.current = null;
           setLoadedHistoryChatId(activeChatId);
@@ -744,8 +786,9 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         }
 
         const nextMessages = chatMessagesToUIMessages(chat.messages);
-        if (!areUIMessagesEquivalentById(messagesRef.current, nextMessages)) {
-          setMessages(nextMessages);
+        const shown = keepUnsent(nextMessages);
+        if (!areUIMessagesEquivalentById(messagesRef.current, shown)) {
+          setMessages(shown);
         }
         historyEndsOnUserRef.current =
           nextMessages[nextMessages.length - 1]?.role === "user";
@@ -762,7 +805,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     return () => {
       cancelled = true;
     };
-  }, [activeChatId, setMessages, status, stopSettling, syncTick]);
+  }, [activeChatId, keepUnsent, setMessages, status, stopSettling, syncTick]);
 
   // Nothing about clicking a chat produces an event, so the run list can be
   // seconds stale exactly when it is being read. Ask on arrival: it decides
@@ -1019,6 +1062,30 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     }
   }, []);
 
+  // Send one message to the agent: the same steps whoever asks, the person's
+  // composer or a button that sends the message again.
+  const dispatchMessage = useCallback((messageText: string) => {
+    setChatError(null);
+    // A message refused earlier and left on the screen is let go of: this one replaces it.
+    const refused = unsentRef.current;
+    unsentRef.current = null;
+    handoverFailureRef.current = null;
+    setHandoverFailure(null);
+    if (refused) setMessages((current) => current.filter((message) => message.id !== refused.id));
+    stopRequestedRef.current = false;
+
+    pendingProjectSwitchRef.current = true;
+    submissionStartCountRef.current = messagesRef.current.length;
+    handledSwitchToolCallsRef.current.clear();
+    queuedSwitchResultRef.current = null;
+    shouldRefreshProjectsRef.current = false;
+
+    registerOutgoingChat(messageText, activeProjectId);
+
+    lastSentRef.current = messageText;
+    sendMessage({ text: messageText, metadata: { createdAt: new Date().toISOString() } });
+  }, [activeProjectId, registerOutgoingChat, sendMessage, setMessages]);
+
   const onSubmit = useCallback((messageOverride?: string) => {
     const typed = messageOverride ?? input;
     if (pendingInteraction) {
@@ -1050,18 +1117,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     const messageText = shellInput?.kind === "literal" ? shellInput.text : typed;
 
     if (!messageText.trim() || isLoading) return;
-    setChatError(null);
-    stopRequestedRef.current = false;
-
-    pendingProjectSwitchRef.current = true;
-    submissionStartCountRef.current = messagesRef.current.length;
-    handledSwitchToolCallsRef.current.clear();
-    queuedSwitchResultRef.current = null;
-    shouldRefreshProjectsRef.current = false;
-
-    registerOutgoingChat(messageText, activeProjectId);
-
-    sendMessage({ text: messageText, metadata: { createdAt: new Date().toISOString() } });
+    dispatchMessage(messageText);
     setInput("");
   }, [
     input,
@@ -1072,8 +1128,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     internalChatId,
     activeProjectId,
     currentPath,
-    sendMessage,
-    registerOutgoingChat,
+    dispatchMessage,
   ]);
 
   // What a command card may ask of the conversation around it.
@@ -1129,6 +1184,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
       }
 
       registerOutgoingChat(messageText, projectId);
+      lastSentRef.current = messageText;
       sendMessage({ text: messageText, metadata: { createdAt: new Date().toISOString() } });
     } catch (error) {
       setChatError(error instanceof Error ? error.message : t("chat.errors.launchSkill"));
@@ -1191,6 +1247,70 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     setTimeout(() => setMessages(snapshot), 0);
   }, [setMessages, stop]);
 
+  // Choosing where the chat runs. For a chat that is stored this is a write the
+  // server may refuse (the computer is gone, the chat is working); for one that
+  // is not stored yet it is only what the first message will carry.
+  const selectHome = useCallback(async (target: ChatHome): Promise<boolean> => {
+    setChatError(null);
+    setHandoverFailure(null);
+    handoverFailureRef.current = null;
+    if (activeChatId === null) {
+      chatHomeRef.current = target;
+      setChatHome(target);
+      return true;
+    }
+    try {
+      const response = await fetch("/api/chat/home", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chatId: internalChatIdRef.current, home: target }),
+      });
+      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+      if (!response.ok) {
+        setChatError(t("chat.runPlace.switchFailed", { reason: payload?.error || response.statusText }));
+        void remote.refresh();
+        return false;
+      }
+      // Set at once, not on the next render: a message re-sent straight after reads it from here.
+      chatHomeRef.current = target;
+      setChatHome(target);
+      return true;
+    } catch (error) {
+      setChatError(t("chat.runPlace.switchFailed", { reason: error instanceof Error ? error.message : String(error) }));
+      return false;
+    }
+  }, [activeChatId, remote, t]);
+
+  // The message that was refused is sent again - not the last one the chat
+  // shows, which is the one before it: this side never wrote the refused one down.
+  const sendRefusedMessageAgain = useCallback(() => {
+    const text = lastSentRef.current;
+    if (!text) return;
+    dispatchMessage(text);
+  }, [dispatchMessage]);
+
+  const retryHandedOverMessage = useCallback(() => {
+    sendRefusedMessageAgain();
+  }, [sendRefusedMessageAgain]);
+
+  const runHereInstead = useCallback(async () => {
+    const here = remote.status?.node;
+    if (!here) return;
+    // Choosing a place clears the refusal along with its message; keep the text for the send that follows.
+    const text = lastSentRef.current;
+    if (await selectHome(here) && text) dispatchMessage(text);
+  }, [dispatchMessage, remote.status?.node, selectHome]);
+
+  const errorActions = useMemo(() => {
+    if (!handoverFailure) return undefined;
+    const actions: Array<{ label: string; onClick: () => void }> = [];
+    if (canRunHereInstead(handoverFailure) && remote.status?.enabled) {
+      actions.push({ label: t("chat.runPlace.runHere"), onClick: () => void runHereInstead() });
+    }
+    actions.push({ label: t("chat.runPlace.tryAgain"), onClick: retryHandedOverMessage });
+    return actions;
+  }, [handoverFailure, remote.status?.enabled, retryHandedOverMessage, runHereInstead, t]);
+
   const showQuickSkills = !activeProjectId && activeChatId === null && messages.length === 0 ? quickSkills : [];
 
   return (
@@ -1203,6 +1323,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         messages={messages}
         isLoading={isLoading}
         errorMessage={chatError}
+        errorActions={errorActions}
         compactionStatus={compactionStatus}
         actionNotice={actionNotice}
         pendingInteraction={pendingInteraction}
@@ -1230,6 +1351,13 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         // and a history of calls to tools that are no longer offered is not
         // worth what it costs at the provider.
         contextModeLocked={messages.length > 0 || isLoading}
+        runPlace={{
+          status: remote.status,
+          home: chatHome,
+          busy: isLoading,
+          onSelect: (home) => void selectHome(home),
+          onOpen: () => void remote.refresh(),
+        }}
       />
     </div>
     </MailReplyProvider>

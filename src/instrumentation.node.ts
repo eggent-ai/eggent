@@ -3,8 +3,12 @@ import { getManagedGatewayToken, refreshPiModelCatalog, syncManagedProviderCatal
 import { managedGatewayBaseUrl, refreshManagedCatalog } from "@/lib/pi/managed-models";
 import { restorePiSchedules } from "@/lib/pi/schedule-host";
 import { sweepStoredChats } from "@/lib/secrets/sweep";
+import { startChatsWatcher } from "@/lib/storage/chats-watcher";
 import { startMailSync } from "@/lib/mail/sync";
 import { startBoardDispatcher } from "@/lib/board/dispatcher";
+
+// A chat written by the sync with a paired workspace or computer shows up on screen as it arrives.
+startChatsWatcher();
 
 initTelegramLifecycle().catch((error) => {
   console.error("Failed to initialize Telegram lifecycle:", error);

@@ -1048,6 +1048,7 @@ const enMessages = {
   "telegram.command.chats": "Recent chats",
   "telegram.command.reset": "Stop a stuck answer",
   "telegram.command.files": "Files from the last answer",
+  "telegram.command.here": "Run this chat on this side",
 
   // A messenger has no chat list, so /chats is one. Each line ends with the
   // command that opens that chat, which Telegram turns into a tap target.
@@ -1131,6 +1132,46 @@ const enMessages = {
   "terminal.panel.closed.shutdown": "The workspace restarted, which ended the terminal.",
   "terminal.panel.closed.timeout": "The terminal ran out of time.",
   "terminal.panel.closed.error": "The terminal stopped working.",
+
+  // Running a chat on the other side of a paired workspace and computer.
+  "remote.where.cloud": "the cloud",
+  "remote.where.yourComputer": "your computer",
+  "remote.error.offlineCloud": "The cloud workspace can't be reached right now. Check the connection, or run this chat on this computer instead.",
+  "remote.error.offlineDevice": "{where} isn't available right now: the Eggent app is closed, offline, or not set to take tasks from the cloud. Run this chat in the cloud instead, or open the app and try again.",
+  "remote.error.denied": "{where} declined to run this chat.",
+  "remote.error.notReady": "{where} can't take this chat yet: its chat history isn't shared with the cloud.",
+  "remote.error.notSynced": "{where} hasn't received this chat's latest changes yet. Give it a few seconds and send again.",
+  "remote.error.busy": "This chat is working right now. Wait for it to finish, or stop it first.",
+  "remote.error.notSyncedMove": "The chat can't be moved yet: this side hasn't received everything the other side wrote in it. Give it a few seconds and try again.",
+  "remote.error.moved": "This chat was moved to this side a moment ago, before this screen had heard of it. Give it a few seconds and send again.",
+  "remote.error.timeout": "{where} didn't answer in time.",
+  "remote.error.disabled": "Running chats on another side isn't set up here.",
+  "remote.error.failed": "The message couldn't be handed to {where}: {reason}",
+  "remote.error.lost": "The connection to {where} was lost. The turn may still be running there; its answer will appear in this chat when it syncs.",
+  "remote.error.hintHere": "Send /here to run this chat on this side instead.",
+  "external.here.done": "Done. This chat runs here now.",
+  "external.here.already": "This chat already runs here.",
+  "external.here.unavailable": "Running a chat on another side isn't set up here.",
+  "external.here.busy": "This chat is working right now, so it cannot be moved. Wait for it to finish, or send \"stop\" (or /reset) first.",
+  "external.here.notSynced": "This chat hasn't fully arrived here yet. Give it a few seconds and send /here again.",
+
+  // The control under the composer that says where a chat runs.
+  "chat.runPlace.trigger": "Where this chat runs",
+  "chat.runPlace.hint": "Where this chat runs. Messages go there whichever side you type them on, and the answer comes back here.",
+  "chat.runPlace.thisComputer": "This computer",
+  "chat.runPlace.cloud": "Cloud",
+  "chat.runPlace.yourComputer": "Your computer",
+  "chat.runPlace.here": "here",
+  "chat.runPlace.unavailable": "not available",
+  "chat.runPlace.unavailableReason": "The app is closed, offline, or not set to take tasks from the cloud.",
+  "chat.runPlace.notReadyReason": "Its chat history isn't shared with the cloud yet.",
+  "chat.runPlace.cloudUnreachable": "The cloud can't be reached right now.",
+  "chat.runPlace.busy": "Wait for the current turn to finish first.",
+  "chat.runPlace.switchFailed": "Couldn't switch: {reason}",
+  "chat.runPlace.runHere": "Run it here instead",
+  "chat.runPlace.tryAgain": "Try again",
+  "nav.homeCloud": "Runs in the cloud",
+  "nav.homeDevice": "Runs on {name}",
 
   // Messages with the other people of the workspace's company (lib/mail).
   "nav.messages": "Messages",

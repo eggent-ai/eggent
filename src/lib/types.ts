@@ -5,6 +5,7 @@
 import type { LearnedNotice } from "@/lib/learning/types";
 import type { ProducedGroup } from "@/lib/files/produced";
 import type { PiRuntimeStats, SubagentSnapshot } from "@/lib/pi/types";
+import type { ChatHome } from "@/lib/remote/types";
 import type { MailReplyInfo } from "@/lib/mail/types";
 
 // --- Settings ---
@@ -144,6 +145,12 @@ export interface Chat {
   scheduledRun?: ScheduledRunInfo;
   /** Set on a chat a project was asked to work in, from another chat: see eggent_ask_project. */
   visit?: ProjectVisitInfo;
+  /**
+   * Where this chat runs when it should not simply run wherever it is typed in:
+   * the workspace or one paired computer. Absent on every chat that has never
+   * been switched, and then it runs where the message was written.
+   */
+  home?: ChatHome;
   /** Set on a chat opened to answer a colleague's message: see lib/mail. */
   mailReply?: MailReplyInfo;
   /** This chat is a card on the task board, whose id it shares: see lib/board. */
@@ -189,6 +196,8 @@ export interface ChatListItem {
   scheduledJob?: string;
   /** The title of the chat that asked this project, when this chat is a visit. */
   visitFrom?: string;
+  /** Where the chat runs, when it has been switched to a place of its own. */
+  home?: ChatHome;
   /** Who this chat answers, when it was opened to answer a colleague's message. */
   mailReplyTo?: string;
   /** The chat is a card on the task board. */

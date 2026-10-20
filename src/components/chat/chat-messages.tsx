@@ -44,6 +44,8 @@ interface ChatMessagesProps {
   messages: UIMessage[];
   isLoading: boolean;
   errorMessage?: string | null;
+  /** What the person can do about the error, as buttons under it. */
+  errorActions?: Array<{ label: string; onClick: () => void }>;
   compactionStatus?: PiCompactionStatus | null;
   actionNotice?: EggentActionNotice | null;
   pendingInteraction?: PiPendingInteraction | null;
@@ -252,7 +254,7 @@ function ShellCardRow({ card }: { card: ShellCard }) {
   );
 }
 
-export function ChatMessages({ messages, isLoading, errorMessage, compactionStatus, actionNotice, pendingInteraction, onRespondToInteraction, quickSkills = [], onLaunchSkill, launchingSkill, awaitingHistory = false }: ChatMessagesProps) {
+export function ChatMessages({ messages, isLoading, errorMessage, errorActions, compactionStatus, actionNotice, pendingInteraction, onRespondToInteraction, quickSkills = [], onLaunchSkill, launchingSkill, awaitingHistory = false }: ChatMessagesProps) {
   const { t } = useI18n();
   const scrollRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
@@ -503,6 +505,15 @@ export function ChatMessages({ messages, isLoading, errorMessage, compactionStat
         {errorMessage ? (
           <Alert variant="destructive">
             <AlertDescription>{errorMessage}</AlertDescription>
+            {errorActions && errorActions.length > 0 ? (
+              <div className="col-start-2 mt-2 flex flex-wrap gap-2">
+                {errorActions.map((action) => (
+                  <Button key={action.label} type="button" variant="outline" size="sm" onClick={action.onClick}>
+                    {action.label}
+                  </Button>
+                ))}
+              </div>
+            ) : null}
           </Alert>
         ) : null}
 

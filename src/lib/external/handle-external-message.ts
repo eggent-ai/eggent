@@ -1,5 +1,5 @@
 import { joinActiveRun, runPiAgentText } from "@/lib/pi/chat-runner";
-import { createChat, getChat } from "@/lib/storage/chat-store";
+import { createChat, getChat, saveChat } from "@/lib/storage/chat-store";
 import { saveChatFile } from "@/lib/storage/chat-files-store";
 import { getAllProjects, getProject } from "@/lib/storage/project-store";
 import { transcribeVoiceNote } from "@/lib/speech/voice-note";
@@ -13,6 +13,13 @@ import {
   type ExternalSession,
 } from "@/lib/storage/external-session-store";
 import { getServerTranslator } from "@/i18n/server";
+import { getActiveRun } from "@/lib/pi/active-runs";
+import { getLiveRun } from "@/lib/pi/live-run";
+import { isRemoteHome, localNode, remoteEnabled } from "@/lib/remote/config";
+import { switchWaitMs } from "@/lib/remote/config";
+import { waitForCover } from "@/lib/remote/head";
+import { forgetHandOver, remoteChatState } from "@/lib/remote/proxy-turn";
+import { stampAfter } from "@/lib/remote/stamp";
 import type { MessageKey } from "@/i18n/messages";
 import type { AgentProgressEvent } from "@/lib/pi/types";
 import type { ChatContextMode } from "@/lib/types";
@@ -504,7 +511,17 @@ type ChatCommand = { kind: "list" } | { kind: "open"; shortId: string };
  * button is: instant, free, and not dependent on the model choosing a tool.
  */
 export function isChatCommand(message: string): boolean {
-  return parseChatCommand(message) !== null || isResetCommand(message) || isFilesCommand(message);
+  return parseChatCommand(message) !== null || isResetCommand(message) || isFilesCommand(message) || isHereCommand(message);
+}
+
+/**
+ * `/here`: run this chat on the side that is reading it. A chat that was
+ * switched to another side stops answering when that side goes away, and a
+ * messenger has no switch to put it back with.
+ */
+export function isHereCommand(message: string): boolean {
+  const first = message.trim().split(/\s+/, 1)[0]?.toLowerCase() ?? "";
+  return first.split("@", 1)[0] === "/here";
 }
 
 /**
@@ -636,6 +653,52 @@ async function isExitProjectMessage(message: string, via: string | undefined): P
   const prefix = t("telegram.bot.exitProject", { project: "" }).trim();
   if (!prefix) return false;
   return message.trim().toLowerCase().startsWith(prefix.toLowerCase());
+}
+
+async function answerHere(context: ResolvedExternalMessageRunContext): Promise<ExternalMessageResult> {
+  const { session, previousChatId, resolvedProjectId, currentPath, resolvedChatId } = context;
+  const t = await getServerTranslator();
+  const here = remoteEnabled() ? localNode() : null;
+  let reply = t("external.here.unavailable");
+  if (here) {
+    const chat = await getChat(resolvedChatId);
+    if (chat && chat.home !== here) {
+      // A turn that is working - here, or over there - is not moved from under itself.
+      const other = isRemoteHome(chat.home) ? await remoteChatState(resolvedChatId, chat.home) : null;
+      const working = Boolean(getActiveRun(resolvedChatId) || getLiveRun(resolvedChatId)) || other?.running === true;
+      // ... and this side takes the chat over only once it holds what the other side wrote.
+      const behind = !working && other !== null && (await waitForCover(resolvedChatId, other.head, { timeoutMs: switchWaitMs() })).length > 0;
+      if (working) {
+        reply = t("external.here.busy");
+      } else if (behind) {
+        reply = t("external.here.notSynced");
+      } else {
+        chat.home = here;
+        // The newer copy wins when the two sides' files are joined.
+        chat.updatedAt = stampAfter(chat.updatedAt);
+        await saveChat(chat);
+        forgetHandOver(resolvedChatId);
+        reply = t("external.here.done");
+      }
+    } else {
+      reply = t("external.here.already");
+    }
+  }
+  return {
+    success: true,
+    sessionId: session.id,
+    reply,
+    context: {
+      activeProjectId: resolvedProjectId || null,
+      activeProjectName: null,
+      activeChatId: resolvedChatId,
+      activeChatTitle: await chatTitle(resolvedChatId),
+      currentPath: currentPath || "",
+    },
+    chatChanged: Boolean(previousChatId) && resolvedChatId !== previousChatId,
+    switchedProject: { toProjectId: null, toProjectName: null },
+    createdProject: null,
+  };
 }
 
 async function answerReset(context: ResolvedExternalMessageRunContext): Promise<ExternalMessageResult> {
@@ -818,6 +881,7 @@ export async function handleExternalMessage(
   if (chatCommand) return answerChatCommand(chatCommand, runContext);
   if (isTelegramMessage(input) && !input.publicMode && isResetCommand(message)) return answerReset(runContext);
   if (isTelegramMessage(input) && !input.publicMode && isFilesCommand(message)) return answerFiles(runContext, input);
+  if (isTelegramMessage(input) && !input.publicMode && isHereCommand(message)) return answerHere(runContext);
 
   // A message sent while this chat is already working belongs to that run, not
   // to a second agent of its own. Over a messenger there is no stop button, so
@@ -861,7 +925,7 @@ export async function handleExternalMessage(
     };
   }
 
-  const outcome: { stopped?: boolean; files?: ProducedGroup[]; filesSent?: boolean } = {};
+  const outcome: { stopped?: boolean; files?: ProducedGroup[]; filesSent?: boolean; chatBefore?: number } = {};
   let reply = await runPiAgentText({
     outcome,
     chatId: resolvedChatId,
@@ -879,6 +943,9 @@ export async function handleExternalMessage(
     // shell, no writing, no web, nothing outside the project. See public-share.ts.
     publicShare: input.publicMode === true,
     onProgress: input.onProgress,
+    // A chat that lives on the other side of a paired workspace and computer is
+    // run there and read back here, the same as from the browser.
+    allowHandover: input.publicMode !== true,
   });
 
   // A Telegram answer cannot carry a file the way the browser's does, so it says
@@ -890,7 +957,10 @@ export async function handleExternalMessage(
   }
 
   const afterChat = await getChat(resolvedChatId);
-  const newMessages = afterChat?.messages.slice(beforeCount) ?? [];
+  // A turn that ran on the other side says where its own messages begin: this
+  // side's copy of the chat may have been behind it, and counting from here took
+  // what an earlier turn over there had written for what this one did.
+  const newMessages = afterChat?.messages.slice(outcome.chatBefore ?? beforeCount) ?? [];
 
   let switchSignal: SwitchProjectSignal | null = null;
   let createSignal: CreateProjectSignal | null = null;

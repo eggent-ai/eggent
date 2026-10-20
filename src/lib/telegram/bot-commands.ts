@@ -1,4 +1,5 @@
 import { getServerTranslator } from "@/i18n/server";
+import { remoteEnabled } from "@/lib/remote/config";
 
 interface TelegramApiResponse {
   ok?: boolean;
@@ -15,6 +16,8 @@ async function getEggentTelegramBotCommands() {
     { command: "chats", description: t("telegram.command.chats") },
     { command: "reset", description: t("telegram.command.reset") },
     { command: "files", description: t("telegram.command.files") },
+    // Only where a chat can live on the other side of a pair; elsewhere there is nothing for it to do.
+    ...(remoteEnabled() ? [{ command: "here", description: t("telegram.command.here") }] : []),
   ];
 }
 

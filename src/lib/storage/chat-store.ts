@@ -1,6 +1,7 @@
 import fs from "fs/promises";
 import path from "path";
 import type { Chat, ChatContextMode, ChatListItem } from "@/lib/types";
+import type { ChatHome } from "@/lib/remote/types";
 import { publishUiSyncEvent } from "@/lib/realtime/event-bus";
 import { withoutInlineImages } from "@/lib/storage/chat-media";
 import { withoutSecrets } from "@/lib/secrets/mask";
@@ -29,6 +30,7 @@ export async function getAllChats(): Promise<ChatListItem[]> {
         contextMode: chat.contextMode,
         ...(chat.scheduledRun?.jobName ? { scheduledJob: chat.scheduledRun.jobName } : {}),
         ...(chat.visit ? { visitFrom: chat.visit.fromTitle || chat.visit.fromChatId } : {}),
+        ...(chat.home ? { home: chat.home } : {}),
         ...(chat.mailReply ? { mailReplyTo: chat.mailReply.contactName } : {}),
         ...(chat.boardCard ? { boardCard: true } : {}),
         createdAt: chat.createdAt,
@@ -76,10 +78,43 @@ export async function getChat(chatId: string): Promise<Chat | null> {
   }
 }
 
+/**
+ * What a chat's file is right now, as a string that changes when the file does.
+ * For code that waits for a chat to change and should not read it for nothing.
+ */
+export async function chatFileIdentity(chatId: string): Promise<string | null> {
+  try {
+    const stat = await fs.stat(path.join(CHATS_DIR, `${chatId}.json`));
+    return `${stat.mtimeMs}:${stat.size}`;
+  } catch {
+    return null;
+  }
+}
+
+// Chats this process wrote itself, and when. Whatever changes a chat's file
+// after that is somebody else - the file sync, a second process - and the
+// screen has to be told, because nothing else will.
+const OWN_WRITES_KEY = "__EGGENT_OWN_CHAT_WRITES__";
+
+function ownWrites(): Map<string, number> {
+  const holder = globalThis as typeof globalThis & { [OWN_WRITES_KEY]?: Map<string, number> };
+  if (!holder[OWN_WRITES_KEY]) holder[OWN_WRITES_KEY] = new Map<string, number>();
+  return holder[OWN_WRITES_KEY];
+}
+
+/** Whether this process wrote the chat's file a moment ago. */
+export function wroteChatHereLately(chatId: string, withinMs = 2500): boolean {
+  const at = ownWrites().get(chatId);
+  return at !== undefined && Date.now() - at < withinMs;
+}
+
 export async function saveChat(chat: Chat): Promise<void> {
   await ensureDir(CHATS_DIR);
   const filePath = path.join(CHATS_DIR, `${chat.id}.json`);
   await fs.writeFile(filePath, JSON.stringify(withoutSecrets(withoutInlineImages(chat)), null, 2), "utf-8");
+  const writes = ownWrites();
+  if (writes.size > 500) writes.clear();
+  writes.set(chat.id, Date.now());
   publishUiSyncEvent({
     topic: "chat",
     chatId: chat.id,
@@ -137,7 +172,8 @@ export async function createChat(
   id: string,
   title: string,
   projectId?: string,
-  contextMode?: ChatContextMode
+  contextMode?: ChatContextMode,
+  home?: ChatHome
 ): Promise<Chat> {
   const now = new Date().toISOString();
   const chat: Chat = {
@@ -147,6 +183,7 @@ export async function createChat(
     // Stored only when it is not the default, so nothing changes on disk for
     // the chats that every other surface creates.
     ...(contextMode && contextMode !== "full" ? { contextMode } : {}),
+    ...(home ? { home } : {}),
     messages: [],
     createdAt: now,
     updatedAt: now,

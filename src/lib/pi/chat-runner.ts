@@ -7,7 +7,7 @@ import { getServerTranslator } from "@/i18n/server";
 import { learnFromTurn } from "@/lib/learning/review";
 import { cancelPendingInteractionsForRun, listPendingInteractions } from "@/lib/pi/pending-interactions";
 import { retainPiMcpOAuthSession, retainPiScheduleSession, takeRetainedPiScheduleSession } from "@/lib/pi/schedule-host";
-import { clearActiveRun, getActiveRun, isStopRequest, registerActiveRun, stopActiveRun } from "@/lib/pi/active-runs";
+import { clearActiveRun, joinActiveRun, registerActiveRun } from "@/lib/pi/active-runs";
 import { createStartingRun, raceAbort, TurnAbortedError, undoFailedSetup, type TurnSetupScope } from "@/lib/pi/turn-control";
 import { noteSessionEvent, startTurnWatchdog, watchdogThresholds, watchdogTickMs, type StalledTurn } from "@/lib/pi/turn-watchdog";
 import { attachToLiveRun, startLiveRun, type LiveRunSink } from "@/lib/pi/live-run";
@@ -23,6 +23,8 @@ import type { AgentProgressEvent, PiChatRunOptions, PiRuntimeStats, PiToolRecord
 import { getChat, saveChat } from "@/lib/storage/chat-store";
 import { clearUsageSnapshotCache } from "@/lib/usage/usage-provider";
 import type { ChatMessage, ChatMessagePart } from "@/lib/types";
+import type { ChatHome } from "@/lib/remote/types";
+import { runHandedOverText, storedRemoteHome } from "@/lib/remote/proxy-turn";
 import type { PiPendingInteraction } from "@/lib/pi/interaction-types";
 import {
   checkpointToolMessageId,
@@ -706,49 +708,8 @@ async function persistAssistantMessage(options: {
   await saveChat(chat);
 }
 
-/**
- * What to do with a message that arrives while this chat already has an agent working.
- *
- * Starting a second agent was the old answer and it was the wrong one: neither
- * could see the other, so a request to stop went to a fresh session that had
- * nothing to stop, while the real run kept going. The runtime has both of the
- * primitives needed here and we were using neither.
- *
- * - A stop is honoured immediately, because that is the whole point of saying it.
- * - Anything else is steered into the running turn: it lands after the current
- *   tool calls and before the next model call, which is where a correction is
- *   still worth something. Queuing it until the end (followUp) would let the
- *   agent finish doing the thing the user was trying to redirect.
- *
- * Returns null when there was no run to join, so the caller starts one normally.
- */
-export async function joinActiveRun(
-  chatId: string,
-  message: string
-): Promise<"stopped" | "steered" | null> {
-  const active = getActiveRun(chatId);
-  if (!active) return null;
-
-  if (isStopRequest(message)) {
-    // Through the run's own way of stopping, when it has one: a turn aborted
-    // from outside believes it finished, and one that had written nothing yet
-    // was then reported as a provider that answered nothing.
-    await stopActiveRun(chatId);
-    return "stopped";
-  }
-
-  // Extension commands cannot be steered - the runtime refuses them - and a
-  // slash command is a new instruction anyway, so let it start its own run.
-  if (message.trimStart().startsWith("/")) return null;
-
-  try {
-    await active.session.steer(message);
-    return "steered";
-  } catch (error) {
-    console.warn("Failed to steer the running turn, starting a new one:", error);
-    return null;
-  }
-}
+// Moved to active-runs.ts so a handed-over turn can use it without loading the whole runner.
+export { joinActiveRun };
 
 /** What the person is told when a turn was given up on for going quiet. */
 async function stalledNotice(stalled: StalledTurn): Promise<string> {
@@ -762,7 +723,14 @@ function logStall(chatId: string, stalled: StalledTurn): void {
   console.warn(`[watchdog] chat ${chatId.slice(0, 8)} stalled in ${stalled.phase} after ${Math.round(stalled.silentMs / 1000)}s`);
 }
 
-type PiAgentTextOptions = PiChatRunOptions & {
+export type PiAgentTextOptions = PiChatRunOptions & {
+  /**
+   * The chat may live on the other side of a paired workspace and computer; when
+   * it does, the turn is handed there instead of run here. Set by the messenger
+   * handlers and by nobody else - a scheduled run, a project visit, a public
+   * link and the learning pass all run where they are.
+   */
+  allowHandover?: boolean;
   /**
    * The task board started this turn on one of its cards and reads how it ended
    * itself; see lib/board. Any other turn in a card's chat - somebody writing
@@ -791,10 +759,52 @@ type PiAgentTextOptions = PiChatRunOptions & {
     finalText?: string;
     files?: ProducedGroup[];
     filesSent?: boolean;
+    /**
+     * Set when the turn ran on the other side: how many messages the chat held
+     * there before it, which is where what it wrote begins - this side's copy of
+     * the chat may be behind by more than the turn.
+     */
+    chatBefore?: number;
   };
 };
 
+async function handOverText(options: PiAgentTextOptions, home: ChatHome): Promise<string> {
+  // The text the person wrote, and the context the messenger adds to it. The
+  // other side's agent reads exactly what this side's would have.
+  const runtimeSuffix = options.runtimeData ? `\n\nRuntime data:\n${JSON.stringify(options.runtimeData, null, 2)}` : "";
+  const chat = await getChat(options.chatId);
+  const result = await runHandedOverText(
+    {
+      chatId: options.chatId,
+      home,
+      message: `${options.userMessage}${runtimeSuffix}`,
+      projectId: options.projectId,
+      contextMode: options.chatContextMode,
+      currentPath: options.cwd,
+      chatTitle: chat?.title,
+    },
+    (event) => {
+      if (!options.onProgress) return;
+      try {
+        options.onProgress(event);
+      } catch (error) {
+        console.warn("A progress listener failed:", error);
+      }
+    }
+  );
+  if (options.outcome) {
+    if (result.stopped) options.outcome.stopped = true;
+    options.outcome.finalText = result.finalText;
+    if (result.chatBefore !== null) options.outcome.chatBefore = result.chatBefore;
+  }
+  return result.text;
+}
+
 export async function runPiAgentText(options: PiAgentTextOptions): Promise<string> {
+  if (options.allowHandover && !options.visit && !options.publicShare) {
+    const home = await storedRemoteHome(options.chatId);
+    if (home) return handOverText(options, home);
+  }
   const scope: TurnSetupScope = {};
   try {
     return await runPiAgentTextTurn(options, scope);
@@ -1326,6 +1336,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         runId,
         surface: "web",
         requestStop: () => runAbort.abort(),
+        ...(options.remote ? { servedForRemote: true } : {}),
       });
       // A chat that is a board card: the card follows this turn too.
       const cardTurn = trackCardTurn(options.chatId, runId, "web");
@@ -1379,7 +1390,8 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
       const promptFor = promptForMessage(options.userMessage, "", mention);
 
       // A question the agent asks is put on this response's stream, and saved with the turn so far.
-      const onPiInteraction = (interaction: PiPendingInteraction) => {
+      // A turn nobody is watching - a messenger handed it over - has no one to put one to.
+      const onPiInteraction = options.interactive === false ? undefined : (interaction: PiPendingInteraction) => {
         safeWrite({
           type: "data-piInteraction",
           id: `pi-interaction-${interaction.id}`,
@@ -1402,6 +1414,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
             projectId: options.projectId,
             chatContextMode: options.chatContextMode,
             enableEggentTools: options.enableEggentTools,
+            remote: options.remote,
             runId,
             abortSignal: runAbort.signal,
             onPiInteraction,
@@ -1571,6 +1584,24 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
           const separator = assistantText.trim() ? "\n\n" : "";
           assistantText = `${assistantText}${separator}${notice}`;
           appendTimelineText(timelineParts, `${separator}${notice}`);
+          // On the stream too, not only in the stored turn: whoever reads the
+          // stream - a messenger on the other side of a handover is the case - is
+          // told why the turn stopped, in the same words the stored chat has.
+          // Not through safeWrite: that goes quiet once the turn is aborted, and a turn
+          // that has been given up on is exactly this one.
+          const noticeId = `pi-text-${crypto.randomUUID()}`;
+          for (const part of [
+            { type: "text-start" as const, id: noticeId },
+            { type: "text-delta" as const, id: noticeId, delta: `${separator}${notice}` },
+            { type: "text-end" as const, id: noticeId },
+          ]) {
+            try {
+              if (live) live.push(part);
+              else writer.write(part);
+            } catch {
+              // the reader is gone; the stored turn has it
+            }
+          }
         }
         // A stopped turn keeps the files it had made, as the same turn on the other surface does.
         const files = await producedForTurn({

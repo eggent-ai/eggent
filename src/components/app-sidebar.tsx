@@ -7,8 +7,10 @@ import { useRouter, usePathname } from "next/navigation";
 import {
   Bot,
   CalendarClock,
+  Cloud,
   CornerDownRight,
   FolderOpen,
+  Laptop,
   Mail,
   LifeBuoy,
   LogOut,
@@ -23,6 +25,7 @@ import { useAppStore } from "@/store/app-store";
 import { chatPath } from "@/lib/dashboard-routes";
 import { useBackgroundSync } from "@/hooks/use-background-sync";
 import { useActiveRuns } from "@/hooks/use-active-runs";
+import { useRemoteStatus } from "@/hooks/use-remote-status";
 import { useI18n } from "@/i18n/provider";
 
 import {
@@ -70,6 +73,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     projectId: activeProjectId ?? null,
   });
   const activeRuns = useActiveRuns();
+  const remote = useRemoteStatus(chatsTick);
+  // Whether a chat's home is the other side of the pair, from where this list is read.
+  const isOtherSide = (home: string | undefined) => Boolean(home && remote.status?.enabled && home !== remote.status.node);
 
   /**
    * Open a conversation, in the store and in the address bar.
@@ -356,9 +362,13 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                         ? t("nav.visitChat", { chat: chat.visitFrom })
                         : chat.mailReplyTo
                           ? t("nav.mailReplyChat", { name: chat.mailReplyTo })
-                          : chat.boardCard
-                            ? t("nav.boardChat")
-                            : undefined
+                          : isOtherSide(chat.home)
+                            ? chat.home === "cloud"
+                              ? t("nav.homeCloud")
+                              : t("nav.homeDevice", { name: remote.status?.devices.find((device) => device.node === chat.home)?.name ?? t("chat.runPlace.yourComputer") })
+                            : chat.boardCard
+                              ? t("nav.boardChat")
+                              : undefined
                   }
                 >
                   {/* A scheduled task reports into a chat a day, so these
@@ -371,6 +381,11 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                   ) : chat.mailReplyTo ? (
                     // A chat opened to answer a colleague's message.
                     <Mail aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+                  ) : isOtherSide(chat.home) ? (
+                    // A chat that runs on the other side of the pair, not where this list is read.
+                    chat.home === "cloud"
+                      ? <Cloud aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+                      : <Laptop aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
                   ) : chat.boardCard ? (
                     // The conversation of a card on the board.
                     <SquareKanban aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
