@@ -124,6 +124,8 @@ const { listPendingInteractions, respondToPendingInteraction } = await import(".
 const { createChat, getChat } = await import("../src/lib/storage/chat-store.ts");
 const { getActiveRun, stopActiveRun } = await import("../src/lib/pi/active-runs.ts");
 const { getLiveRun, whenLiveRunFinished } = await import("../src/lib/pi/live-run.ts");
+const { createCards } = await import("../src/lib/board/cards.ts");
+const { getCard } = await import("../src/lib/board/store.ts");
 
 async function waitFor<T>(what: string, probe: () => Promise<T | null> | T | null, ms = 30_000): Promise<T> {
   const until = Date.now() + ms;
@@ -206,6 +208,25 @@ await check("an answer written later reaches the model, which was told nobody ha
   assert.ok(requests[requests.length - 1].includes(LATER), "the later answer did not reach the model");
   const turns = await assistantTurns(LEFT);
   assert.ok(turns[turns.length - 1]?.content.includes(LATER_REPLY), "the reply to the later answer was not stored");
+});
+
+console.log("\nOn a card\n");
+
+// A card's chat is a chat like any other: a question asked in it while the person watched
+// is a card in the chat, and nobody coming back to it for a day leaves the card waiting.
+const [card] = await createCards([{ title: "Relay project", body: "Make a new project for the relay" }], { createdBy: "person" });
+await turn(card.id, "run-question-card", "Make a new project for the relay");
+const settledCard = await waitFor("the card to settle", async () => {
+  const current = await getCard(card.id);
+  return current && current.status !== "running" ? current : null;
+}, 10_000).catch(() => null);
+
+await check("a card whose question went unanswered waits on that question, on the board, where it can be answered", () => {
+  assert.ok(settledCard, "the card still says it is running");
+  assert.equal(settledCard.status, "waiting");
+  assert.equal(settledCard.waiting?.reason, "question", `it waits as ${settledCard.waiting?.reason}`);
+  assert.equal(settledCard.question?.text, QUESTION);
+  assert.ok(settledCard.question?.options?.includes(OPTION), "the question's choices did not reach the card");
 });
 
 console.log("\nA question that is answered, or waved away\n");

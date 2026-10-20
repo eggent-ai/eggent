@@ -761,6 +761,31 @@ async function stallEnding(stalled: StalledTurn, question: PiPendingInteraction 
   return [asked, notice].filter((part) => part.trim()).join("\n\n");
 }
 
+/** A question a person answers in words, as a card holds it; null for a secret, a sign-in or a command's input. */
+function cardQuestionOfInteraction(interaction: PiPendingInteraction): Omit<CardQuestion, "askedAt"> | null {
+  const kind = interaction.kind === "select" ? "choice" : interaction.kind === "confirm" ? "confirm" : interaction.kind === "text" ? "free_text" : null;
+  // The question tool keeps the question in the message when it gave the card a title of its own.
+  const text = interaction.message?.trim() || interaction.title?.trim() || "";
+  if (!kind || !text) return null;
+  const options = (interaction.options ?? []).map((option) => option.trim()).filter(Boolean).slice(0, 6);
+  return {
+    text,
+    kind,
+    ...(options.length ? { options } : {}),
+    ...(interaction.placeholder?.trim() ? { placeholder: interaction.placeholder.trim() } : {}),
+  };
+}
+
+/**
+ * How a card's turn that was given up on ends on the card. A question nobody answered goes on
+ * the card, as a question from a run nobody watched does, so it can be answered from the board
+ * and the answer starts the card's next run; anything else waits as stalled.
+ */
+function stalledCardEnd(stalled: StalledTurn, question: PiPendingInteraction | null): Parameters<CardTurn["end"]>[0] {
+  const onCard = stalled.unanswered && question ? cardQuestionOfInteraction(question) : null;
+  return onCard ? { outcome: "question", question: onCard } : { outcome: "stalled" };
+}
+
 export type PiAgentTextOptions = PiChatRunOptions & {
   /**
    * The chat may live on the other side of a paired workspace and computer; when
@@ -1028,11 +1053,11 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
       cardTurn?.end({ outcome: "failed", detail: streamErrorText(error) });
       throw error;
     }
-    cardTurn?.end({ outcome: turn.stalled ? "stalled" : "stopped" });
+    cardTurn?.end(turn.stalled ? stalledCardEnd(turn.stalled, turn.question) : { outcome: "stopped" });
     if (options.outcome && turn.stalled) options.outcome.stalled = true;
     // Stopped, or given up on, before it began.
     const t = await getServerTranslator();
-    const notice = turn.stalled ? await stalledNotice(turn.stalled) : t("external.run.stopped");
+    const notice = turn.stalled ? await stallEnding(turn.stalled, turn.question) : t("external.run.stopped");
     await persistAssistantMessage({ chatId: options.chatId, assistantText: notice, tools: [], parts: [{ type: "text", text: notice }] });
     // Said the way a stop is said later in the turn: somebody stopped it, so the surface that
     // already told them so (the stop word's own reply) does not say it twice. A turn given up
@@ -1313,7 +1338,7 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
         : refusal !== null
           ? { outcome: "refused", ...(refusal ? { detail: refusal } : {}) }
           : turn.stalled
-            ? { outcome: "stalled" }
+            ? stalledCardEnd(turn.stalled, turn.question)
             : stopped
               ? { outcome: "stopped" }
               : { outcome: "done", finalText: lastMessageText || assistantText, files: producedFiles }
@@ -1518,10 +1543,10 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
           cardTurn?.end({ outcome: "failed", detail: streamErrorText(error) });
           throw error;
         }
-        cardTurn?.end({ outcome: stall.stalled ? "stalled" : "stopped" });
+        cardTurn?.end(stall.stalled ? stalledCardEnd(stall.stalled, stall.question) : { outcome: "stopped" });
         // Stopped, or given up on, before it began: say so, and keep it.
         const t = await getServerTranslator();
-        const notice = stall.stalled ? await stalledNotice(stall.stalled) : t("external.run.stopped");
+        const notice = stall.stalled ? await stallEnding(stall.stalled, stall.question) : t("external.run.stopped");
         await persistAssistantMessage({ chatId: options.chatId, assistantText: notice, tools: [], parts: [{ type: "text", text: notice }] });
         const textId = `pi-text-${crypto.randomUUID()}`;
         writer.write({ type: "text-start", id: textId });
@@ -2033,7 +2058,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
             : turnFailure !== null
             ? { outcome: "failed", detail: turnFailure }
             : stall.stalled
-              ? { outcome: "stalled" }
+              ? stalledCardEnd(stall.stalled, stall.question)
               : aborted
                 ? { outcome: "stopped" }
                 : refusal !== null
