@@ -9,7 +9,7 @@ import { cancelPendingInteractionsForRun, listPendingInteractions } from "@/lib/
 import { retainPiMcpOAuthSession, retainPiScheduleSession, takeRetainedPiScheduleSession } from "@/lib/pi/schedule-host";
 import { clearActiveRun, joinActiveRun, registerActiveRun } from "@/lib/pi/active-runs";
 import { createStartingRun, raceAbort, TurnAbortedError, undoFailedSetup, type TurnSetupScope } from "@/lib/pi/turn-control";
-import { noteSessionEvent, startTurnWatchdog, watchdogThresholds, watchdogTickMs, type StalledTurn } from "@/lib/pi/turn-watchdog";
+import { noteSessionEvent, startTurnWatchdog, UNANSWERED_QUESTION, watchdogThresholds, watchdogTickMs, type StalledTurn } from "@/lib/pi/turn-watchdog";
 import { attachToLiveRun, startLiveRun, type LiveRunSink } from "@/lib/pi/live-run";
 import { applySchedulingToolPolicy, hasScheduleIntent, hasScheduleManagementIntent } from "@/lib/pi/schedule-intent";
 import { describeProviderFailure, type ProviderFailure } from "@/lib/pi/provider-failure";
@@ -727,16 +727,38 @@ async function persistAssistantMessage(options: {
 // Moved to active-runs.ts so a handed-over turn can use it without loading the whole runner.
 export { joinActiveRun };
 
-/** What the person is told when a turn was given up on for going quiet. */
+/** What the person is told when a turn was given up on for going quiet, or for a question nobody answered. */
 async function stalledNotice(stalled: StalledTurn): Promise<string> {
   const t = await getServerTranslator();
+  if (stalled.unanswered) return t("external.run.stalledQuestion", { hours: Math.max(1, Math.round(stalled.silentMs / 3_600_000)) });
   const minutes = Math.max(1, Math.round(stalled.silentMs / 60_000));
   const key = stalled.phase === "starting" ? "external.run.stalledStart" : stalled.phase === "tool" ? "external.run.stalledTool" : "external.run.stalled";
   return t(key, { minutes });
 }
 
 function logStall(chatId: string, stalled: StalledTurn): void {
+  if (stalled.unanswered) {
+    console.warn(`[watchdog] chat ${chatId.slice(0, 8)} stopped: a question waited ${Math.round(stalled.silentMs / 60_000)} min with no answer`);
+    return;
+  }
   console.warn(`[watchdog] chat ${chatId.slice(0, 8)} stalled in ${stalled.phase} after ${Math.round(stalled.silentMs / 1000)}s`);
+}
+
+/** The question still open in a run - the one that went unanswered, when the turn is stopped for it. */
+function openQuestionOf(runId: string): PiPendingInteraction | null {
+  return listPendingInteractions(runId).find((interaction) => interaction.status === "pending") ?? null;
+}
+
+/**
+ * The words a turn stopped by the watchdog ends with: why it stopped, after the
+ * question it was waiting on when that was the reason. The stored chat kept the
+ * question only while the turn waited; the finished turn replaces that, and
+ * somebody who comes back a day later has to see what they were asked.
+ */
+async function stallEnding(stalled: StalledTurn, question: PiPendingInteraction | null): Promise<string> {
+  const notice = await stalledNotice(stalled);
+  const asked = stalled.unanswered && question ? describeInteractionForTranscript(question) : "";
+  return [asked, notice].filter((part) => part.trim()).join("\n\n");
 }
 
 export type PiAgentTextOptions = PiChatRunOptions & {
@@ -890,12 +912,17 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
     else options.abortSignal.addEventListener("abort", () => runAbort.abort(), { once: true });
   }
   let stopped = false;
-  const turn: { stalled: StalledTurn | null; session: Awaited<ReturnType<typeof createEggentPiSession>> | null } = { stalled: null, session: null };
-  const requestStop = () => {
+  const turn: {
+    stalled: StalledTurn | null;
+    /** The question that went unanswered, when that is why the turn stopped. */
+    question: PiPendingInteraction | null;
+    session: Awaited<ReturnType<typeof createEggentPiSession>> | null;
+  } = { stalled: null, question: null, session: null };
+  const requestStop = (reason?: unknown) => {
     stopped = true;
     // Not a turn to join any more, whatever its session is still doing: see markStopped.
     starting.markStopped();
-    runAbort.abort();
+    runAbort.abort(reason);
     // A stop discards what was waiting to be added to the turn: left queued, it
     // would start the loop again the moment the abort let go of it.
     starting.takeQueuedSteers();
@@ -920,8 +947,10 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
       onResume: () => report({ type: "silent", active: false }),
       onStall: (stalled) => {
         turn.stalled = stalled;
+        // Read before the stop, which cancels it.
+        if (stalled.unanswered) turn.question = openQuestionOf(runId);
         logStall(options.chatId, stalled);
-        requestStop();
+        requestStop(stalled.unanswered ? UNANSWERED_QUESTION : undefined);
       },
     })
     : null;
@@ -1213,8 +1242,8 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
     }
     liveCloseText();
     if (turn.stalled) {
-      // Given up on for going quiet: the answer says so, in the person's words.
-      const notice = await stalledNotice(turn.stalled);
+      // Given up on for going quiet, or for a question nobody answered: the answer says so, in the person's words.
+      const notice = await stallEnding(turn.stalled, turn.question);
       const separator = assistantText.trim() ? "\n\n" : "";
       assistantText = `${assistantText}${separator}${notice}`;
       appendTimelineText(timelineParts, `${separator}${notice}`);
@@ -1396,7 +1425,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
       // A turn handed here with nobody watching - a board run, a messenger's - is the one exception:
       // the side that handed it over reads how it ends from the stream and writes the card itself.
       const cardTurn: CardTurn | null = options.interactive === false ? null : trackCardTurn(options.chatId, runId, "web");
-      const stall: { stalled: StalledTurn | null } = { stalled: null };
+      const stall: { stalled: StalledTurn | null; question: PiPendingInteraction | null } = { stalled: null, question: null };
       const thresholds = watchdogThresholds();
       const watchdog = thresholds
         ? startTurnWatchdog({
@@ -1406,8 +1435,10 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
           isWaitingForHuman: () => listPendingInteractions(runId).some((interaction) => interaction.status === "pending"),
           onStall: (stalled) => {
             stall.stalled = stalled;
+            // Read before the abort, which cancels it.
+            if (stalled.unanswered) stall.question = openQuestionOf(runId);
             logStall(options.chatId, stalled);
-            runAbort.abort();
+            runAbort.abort(stalled.unanswered ? UNANSWERED_QUESTION : undefined);
           },
         })
         : null;
@@ -1637,8 +1668,8 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         cancelProgressCheckpoint();
         closeTextPart();
         if (stall.stalled) {
-          // Given up on for going quiet: the stored turn says so, in the person's words.
-          const notice = await stalledNotice(stall.stalled);
+          // Given up on for going quiet, or for a question nobody answered: the stored turn says so, in the person's words.
+          const notice = await stallEnding(stall.stalled, stall.question);
           const separator = assistantText.trim() ? "\n\n" : "";
           assistantText = `${assistantText}${separator}${notice}`;
           appendTimelineText(timelineParts, `${separator}${notice}`);

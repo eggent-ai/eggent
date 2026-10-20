@@ -17,13 +17,22 @@
  * counts as speech, including thinking and a helper's progress.
  *
  * A turn that is waiting for the person to answer is not silent, it is waiting,
- * and is never stopped for it.
+ * and is not stopped for being quiet. It is stopped only when the question has
+ * waited a day (`questionMs`): a question nobody comes back to otherwise holds
+ * the turn for ever - and with it the workspace, which nothing restarts while a
+ * turn runs. The question stays in the chat, so it can still be answered.
  *
  * Pure apart from its own timer: the clock and the tick are injectable, so the
  * rules can be tested without waiting for them.
  */
 
 export type TurnPhase = "starting" | "model" | "tool";
+
+/**
+ * The reason a turn is aborted with when its question went unanswered, so the
+ * question tool can tell the model the truth: nobody dismissed it, nobody came.
+ */
+export const UNANSWERED_QUESTION = "eggent:unanswered-question";
 
 export interface WatchdogThresholds {
   /** Silence after which the person is told the turn is still going, and how to stop it. */
@@ -34,6 +43,8 @@ export interface WatchdogThresholds {
   modelMs: number;
   /** Silence at which a turn running a command or helper is given up on. */
   toolMs: number;
+  /** How long a question may wait for the person before the turn is stopped; 0 waits for ever. */
+  questionMs: number;
 }
 
 const DEFAULTS: WatchdogThresholds = {
@@ -41,11 +52,19 @@ const DEFAULTS: WatchdogThresholds = {
   startingMs: 3 * 60_000,
   modelMs: 6 * 60_000,
   toolMs: 20 * 60_000,
+  questionMs: 24 * 3_600_000,
 };
 
 function seconds(value: string | undefined, fallbackMs: number): number {
   const parsed = Number.parseInt(value ?? "", 10);
   return Number.isFinite(parsed) && parsed >= 1 ? parsed * 1000 : fallbackMs;
+}
+
+/** How long a question may wait: seconds, "0" or "off" for no limit, anything else the default. */
+function questionWait(value: string | undefined, fallbackMs: number): number {
+  const raw = (value ?? "").trim().toLowerCase();
+  if (raw === "0" || raw === "off") return 0;
+  return seconds(raw, fallbackMs);
 }
 
 /** The limits in force, or null when the deployment has switched the watchdog off. */
@@ -56,6 +75,7 @@ export function watchdogThresholds(env: Record<string, string | undefined> = pro
     startingMs: seconds(env.EGGENT_TURN_SILENCE_START_SECONDS, DEFAULTS.startingMs),
     modelMs: seconds(env.EGGENT_TURN_SILENCE_MODEL_SECONDS, DEFAULTS.modelMs),
     toolMs: seconds(env.EGGENT_TURN_SILENCE_TOOL_SECONDS, DEFAULTS.toolMs),
+    questionMs: questionWait(env.EGGENT_TURN_QUESTION_WAIT_SECONDS, DEFAULTS.questionMs),
   };
 }
 
@@ -68,6 +88,8 @@ export function watchdogTickMs(env: Record<string, string | undefined> = process
 export interface StalledTurn {
   phase: TurnPhase;
   silentMs: number;
+  /** Stopped because a question went unanswered for `questionMs`, not for silence; `silentMs` is how long it waited. */
+  unanswered?: boolean;
 }
 
 export interface TurnWatchdog {
@@ -109,6 +131,12 @@ export function startTurnWatchdog(options: {
   let unnamed = 0;
   let lastSpoke = now();
   let softSent = false;
+  /**
+   * When the question now open was asked; null while none is. The turn says nothing while it
+   * waits, so anything it does say - the answer coming back, the next question being asked -
+   * ends the wait, even when no tick fell between the two.
+   */
+  let waitingSince: number | null = null;
   let stalled: StalledTurn | null = null;
   let timer: ReturnType<typeof setInterval> | undefined;
 
@@ -119,11 +147,22 @@ export function startTurnWatchdog(options: {
     if (stalled) return;
     const silentMs = now() - lastSpoke;
     if (options.isWaitingForHuman?.()) {
+      // The question was the last thing the turn did, so its wait starts there, not at the
+      // tick that noticed it.
+      waitingSince ??= lastSpoke;
+      const waited = now() - waitingSince;
+      if (options.thresholds.questionMs > 0 && waited >= options.thresholds.questionMs) {
+        stalled = { phase, silentMs: waited, unanswered: true };
+        stop();
+        options.onStall(stalled);
+        return;
+      }
       // Waiting is not silence: the clock starts again when the answer arrives.
       lastSpoke = now();
       softSent = false;
       return;
     }
+    waitingSince = null;
     if (silentMs >= limitFor(phase)) {
       stalled = { phase, silentMs };
       stop();
@@ -150,6 +189,7 @@ export function startTurnWatchdog(options: {
 
   const spoke = () => {
     lastSpoke = now();
+    waitingSince = null;
     if (softSent) {
       softSent = false;
       options.onResume?.();

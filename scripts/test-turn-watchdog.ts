@@ -21,14 +21,15 @@ function check(name: string, fn: () => void): void {
 }
 
 const MIN = 60_000;
-const limits: WatchdogThresholds = { softMs: 90_000, startingMs: 3 * MIN, modelMs: 6 * MIN, toolMs: 20 * MIN };
+const HOUR = 60 * MIN;
+const limits: WatchdogThresholds = { softMs: 90_000, startingMs: 3 * MIN, modelMs: 6 * MIN, toolMs: 20 * MIN, questionMs: 24 * HOUR };
 
-function make(extra: { waiting?: () => boolean } = {}) {
+function make(extra: { waiting?: () => boolean; thresholds?: Partial<WatchdogThresholds> } = {}) {
   let time = 1_000_000;
   const soft: Array<{ phase: string; silentMs: number }> = [];
-  const stalls: Array<{ phase: string; silentMs: number }> = [];
+  const stalls: Array<{ phase: string; silentMs: number; unanswered?: boolean }> = [];
   const watchdog = startTurnWatchdog({
-    thresholds: limits,
+    thresholds: { ...limits, ...extra.thresholds },
     isWaitingForHuman: extra.waiting,
     onSoft: (phase, silentMs) => soft.push({ phase, silentMs }),
     onStall: (stalled) => stalls.push(stalled),
@@ -132,6 +133,54 @@ check("a turn with a question open is waiting, not stuck", () => {
   assert.equal(t.stalls.length, 1);
 });
 
+check("a question nobody answers for a day ends the turn, and says it was the question", () => {
+  const t = make({ waiting: () => true });
+  t.watchdog.toolStarted("ask-1");
+  t.advance(23 * HOUR + 59 * MIN);
+  assert.equal(t.stalls.length, 0, "stopped before the day was out");
+  t.advance(2 * MIN);
+  assert.equal(t.stalls.length, 1);
+  assert.equal(t.stalls[0].unanswered, true);
+  assert.ok(t.stalls[0].silentMs >= 24 * HOUR, `waited ${t.stalls[0].silentMs}`);
+  t.advance(24 * HOUR);
+  assert.equal(t.stalls.length, 1, "a turn is given up on once");
+});
+
+check("an answer starts the next question's day afresh", () => {
+  let open = true;
+  const t = make({ waiting: () => open });
+  t.advance(23 * HOUR);
+  open = false;
+  t.watchdog.setPhase("model");
+  t.advance(MIN);
+  open = true;
+  t.advance(23 * HOUR);
+  assert.equal(t.stalls.length, 0, "the first question's wait was carried into the second");
+  t.advance(2 * HOUR);
+  assert.equal(t.stalls.length, 1);
+  assert.equal(t.stalls[0].unanswered, true);
+});
+
+check("a question asked straight after an answer gets a day of its own, even with no look in between", () => {
+  const t = make({ waiting: () => true });
+  t.watchdog.toolStarted("ask-1");
+  t.advance(20 * HOUR);
+  // The answer comes back and the next question is asked before the watchdog looks again.
+  t.watchdog.toolEnded("ask-1");
+  t.watchdog.toolStarted("ask-2");
+  t.advance(5 * HOUR);
+  assert.equal(t.stalls.length, 0, "the first question's wait was carried into the second");
+  t.advance(19 * HOUR + MIN);
+  assert.equal(t.stalls.length, 1);
+  assert.equal(t.stalls[0].unanswered, true);
+});
+
+check("a deployment can let a question wait for ever", () => {
+  const t = make({ waiting: () => true, thresholds: { questionMs: 0 } });
+  t.advance(30 * 24 * HOUR);
+  assert.equal(t.stalls.length, 0);
+});
+
 console.log("\nReading the session\n");
 
 check("a tool starting and ending moves the phase, and any other event is speech", () => {
@@ -201,7 +250,11 @@ check("an end with no start does not strand the turn in its tool phase, and a ne
 });
 
 check("the limits come from the environment, and the watchdog can be switched off", () => {
-  assert.deepEqual(watchdogThresholds({}), { softMs: 90_000, startingMs: 180_000, modelMs: 360_000, toolMs: 1_200_000 });
+  assert.deepEqual(watchdogThresholds({}), { softMs: 90_000, startingMs: 180_000, modelMs: 360_000, toolMs: 1_200_000, questionMs: 86_400_000 });
+  assert.equal(watchdogThresholds({ EGGENT_TURN_QUESTION_WAIT_SECONDS: "3600" })?.questionMs, 3_600_000);
+  assert.equal(watchdogThresholds({ EGGENT_TURN_QUESTION_WAIT_SECONDS: "0" })?.questionMs, 0);
+  assert.equal(watchdogThresholds({ EGGENT_TURN_QUESTION_WAIT_SECONDS: "off" })?.questionMs, 0);
+  assert.equal(watchdogThresholds({ EGGENT_TURN_QUESTION_WAIT_SECONDS: "a while" })?.questionMs, 86_400_000);
   assert.equal(watchdogThresholds({ EGGENT_TURN_SILENCE_MODEL_SECONDS: "600" })?.modelMs, 600_000);
   assert.equal(watchdogThresholds({ EGGENT_TURN_SILENCE_MODEL_SECONDS: "soon" })?.modelMs, 360_000);
   assert.equal(watchdogThresholds({ EGGENT_TURN_WATCHDOG: "off" }), null);

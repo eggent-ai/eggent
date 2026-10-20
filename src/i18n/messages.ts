@@ -325,6 +325,7 @@ const enMessages = {
   "external.run.stalled": "I stopped this: nothing had happened for {minutes} min, and a model that has gone quiet this long is not coming back. Your messages are saved - write again to carry on, or send /new for a fresh start.",
   "external.run.stalledStart": "I stopped this: the workspace had not finished getting ready after {minutes} min. Your messages are saved - write again to try once more.",
   "external.run.stalledTool": "I stopped this: a command had been running for {minutes} min without a word. Whatever it finished is saved - write again to carry on, ideally in smaller steps.",
+  "external.run.stalledQuestion": "I stopped here: the question above waited {hours} h without an answer. Answer it in this chat whenever you are ready, and I will carry on from there.",
   "chat.compaction.runningManual": "Compacting the chat history…",
   "chat.compaction.runningAuto": "Compacting the context so the conversation can continue…",
   "chat.compaction.done": "Context compacted: {before} tokens before, about {after} after.",

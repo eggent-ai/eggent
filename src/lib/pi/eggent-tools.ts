@@ -16,6 +16,7 @@ import {
 import { managePiSchedules, noteScheduledRunReachedTelegram, scheduledRunChatFor } from "@/lib/pi/schedule-host";
 import { formatUsageMeter, getUsageSnapshot, isUsageProviderConfigured } from "@/lib/usage/usage-provider";
 import { createPendingInteraction } from "@/lib/pi/pending-interactions";
+import { UNANSWERED_QUESTION } from "@/lib/pi/turn-watchdog";
 import { DEFER_INTERACTION_ANSWER, type PiPendingInteraction } from "@/lib/pi/interaction-types";
 import { resolveTelegramDestination } from "@/lib/telegram/outbound";
 import { afterTelegramDelivery } from "@/lib/telegram/conversation";
@@ -367,12 +368,17 @@ export async function createEggentPiTools(options: {
           }
 
           if (answer === undefined) {
+            // Nobody dismissed a question the turn was stopped for after a day: nobody came.
+            // The turn ends here either way; this is what the model reads when they do.
+            const unanswered = options.abortSignal?.aborted === true && options.abortSignal.reason === UNANSWERED_QUESTION;
             return textResult(
               JSON.stringify(
                 {
                   success: false,
                   cancelled: true,
-                  note: "The user dismissed the question. Do not ask it again; continue with a reasonable default and tell them what you assumed.",
+                  note: unanswered
+                    ? "Nobody answered this question for a long time, so the turn was stopped here. If the person writes in this chat later, read what they say as the answer to it and carry on."
+                    : "The user dismissed the question. Do not ask it again; continue with a reasonable default and tell them what you assumed.",
                 },
                 null,
                 2
