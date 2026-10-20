@@ -730,7 +730,12 @@ export { joinActiveRun };
 /** What the person is told when a turn was given up on for going quiet, or for a question nobody answered. */
 async function stalledNotice(stalled: StalledTurn): Promise<string> {
   const t = await getServerTranslator();
-  if (stalled.unanswered) return t("external.run.stalledQuestion", { hours: Math.max(1, Math.round(stalled.silentMs / 3_600_000)) });
+  if (stalled.unanswered) {
+    // A day unless a deployment chose otherwise, and a short limit is said in minutes.
+    return stalled.silentMs < 3_600_000
+      ? t("external.run.stalledQuestionMinutes", { minutes: Math.max(1, Math.round(stalled.silentMs / 60_000)) })
+      : t("external.run.stalledQuestion", { hours: Math.round(stalled.silentMs / 3_600_000) });
+  }
   const minutes = Math.max(1, Math.round(stalled.silentMs / 60_000));
   const key = stalled.phase === "starting" ? "external.run.stalledStart" : stalled.phase === "tool" ? "external.run.stalledTool" : "external.run.stalled";
   return t(key, { minutes });

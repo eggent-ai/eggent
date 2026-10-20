@@ -195,7 +195,8 @@ await check("the stored chat keeps what was done, the question and its choices, 
   assert.ok(stored.content.includes(BEFORE), "what the turn did before the question was lost");
   assert.ok(stored.content.includes(QUESTION), "the question is gone from the chat");
   assert.ok(stored.content.includes(OPTION), "the choices the question offered are gone");
-  assert.match(stored.content, /waited \d+ h without an answer/);
+  // The limit here is two seconds, which is said in minutes; a day is said in hours.
+  assert.match(stored.content, /waited 1 min without an answer/);
   assert.match(stored.content, /Answer it in this chat/);
 });
 
