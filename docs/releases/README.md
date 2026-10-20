@@ -9,6 +9,7 @@ said `0.2.4`, which is why the number there now links to the releases page.
 
 | Version | Name | Date | Notes |
 | --- | --- | --- | --- |
+| `0.6.0` | Task Board and Side-by-Side Files | 2026-10-20 | [Full snapshot](./0.6.0-task-board-and-side-by-side-files.md), [GitHub body](./github-v0.6.0.md) |
 | `0.5.0` | Keyless Search and Scheduled Reports | 2026-10-14 | [Full snapshot](./0.5.0-keyless-search-and-scheduled-reports.md), [GitHub body](./github-v0.5.0.md) |
 | `0.4.0` | Learning, Projects and Files | 2026-10-11 | [Full snapshot](./0.4.0-learning-projects-and-files.md), [GitHub body](./github-v0.4.0.md) |
 | `0.3.0` | Terminal and Helpers | 2026-10-09 | [Full snapshot](./0.3.0-terminal-and-helpers.md), [GitHub body](./github-v0.3.0.md) |

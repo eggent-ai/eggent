@@ -1651,6 +1651,37 @@ export async function saveProjectModelSettingsFile(projectId: string, content: s
   return normalized;
 }
 
+/**
+ * Put every project whose model.json names a provider that `matches` back on
+ * the workspace's model, and return their ids.
+ *
+ * The provider and model stay in the file beside `inheritsGlobal: true`, the
+ * same way the settings form remembers a last pick, so choosing it again
+ * starts from where it was. Files that cannot be read are left alone.
+ */
+export async function followWorkspaceModelWhere(matches: (provider: string) => boolean): Promise<string[]> {
+  const released: string[] = [];
+  for (const project of await getAllProjects()) {
+    const filePath = getProjectModelSettingsPath(project.id);
+    const content = await readTextIfExists(filePath);
+    if (content === null) continue;
+    let record: Record<string, unknown>;
+    try {
+      const parsed = JSON.parse(content) as unknown;
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) continue;
+      record = parsed as Record<string, unknown>;
+    } catch {
+      continue;
+    }
+    const provider = typeof record.provider === "string" ? record.provider.trim() : "";
+    if (record.inheritsGlobal === true || !provider || !matches(provider)) continue;
+    await writeTextFile(filePath, JSON.stringify({ ...record, inheritsGlobal: true }, null, 2));
+    publishUiSyncEvent({ topic: "projects", projectId: project.id, reason: "project_model_updated" });
+    released.push(project.id);
+  }
+  return released;
+}
+
 export async function loadProjectModelSettings(projectId: string): Promise<Record<string, unknown> | null> {
   try {
     const content = await readProjectModelSettingsFile(projectId);

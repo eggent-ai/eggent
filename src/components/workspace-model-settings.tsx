@@ -21,6 +21,7 @@ import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectLabel, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SkeletonBlock } from "@/components/ui/skeleton-list";
 import { Textarea } from "@/components/ui/textarea";
+import { EggentServicesSettings, type ServicesState } from "@/components/eggent-services-settings";
 import { useI18n } from "@/i18n/provider";
 import type { MessageKey, MessageValues } from "@/i18n/messages";
 
@@ -173,6 +174,8 @@ interface PiState {
     reason?: string;
   };
   imageProviders?: Array<{ id: string; name: string }>;
+  /** Who draws, transcribes and looks back while the workspace is on its own model. */
+  services?: ServicesState;
   /** What the workspace is set to, whether or not the provider still lists it. */
   savedModel?: { provider: string; providerName?: string; model: string; available: boolean } | null;
   /** What actually answers: the saved model while it is servable, the fallback otherwise. */
@@ -234,9 +237,6 @@ export function WorkspaceModelSettings() {
   const [defaultProviderSelection, setDefaultProviderSelection] = useState("");
   const [defaultModelSelection, setDefaultModelSelection] = useState("");
   const [defaultThinkingLevel, setDefaultThinkingLevel] = useState("high");
-  const [imageProviderSelection, setImageProviderSelection] = useState("");
-  const [imageModelSelection, setImageModelSelection] = useState("");
-  const [savingImageBackend, setSavingImageBackend] = useState(false);
 
   useEffect(() => {
     void loadPiState();
@@ -328,9 +328,6 @@ export function WorkspaceModelSettings() {
       const firstProviderModel = availablePiModels.find((model) => model.provider === providerSelection);
       setDefaultProviderSelection(providerSelection);
       setDefaultModelSelection(defaultProviderHasModels && defaultModel ? defaultModel : firstProviderModel?.id || "");
-      const imageBackend = stateJson?.imageGeneration as { providerId?: string; model?: string; provider?: string } | undefined;
-      setImageProviderSelection(imageBackend?.provider === "custom" ? imageBackend.providerId || "" : "");
-      setImageModelSelection(imageBackend?.provider === "custom" ? imageBackend.model || "" : "");
       setDefaultThinkingLevel(typeof stateJson?.settings?.defaultThinkingLevel === "string" ? stateJson.settings.defaultThinkingLevel : "high");
       const raw = typeof rawJson.content === "string" ? rawJson.content : "";
       setModelsJson(raw);
@@ -380,32 +377,6 @@ export function WorkspaceModelSettings() {
       setPiError(error instanceof Error ? error.message : t("settings.errors.saveProviderKey"));
     } finally {
       setSavingProvider(false);
-    }
-  }
-
-  /**
-   * Save which provider and model answer image requests.
-   *
-   * Only reachable on a workspace running its own model: while the included
-   * model is active it serves images too, so there is nothing to choose.
-   */
-  async function saveImageBackend(clear = false) {
-    try {
-      setSavingImageBackend(true);
-      setPiError(null);
-      const res = await fetch("/api/pi/images", {
-        method: "PUT",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(clear ? {} : { provider: imageProviderSelection, model: imageModelSelection }),
-      });
-      const json = await res.json().catch(() => null);
-      if (!res.ok) throw new Error(json?.error || t("settings.errors.saveImageBackend"));
-      setPiState(json);
-      await loadPiState();
-    } catch (error) {
-      setPiError(error instanceof Error ? error.message : t("settings.errors.saveImageBackend"));
-    } finally {
-      setSavingImageBackend(false);
     }
   }
 
@@ -613,8 +584,6 @@ export function WorkspaceModelSettings() {
       .sort((a, b) => a.name.localeCompare(b.name));
   }, [piState]);
 
-  const imageProviderChoices = useMemo(() => piState?.imageProviders ?? [], [piState]);
-
   /**
    * The included models, each with the one line that decides between them.
    *
@@ -726,7 +695,6 @@ export function WorkspaceModelSettings() {
   const modelLockLabel = piState.modelLock?.label || "Eggent AI";
   const modelLockEnforced = Boolean(piState.modelLock?.enforced);
   const modelLockSelfHostedUrl = piState.modelLock?.selfHostedUrl || "https://github.com/eggent-ai/eggent";
-  const eggentImagesEnabled = Boolean(piState.imageGeneration?.enabled);
   // The pickers show what is saved; these say what actually answers, which is
   // something else whenever the saved model is not one the workspace can serve.
   const savedModel = piState.savedModel ?? null;
@@ -1176,55 +1144,19 @@ export function WorkspaceModelSettings() {
               </Select>
             </div>
 
-            {/* Images follow the text model. The included model covers both;
-                a workspace on its own provider brings its own image model or
-                has none. */}
-            <div className="space-y-3 border-t pt-5">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <h4 className="text-sm font-medium">{t("settings.imageGeneration.title")}</h4>
-                <Badge variant={eggentImagesEnabled ? "secondary" : "outline"}>
-                  {eggentImagesEnabled ? t("settings.imageGeneration.enabled") : t("settings.imageGeneration.unavailable")}
-                </Badge>
-              </div>
-              <p className="text-xs text-muted-foreground">{t("settings.imageGeneration.ownDescription")}</p>
-              <div className="grid gap-3 md:grid-cols-[1fr_1fr_auto]">
-                <Select value={imageProviderSelection} onValueChange={setImageProviderSelection} disabled={imageProviderChoices.length === 0}>
-                  <SelectTrigger className="w-full" aria-label={t("settings.imageGeneration.selectProvider")}>
-                    <SelectValue placeholder={imageProviderChoices.length === 0 ? t("settings.imageGeneration.noProviders") : t("settings.imageGeneration.selectProvider")} />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectGroup>
-                      {imageProviderChoices.map((item) => (
-                        <SelectItem key={item.id} value={item.id}>{item.name}</SelectItem>
-                      ))}
-                    </SelectGroup>
-                  </SelectContent>
-                </Select>
-                <Input
-                  value={imageModelSelection}
-                  onChange={(event) => setImageModelSelection(event.target.value)}
-                  aria-label={t("settings.imageGeneration.modelPlaceholder")}
-                  placeholder={t("settings.imageGeneration.modelPlaceholder")}
-                  disabled={!imageProviderSelection}
-                />
-                <div className="flex gap-2">
-                  <Button
-                    variant="outline"
-                    onClick={() => saveImageBackend()}
-                    disabled={savingImageBackend || !imageProviderSelection || !imageModelSelection.trim()}
-                    className="gap-2"
-                  >
-                    {savingImageBackend ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
-                    {t("common.save")}
-                  </Button>
-                  {piState.imageGeneration?.provider === "custom" ? (
-                    <Button variant="ghost" size="sm" className="text-destructive" onClick={() => saveImageBackend(true)} disabled={savingImageBackend}>
-                      {t("settings.imageGeneration.clear")}
-                    </Button>
-                  ) : null}
-                </div>
-              </div>
-            </div>
+            {/* What else the included model does - images, voice, the look-back
+                after a chat - is off once the workspace leaves it, and turned
+                back on here one at a time, or pointed at a provider of its own. */}
+            {piState.services ? (
+              <EggentServicesSettings
+                services={piState.services}
+                onError={setPiError}
+                onSaved={async (json) => {
+                  setPiState(json as PiState);
+                  await loadPiState();
+                }}
+              />
+            ) : null}
 
             <div className="space-y-2 border-t pt-5">
               <div className="flex flex-wrap items-start justify-between gap-3">

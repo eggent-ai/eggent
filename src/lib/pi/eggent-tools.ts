@@ -5,10 +5,12 @@ import fs from "fs/promises";
 import path from "path";
 import type { McpServerConfig } from "@/lib/types";
 import {
+  getEggentAiModelLockState,
   getImageGenerationState,
   getPiAuthPath,
   getPiModelsState,
   getPiSettingsState,
+  managedCredentialRecoverable,
   resolveImageBackend,
   switchToModelProvider,
   upsertCustomModelProvider,
@@ -1009,14 +1011,21 @@ export async function createEggentPiTools(options: {
           // Say which of the two ways out applies rather than "not configured":
           // a workspace that left the included model has an image model to pick,
           // and coming back turns text and images on together.
-          const state = await getImageGenerationState();
+          const [state, managedRecoverable, modelLock] = await Promise.all([
+            getImageGenerationState(),
+            managedCredentialRecoverable(),
+            getEggentAiModelLockState(),
+          ]);
+          const managed = modelLock.label;
           return textResult(
             [
               "This workspace cannot generate images right now.",
               state.reason === "image_provider_not_connected" || state.reason === "image_provider_has_no_base_url"
                 ? `The image provider selected in Settings (${state.providerId}) is not usable: connect it, or choose another one.`
                 : "No image model is selected. Image generation is configured separately from the text model.",
-              "Tell the user they have two options: choose an image provider and model in Settings, or switch back to the included Eggent AI model, which covers text and images together. Do not attempt image generation through other tools.",
+              managedRecoverable
+                ? `Tell the user their options, all in Settings -> Models, Advanced: turn ${managed} on for images alone while the chat stays on their own model, or choose an image provider and model of their own; switching the whole workspace back to ${managed} turns images on too. Do not attempt image generation through other tools.`
+                : "Tell the user to choose an image provider and model in Settings -> Models, Advanced. Do not attempt image generation through other tools.",
             ].join("\n"),
             { configured: false, reason: state.reason || "image_backend_not_configured" }
           );

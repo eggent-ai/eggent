@@ -1,10 +1,13 @@
 /**
  * A voice message goes to the included model's gateway while the workspace runs
- * on it, and to local whisper otherwise - or whenever the gateway does not
- * answer with a transcript, so a refusal never costs the person their message.
+ * on it, and to local whisper otherwise - unless the person turned the gateway
+ * on for voice, or chose a provider of their own - and to whisper whenever the
+ * remote one does not answer with a transcript, so a refusal never costs the
+ * person their message.
  *
- * Drives the real transcriber: a stub gateway on loopback, a throwaway agent
- * directory for the model lock, a stand-in whisper binary, the real ffmpeg.
+ * Drives the real transcriber: a stub gateway and a stub provider on loopback, a
+ * throwaway agent directory for the model lock, a stand-in whisper binary, the
+ * real ffmpeg.
  * Run: npm run test:cloud-transcription
  */
 import assert from "node:assert/strict";
@@ -33,11 +36,22 @@ fs.mkdirSync(agentDir, { recursive: true });
 type Seen = { auth?: string; body: Record<string, unknown> };
 const seen: Seen[] = [];
 let answer: { status: number; body: unknown } = { status: 200, body: { text: "  from the cloud  " } };
+// A provider of the workspace's own, under /own: OpenAI's form, not the gateway's JSON.
+type ProviderSeen = { auth?: string; type?: string; body: Buffer };
+const providerSeen: ProviderSeen[] = [];
+let providerAnswer: { status: number; body: unknown } = { status: 200, body: { text: " from the provider " } };
 const server = http.createServer((req, res) => {
-  let raw = "";
-  req.on("data", (chunk) => { raw += chunk; });
+  const chunks: Buffer[] = [];
+  req.on("data", (chunk: Buffer) => { chunks.push(chunk); });
   req.on("end", () => {
-    seen.push({ auth: req.headers.authorization, body: JSON.parse(raw || "{}") });
+    const raw = Buffer.concat(chunks);
+    if (req.url?.startsWith("/own/")) {
+      providerSeen.push({ auth: req.headers.authorization, type: req.headers["content-type"], body: raw });
+      res.writeHead(providerAnswer.status, { "content-type": "application/json" });
+      res.end(JSON.stringify(providerAnswer.body));
+      return;
+    }
+    seen.push({ auth: req.headers.authorization, body: JSON.parse(raw.toString("utf-8") || "{}") });
     res.writeHead(answer.status, { "content-type": "application/json" });
     res.end(JSON.stringify(answer.body));
   });
@@ -76,6 +90,9 @@ function onIncludedModel(): void {
 function onOwnProvider(): void {
   fs.writeFileSync(path.join(agentDir, "settings.json"), JSON.stringify({ defaultProvider: "my-own", defaultModel: "x" }));
   fs.writeFileSync(path.join(agentDir, "auth.json"), JSON.stringify({ "my-own": { type: "api_key", key: "sk-own" }, "eggent-ai": { type: "api_key", key: "eggw_test_token" } }));
+  fs.writeFileSync(path.join(agentDir, "models.json"), JSON.stringify({
+    providers: { "my-own": { baseUrl: `http://127.0.0.1:${port}/own/v1`, api: "openai-completions", models: [{ id: "x" }] } },
+  }));
 }
 
 // A real recording: one second of tone, Ogg Opus as a browser or Telegram sends it.
@@ -85,6 +102,7 @@ const recording = fs.readFileSync(oggPath);
 
 const { transcribeAudioBuffer } = await import("../src/lib/speech/transcriber.ts");
 const { cloudUploadName, transcribeInCloud, CLOUD_TRANSCRIPTION_MAX_BYTES } = await import("../src/lib/speech/cloud-transcriber.ts");
+const store = await import("../src/lib/pi/config-store.ts");
 
 console.log("on the included model the gateway transcribes:");
 onIncludedModel();
@@ -131,6 +149,65 @@ await check("whisper, and no request to the gateway", () => {
   assert.equal(own.transcript, "from whisper");
   assert.equal(seen.length, 0);
 });
+
+console.log("\non its own provider, with the gateway turned on for voice:");
+await store.setServiceChoice({ service: "speech", use: "eggent" });
+seen.length = 0;
+answer = { status: 200, body: { text: "from the cloud" } };
+const optedIn = await transcribeAudioBuffer({ buffer: recording, filename: "voice.ogg", mimeType: "audio/ogg", language: "ru" });
+await check("the gateway transcribes, with the gateway token", () => {
+  assert.equal(optedIn.transcript, "from the cloud");
+  assert.equal(optedIn.modelPath, "cloud");
+  assert.equal(seen.length, 1);
+  assert.equal(seen[0].auth, "Bearer eggw_test_token");
+});
+
+console.log("\non its own provider, with a voice provider of its own:");
+await store.setServiceChoice({ service: "speech", use: "provider", provider: "my-own", model: "listen-1" });
+seen.length = 0;
+providerSeen.length = 0;
+providerAnswer = { status: 200, body: { text: " from the provider " } };
+const viaProvider = await transcribeAudioBuffer({ buffer: recording, filename: "voice.ogg", mimeType: "audio/ogg", language: "ru" });
+await check("the provider transcribes, and the gateway is not asked", () => {
+  assert.equal(viaProvider.transcript, "from the provider");
+  assert.equal(viaProvider.modelPath, "provider:my-own");
+  assert.equal(providerSeen.length, 1);
+  assert.equal(seen.length, 0);
+});
+await check("with the provider's own key, as OpenAI's form: the file, the model, the language", () => {
+  const sent = providerSeen[0];
+  assert.equal(sent.auth, "Bearer sk-own");
+  assert.match(sent.type || "", /^multipart\/form-data; boundary=/);
+  const text = sent.body.toString("latin1");
+  assert.match(text, /name="model"\r\n\r\nlisten-1\r\n/);
+  assert.match(text, /name="language"\r\n\r\nru\r\n/);
+  assert.match(text, /name="file"; filename="voice\.ogg"\r\nContent-Type: audio\/ogg\r\n\r\n/);
+  assert.ok(sent.body.includes(recording), "the whole recording is in the form");
+});
+await check("a language left to detect is not sent", async () => {
+  providerSeen.length = 0;
+  await transcribeAudioBuffer({ buffer: recording, filename: "voice.ogg", mimeType: "audio/ogg", language: "auto" });
+  assert.doesNotMatch(providerSeen[0].body.toString("latin1"), /name="language"/);
+});
+await check("a provider that refuses leaves the message to whisper", async () => {
+  providerSeen.length = 0;
+  providerAnswer = { status: 401, body: { error: { message: "bad key" } } };
+  const refusedByProvider = await transcribeAudioBuffer({ buffer: recording, filename: "voice.ogg", mimeType: "audio/ogg" });
+  assert.equal(providerSeen.length, 1);
+  assert.equal(refusedByProvider.transcript, "from whisper");
+});
+
+console.log("\nleaving the included model turns the gateway off for voice again:");
+await store.setServiceChoice({ service: "speech", use: "eggent" });
+onIncludedModel();
+await store.disableEggentAiModelLock();
+seen.length = 0;
+const afterLeaving = await transcribeAudioBuffer({ buffer: recording, filename: "voice.ogg", mimeType: "audio/ogg" });
+await check("whisper, and no request to the gateway", () => {
+  assert.equal(afterLeaving.transcript, "from whisper");
+  assert.equal(seen.length, 0);
+});
+fs.rmSync(path.join(agentDir, "eggent-ai-lock.json"), { force: true });
 
 console.log("\nthe cloud switched off by the environment:");
 onIncludedModel();
