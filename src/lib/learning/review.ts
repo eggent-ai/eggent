@@ -19,7 +19,9 @@ import { countTurn, noteReviewStarted, reviewAllowed } from "@/lib/learning/stat
 import { createReviewTools, REVIEW_TOOL_NAMES } from "@/lib/learning/tools";
 import type { LearnedChange } from "@/lib/learning/types";
 import { noteSkillsUsed, runCurator } from "@/lib/learning/usage";
-import { fallbackRuntimeModel, getPiModelRegistry, getPiModelRuntime } from "@/lib/pi/config-store";
+import { pickReviewCandidate } from "@/lib/learning/review-model";
+import { fallbackRuntimeModel, getManagedProviderId, getPiModelRegistry, getPiModelRuntime, learningModelPolicy } from "@/lib/pi/config-store";
+import { managedDefaultTextModel, readManagedCatalog } from "@/lib/pi/managed-models";
 import type { PiToolRecord } from "@/lib/pi/types";
 import { redactSecrets } from "@/lib/pi/provider-failure";
 import { getChat } from "@/lib/storage/chat-store";
@@ -75,19 +77,24 @@ async function pickReviewModel(preferred?: { provider?: string; id?: string }) {
   await registry.refresh();
   const available = registry.getAvailable();
 
-  const override = reviewModelOverride();
-  if (override) {
-    const slash = override.indexOf("/");
-    const provider = slash > 0 ? override.slice(0, slash) : undefined;
-    const id = slash > 0 ? override.slice(slash + 1) : override;
-    const matches = available.filter((model) => model.id === id && (!provider || model.provider === provider));
-    const named = matches.find((model) => model.provider === preferred?.provider) ?? matches[0];
-    if (named) return { model: named, runtime };
-  }
-  const same = preferred?.id
-    ? available.find((model) => model.provider === preferred.provider && model.id === preferred.id)
-    : undefined;
-  if (same) return { model: same, runtime };
+  // The included model only where the chat itself is on it or the person turned
+  // it on for this: the deployment's choice of model for the look-back is a
+  // choice within the included model, not a reason to stay on it after leaving.
+  const [policy, managedProvider, catalog] = await Promise.all([
+    learningModelPolicy(preferred?.provider),
+    getManagedProviderId(),
+    readManagedCatalog().catch(() => []),
+  ]);
+  const picked = pickReviewCandidate({
+    available,
+    override: reviewModelOverride(),
+    preferred,
+    managedAllowed: policy.managedAllowed,
+    managedFirst: policy.managedFirst,
+    isManaged: (provider) => provider === "eggent-ai" || (Boolean(managedProvider) && provider === managedProvider),
+    managedDefaultId: managedDefaultTextModel(catalog)?.id,
+  });
+  if (picked) return { model: picked, runtime };
   const fallback = await fallbackRuntimeModel(available);
   return fallback ? { model: fallback, runtime } : null;
 }

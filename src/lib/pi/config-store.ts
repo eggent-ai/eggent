@@ -4,7 +4,7 @@ import path from "path";
 import * as PiSdk from "@earendil-works/pi-coding-agent";
 import type { ModelRegistry, ModelRuntime, SettingsManager } from "@earendil-works/pi-coding-agent";
 import type { PiRuntimeStats } from "@/lib/pi/types";
-import { getWorkDir, loadProjectModelSettings } from "@/lib/storage/project-store";
+import { followWorkspaceModelWhere, getWorkDir, loadProjectModelSettings } from "@/lib/storage/project-store";
 import { canProbeProviderApi, isLocalOnlyBaseUrl, probeModelProvider, type ProviderProbe } from "@/lib/pi/provider-probe";
 
 type StoredCredentialInfo = { providerId: string; type: string };
@@ -18,6 +18,7 @@ function isTruthyEnv(value: string | undefined): boolean {
 import {
   managedCatalogAgeMs,
   managedDefaultTextModel,
+  managedGatewayBaseUrl,
   readManagedCatalog,
   refreshManagedCatalog,
   usableManagedTextModels,
@@ -236,20 +237,21 @@ async function providerApi(providerId: string): Promise<string | undefined> {
  * which survives switching to your own model - so a workspace that had
  * deliberately left Eggent AI still showed Eggent image generation as active
  * and still spent included credits on it. The two now travel together: the
- * managed backend serves images only while the managed text model is the one
- * answering. A workspace on its own provider brings its own image model, or has
- * none, and both the settings screen and the agent say so plainly.
+ * managed backend serves images while the managed text model is the one
+ * answering, and after that only when the person turned it back on for images
+ * (see {@link readServiceOptIns}). Otherwise a workspace on its own provider
+ * brings its own image model, or has none, and both the settings screen and the
+ * agent say so plainly.
  */
 export async function getImageGenerationState(): Promise<ImageGenerationState> {
-  const [auth, modelLock] = await Promise.all([
+  const [auth, modelLock, optIns] = await Promise.all([
     readAuthJson().catch((): Record<string, StoredCredentialRecord> => ({})),
     getEggentAiModelLockState(),
+    readServiceOptIns(),
   ]);
 
-  if (modelLock.locked) {
-    const token = typeof auth["eggent-ai"]?.key === "string" ? auth["eggent-ai"].key : "";
-    const baseUrl = await providerBaseUrl("eggent-ai");
-    if (token.startsWith("eggw_") && baseUrl) {
+  if (modelLock.locked || optIns.images) {
+    if (await managedImagesUsable(auth)) {
       return { enabled: true, provider: "eggent", label: modelLock.label, providerId: "eggent-ai" };
     }
     return { enabled: false, provider: "none", label: "Not configured", reason: "missing_managed_gateway_token" };
@@ -323,6 +325,7 @@ export async function setImageGenerationBackend(
 ): Promise<ImageGenerationState> {
   if (!input) {
     await writeImageBackendConfig(null);
+    await setServiceOptIn("images", false);
     return await getImageGenerationState();
   }
   const provider = input.provider.trim();
@@ -332,11 +335,347 @@ export async function setImageGenerationBackend(
   if (!auth[provider]) {
     throw new Error(`Connect ${provider} first: this workspace has no credential for it.`);
   }
+  if (auth[provider].type !== "api_key" || !auth[provider].key?.trim()) {
+    throw new Error(`${provider} is signed in without an API key, and image requests need one.`);
+  }
   if (!(await providerBaseUrl(provider))) {
     throw new Error(`${provider} has no base URL, so it cannot serve image requests.`);
   }
   await writeImageBackendConfig({ provider, model });
+  // One choice per service: a provider of one's own replaces Eggent AI for it.
+  await setServiceOptIn("images", false);
   return await getImageGenerationState();
+}
+
+// --- What else the included model does --------------------------------------
+//
+// The included model is more than the chat: it draws images, transcribes voice
+// and runs the look-back that keeps learned notes. The three used to follow a
+// workspace's departure each in its own way - images stopped, voice fell back to
+// whisper, and the look-back went on running on the included model and spending
+// its balance - so leaving was never quite leaving. One rule now: while the
+// workspace answers on the included model, all three use it; once it leaves,
+// none of them does until the person turns one back on in Settings. Leaving
+// again turns them all off again (disableEggentAiModelLock), so "I left" always
+// means nothing more is spent there.
+
+export type EggentAiService = "images" | "speech" | "learning";
+const EGGENT_AI_SERVICES: readonly EggentAiService[] = ["images", "speech", "learning"];
+
+function getServiceOptInsPath(): string {
+  return path.join(getPiAgentDir(), "eggent-ai-services.json");
+}
+
+/** The services Eggent AI was turned back on for while the workspace is on its own model. */
+export async function readServiceOptIns(): Promise<Record<EggentAiService, boolean>> {
+  const optIns: Record<EggentAiService, boolean> = { images: false, speech: false, learning: false };
+  try {
+    const parsed = readJsonRecord(await fs.readFile(getServiceOptInsPath(), "utf-8"));
+    for (const service of EGGENT_AI_SERVICES) optIns[service] = parsed[service] === true;
+  } catch {
+    // No file, or not one we can read: nothing was turned on.
+  }
+  return optIns;
+}
+
+async function setServiceOptIn(service: EggentAiService, on: boolean): Promise<void> {
+  const optIns = await readServiceOptIns();
+  if (optIns[service] === on) return;
+  optIns[service] = on;
+  const filePath = getServiceOptInsPath();
+  if (!EGGENT_AI_SERVICES.some((name) => optIns[name])) {
+    await fs.rm(filePath, { force: true });
+    return;
+  }
+  await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  const temporary = `${filePath}.${process.pid}.tmp`;
+  await fs.writeFile(temporary, `${JSON.stringify(optIns, null, 2)}\n`, { mode: 0o600 });
+  await fs.rename(temporary, filePath);
+}
+
+/** Every service back to its own-model default: what leaving the included model means. */
+export async function clearServiceOptIns(): Promise<void> {
+  await fs.rm(getServiceOptInsPath(), { force: true }).catch(() => undefined);
+}
+
+/** Whether the included backend can serve images: its credential and its address. */
+async function managedImagesUsable(auth: Record<string, StoredCredentialRecord>): Promise<boolean> {
+  const token = typeof auth["eggent-ai"]?.key === "string" ? auth["eggent-ai"].key : "";
+  return token.startsWith("eggw_") && Boolean(await providerBaseUrl("eggent-ai"));
+}
+
+function speechCloudDisabled(): boolean {
+  const value = process.env.EGGENT_STT_CLOUD?.trim().toLowerCase();
+  return value === "0" || value === "false" || value === "off" || value === "no";
+}
+
+/** Where the included model's gateway takes a recording, or null when it cannot. */
+async function managedSpeechTarget(): Promise<{ url: string; token: string } | null> {
+  if (speechCloudDisabled()) return null;
+  const base = managedGatewayBaseUrl();
+  if (!base) return null;
+  const token = await getManagedGatewayToken();
+  if (!token) return null;
+  return { url: `${base.replace(/\/+$/, "")}/audio/transcriptions`, token };
+}
+
+function getSpeechBackendPath(): string {
+  return path.join(getPiAgentDir(), "speech-transcription.json");
+}
+
+/** The workspace's own provider and model for voice, when one was chosen. */
+export async function readSpeechBackendConfig(): Promise<{ provider: string; model: string } | null> {
+  try {
+    const parsed = readJsonRecord(await fs.readFile(getSpeechBackendPath(), "utf-8"));
+    const provider = typeof parsed.provider === "string" ? parsed.provider.trim() : "";
+    const model = typeof parsed.model === "string" ? parsed.model.trim() : "";
+    return provider && model ? { provider, model } : null;
+  } catch {
+    return null;
+  }
+}
+
+async function writeSpeechBackendConfig(content: { provider: string; model: string } | null): Promise<void> {
+  const filePath = getSpeechBackendPath();
+  if (!content) {
+    await fs.rm(filePath, { force: true }).catch(() => undefined);
+    return;
+  }
+  await fs.mkdir(path.dirname(filePath), { recursive: true, mode: 0o700 });
+  await fs.writeFile(filePath, `${JSON.stringify(content, null, 2)}\n`, { mode: 0o600 });
+  await fs.chmod(filePath, 0o600).catch(() => undefined);
+}
+
+/**
+ * Whether a provider can transcribe: a key of its own and the OpenAI dialect.
+ *
+ * A transcription is a plain `POST /audio/transcriptions` with that key, in the
+ * OpenAI-compatible shape - a subscription signed in with OAuth has no key to
+ * send, and providers of other dialects expect something else - so only those
+ * providers are offered, and only they can be saved.
+ */
+async function speechProviderProblem(
+  provider: string,
+  auth: Record<string, StoredCredentialRecord>
+): Promise<SpeechTranscriptionState["reason"] | undefined> {
+  const credential = auth[provider];
+  if (!credential) return "provider_not_connected";
+  if (credential.type !== "api_key" || typeof credential.key !== "string" || !credential.key.trim()) {
+    return "provider_has_no_key";
+  }
+  if (!(await providerBaseUrl(provider))) return "provider_has_no_base_url";
+  const api = await providerApi(provider);
+  if (api && !api.startsWith("openai")) return "provider_cannot_transcribe";
+  return undefined;
+}
+
+export interface SpeechTranscriptionState {
+  /** Who turns voice into text: the included model, the workspace's own provider, or whisper here. */
+  use: "eggent" | "provider" | "local";
+  /** True when this follows the included model rather than a choice made in Settings. */
+  automatic: boolean;
+  providerId?: string;
+  model?: string;
+  /** Why the choice cannot be used right now; whisper on this server answers meanwhile. */
+  reason?:
+    | "managed_unavailable"
+    | "provider_not_connected"
+    | "provider_has_no_key"
+    | "provider_has_no_base_url"
+    | "provider_cannot_transcribe";
+}
+
+/** Who transcribes voice in this workspace, by the same rule as images. */
+export async function getSpeechTranscriptionState(): Promise<SpeechTranscriptionState> {
+  const [modelLock, optIns] = await Promise.all([getEggentAiModelLockState(), readServiceOptIns()]);
+  if (modelLock.locked || optIns.speech) {
+    const target = await managedSpeechTarget();
+    return { use: "eggent", automatic: modelLock.locked, ...(target ? {} : { reason: "managed_unavailable" as const }) };
+  }
+  const configured = await readSpeechBackendConfig();
+  if (!configured) return { use: "local", automatic: true };
+  const auth = await readAuthJson().catch((): Record<string, StoredCredentialRecord> => ({}));
+  const reason = await speechProviderProblem(configured.provider, auth);
+  return { use: "provider", automatic: false, providerId: configured.provider, model: configured.model, ...(reason ? { reason } : {}) };
+}
+
+export type SpeechBackend =
+  | { kind: "eggent"; url: string; token: string }
+  | { kind: "provider"; url: string; token: string; model: string; providerId: string };
+
+/** Where a recording goes, or null for whisper on this server. */
+export async function resolveSpeechBackend(): Promise<SpeechBackend | null> {
+  const state = await getSpeechTranscriptionState();
+  if (state.use === "eggent") {
+    const target = await managedSpeechTarget();
+    return target ? { kind: "eggent", ...target } : null;
+  }
+  if (state.use !== "provider" || state.reason || !state.providerId || !state.model) return null;
+  const auth = await readAuthJson().catch((): Record<string, StoredCredentialRecord> => ({}));
+  const token = auth[state.providerId]?.key?.trim() || "";
+  const baseUrl = await providerBaseUrl(state.providerId);
+  if (!token || !baseUrl) return null;
+  return { kind: "provider", url: `${baseUrl}/audio/transcriptions`, token, model: state.model, providerId: state.providerId };
+}
+
+/**
+ * Whether the learning look-back may run on the included model, and whether it
+ * should prefer it.
+ *
+ * It follows the chat it looks back on: a chat answered by the included model -
+ * the whole workspace on it, or one project put on it on purpose - is looked
+ * back on there, on the deployment's model for it if one is named. Once the
+ * person turned the included model on for the look-back, any chat is. Otherwise
+ * it runs on the chat's own model, whatever the deployment names for it: that
+ * name used to win regardless, so a workspace that had left kept paying for
+ * every look-back.
+ */
+export async function learningModelPolicy(chatProvider?: string): Promise<{ managedAllowed: boolean; managedFirst: boolean }> {
+  if (chatProvider && (await isManagedProviderId(chatProvider))) return { managedAllowed: true, managedFirst: false };
+  if ((await getEggentAiModelLockState()).locked) return { managedAllowed: true, managedFirst: false };
+  const optedIn = (await readServiceOptIns()).learning && Boolean(await getManagedProviderId());
+  return { managedAllowed: optedIn, managedFirst: optedIn };
+}
+
+export type ServiceChoice =
+  | { service: "images"; use: "off" | "eggent" }
+  | { service: "images"; use: "provider"; provider: string; model: string }
+  | { service: "speech"; use: "local" | "eggent" }
+  | { service: "speech"; use: "provider"; provider: string; model: string }
+  | { service: "learning"; use: "chat" | "eggent" };
+
+/**
+ * Make one choice for one service.
+ *
+ * Only meaningful on the workspace's own model: on the included one all three
+ * already use it, and a choice made there would only come back to surprise
+ * somebody after they leave. Each service holds one choice - turning Eggent AI
+ * on for voice forgets a voice provider and the other way round - so the
+ * screen and the run never disagree about which of two saved things applies.
+ */
+export async function setServiceChoice(choice: ServiceChoice): Promise<void> {
+  const modelLock = await getEggentAiModelLockState();
+  if (modelLock.locked) {
+    throw new Error(`This workspace runs on ${modelLock.label}, which already draws, transcribes and learns for it.`);
+  }
+  const auth = await readAuthJson().catch((): Record<string, StoredCredentialRecord> => ({}));
+
+  if (choice.use === "eggent") {
+    const usable = choice.service === "images"
+      ? await managedImagesUsable(auth)
+      : choice.service === "speech"
+        ? Boolean(await managedSpeechTarget())
+        : Boolean(await getManagedProviderId());
+    if (!usable) throw new Error(`${modelLock.label} is not available in this workspace.`);
+    if (choice.service === "images") await writeImageBackendConfig(null);
+    if (choice.service === "speech") await writeSpeechBackendConfig(null);
+    await setServiceOptIn(choice.service, true);
+    return;
+  }
+
+  if (choice.use === "provider") {
+    const provider = choice.provider.trim();
+    const model = choice.model.trim();
+    if (choice.service === "images") {
+      await setImageGenerationBackend({ provider, model });
+      return;
+    }
+    if (!provider || !model) throw new Error("Choose a provider and enter a model id.");
+    const problem = await speechProviderProblem(provider, auth);
+    if (problem === "provider_not_connected") throw new Error(`Connect ${provider} first: this workspace has no credential for it.`);
+    if (problem === "provider_has_no_key") throw new Error(`${provider} is signed in without an API key, and transcription needs one.`);
+    if (problem === "provider_has_no_base_url") throw new Error(`${provider} has no base URL, so it cannot transcribe.`);
+    if (problem === "provider_cannot_transcribe") throw new Error(`${provider} does not speak the OpenAI API, so it cannot transcribe here.`);
+    await writeSpeechBackendConfig({ provider, model });
+    await setServiceOptIn("speech", false);
+    return;
+  }
+
+  // Back to the default on one's own model: nothing for images, whisper for
+  // voice, the chat's model for the look-back.
+  if (choice.service === "images") await writeImageBackendConfig(null);
+  if (choice.service === "speech") await writeSpeechBackendConfig(null);
+  await setServiceOptIn(choice.service, false);
+}
+
+export interface EggentServicesState {
+  /** Whether the included model could serve each service here, and under what name. */
+  managed: { label: string; images: boolean; speech: boolean; learning: boolean };
+  images: { use: "eggent" | "provider" | "off"; automatic: boolean; providerId?: string; model?: string; reason?: string };
+  speech: SpeechTranscriptionState;
+  learning: { use: "eggent" | "chat"; automatic: boolean };
+  imageProviders: Array<{ id: string; name: string }>;
+  speechProviders: Array<{ id: string; name: string }>;
+}
+
+/** Everything the settings screen and the agent need to say who does what. */
+async function getServicesState(
+  displayName: (provider: string) => string,
+  images: ImageGenerationState
+): Promise<EggentServicesState> {
+  const [auth, modelLock, optIns, imageConfig, speech, managedProvider] = await Promise.all([
+    readAuthJson().catch((): Record<string, StoredCredentialRecord> => ({})),
+    getEggentAiModelLockState(),
+    readServiceOptIns(),
+    readImageBackendConfig(),
+    getSpeechTranscriptionState(),
+    getManagedProviderId(),
+  ]);
+  const usableImages = images.enabled ? {} : { reason: images.reason };
+  return {
+    managed: {
+      label: modelLock.label,
+      images: await managedImagesUsable(auth),
+      speech: Boolean(await managedSpeechTarget()),
+      learning: Boolean(managedProvider),
+    },
+    images: modelLock.locked || optIns.images
+      ? { use: "eggent", automatic: modelLock.locked, ...usableImages }
+      : imageConfig
+        ? { use: "provider", automatic: false, providerId: imageConfig.provider, model: imageConfig.model, ...usableImages }
+        : { use: "off", automatic: true },
+    speech,
+    learning: modelLock.locked || optIns.learning
+      ? { use: "eggent", automatic: modelLock.locked }
+      : { use: "chat", automatic: true },
+    imageProviders: imageProviderChoices(auth, displayName),
+    speechProviders: await speechProviderChoices(auth, displayName),
+  };
+}
+
+/**
+ * Providers that can draw: connected with a key of their own.
+ *
+ * An image request carries that key, so a subscription signed in with OAuth -
+ * which has none - could be picked and then fail on the first picture.
+ */
+function imageProviderChoices(
+  auth: Record<string, StoredCredentialRecord>,
+  displayName: (provider: string) => string
+): Array<{ id: string; name: string }> {
+  return Object.entries(auth)
+    .filter(([provider, credential]) =>
+      provider !== "eggent-ai" &&
+      credential?.type === "api_key" &&
+      typeof credential.key === "string" &&
+      Boolean(credential.key.trim()) &&
+      !credential.key.startsWith("eggw_"))
+    .map(([provider]) => ({ id: provider, name: displayName(provider) }))
+    .sort((a, b) => a.name.localeCompare(b.name));
+}
+
+/** Providers that can take a recording: connected with a key, speaking OpenAI's API. */
+async function speechProviderChoices(
+  auth: Record<string, StoredCredentialRecord>,
+  displayName: (provider: string) => string
+): Promise<Array<{ id: string; name: string }>> {
+  const choices: Array<{ id: string; name: string }> = [];
+  for (const provider of Object.keys(auth)) {
+    if (provider === "eggent-ai" || auth[provider]?.key?.startsWith("eggw_")) continue;
+    if (await speechProviderProblem(provider, auth)) continue;
+    choices.push({ id: provider, name: displayName(provider) });
+  }
+  return choices.sort((a, b) => a.name.localeCompare(b.name));
 }
 
 async function writeAuthJson(content: Record<string, StoredCredentialRecord>): Promise<void> {
@@ -625,11 +964,15 @@ export async function switchToModelProvider(
 
   const wasLocked = (await getEggentAiModelLockState(cwd)).locked;
   if (wasLocked) {
-    await disableEggentAiModelLock(cwd);
+    // Projects are moved off the included model only once the switch has gone
+    // through: a refused one puts the lock back, and should leave them as they were.
+    await disableEggentAiModelLock(cwd, { keepProjects: true });
   }
 
   try {
-    return await updatePiModelDefaults({ provider, model }, cwd);
+    const state = await updatePiModelDefaults({ provider, model }, cwd);
+    if (wasLocked) await releaseProjectsFromManagedModel();
+    return state;
   } catch (error) {
     if (wasLocked) {
       await enableEggentAiModelLock(cwd).catch(() => undefined);
@@ -998,17 +1341,25 @@ export async function isManagedProviderId(provider?: string | null): Promise<boo
   return provider === "eggent-ai" || provider === (await getManagedProviderId());
 }
 
-export async function disableEggentAiModelLock(cwd = process.cwd()): Promise<void> {
+export async function disableEggentAiModelLock(
+  cwd = process.cwd(),
+  options: { keepProjects?: boolean } = {}
+): Promise<void> {
   if (isManagedAiEnforced()) {
     throw new Error(
       `Model selection is managed for this workspace. To use your own model or provider, run Eggent self-hosted: ${selfHostedDocsUrl()}`
     );
   }
   await writeEggentAiLockOverride({ disabled: true });
-  // Keep the managed gateway credential in auth.json. Once the text/agent model
-  // is unlocked, this token becomes the separate Eggent Images backend so users
-  // can combine BYOK/OAuth text models (for example Codex login) with managed
-  // image generation without losing the original gateway token.
+  // Leaving is leaving. Whatever was turned back on for images, voice or the
+  // look-back the last time this workspace was away is off again, and a project
+  // put on one of the included models follows the workspace's own model from
+  // now on: without this both kept spending the balance of a workspace whose
+  // owner had just walked away from it. Each can be turned back on in Settings.
+  await clearServiceOptIns();
+  if (!options.keepProjects) await releaseProjectsFromManagedModel();
+  // The managed gateway credential stays in auth.json: it is the way back, and
+  // what serves any of those services when one is turned on again.
   const settingsManager = getPiSettingsManager(cwd);
   if (settingsManager.getDefaultProvider() === "eggent-ai") {
     settingsManager.setDefaultProvider("");
@@ -1056,11 +1407,37 @@ export async function enableEggentAiModelLock(cwd = process.cwd()): Promise<Mana
   }
 
   await removeEggentAiLockOverride();
+  // Back on the included model everything uses it again, so nothing turned on
+  // while away is worth keeping - and keeping it would carry it into the next
+  // time the workspace leaves, which is the one place it must not be.
+  await clearServiceOptIns();
   const settingsManager = getPiSettingsManager(cwd);
   settingsManager.setDefaultProvider(managedProvider);
   settingsManager.setDefaultModel(managedModel.id);
   await settingsManager.flush();
   return repair;
+}
+
+/**
+ * Put every project that names an included model back on the workspace's model.
+ *
+ * The file keeps the provider and model it named, the way the settings form
+ * remembers a last pick, so turning the project back onto the included model is
+ * the same two clicks it always was. A failure here must not stop the switch it
+ * is part of, so it is logged and left.
+ */
+async function releaseProjectsFromManagedModel(): Promise<void> {
+  try {
+    const managed = await getManagedProviderId();
+    const released = await followWorkspaceModelWhere(
+      (provider) => provider === "eggent-ai" || (Boolean(managed) && provider === managed)
+    );
+    if (released.length > 0) {
+      console.log(`[eggent] left the included model: ${released.length} project(s) now follow the workspace model`);
+    }
+  } catch (error) {
+    console.warn("[eggent] could not move projects off the included model:", error instanceof Error ? error.message : error);
+  }
 }
 
 export async function getPiSettingsState(cwd = process.cwd()) {
@@ -1400,6 +1777,7 @@ export async function getPiModelsState() {
     : undefined;
   const modelLock = await getEggentAiModelLockState();
   const imageGeneration = await getImageGenerationState();
+  const services = await getServicesState((provider) => modelRegistry.getProviderDisplayName(provider), imageGeneration);
 
   if (modelLock.locked) {
     // Being on the included plan is a provider, not a model. The screen used to
@@ -1445,6 +1823,7 @@ export async function getPiModelsState() {
       modelsFile: getPiModelsPath(),
       modelLock,
       imageGeneration,
+      services,
       current: {
         provider: "eggent-ai",
         providerName: modelLock.label,
@@ -1515,12 +1894,11 @@ export async function getPiModelsState() {
     modelsFile: getPiModelsPath(),
     modelLock,
     imageGeneration,
-    // Only providers this workspace already holds a credential for can serve
-    // images, so the image picker offers exactly those and nothing else.
-    imageProviders: Object.keys(storedAuth)
-      .filter((provider) => provider !== "eggent-ai")
-      .map((provider) => ({ id: provider, name: modelRegistry.getProviderDisplayName(provider) }))
-      .sort((a, b) => a.name.localeCompare(b.name)),
+    // Who draws, transcribes and looks back, and what each could be pointed at.
+    services,
+    // Only providers this workspace holds a key for can serve images, so the
+    // image picker offers exactly those and nothing else.
+    imageProviders: services.imageProviders,
     managed: { available: managedRecoverable, providerId: managedProviderId || "eggent-ai", label: modelLock.label },
     // Also here, not only under the lock: a workspace on its own provider can
     // still put one project on the included model, and that form offers the

@@ -1,14 +1,17 @@
 /**
- * Speech to text through the included model's gateway.
+ * Speech to text somewhere other than this server.
  *
- * Only while the workspace runs on the included model: the gateway bills the
- * recording to the same balance as everything else, and a workspace that moved
- * to its own provider has said where its AI comes from. Anything that does not
- * end in a transcript - no gateway, a refusal, a timeout - returns null and the
- * caller transcribes locally, so a voice message is never lost to a wall.
+ * Two places can take a recording: the included model's gateway, and a
+ * provider the workspace connected with its own key. Which one - or neither -
+ * is decided in one place (resolveSpeechBackend), by the same rule as images:
+ * the gateway while the workspace runs on the included model, or when the
+ * person turned it on for voice; the own provider when one was chosen; local
+ * whisper otherwise. Anything that does not end in a transcript - a refusal, a
+ * timeout, a provider that does not transcribe - returns null and the caller
+ * transcribes locally, so a voice message is never lost to a wall.
  */
 
-/** The gateway's own ceiling on one recording. */
+/** The gateway's own ceiling on one recording, and OpenAI's. */
 export const CLOUD_TRANSCRIPTION_MAX_BYTES = 25 * 1024 * 1024;
 
 /** Containers the gateway's upstream accepts as they are. */
@@ -17,6 +20,12 @@ const ACCEPTED_EXTENSIONS = new Set([".webm", ".ogg", ".mp3", ".mp4", ".m4a", ".
 export interface CloudTarget {
   url: string;
   token: string;
+}
+
+/** A provider of the workspace's own: its transcription endpoint, key and model. */
+export interface ProviderTarget extends CloudTarget {
+  model: string;
+  providerId: string;
 }
 
 export interface CloudTranscriptionInput {
@@ -28,22 +37,14 @@ export interface CloudTranscriptionInput {
   language: string;
 }
 
-function cloudDisabled(): boolean {
-  const value = process.env.EGGENT_STT_CLOUD?.trim().toLowerCase();
-  return value === "0" || value === "false" || value === "off" || value === "no";
-}
+export type SpeechTarget =
+  | ({ kind: "eggent" } & CloudTarget)
+  | ({ kind: "provider" } & ProviderTarget);
 
-/** Where to send a recording, or null when this workspace is not on the included model. */
-export async function cloudTranscriptionTarget(): Promise<CloudTarget | null> {
-  if (cloudDisabled()) return null;
-  const { managedGatewayBaseUrl } = await import("@/lib/pi/managed-models");
-  const base = managedGatewayBaseUrl();
-  if (!base) return null;
-  const { getEggentAiModelLockState, getManagedGatewayToken } = await import("@/lib/pi/config-store");
-  if (!(await getEggentAiModelLockState()).locked) return null;
-  const token = await getManagedGatewayToken();
-  if (!token) return null;
-  return { url: `${base.replace(/\/+$/, "")}/audio/transcriptions`, token };
+/** Where to send a recording, or null for whisper on this server. */
+export async function speechTarget(): Promise<SpeechTarget | null> {
+  const { resolveSpeechBackend } = await import("@/lib/pi/config-store");
+  return resolveSpeechBackend();
 }
 
 /**
@@ -102,6 +103,50 @@ export async function transcribeInCloud(
     return transcript || null;
   } catch (error) {
     console.warn(`[speech] cloud transcription failed, transcribing locally: ${error instanceof Error ? error.message : String(error)}`);
+    return null;
+  }
+}
+
+/**
+ * Transcribe with a provider of the workspace's own, or return null with the
+ * reason logged.
+ *
+ * OpenAI's own request - a form with the file, the model, the language when it
+ * is known - which every OpenAI-compatible service that transcribes accepts.
+ * The key is the provider's, so nothing here is billed to the included model.
+ */
+export async function transcribeWithProvider(
+  target: ProviderTarget,
+  input: CloudTranscriptionInput,
+  options: { fetchImpl?: typeof fetch; timeoutMs?: number } = {}
+): Promise<string | null> {
+  if (input.buffer.byteLength === 0 || input.buffer.byteLength > CLOUD_TRANSCRIPTION_MAX_BYTES) return null;
+  const upload = cloudUploadName(input.extension, input.mimeType);
+  if (!upload) return null;
+  const fetchImpl = options.fetchImpl || fetch;
+  const timeoutMs = options.timeoutMs ?? Number(process.env.EGGENT_STT_CLOUD_TIMEOUT_MS || 60_000);
+  const form = new FormData();
+  form.append("file", new Blob([new Uint8Array(input.buffer)], { type: upload.mimeType }), upload.filename);
+  form.append("model", target.model);
+  if (input.language && input.language !== "auto") form.append("language", input.language);
+  form.append("response_format", "json");
+  try {
+    const response = await fetchImpl(target.url, {
+      method: "POST",
+      headers: { authorization: `Bearer ${target.token}` },
+      body: form,
+      signal: AbortSignal.timeout(timeoutMs),
+    });
+    const text = await response.text();
+    if (!response.ok) {
+      console.warn(`[speech] ${target.providerId} refused the recording (${response.status}), transcribing locally: ${errorMessage(text)}`);
+      return null;
+    }
+    const parsed = JSON.parse(text) as { text?: unknown };
+    const transcript = typeof parsed.text === "string" ? parsed.text.trim() : "";
+    return transcript || null;
+  } catch (error) {
+    console.warn(`[speech] ${target.providerId} transcription failed, transcribing locally: ${error instanceof Error ? error.message : String(error)}`);
     return null;
   }
 }

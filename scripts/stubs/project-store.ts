@@ -103,3 +103,8 @@ export async function createProject(
 export async function loadProjectModelSettings(): Promise<null> {
   return null;
 }
+
+/** Stub projects carry no model.json, so none follows anything. */
+export async function followWorkspaceModelWhere(): Promise<string[]> {
+  return [];
+}
