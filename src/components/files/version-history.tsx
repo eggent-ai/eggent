@@ -245,7 +245,9 @@ export function VersionHistory({ projectId, path, fill = false, onRestored }: {
 
   const restore = async () => {
     if (!selectedVersion || busy) return;
-    if (!window.confirm(t("files.history.restoreConfirm", { n: selectedVersion.n }))) return;
+    // Known already not to be kept, what the file holds is said to be lost in the one question asked.
+    const unkept = Boolean(history?.unkept);
+    if (!window.confirm(unkept ? t("files.history.restoreAnyway") : t("files.history.restoreConfirm", { n: selectedVersion.n }))) return;
     setBusy("restore");
     setNotice(null);
     try {
@@ -255,8 +257,8 @@ export function VersionHistory({ projectId, path, fill = false, onRestored }: {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ project: projectId, path, n: selectedVersion.n, ...(force ? { force: true } : {}) }),
         });
-      let response = await send(false);
-      let payload = (await response.json().catch(() => ({}))) as { error?: string; code?: string; version?: VersionInfo | null };
+      let response = await send(unkept);
+      let payload = (await response.json().catch(() => ({}))) as { error?: string; code?: string; version?: VersionInfo | null; lost?: boolean };
       // What the file holds now cannot be kept: said plainly, and done only if the person still wants it.
       if (response.status === 409 && payload.code === "unkept") {
         if (!window.confirm(t("files.history.restoreAnyway"))) return;
@@ -264,7 +266,7 @@ export function VersionHistory({ projectId, path, fill = false, onRestored }: {
         payload = (await response.json().catch(() => ({}))) as typeof payload;
       }
       if (!response.ok) throw new Error(payload.error || t("files.history.restoreFailed"));
-      setNotice(t("files.history.restored", { n: selectedVersion.n }));
+      setNotice(t(payload.lost ? "files.history.restoredLost" : "files.history.restored", { n: selectedVersion.n }));
       setCompareWith("previous");
       if (payload.version) setSelected(payload.version.n);
       await loadHistory();
@@ -328,7 +330,8 @@ export function VersionHistory({ projectId, path, fill = false, onRestored }: {
         ));
   }
 
-  const currentN = versions[0] && !versions[0].deleted ? versions[0].n : null;
+  // When the file has moved on to something its history could not keep, no version is what it holds now.
+  const currentN = versions[0] && !versions[0].deleted && !history.unkept ? versions[0].n : null;
   const compareOptions: Array<{ value: CompareWith; label: string }> = [
     { value: "previous", label: t("files.history.compare.previous") },
     ...(currentN !== null && selectedVersion && selectedVersion.n !== currentN ? [{ value: "current" as const, label: t("files.history.compare.current") }] : []),
@@ -353,6 +356,11 @@ export function VersionHistory({ projectId, path, fill = false, onRestored }: {
           <div className="flex items-center justify-between gap-2 px-3 py-2 text-xs text-muted-foreground">
             <span>{t("files.history.summary", { count: versions.length, size: formatBytes(history.bytes) })}</span>
           </div>
+          {history.unkept ? (
+            <p role="status" className="mx-3 mb-2 border-l-2 border-l-warning bg-muted/50 px-2 py-1.5 text-xs">
+              {t(history.unkept === "too-large" ? "files.history.nowTooLarge" : "files.history.nowUnreadable")}
+            </p>
+          ) : null}
           <ul className="max-h-44 min-h-0 overflow-y-auto pb-1 @3xl:max-h-none @3xl:flex-1" aria-label={t("files.history.listLabel")}>
             {versions.map((version) => {
               const when = formatWhen(version.at, locale, t);

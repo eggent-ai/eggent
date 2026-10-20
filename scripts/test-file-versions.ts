@@ -678,9 +678,10 @@ await check("restoring brings the text back as a new version, and what it replac
   fs.writeFileSync(path.join(shopDir, "contract.md"), "term 999 - typed on the laptop\n");
   const response = await restoreRoute.POST(request("/api/files/versions/restore", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ project: "shop", path: "contract.md", n: 1 }) }));
   assert.equal(response.status, 200);
-  const { version } = await response.json();
+  const { version, lost } = await response.json();
   assert.equal(version.by.kind, "restore");
   assert.equal(version.by.restoredFrom, 1);
+  assert.equal(lost, undefined, "a restore that kept what it replaced must not say it was lost");
   assert.equal(fs.readFileSync(path.join(shopDir, "contract.md"), "utf8"), "term 100\n");
   const texts: string[] = [];
   for (const item of (await journalOf("contract.md"))!.versions) texts.push((await store.content("shop/contract.md", item.n))?.toString() ?? "");
@@ -710,7 +711,9 @@ await check("a restore that cannot keep what the file holds now asks first, and 
     assert.equal(refused.status, 409);
     assert.equal((await refused.json()).code, "unkept");
     assert.equal(fs.readFileSync(file, "utf8").length, 3000);
-    assert.equal((await restore(true)).status, 200);
+    const forced = await restore(true);
+    assert.equal(forced.status, 200);
+    assert.equal((await forced.json()).lost, true, "the screen must be told what was replaced is not in the history");
     assert.equal(fs.readFileSync(file, "utf8"), "small\n");
   } finally {
     delete process.env.EGGENT_VERSIONS_MAX_FILE_MB;
@@ -902,6 +905,31 @@ await check("it lists, shows and compares what the store keeps", async () => {
   assert.match(diff, /-Old notes/);
   assert.match(diff, /\+Second line, edited/);
   assert.match(runCli(["list", "never-touched.md"]), /no history yet/);
+});
+await check("a file that outgrew its history is not said to hold its newest version, and that version can be brought back", async () => {
+  const file = put("outgrown.md", "kept\n", DAY);
+  await capture.captureBefore(file);
+  fs.writeFileSync(file, "kept, edited\n");
+  await capture.captureAfter(file, { kind: "person" });
+  fs.writeFileSync(file, "z".repeat(3000));
+  const history = async () => (await (await historyRoute.GET(request("/api/files/versions?project=shop&path=outgrown.md"))).json()) as { unkept?: string; versions: Array<{ n: number }> };
+  process.env.EGGENT_VERSIONS_MAX_FILE_MB = "0.001";
+  try {
+    const view = await history();
+    assert.equal(view.unkept, "too-large");
+    assert.deepEqual(view.versions.map((version) => version.n), [2, 1]);
+    const list = runCli(["list", "outgrown.md"]);
+    assert.doesNotMatch(list, /\(current\)/);
+    assert.match(list, /has changed since v2/);
+  } finally {
+    delete process.env.EGGENT_VERSIONS_MAX_FILE_MB;
+  }
+  // Holding its newest version again, the file is said to.
+  fs.writeFileSync(file, "kept, edited\n");
+  assert.equal((await history()).unkept, undefined);
+  assert.match(runCli(["list", "outgrown.md"]), /v2 .*\(current\)/);
+  fs.rmSync(file);
+  assert.match(runCli(["list", "outgrown.md"]), /not there any more; v2 is the last version kept/);
 });
 await check("it reads a document's text exactly as the screen does", async () => {
   const file = put("deal.docx", docx(["Πρώτο σημείο"], [["A", "B"]]));

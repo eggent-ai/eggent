@@ -84,6 +84,34 @@ function readObject(sha) {
   }
 }
 
+// What is read to tell whether a file still holds its newest version; a history keeps nothing larger.
+const MAX_COMPARE_BYTES = 64 * 1024 * 1024;
+
+/**
+ * Whether the file holds its newest version now. The history can be behind
+ * it: a change nobody has looked at yet, or one too large or unreadable to
+ * keep. Its status is compared first, as the workspace does; the content only
+ * when that moved.
+ */
+function fileState(key, journal, newest) {
+  let stat;
+  try {
+    stat = fs.lstatSync(path.join(projectsDir(), ...key.split("/")));
+  } catch {
+    return newest.deleted ? "same" : "gone";
+  }
+  if (newest.deleted) return "back";
+  if (!stat.isFile()) return "differs";
+  const seen = journal.seen;
+  if (seen && seen.mtimeMs === stat.mtimeMs && seen.ctimeMs === stat.ctimeMs && seen.size === stat.size) return "same";
+  if (stat.size !== newest.size || stat.size > MAX_COMPARE_BYTES) return "differs";
+  try {
+    return sha256(fs.readFileSync(path.join(projectsDir(), ...key.split("/")))) === newest.sha ? "same" : "differs";
+  } catch {
+    return "differs";
+  }
+}
+
 function author(entry) {
   if (entry.deleted) return "file deleted";
   const by = entry.by || {};
@@ -534,13 +562,17 @@ function main(argv) {
 
   if (command === "list") {
     const newest = journal.versions[journal.versions.length - 1];
+    const state = fileState(key, journal, newest);
     process.stdout.write(`History of ${key} (${journal.versions.length} versions, newest first):\n`);
     for (const entry of [...journal.versions].reverse()) {
       const when = new Date(entry.at).toISOString().replace("T", " ").slice(0, 16) + " UTC";
       const stats = typeof entry.added === "number" && typeof entry.removed === "number" ? `  +${entry.added} -${entry.removed}` : "";
-      const current = entry === newest && !entry.deleted ? "  (current)" : "";
+      const current = entry === newest && !entry.deleted && state === "same" ? "  (current)" : "";
       process.stdout.write(`v${entry.n}  ${when}  ${author(entry)}  ${size(entry.size)}${stats}${current}\n`);
     }
+    if (state === "differs") process.stdout.write(`The file has changed since v${newest.n} and that change is not in its history (too large or unreadable to keep, or not looked at yet): what it holds now is in the file itself.\n`);
+    if (state === "gone") process.stdout.write(`The file is not there any more; v${newest.n} is the last version kept.\n`);
+    if (state === "back") process.stdout.write(`The file is there again, and what it holds now is not in its history yet.\n`);
     return;
   }
 

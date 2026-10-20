@@ -11,7 +11,7 @@ import { getVersionStore } from "@/lib/files/versions/store";
 /**
  * Bring an older version back:
  *
- *   POST /api/files/versions/restore  { project, path, n, force? }  ->  { version }
+ *   POST /api/files/versions/restore  { project, path, n, force? }  ->  { version, lost? }
  *
  * Nothing is lost by it. What the file holds now is kept first if the history
  * does not have it yet - a change made elsewhere a moment ago included - and the
@@ -19,7 +19,8 @@ import { getVersionStore } from "@/lib/files/versions/store";
  * back can itself be undone. When what the file holds now cannot be kept (it
  * has grown past the size a history is kept for, or cannot be read), the
  * restore is refused with `code: "unkept"` unless the person said `force`
- * after being told.
+ * after being told, and then answers `lost: true`: the screen must not say
+ * that what was replaced is in the history.
  */
 
 export async function POST(req: NextRequest) {
@@ -52,5 +53,6 @@ export async function POST(req: NextRequest) {
     return jsonError(t("files.history.restoreFailed"), 409);
   }
   const version = await captureAfter(target.absolute, { kind: "restore", restoredFrom: n });
-  return Response.json({ version }, { headers: { "Cache-Control": "no-store" } });
+  const lost = before === "too-large" || before === "unreadable";
+  return Response.json({ version, ...(lost ? { lost: true } : {}) }, { headers: { "Cache-Control": "no-store" } });
 }

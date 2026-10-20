@@ -290,8 +290,14 @@ export async function hasHistory(absolute: string): Promise<boolean> {
 /**
  * A file that already has a history, looked at for a change nobody here made.
  * Its stat is compared first, so an unchanged file costs one call.
+ *
+ * "too-large" and "unreadable" mean the file has moved on to something the
+ * history cannot keep: its newest version is no longer what it holds, and
+ * whoever shows the history must not say it is.
  */
-export async function checkTracked(key: string): Promise<"same" | "changed" | "deleted" | "gone"> {
+export type TrackedOutcome = "same" | "changed" | "deleted" | "gone" | "too-large" | "unreadable";
+
+export async function checkTracked(key: string): Promise<TrackedOutcome> {
   const root = await projectsRoot();
   const target = await versionTarget(path.join(root, ...key.split("/")));
   const store = getVersionStore();
@@ -308,10 +314,12 @@ export async function checkTracked(key: string): Promise<"same" | "changed" | "d
     announce(key);
     return "deleted";
   }
-  if (!stat.isFile()) return "same";
+  // A folder or a link where the file was: what is there is not the newest version.
+  if (!stat.isFile()) return last.deleted ? "same" : "unreadable";
   const seen = journal.seen;
   if (!last.deleted && seen && seen.mtimeMs === stat.mtimeMs && seen.ctimeMs === stat.ctimeMs && seen.size === stat.size) return "same";
   const read = await readTarget(target);
+  if (read.kind === "too-large" || read.kind === "unreadable") return read.kind;
   if (read.kind !== "file") return "same";
   if (!last.deleted && last.sha === sha256(read.content)) {
     await store.confirmSeen(key, read.seen);

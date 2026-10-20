@@ -55,8 +55,13 @@ export async function historyOf(projectId: string, filePath: string): Promise<{ 
   }
   const store = getVersionStore();
   // A change made elsewhere since the last look is put in its place first, so
-  // the newest version on screen is what the file holds.
-  if (enabled && (await store.journal(target.key))) await checkTracked(target.key).catch(() => undefined);
+  // the newest version on screen is what the file holds - or, when what it
+  // holds could not be kept, the screen is told so.
+  let unkept: FileHistoryView["unkept"];
+  if (enabled && (await store.journal(target.key))) {
+    const outcome = await checkTracked(target.key).catch(() => undefined);
+    if (outcome === "too-large" || outcome === "unreadable") unkept = outcome;
+  }
   const journal = await store.journal(target.key);
   const versions: VersionInfo[] = [];
   for (const entry of [...(journal?.versions ?? [])].reverse()) {
@@ -74,6 +79,7 @@ export async function historyOf(projectId: string, filePath: string): Promise<{ 
       versions,
       bytes: journal ? await store.historyBytes(target.key) : 0,
       retention,
+      ...(unkept ? { unkept } : {}),
     },
   };
 }

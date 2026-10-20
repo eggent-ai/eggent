@@ -62,6 +62,11 @@ export interface FileHistoryView {
   /** Bytes this file's history takes. */
   bytes: number;
   retention: VersionRetention;
+  /**
+   * The file holds something its history could not keep - it grew too large,
+   * or cannot be read - so the newest version is not what it holds now.
+   */
+  unkept?: "too-large" | "unreadable";
 }
 
 export interface VersionRetention {
