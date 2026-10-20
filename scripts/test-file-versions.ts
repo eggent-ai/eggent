@@ -96,7 +96,7 @@ const provider = http.createServer((req, res) => {
         ["edit", { path: "notes.md", edits: [{ oldText: "Second line", newText: "Second line, edited" }] }],
       ]
       : lastUser.includes("EDIT-CONTRACT") ? [
-        ["edit", { path: "contract.md", edits: [{ oldText: "price 100", newText: "price 120" }] }],
+        ["edit", { path: "contract.md", edits: [{ oldText: "term 100", newText: "term 120" }] }],
       ]
       : lastUser.includes("BASH-DOC") ? [
         ["bash", { command: "printf 'Report v1\\n' > report.md && printf '{\"a\":1}' > data.json" }],
@@ -328,9 +328,9 @@ await check("a file deleted long ago leaves nothing behind; no file keeps more t
 console.log("\nKeeping versions on disk\n");
 
 await check("before a write the file's state is kept; after it the new one; the same bytes twice make one version", async () => {
-  const file = put("contract.md", "price 100\n", 3 * DAY);
+  const file = put("contract.md", "term 100\n", 3 * DAY);
   await capture.captureBefore(file);
-  fs.writeFileSync(file, "price 110\n");
+  fs.writeFileSync(file, "term 110\n");
   await capture.captureAfter(file, { kind: "person" });
   await capture.captureAfter(file, { kind: "person" });
   assert.deepEqual(await kinds("contract.md"), ["earlier", "person"]);
@@ -340,13 +340,13 @@ await check("before a write the file's state is kept; after it the new one; the 
   // The state found before the first change is dated when it was seen; the file's own date is kept beside it.
   assert.ok(Date.parse(journal!.versions[0].at) > Date.now() - 60_000);
   assert.ok(Date.parse(journal!.versions[0].fileTime ?? "") < Date.now() - 2 * DAY);
-  assert.equal((await store.content("shop/contract.md", 1))?.toString(), "price 100\n");
+  assert.equal((await store.content("shop/contract.md", 1))?.toString(), "term 100\n");
 });
 await check("a change nobody here made is noticed before the next write, as made outside", async () => {
   const file = path.join(shopDir, "contract.md");
-  fs.writeFileSync(file, "price 115\n");
+  fs.writeFileSync(file, "term 115\n");
   await capture.captureBefore(file);
-  fs.writeFileSync(file, "price 100\n");
+  fs.writeFileSync(file, "term 100\n");
   await capture.captureAfter(file, { kind: "person" });
   assert.deepEqual(await kinds("contract.md"), ["earlier", "person", "outside", "person"]);
 });
@@ -378,7 +378,7 @@ await check("the pass over tracked files reads only the files whose size or time
   const quiet = await service.checkTrackedFiles();
   assert.equal(quiet.changed, 0);
   assert.equal((await journalOf("contract.md"))?.versions.length, before);
-  fs.writeFileSync(path.join(shopDir, "contract.md"), "price 130 - from the laptop\n");
+  fs.writeFileSync(path.join(shopDir, "contract.md"), "term 130 - from the laptop\n");
   const moved = await service.checkTrackedFiles();
   assert.equal(moved.changed, 1);
   assert.equal((await journalOf("contract.md"))?.versions.at(-1)?.by.kind, "outside");
@@ -421,7 +421,7 @@ await check("a turn's commands: files with a history get a version; files only c
   const since = Date.now() - 1000;
   put("out/summary.md", "summary\n");
   put("out/data.csv", "a,b\n");
-  put("contract.md", "price 140\n");
+  put("contract.md", "term 140\n");
   await capture.captureRunChanges({ cwd: shopDir, since, by: { kind: "agent", chat: "chat-2", run: "run-x" } });
   assert.equal(await journalOf("out/summary.md"), null);
   assert.equal(await journalOf("out/data.csv"), null);
@@ -430,12 +430,12 @@ await check("a turn's commands: files with a history get a version; files only c
 await check("a command that set a file's date back is still seen: by its status time", async () => {
   const file = path.join(shopDir, "contract.md");
   const since = Date.now() - 1000;
-  fs.writeFileSync(file, "price 145 - copied with its old date\n");
+  fs.writeFileSync(file, "term 145 - copied with its old date\n");
   const old = new Date(Date.now() - 300 * DAY);
   fs.utimesSync(file, old, old);
   await capture.captureRunChanges({ cwd: shopDir, since, by: { kind: "agent", chat: "chat-2", run: "run-y" } });
   const journal = await journalOf("contract.md");
-  assert.equal((await store.content("shop/contract.md", journal!.versions.at(-1)!.n))?.toString(), "price 145 - copied with its old date\n");
+  assert.equal((await store.content("shop/contract.md", journal!.versions.at(-1)!.n))?.toString(), "term 145 - copied with its old date\n");
   // Dated when seen: the version it replaced is young, not 300 days old, and is kept.
   assert.ok(journal!.versions.some((item) => item.by.run === "run-x"));
 });
@@ -588,7 +588,7 @@ await check("a spreadsheet is read sheet by sheet, row by row, shared strings an
     "xl/sharedStrings.xml": `<sst><si><t>Αλεύρι</t></si><si><r><t>Ζάχα</t></r><r><t>ρη</t></r></si></sst>`,
     "xl/worksheets/sheet1.xml": `<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1"><v>100</v></c></row><row r="2"><c r="A2" t="s"><v>1</v></c><c r="B2"><f>B1*2</f><v>200</v></c></row></sheetData></worksheet>`,
   });
-  const extracted = await textModule.extractVersionText("prices.xlsx", workbook);
+  const extracted = await textModule.extractVersionText("stock.xlsx", workbook);
   assert.equal(extracted.text, "## Τιμές\n1. A: Αλεύρι | B: 100\n2. A: Ζάχαρη | B: 200 (=B1*2)");
 });
 await check("a presentation is read slide by slide", async () => {
@@ -663,28 +663,28 @@ await check("the same file named from the orchestrator has the same history", as
 });
 await check("a version's text, and the version as a file named after it", async () => {
   const text = await (await contentRoute.GET(request("/api/files/versions/content?project=shop&path=contract.md&n=1"))).json();
-  assert.equal(text.text, "price 100\n");
+  assert.equal(text.text, "term 100\n");
   const download = await downloadRoute.GET(request("/api/files/versions/download?project=shop&path=contract.md&n=1"));
   assert.equal(download.status, 200);
   assert.match(download.headers.get("content-disposition") || "", /contract \(v1\)\.md/);
   assert.equal(download.headers.get("content-type"), "application/octet-stream");
-  assert.equal(Buffer.from(await download.arrayBuffer()).toString(), "price 100\n");
+  assert.equal(Buffer.from(await download.arrayBuffer()).toString(), "term 100\n");
   assert.equal((await contentRoute.GET(request("/api/files/versions/content?project=shop&path=contract.md&n=999"))).status, 404);
   assert.equal((await contentRoute.GET(request("/api/files/versions/content?project=shop&path=../../etc/passwd&n=1"))).status, 403);
 });
 await check("restoring brings the text back as a new version, and what it replaced stays", async () => {
   const before = fs.readFileSync(path.join(shopDir, "contract.md"), "utf8");
   // A change made elsewhere a moment ago, not seen yet: it must not be lost by the restore.
-  fs.writeFileSync(path.join(shopDir, "contract.md"), "price 999 - typed on the laptop\n");
+  fs.writeFileSync(path.join(shopDir, "contract.md"), "term 999 - typed on the laptop\n");
   const response = await restoreRoute.POST(request("/api/files/versions/restore", { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ project: "shop", path: "contract.md", n: 1 }) }));
   assert.equal(response.status, 200);
   const { version } = await response.json();
   assert.equal(version.by.kind, "restore");
   assert.equal(version.by.restoredFrom, 1);
-  assert.equal(fs.readFileSync(path.join(shopDir, "contract.md"), "utf8"), "price 100\n");
+  assert.equal(fs.readFileSync(path.join(shopDir, "contract.md"), "utf8"), "term 100\n");
   const texts: string[] = [];
   for (const item of (await journalOf("contract.md"))!.versions) texts.push((await store.content("shop/contract.md", item.n))?.toString() ?? "");
-  assert.ok(texts.includes("price 999 - typed on the laptop\n"), "the change made elsewhere was lost");
+  assert.ok(texts.includes("term 999 - typed on the laptop\n"), "the change made elsewhere was lost");
   assert.ok(texts.includes(before));
 });
 await check("the editor's save keeps what was there and what was saved; a link at the name is refused", async () => {
@@ -837,8 +837,8 @@ await check("a data file gets versions from commands once somebody edited it by 
 });
 await check("the open file and the selected lines reach the model with the message, and are not stored with it", async () => {
   const { describeOpenFile, parseOpenFile } = await import("../src/lib/files/open-file-context.ts");
-  put("contract.md", "Intro\nprice 100\nEvery morning at 9 the courier calls.\n");
-  const note = await describeOpenFile(parseOpenFile({ project: "shop", path: "contract.md", selection: { startLine: 2, endLine: 3, text: "price 100\nEvery morning at 9 the courier calls." }, unsaved: true })!);
+  put("contract.md", "Intro\nterm 100\nEvery morning at 9 the courier calls.\n");
+  const note = await describeOpenFile(parseOpenFile({ project: "shop", path: "contract.md", selection: { startLine: 2, endLine: 3, text: "term 100\nEvery morning at 9 the courier calls." }, unsaved: true })!);
   assert.ok(note);
   assert.match(note, /Open beside this chat: `contract\.md` in the project "Shop"/);
   assert.match(note, /lines 2-3/);
@@ -850,7 +850,7 @@ await check("the open file and the selected lines reach the model with the messa
   assert.ok(requests.some((item) => item.lastUser.includes("Open beside this chat") && item.lastUser.includes("Every morning at 9")), "the model was not told");
   const stored = (await getChat(chat))?.messages.find((message) => message.role === "user");
   assert.equal(stored?.content, "EDIT-CONTRACT make it 120");
-  assert.equal(fs.readFileSync(path.join(shopDir, "contract.md"), "utf8"), "Intro\nprice 120\nEvery morning at 9 the courier calls.\n");
+  assert.equal(fs.readFileSync(path.join(shopDir, "contract.md"), "utf8"), "Intro\nterm 120\nEvery morning at 9 the courier calls.\n");
 });
 await check("no note for a file outside the scope, a credential, or a folder", async () => {
   const { describeOpenFile } = await import("../src/lib/files/open-file-context.ts");
@@ -917,7 +917,7 @@ await check("it reads a document's text exactly as the screen does", async () =>
 await check("it reads a spreadsheet, a presentation and an OpenDocument text as the screen does", async () => {
   const samples: Array<[string, Buffer]> = [
     ["book.xlsx", makeZip({
-      "xl/workbook.xml": `<workbook><sheets><sheet name="Prices &amp; stock" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+      "xl/workbook.xml": `<workbook><sheets><sheet name="Orders &amp; stock" sheetId="1" r:id="rId1"/></sheets></workbook>`,
       "xl/_rels/workbook.xml.rels": `<Relationships><Relationship Id="rId1" Type="x" Target="worksheets/sheet1.xml"/></Relationships>`,
       "xl/sharedStrings.xml": `<sst><si><t>Flour</t></si><si><r><t>Su</t></r><r><t>gar</t></r><rPh><t>hint</t></rPh></si></sst>`,
       "xl/worksheets/sheet1.xml": `<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1"><v>100</v></c><c r="C1" t="b"><v>1</v></c></row><row r="2"><c r="A2" t="s"><v>1</v></c><c r="B2"><f>B1*2</f><v>200</v></c><c r="C2" t="inlineStr"><is><t>note</t></is></c></row></sheetData></worksheet>`,
