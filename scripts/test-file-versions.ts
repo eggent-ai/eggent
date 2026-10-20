@@ -237,18 +237,20 @@ await check("the agent's bookkeeping, credentials and dependency folders have no
   for (const key of ["memory.md", "shop/memory.md", "shop/skills/x/SKILL.md", "shop/.mcp.json", "shop/.env", "shop/node_modules/x/readme.md", "shop/.git/config", "shop/.ssh/notes.md", "shop/project.json", "shop/a/../b.md"]) {
     assert.equal(capture.isVersionablePath(key), false, key);
   }
-  for (const key of ["shop/contract.md", "shop/context.md", "notes.md", "shop/Переписка/Пётр/письмо.docx"]) {
+  for (const key of ["shop/contract.md", "shop/context.md", "notes.md", "shop/Αλληλογραφία/Πέτρος/επιστολή.docx"]) {
     assert.equal(capture.isVersionablePath(key), true, key);
   }
 });
 
 console.log("\nComparing two versions\n");
 
-await check("a changed word in a Russian sentence is marked as a word, not as scattered letters", () => {
-  const segments = diffModel.wordSegments("Цена договора составляет сто рублей.", "Цена договора составляет сто двадцать рублей.");
-  assert.deepEqual(segments?.filter((segment) => segment.kind !== "same").map((segment) => [segment.kind, segment.text]), [["add", "двадцать "]]);
-  const replaced = diffModel.wordSegments("Срок поставки — пять дней.", "Срок поставки — десять дней.");
-  assert.deepEqual(replaced?.filter((segment) => segment.kind !== "same").map((segment) => [segment.kind, segment.text]), [["del", "пять"], ["add", "десять"]]);
+// Greek rather than Russian here, which this repository keeps on its own branch: any script the
+// diff library does not count as letters shows the fault the same way.
+await check("a changed word in a non-Latin sentence is marked as a word, not as scattered letters", () => {
+  const segments = diffModel.wordSegments("Η τιμή είναι εκατό ευρώ.", "Η τιμή είναι εκατό πενήντα ευρώ.");
+  assert.deepEqual(segments?.filter((segment) => segment.kind !== "same").map((segment) => [segment.kind, segment.text]), [["add", "πενήντα "]]);
+  const replaced = diffModel.wordSegments("Παράδοση σε πέντε ημέρες.", "Παράδοση σε δέκα ημέρες.");
+  assert.deepEqual(replaced?.filter((segment) => segment.kind !== "same").map((segment) => [segment.kind, segment.text]), [["del", "πέντε"], ["add", "δέκα"]]);
 });
 await check("a change keeps a few lines around it and folds the rest away", () => {
   const older = Array.from({ length: 40 }, (_, index) => `line ${index + 1}`).join("\n");
@@ -485,27 +487,27 @@ await check("turned off in Settings, nothing is kept", async () => {
 console.log("\nThe text of a document\n");
 
 await check("a Word document is read as paragraphs and table rows; deleted tracked text is not read", async () => {
-  const extracted = await textModule.extractVersionText("contract.docx", docx(["Договор № 5", "Цена: 100 & НДС"], [["Товар", "Цена"], ["Мука", "100"]]));
+  const extracted = await textModule.extractVersionText("contract.docx", docx(["Σύμβαση αρ. 5", "Τιμή: 100 & ΦΠΑ"], [["Είδος", "Τιμή"], ["Αλεύρι", "100"]]));
   assert.equal(extracted.kind, "extracted");
-  assert.equal(extracted.text, "Договор № 5\nЦена: 100 & НДС\nТовар | Цена\nМука | 100\n");
+  assert.equal(extracted.text, "Σύμβαση αρ. 5\nΤιμή: 100 & ΦΠΑ\nΕίδος | Τιμή\nΑλεύρι | 100\n");
 });
 await check("a spreadsheet is read sheet by sheet, row by row, shared strings and formulas included", async () => {
   const workbook = makeZip({
-    "xl/workbook.xml": `<workbook><sheets><sheet name="Прайс" sheetId="1" r:id="rId1"/></sheets></workbook>`,
+    "xl/workbook.xml": `<workbook><sheets><sheet name="Τιμές" sheetId="1" r:id="rId1"/></sheets></workbook>`,
     "xl/_rels/workbook.xml.rels": `<Relationships><Relationship Id="rId1" Type="x" Target="worksheets/sheet1.xml"/></Relationships>`,
-    "xl/sharedStrings.xml": `<sst><si><t>Мука</t></si><si><r><t>Сах</t></r><r><t>ар</t></r></si></sst>`,
+    "xl/sharedStrings.xml": `<sst><si><t>Αλεύρι</t></si><si><r><t>Ζάχα</t></r><r><t>ρη</t></r></si></sst>`,
     "xl/worksheets/sheet1.xml": `<worksheet><sheetData><row r="1"><c r="A1" t="s"><v>0</v></c><c r="B1"><v>100</v></c></row><row r="2"><c r="A2" t="s"><v>1</v></c><c r="B2"><f>B1*2</f><v>200</v></c></row></sheetData></worksheet>`,
   });
   const extracted = await textModule.extractVersionText("prices.xlsx", workbook);
-  assert.equal(extracted.text, "## Прайс\n1. A: Мука | B: 100\n2. A: Сахар | B: 200 (=B1*2)");
+  assert.equal(extracted.text, "## Τιμές\n1. A: Αλεύρι | B: 100\n2. A: Ζάχαρη | B: 200 (=B1*2)");
 });
 await check("a presentation is read slide by slide", async () => {
   const deck = makeZip({
     "ppt/slides/slide2.xml": `<p:sld><a:p><a:r><a:t>Second</a:t></a:r></a:p></p:sld>`,
     "ppt/slides/slide1.xml": `<p:sld><a:p><a:r><a:t>Title</a:t></a:r></a:p><a:p><a:r><a:t>Point</a:t></a:r></a:p></p:sld>`,
   });
-  const extracted = await textModule.extractVersionText("deck.pptx", deck, { slide: "Слайд" });
-  assert.equal(extracted.text, "## Слайд 1\nTitle\nPoint\n\n## Слайд 2\nSecond");
+  const extracted = await textModule.extractVersionText("deck.pptx", deck, { slide: "Page" });
+  assert.equal(extracted.text, "## Page 1\nTitle\nPoint\n\n## Page 2\nSecond");
 });
 await check("a damaged document is not compared, and nothing breaks", async () => {
   assert.deepEqual(await textModule.extractVersionText("broken.docx", Buffer.from("not a zip")), { kind: "none", text: "" });
@@ -725,15 +727,15 @@ await check("it lists, shows and compares what the store keeps", async () => {
   assert.match(runCli(["list", "never-touched.md"]), /no history yet/);
 });
 await check("it reads a document's text exactly as the screen does", async () => {
-  const file = put("deal.docx", docx(["Первый пункт"], [["A", "B"]]));
+  const file = put("deal.docx", docx(["Πρώτο σημείο"], [["A", "B"]]));
   await capture.captureAfter(file, { kind: "upload" });
-  fs.writeFileSync(file, docx(["Первый пункт, изменённый", "Второй пункт"], [["A", "C"]]));
+  fs.writeFileSync(file, docx(["Πρώτο σημείο, αλλαγμένο", "Δεύτερο σημείο"], [["A", "C"]]));
   await capture.captureAfter(file, { kind: "person" });
   for (const n of [1, 2]) {
     const screen = (await textModule.extractVersionText("deal.docx", (await store.content("shop/deal.docx", n))!)).text;
     assert.equal(runCli(["text", "deal.docx", String(n)]), screen.endsWith("\n") ? screen : `${screen}\n`);
   }
-  assert.match(runCli(["diff", "deal.docx", "1"]), /\+Второй пункт/);
+  assert.match(runCli(["diff", "deal.docx", "1"]), /\+Δεύτερο σημείο/);
 });
 await check("the agent is told the history exists and how to read it", () => {
   const guidance = service.fileHistoryGuidance();
