@@ -1,4 +1,4 @@
-export type UiSyncTopic = "projects" | "chat" | "files" | "pipelines" | "global";
+export type UiSyncTopic = "projects" | "chat" | "files" | "board" | "global";
 
 export interface UiSyncEvent {
   id: number;

@@ -3,7 +3,7 @@
 /**
  * Which workspace a settings tab is about: the orchestrator or one project.
  *
- * Model, context, memory, skills, MCP, pipelines and schedules all exist once
+ * Model, context, memory, skills, MCP and schedules all exist once
  * for the orchestrator and once per project. Only two tabs used to let the
  * person pick whose they were looking at; the rest showed the orchestrator's
  * and sent projects to pages of their own. The same switcher now sits on all

@@ -146,6 +146,8 @@ export interface Chat {
   visit?: ProjectVisitInfo;
   /** Set on a chat opened to answer a colleague's message: see lib/mail. */
   mailReply?: MailReplyInfo;
+  /** This chat is a card on the task board, whose id it shares: see lib/board. */
+  boardCard?: boolean;
   messages: ChatMessage[];
   createdAt: string;
   updatedAt: string;
@@ -189,6 +191,8 @@ export interface ChatListItem {
   visitFrom?: string;
   /** Who this chat answers, when it was opened to answer a colleague's message. */
   mailReplyTo?: string;
+  /** The chat is a card on the task board. */
+  boardCard?: boolean;
   createdAt: string;
   updatedAt: string;
   messageCount: number;

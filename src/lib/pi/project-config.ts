@@ -52,8 +52,7 @@ export async function getEggentPiProjectConfig(projectId?: string | null) {
         "web_search",
         "fetch_content",
         "get_search_content",
-        "eggent_list_pipelines",
-        "eggent_start_pipeline",
+        "eggent_board",
       ],
     },
   };

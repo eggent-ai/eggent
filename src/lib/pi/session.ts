@@ -26,6 +26,7 @@ import type { PiPendingInteraction } from "@/lib/pi/interaction-types";
 import type { PiSessionOptions } from "@/lib/pi/types";
 import { getChatFiles } from "@/lib/storage/chat-files-store";
 import { getChat } from "@/lib/storage/chat-store";
+import { getCard } from "@/lib/board/store";
 import { mailEnabled } from "@/lib/mail/config";
 import { formatMailReplyContext } from "@/lib/mail/reply-context";
 import { createMailToolGuardExtension, type MessagesRunner } from "@/lib/mail/tool-guard";
@@ -212,6 +213,8 @@ function buildEggentProjectContext(options: {
   mailReply?: MailReplyInfo;
   /** The workspace has messages with its company's people (EGGENT_MAIL_API_URL). */
   mailAvailable?: boolean;
+  /** This chat is a card on the task board: see lib/board. */
+  boardCard?: { title: string };
 }): string {
   // Ordering here is load-bearing, not cosmetic.
   //
@@ -239,7 +242,7 @@ function buildEggentProjectContext(options: {
     // answers to it lose users in the first minute. Give one concrete shape to
     // describe instead of letting each run improvise.
     "Answering \"who/what are you\", \"what can you do\", and comparison questions:",
-    "- Describe Eggent as a workspace where the assistant does things, not only answers: projects that each keep their own memory, instructions, skills and MCP servers; files; scheduled jobs; pipelines; sub-agents; and Telegram as a second interface to the same workspace. Eggent is open source.",
+    "- Describe Eggent as a workspace where the assistant does things, not only answers: projects that each keep their own memory, instructions, skills and MCP servers; files; scheduled jobs; a task board of work it carries out on its own; sub-agents; and Telegram as a second interface to the same workspace. Eggent is open source.",
     "- Keep it to a few lines and end by asking what the user actually wants to do. Offer concrete openers that match this product: send a document to analyse, point at a site or channel, or describe a work process to automate.",
     "- For comparisons with other assistants or agents (Claude Code, Codex, Hermes, a plain chat subscription): name two or three real differences, do not disparage the other tool, and say plainly what Eggent is worse at. Then ask which task they are choosing for, because a comparison without a task is meaningless.",
     "- When the user already runs another agent, the useful answer is how to interoperate with it, not why to replace it: an MCP server on either side, shared skill files, exchanged files, or Eggent's external API. Lead with that.",
@@ -294,7 +297,8 @@ function buildEggentProjectContext(options: {
     "- Install what a task needs inside the project's working directory, in a plainly named folder such as tools/ - never next to the projects directory or elsewhere in your home directory, and not in a folder named venv or .venv, all of which the Files panel does not show. The user must be able to see what takes the space and delete it, and deleting the project must take its tools with it.",
     "- Settings -> Models and login: provider, sign-in or API key, model choice, image model, and the custom providers editor.",
     "- Settings -> Context / Memory / Skills / MCP: the orchestrator's own files. A project has the same four on its own page under Settings -> Projects.",
-    "- Settings -> Messengers: Telegram. Settings -> API: the external API token. Settings -> Schedules and Pipelines: recurring and multi-step work.",
+    "- Settings -> Messengers: Telegram. Settings -> API: the external API token. Settings -> Schedules: recurring work.",
+    "- Board, in the sidebar: the task board - cards of work you carry out one by one, each in a chat of its own, with columns Inbox, Queue, Working, Waiting for you and Done.",
     "- list_projects / create_project / switch_project for navigating Eggent projects.",
     options.projectId
       ? "- eggent_memory_search / eggent_memory_save / eggent_memory_delete for the project memory.md file."
@@ -319,8 +323,8 @@ function buildEggentProjectContext(options: {
     options.usageToolAvailable
       ? "- eggent_usage_status for any question about balance, remaining credits/tokens, quota, limits, plan or trial. Call it and answer with the real numbers; never guess and never tell the user this information is unavailable to you."
       : "",
-    "- eggent_list_pipelines / eggent_start_pipeline for existing configured pipelines.",
-    "- eggent_start_project_sequence for ad-hoc requests that name project ids in order, such as 'first in project A, then in project B'.",
+    // Pipelines were this, and nobody used them: a chain of steps is now cards that wait for each other.
+    "- eggent_board to read the task board and to write work down as cards: for a job the person wants planned as tasks, put on the board, or split into steps that run on their own - including 'first in project A, then in project B' (one card per step, each waiting for the one before). Every card you write waits in the Inbox until the person starts it; say so.",
   ];
 
   // Everything below names this workspace, so it is where the shared prefix
@@ -364,6 +368,15 @@ function buildEggentProjectContext(options: {
           `Another chat of this workspace${options.visit.parentTitle ? ` (\"${options.visit.parentTitle}\")` : ""} asked this project for the task you were just given, and what you write last is handed back to that chat as it stands.`,
           "Nobody is here to answer a question: do the work with what you have, and make the last thing you write a complete answer that stands on its own, in the language of the task.",
           "You cannot ask another project, and you do not change which project is active.",
+        ].join("\n")
+      : "",
+    options.boardCard
+      ? [
+          "",
+          "## This chat is a card on the task board",
+          `This conversation is the card "${options.boardCard.title}" on this workspace's task board: a task the person handed over to be carried out, often while nobody is watching. What you write last is kept on the card as its result, so make the last message a complete answer that stands on its own, in the language of the task, and name the files you made.`,
+          "Decide yourself whatever you reasonably can. If you cannot go on without the person, ask with eggent_ask_user and stop there: when nobody is watching, the question is put on the card and the answer arrives as the next message.",
+          "To split the work further, write more cards with eggent_board; they wait in the Inbox for the person.",
         ].join("\n")
       : "",
     `Working directory: ${options.cwd}`,
@@ -662,6 +675,8 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
   const mailReply = !liteMode && !publicShare && options.chatId && mailEnabled()
     ? (await getChat(options.chatId))?.mailReply
     : undefined;
+  // A card's chat shares the card's id, so this is one file looked for, and found only for a card.
+  const boardCard = !liteMode && !publicShare && !options.visit && options.chatId ? await getCard(options.chatId) : null;
   const corePiToolsOnly = options.corePiToolsOnly === true || liteMode !== null || publicShare;
 
   const projectContext = liteMode || publicShare ? "" : buildEggentProjectContext({
@@ -700,6 +715,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     visit: options.visit,
     mailReply,
     mailAvailable: !options.visit && mailEnabled(),
+    ...(boardCard ? { boardCard: { title: boardCard.title } } : {}),
   });
   const explicitContextFiles = liteMode || publicShare ? [] : loadEggentContextFiles(cwd, agentDir);
 
@@ -831,6 +847,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
         get abortSignal() { return turn.abortSignal; },
         get onPiInteraction() { return turn.onPiInteraction; },
         visit: options.visit,
+        ...(boardCard ? { boardCardId: boardCard.id } : {}),
         // A UI context is registered for every run, but only a run that streams
         // interactions back has someone able to answer them. Telegram and the
         // external API do not, so asking there would block until timeout.

@@ -16,6 +16,7 @@ import {
   MessagesSquare,
   Plus,
   Settings,
+  SquareKanban,
   Trash2,
 } from "lucide-react";
 import { useAppStore } from "@/store/app-store";
@@ -42,6 +43,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { UsageWidget } from "@/components/usage-widget";
 import { MailNav } from "@/components/mail/mail-nav";
+import { BoardNav } from "@/components/board/board-nav";
 import { CreateProjectForm } from "@/components/create-project-form";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
@@ -257,6 +259,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             {t("nav.newChat")}
           </Button>
         </div>
+        <div className="px-3">
+          <BoardNav />
+        </div>
       </SidebarHeader>
 
       <SidebarContent>
@@ -351,7 +356,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                         ? t("nav.visitChat", { chat: chat.visitFrom })
                         : chat.mailReplyTo
                           ? t("nav.mailReplyChat", { name: chat.mailReplyTo })
-                          : undefined
+                          : chat.boardCard
+                            ? t("nav.boardChat")
+                            : undefined
                   }
                 >
                   {/* A scheduled task reports into a chat a day, so these
@@ -364,6 +371,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                   ) : chat.mailReplyTo ? (
                     // A chat opened to answer a colleague's message.
                     <Mail aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+                  ) : chat.boardCard ? (
+                    // The conversation of a card on the board.
+                    <SquareKanban aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
                   ) : null}
                   <span className="truncate">{chat.title}</span>
                 </SidebarMenuButton>
@@ -408,8 +418,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                   pathname.startsWith("/dashboard/memory") ||
                   pathname.startsWith("/dashboard/skills") ||
                   pathname.startsWith("/dashboard/mcp") ||
-                  pathname.startsWith("/dashboard/pipelines") ||
-                  pathname.startsWith("/dashboard/pipeline-runs") ||
                   pathname.startsWith("/dashboard/schedules") ||
                   pathname.startsWith("/dashboard/messengers") ||
                   pathname.startsWith("/dashboard/api")

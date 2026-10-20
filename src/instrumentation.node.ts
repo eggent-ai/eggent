@@ -4,6 +4,7 @@ import { managedGatewayBaseUrl, refreshManagedCatalog } from "@/lib/pi/managed-m
 import { restorePiSchedules } from "@/lib/pi/schedule-host";
 import { sweepStoredChats } from "@/lib/secrets/sweep";
 import { startMailSync } from "@/lib/mail/sync";
+import { startBoardDispatcher } from "@/lib/board/dispatcher";
 
 initTelegramLifecycle().catch((error) => {
   console.error("Failed to initialize Telegram lifecycle:", error);
@@ -36,6 +37,10 @@ startMailSync();
 restorePiSchedules().catch((error) => {
   console.error("Failed to restore scheduled tasks:", error);
 });
+
+// The task board: cards in the queue start when there is room, and a card a
+// restart cut off in the middle is picked up again (lib/board).
+startBoardDispatcher();
 
 /**
  * Provider catalogs are refreshed here and nowhere else.

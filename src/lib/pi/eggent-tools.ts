@@ -13,8 +13,6 @@ import {
   switchToModelProvider,
   upsertCustomModelProvider,
 } from "@/lib/pi/config-store";
-import { getPipelineDefinitions, upsertPipelineDefinition } from "@/lib/pipelines/store";
-import { startPipelineRunInBackground } from "@/lib/pipelines/runner";
 import { managePiSchedules, noteScheduledRunReachedTelegram, scheduledRunChatFor } from "@/lib/pi/schedule-host";
 import { formatUsageMeter, getUsageSnapshot, isUsageProviderConfigured } from "@/lib/usage/usage-provider";
 import { createPendingInteraction } from "@/lib/pi/pending-interactions";
@@ -31,6 +29,8 @@ import { chatPath } from "@/lib/dashboard-routes";
 import { mailEnabled } from "@/lib/mail/config";
 import { createMessagesTool } from "@/lib/mail/tool";
 import { isScheduledRunSessionId } from "@/lib/pi/scheduled-run-state";
+import { createBoardTool } from "@/lib/board/tool";
+import { putQuestionOnCard } from "@/lib/board/runs";
 import {
   createProject,
   createSkill,
@@ -239,6 +239,8 @@ export async function createEggentPiTools(options: {
   onPiInteraction?: (interaction: PiPendingInteraction) => void;
   /** This run is a project doing work for another chat: it cannot visit another, and what it sends to Telegram is the asking chat's. */
   visit?: { parentChatId: string; parentTitle?: string };
+  /** The chat is a card on the task board: a question nobody here can answer is put on the card. */
+  boardCardId?: string;
 } = {}): Promise<{ tools: ToolDefinition[]; cleanup: () => Promise<void> }> {
   // Memory, skills and MCP belong to whichever workspace is running, and the
   // orchestrator is one of them.
@@ -280,6 +282,30 @@ export async function createEggentPiTools(options: {
         // registers a UI context, but Telegram and the external API have no
         // channel to deliver an interaction card on.
         if (options.interactive === false || ctx?.hasUI === false) {
+          // A board card's run: the question waits on the card for the person,
+          // and this run ends here. Their answer starts the card's next run.
+          if (options.boardCardId) {
+            const placed = await putQuestionOnCard(options.boardCardId, {
+              text: question,
+              kind,
+              ...(choices.length > 0 ? { options: choices } : {}),
+              ...(params.placeholder?.trim() ? { placeholder: params.placeholder.trim() } : {}),
+            });
+            if (placed) {
+              return textResult(
+                JSON.stringify(
+                  {
+                    success: true,
+                    onCard: true,
+                    note: "Nobody is watching this run, so the question is now on the card and the card waits for the person. Stop here: do not continue the task and do not repeat the question. Their answer arrives as the next message.",
+                  },
+                  null,
+                  2
+                ),
+                { onCard: true, kind }
+              );
+            }
+          }
           return textResult(
             JSON.stringify(
               {
@@ -1104,131 +1130,6 @@ export async function createEggentPiTools(options: {
         return textResult(output, { projectId: memoryProjectId });
       },
     }),
-    defineTool({
-      name: "eggent_list_pipelines",
-      label: "List Eggent Pipelines",
-      description:
-        "List configured Eggent pipelines. In the new architecture a pipeline is a sequence of Eggent projects/pi agents.",
-      parameters: Type.Object({}),
-      execute: async () => {
-        const pipelines = await getPipelineDefinitions();
-        return textResult(
-          JSON.stringify(
-            pipelines.map((pipeline) => ({
-              id: pipeline.id,
-              name: pipeline.name,
-              description: pipeline.description,
-              steps: pipeline.steps.map((step) => ({
-                id: step.id,
-                name: step.name,
-                projectId: step.projectId,
-                instructions: step.instructions,
-              })),
-            })),
-            null,
-            2
-          ),
-          { count: pipelines.length }
-        );
-      },
-    }),
-    defineTool({
-      name: "eggent_start_pipeline",
-      label: "Start Eggent Pipeline",
-      description:
-        "Start an existing configured Eggent pipeline by pipeline id/name. Do not pass project ids here. For ad-hoc user requests like 'first run project A, then project B', use eggent_start_project_sequence instead.",
-      parameters: Type.Object({
-        pipelineId: Type.String({ description: "Existing pipeline id or name to start. This is not a project id." }),
-        input: Type.String({ description: "User task/input to pass to the pipeline." }),
-      }),
-      execute: async (_toolCallId, params) => {
-        const run = await startPipelineRunInBackground({
-          pipelineId: params.pipelineId,
-          input: params.input,
-          chatId: options.chatId,
-          projectId: options.projectId,
-          cwd: options.cwd,
-        });
-        return textResult(
-          JSON.stringify(
-            {
-              runId: run.id,
-              status: run.status,
-              pipelineId: run.pipelineId,
-              artifactsDir: run.artifactsDir,
-              steps: run.steps.map((step) => ({
-                id: step.stepId,
-                name: step.name,
-                projectId: step.projectId,
-                status: step.status,
-              })),
-            },
-            null,
-            2
-          ),
-          { run }
-        );
-      },
-    }),
-    defineTool({
-      name: "eggent_start_project_sequence",
-      label: "Start Ad-hoc Project Sequence",
-      description:
-        "Create and start a one-off Eggent pipeline from an ordered list of project steps. Use this when the user says to run a pipeline/sequence across project ids, e.g. 'first in project 222 do X, then in project 123 do Y'.",
-      parameters: Type.Object({
-        name: Type.Optional(Type.String({ description: "Optional name for this one-off pipeline run." })),
-        input: Type.String({ description: "Overall user request/input for the sequence." }),
-        steps: Type.Array(
-          Type.Object({
-            project_id: Type.String({ description: "Eggent project id for this step." }),
-            name: Type.Optional(Type.String({ description: "Human-readable step name." })),
-            instructions: Type.String({ description: "What this project should do in this step." }),
-          }),
-          { minItems: 1, description: "Ordered project-agent steps." }
-        ),
-      }),
-      execute: async (_toolCallId, params) => {
-        const id = `adhoc-${crypto.randomUUID()}`;
-        const pipeline = await upsertPipelineDefinition({
-          id,
-          name: params.name || "Ad-hoc project sequence",
-          description: "One-off pipeline created from a chat request.",
-          steps: params.steps.map((step, index) => ({
-            id: `step-${index + 1}`,
-            name: step.name || `Step ${index + 1}: ${step.project_id}`,
-            projectId: step.project_id,
-            instructions: step.instructions,
-          })),
-        });
-        const run = await startPipelineRunInBackground({
-          pipelineId: pipeline.id,
-          input: params.input,
-          chatId: options.chatId,
-          projectId: options.projectId,
-          cwd: options.cwd,
-        });
-        return textResult(
-          JSON.stringify(
-            {
-              runId: run.id,
-              status: run.status,
-              pipelineId: run.pipelineId,
-              pipelineName: pipeline.name,
-              artifactsDir: run.artifactsDir,
-              steps: run.steps.map((step) => ({
-                id: step.stepId,
-                name: step.name,
-                projectId: step.projectId,
-                status: step.status,
-              })),
-            },
-            null,
-            2
-          ),
-          { run, pipeline }
-        );
-      },
-    }),
   ];
 
   // Registered on every run, including web ones with no Telegram attached.
@@ -1344,6 +1245,10 @@ export async function createEggentPiTools(options: {
         });
       },
   }));
+
+  // The task board: read it, and write down work for the person to start. Not
+  // inside a visit, which is a project doing one piece of work for another chat.
+  if (!options.visit) tools.push(createBoardTool({ chatId: options.chatId, projectId: options.projectId }));
 
   // Messages with the other people of this workspace's company, when the
   // deployment keeps them (EGGENT_MAIL_API_URL). Not inside a visit: a project

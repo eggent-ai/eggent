@@ -10,7 +10,6 @@ import {
   Cpu,
   FileText,
   FolderOpen,
-  GitBranch,
   Puzzle,
   Send,
   Settings,
@@ -31,7 +30,6 @@ const SETTINGS_SECTIONS: Array<{ href: string; labelKey: MessageKey; icon: Lucid
   { href: "/dashboard/memory", labelKey: "settings.nav.memory", icon: Brain },
   { href: "/dashboard/skills", labelKey: "settings.nav.skills", icon: Puzzle },
   { href: "/dashboard/mcp", labelKey: "settings.nav.mcp", icon: Wrench },
-  { href: "/dashboard/pipelines", labelKey: "settings.nav.pipelines", icon: GitBranch },
   { href: "/dashboard/schedules", labelKey: "settings.nav.schedules", icon: CalendarClock },
   { href: "/dashboard/messengers", labelKey: "settings.nav.messengers", icon: Send },
   { href: "/dashboard/api", labelKey: "settings.nav.api", icon: Cable },
@@ -75,9 +73,7 @@ export function SettingsNavigation() {
         {SETTINGS_SECTIONS.map(({ href, labelKey, icon: Icon, exact }) => {
           const active = exact
             ? pathname === href
-            : pathname === href ||
-              pathname.startsWith(`${href}/`) ||
-              (href === "/dashboard/pipelines" && pathname.startsWith("/dashboard/pipeline-runs/"));
+            : pathname === href || pathname.startsWith(`${href}/`);
           return (
             <Link
               key={href}

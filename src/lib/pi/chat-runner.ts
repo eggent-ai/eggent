@@ -13,6 +13,8 @@ import { noteSessionEvent, startTurnWatchdog, watchdogThresholds, watchdogTickMs
 import { attachToLiveRun, startLiveRun, type LiveRunSink } from "@/lib/pi/live-run";
 import { applySchedulingToolPolicy, hasScheduleIntent, hasScheduleManagementIntent } from "@/lib/pi/schedule-intent";
 import { describeProviderFailure, type ProviderFailure } from "@/lib/pi/provider-failure";
+import { isGatewayRefusal } from "@/lib/pi/gateway-refusal";
+import { trackCardTurn, type CardTurn } from "@/lib/board/runs";
 import { isHelperToolName } from "@/lib/pi/subagent-format";
 import { chatAllowsVisits, grantVisits, mentionRuntimeText, planProjectMention, revokeVisits, takeVisitFiles, type MentionPlan } from "@/lib/pi/project-visit";
 import { collectProducedFiles, mergeProducedGroups, type ProducedGroup } from "@/lib/files/produced";
@@ -33,6 +35,23 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     return null;
   }
   return value as Record<string, unknown>;
+}
+
+/** The text of a message's content parts, whatever dialect wrote them. */
+function textOfContent(content: unknown): string {
+  if (typeof content === "string") return content;
+  if (!Array.isArray(content)) return "";
+  return content
+    .map((part) => {
+      const record = asRecord(part);
+      return record?.type === "text" && typeof record.text === "string" ? record.text : "";
+    })
+    .join("");
+}
+
+/** A question put on a board card instead of to a person nobody could reach: see eggent_ask_user. */
+function isQuestionOnCard(toolName: string, output: unknown): boolean {
+  return toolName === "eggent_ask_user" && asRecord(asRecord(output)?.details)?.onCard === true;
 }
 
 function stringifyForDisplay(value: unknown): string {
@@ -744,6 +763,12 @@ function logStall(chatId: string, stalled: StalledTurn): void {
 }
 
 type PiAgentTextOptions = PiChatRunOptions & {
+  /**
+   * The task board started this turn on one of its cards and reads how it ended
+   * itself; see lib/board. Any other turn in a card's chat - somebody writing
+   * there from a messenger - is followed by the card on its own.
+   */
+  boardRun?: boolean;
   runtimeData?: Record<string, unknown>;
   toolRuntimeData?: Record<string, unknown>;
   /** Told about each piece of the answer as it arrives; see AgentProgressEvent. */
@@ -755,7 +780,18 @@ type PiAgentTextOptions = PiChatRunOptions & {
    * same as it having nothing to say, and the text of the last message the
    * model wrote - the answer, without the narration before it.
    */
-  outcome?: { stopped?: boolean; finalText?: string; files?: ProducedGroup[]; filesSent?: boolean };
+  outcome?: {
+    stopped?: boolean;
+    /** Given up on by the watchdog for going quiet, which is a stop nobody asked for. */
+    stalled?: boolean;
+    /** The deployment's gateway answered in place of the model: a limit reached, the workspace closed. */
+    refused?: boolean;
+    /** What the gateway said when it refused, in its own words. */
+    refusalText?: string;
+    finalText?: string;
+    files?: ProducedGroup[];
+    filesSent?: boolean;
+  };
 };
 
 export async function runPiAgentText(options: PiAgentTextOptions): Promise<string> {
@@ -813,6 +849,10 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
   };
   const starting = createStartingRun(requestStop);
   registerActiveRun(options.chatId, { session: starting.run, runId, surface: "external", requestStop });
+  // A chat that is a board card: the card follows this turn. The board's own runs it reads itself.
+  const cardTurn: CardTurn | null = options.boardRun || options.visit || options.publicShare
+    ? null
+    : trackCardTurn(options.chatId, runId, "external");
   const thresholds = watchdogThresholds();
   const watchdog = thresholds
     ? startTurnWatchdog({
@@ -836,6 +876,7 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
     watchdog?.stop();
     clearActiveRun(options.chatId, runId);
     cancelPendingInteractionsForRun(runId);
+    cardTurn?.end({ outcome: "failed", detail: streamErrorText(error) });
     if (live) {
       live.push({ type: "error", errorText: streamErrorText(error) });
       live.finish();
@@ -897,7 +938,12 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
     clearActiveRun(options.chatId, runId);
     cancelPendingInteractionsForRun(runId);
     scope.abandon = undefined;
-    if (!(error instanceof TurnAbortedError)) throw error;
+    if (!(error instanceof TurnAbortedError)) {
+      cardTurn?.end({ outcome: "failed", detail: streamErrorText(error) });
+      throw error;
+    }
+    cardTurn?.end({ outcome: turn.stalled ? "stalled" : "stopped" });
+    if (options.outcome && turn.stalled) options.outcome.stalled = true;
     // Stopped, or given up on, before it began.
     const t = await getServerTranslator();
     const notice = turn.stalled ? await stalledNotice(turn.stalled) : t("external.run.stopped");
@@ -961,6 +1007,10 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
   // finished: the answer is the last, not everything said on the way to it.
   let messageText = "";
   let lastMessageText = "";
+  // Whether the last model call was answered by the gateway instead of the model, and what it said.
+  let refusal: string | null = null;
+  // A question this turn put on its board card, because nobody here could answer it.
+  let questionOnCard = false;
   teardown.push(() => subagents.dispose());
   const unsubscribe = session.subscribe((event: unknown) => {
     const record = asRecord(event);
@@ -1005,6 +1055,8 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
       const message = asRecord(record.message);
       if (message?.role === "assistant") {
         if (messageText.trim()) lastMessageText = messageText;
+        // The last call decides: a retry that went through is not a refusal.
+        refusal = isGatewayRefusal(message) ? textOfContent(message.content).trim() || messageText.trim() : null;
         const usage = asUsage(message.usage);
         lastTurnUsage = usage ?? lastTurnUsage;
         currentPromptUsage = addUsage(currentPromptUsage, usage);
@@ -1060,6 +1112,7 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
       } else if (!record.isError && isMcpOAuthCompleteResult(toolName, output)) {
         mcpOAuthPending = false;
       }
+      if (!record.isError && isQuestionOnCard(toolName, output)) questionOnCard = true;
       tools.set(toolCallId, toolRecord);
       upsertTimelineTool(timelineParts, toolRecord);
       report({ type: "tool", name: toolName, phase: "end" });
@@ -1153,9 +1206,28 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
       });
     }
     if (stopped && options.outcome) options.outcome.stopped = true;
-    if (options.outcome) options.outcome.finalText = lastMessageText;
+    if (options.outcome) {
+      options.outcome.finalText = lastMessageText;
+      if (turn.stalled) options.outcome.stalled = true;
+      if (refusal !== null) {
+        options.outcome.refused = true;
+        if (refusal) options.outcome.refusalText = refusal;
+      }
+    }
+    cardTurn?.end(
+      questionOnCard
+        ? { outcome: "question" }
+        : refusal !== null
+          ? { outcome: "refused", ...(refusal ? { detail: refusal } : {}) }
+          : turn.stalled
+            ? { outcome: "stalled" }
+            : stopped
+              ? { outcome: "stopped" }
+              : { outcome: "done", finalText: lastMessageText || assistantText, files: producedFiles }
+    );
     return assistantText;
   } catch (error) {
+    cardTurn?.end({ outcome: "failed", detail: streamErrorText(error) });
     // The caller of this path answers the messenger it came from; anyone
     // watching the same turn from the web would otherwise see the stream
     // simply stop, with nothing said about why.
@@ -1255,6 +1327,8 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         surface: "web",
         requestStop: () => runAbort.abort(),
       });
+      // A chat that is a board card: the card follows this turn too.
+      const cardTurn = trackCardTurn(options.chatId, runId, "web");
       const stall: { stalled: StalledTurn | null } = { stalled: null };
       const thresholds = watchdogThresholds();
       const watchdog = thresholds
@@ -1278,6 +1352,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         watchdog?.stop();
         clearActiveRun(options.chatId, runId);
         cancelPendingInteractionsForRun(runId);
+        cardTurn.end({ outcome: "failed", detail: streamErrorText(error) });
         if (live) {
           live.push({ type: "error", errorText: streamErrorText(error) });
           live.finish();
@@ -1339,7 +1414,11 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         clearActiveRun(options.chatId, runId);
         cancelPendingInteractionsForRun(runId);
         scope.abandon = undefined;
-        if (!(error instanceof TurnAbortedError)) throw error;
+        if (!(error instanceof TurnAbortedError)) {
+          cardTurn.end({ outcome: "failed", detail: streamErrorText(error) });
+          throw error;
+        }
+        cardTurn.end({ outcome: stall.stalled ? "stalled" : "stopped" });
         // Stopped, or given up on, before it began: say so, and keep it.
         const t = await getServerTranslator();
         const notice = stall.stalled ? await stalledNotice(stall.stalled) : t("external.run.stopped");
@@ -1354,6 +1433,15 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
       starting.attach(session);
 
       let assistantText = "";
+      // The message being written and the last one finished, for a board card's result:
+      // the answer, not the narration on the way to it.
+      let messageText = "";
+      let lastMessageText = "";
+      // Whether the last model call was answered by the gateway instead of the model.
+      let refusal: string | null = null;
+      // How the turn ended, for a board card: set where it fails, read where it ends.
+      let turnFailure: string | null = null;
+      let turnFiles: ProducedGroup[] | undefined;
       let textStarted = false;
       let currentTextId: string | null = null;
       let lastTurnUsage: PiRuntimeStats["lastTurn"] | undefined;
@@ -1546,10 +1634,13 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
           }
         }
 
+        if (record.type === "message_start" && asRecord(record.message)?.role === "assistant") messageText = "";
+
         if (record.type === "message_update") {
           const assistantEvent = asRecord(record.assistantMessageEvent);
           if (assistantEvent?.type === "text_delta" && typeof assistantEvent.delta === "string") {
             const textId = ensureTextStarted();
+            messageText += assistantEvent.delta;
             assistantText += assistantEvent.delta;
             appendTimelineText(timelineParts, assistantEvent.delta);
             safeWrite({ type: "text-delta", id: textId, delta: assistantEvent.delta });
@@ -1560,6 +1651,8 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         if (record.type === "message_end") {
           const message = asRecord(record.message);
           if (message?.role === "assistant") {
+            if (messageText.trim()) lastMessageText = messageText;
+            refusal = isGatewayRefusal(message) ? textOfContent(message.content).trim() || messageText.trim() : null;
             const usage = asUsage(message.usage);
             lastTurnUsage = usage ?? lastTurnUsage;
             currentPromptUsage = addUsage(currentPromptUsage, usage);
@@ -1745,6 +1838,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
           projectId: options.projectId,
           assistantText,
         });
+        turnFiles = producedFiles;
         // Shown at once; the stored message carries the same list for a reload.
         if (producedFiles.length > 0) safeWrite({ type: "data-eggentFiles", id: "eggent-files", data: producedFiles });
         persisted = true;
@@ -1794,6 +1888,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
           clearUsageSnapshotCache();
         }
         console.error("Pi chat stream execution error:", error);
+        turnFailure = errorText;
         persisted = true;
         cancelProgressCheckpoint();
         await persistTurn({
@@ -1807,6 +1902,17 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         // else watching would be left with a stream that simply stopped.
         safeWrite({ type: "error", errorText: streamErrorText(error) });
       } finally {
+        cardTurn.end(
+          turnFailure !== null
+            ? { outcome: "failed", detail: turnFailure }
+            : stall.stalled
+              ? { outcome: "stalled" }
+              : aborted
+                ? { outcome: "stopped" }
+                : refusal !== null
+                  ? { outcome: "refused", ...(refusal ? { detail: refusal } : {}) }
+                  : { outcome: "done", finalText: lastMessageText || assistantText, files: turnFiles }
+        );
         if (mention) revokeVisits(options.chatId);
         takeVisitFiles(options.chatId);
         watchdog?.stop();

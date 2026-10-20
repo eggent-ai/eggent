@@ -6,6 +6,7 @@ import { DefaultChatTransport } from "ai";
 import type { UIMessage } from "ai";
 import { ChatMessages, type QuickSkillAction } from "./chat-messages";
 import { MailReplyBanner, MailReplyProvider } from "@/components/mail/mail-reply";
+import { CardChatBanner } from "@/components/board/card-chat-banner";
 import type { MailReplyInfo } from "@/lib/mail/types";
 import { ChatInput } from "./chat-input";
 import { useAppStore } from "@/store/app-store";
@@ -479,6 +480,8 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
   const [contextMode, setContextMode] = useState<ChatContextMode>("full");
   // A chat opened to answer a colleague's message: which message, from the stored chat.
   const [mailReply, setMailReply] = useState<MailReplyInfo | null>(null);
+  // The chat is a card on the task board.
+  const [boardCard, setBoardCard] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
   const [inputFocusSignal, setInputFocusSignal] = useState(0);
   const [configuredRuntimeStats, setConfiguredRuntimeStats] = useState<PiRuntimeStats | null>(null);
@@ -702,6 +705,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
   // Another chat's message must not be shown over this one while its own loads.
   useEffect(() => {
     setMailReply(null);
+    setBoardCard(false);
   }, [activeChatId]);
 
   // Keep active chat history synced with background updates.
@@ -717,7 +721,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
           return null;
         }
         if (!r.ok) throw new Error("Failed to load chat");
-        return r.json() as Promise<{ messages?: ChatMessage[]; contextMode?: ChatContextMode; mailReply?: MailReplyInfo }>;
+        return r.json() as Promise<{ messages?: ChatMessage[]; contextMode?: ChatContextMode; mailReply?: MailReplyInfo; boardCard?: boolean }>;
       })
       .then((chat) => {
         if (cancelled) return;
@@ -729,6 +733,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
 
         setContextMode(chat?.contextMode ?? "full");
         setMailReply(chat?.mailReply ?? null);
+        setBoardCard(chat?.boardCard === true);
 
         if (!chat?.messages) {
           setMessages([]);
@@ -1193,6 +1198,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     <MailReplyProvider value={activeChatId && mailReply ? mailReply : null}>
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       {activeChatId && mailReply ? <MailReplyBanner info={mailReply} /> : null}
+      {activeChatId && boardCard ? <CardChatBanner chatId={activeChatId} /> : null}
       <ChatMessages
         messages={messages}
         isLoading={isLoading}

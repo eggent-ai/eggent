@@ -25,6 +25,7 @@
  */
 export const RESERVED_DASHBOARD_SEGMENTS: readonly string[] = [
   "api",
+  "board",
   "context",
   "files",
   "mcp",
