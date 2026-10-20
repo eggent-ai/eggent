@@ -3,6 +3,7 @@ import {
   MAX_RESULT_CHARS,
   MAX_RUNS_KEPT,
   type BoardCard,
+  type CardQuestion,
   type CardRun,
   type CardRunOutcome,
   type CardStatus,
@@ -99,6 +100,10 @@ export interface RunEnd {
   /** The last message the model wrote: the card's result when the run finished. */
   finalText?: string;
   files?: ProducedGroup[];
+  /** The question the run stopped at, when the side that ran it could not put it on the card itself. */
+  question?: Omit<CardQuestion, "askedAt">;
+  /** A failure not to retry by itself: a computer that said no to the card is not asked again behind the person's back. */
+  noRetry?: boolean;
 }
 
 export interface RunEndTexts {
@@ -178,10 +183,15 @@ export function applyRunEnd(
       return { ...finished, status: "done", doneAt: at };
     }
     case "question":
-      return { ...wait("question"), failures: 0, interruptions: 0 };
+      return {
+        ...wait("question"),
+        ...(end.question ? { question: { ...end.question, askedAt: at } } : {}),
+        failures: 0,
+        interruptions: 0,
+      };
     case "failed": {
       const failures = card.failures + 1;
-      if (startedHere && failures <= policy.autoRetries) {
+      if (startedHere && !end.noRetry && failures <= policy.autoRetries) {
         return {
           ...base,
           status: "queued",
@@ -207,6 +217,27 @@ export function applyRunEnd(
     case "refused":
       return wait("refused", end.detail);
   }
+}
+
+/**
+ * Two copies of one card, written on the two sides of a pair at once and left
+ * by the file sync as a card and a conflict copy. The copy changed last is the
+ * card - its column, result and question are what was decided last - and its
+ * runs are those of both, so neither side's record of a run is lost: a run the
+ * two copies both know keeps the version that saw it end. The same two copies
+ * give the same card on every side, byte for byte, so the merge does not start
+ * a conflict of its own.
+ */
+export function mergeCardCopies(a: BoardCard, b: BoardCard): BoardCard {
+  const later = Date.parse(b.updatedAt) > Date.parse(a.updatedAt) || (b.updatedAt === a.updatedAt && JSON.stringify(b) > JSON.stringify(a));
+  const [base, other] = later ? [b, a] : [a, b];
+  const runs = new Map<string, CardRun>();
+  for (const run of [...other.runs, ...base.runs]) {
+    const known = runs.get(run.id);
+    if (!known || run.endedAt || !known.endedAt) runs.set(run.id, run);
+  }
+  const merged = [...runs.values()].sort((x, y) => x.startedAt.localeCompare(y.startedAt) || x.id.localeCompare(y.id)).slice(-MAX_RUNS_KEPT);
+  return { ...base, runs: merged };
 }
 
 /** A run starting on a card: it moves to "running" with a record of the run. */

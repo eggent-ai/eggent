@@ -31,6 +31,7 @@ import { createMessagesTool } from "@/lib/mail/tool";
 import { isScheduledRunSessionId } from "@/lib/pi/scheduled-run-state";
 import { createBoardTool } from "@/lib/board/tool";
 import { putQuestionOnCard } from "@/lib/board/runs";
+import { boardRunsHere } from "@/lib/board/place";
 import {
   createProject,
   createSkill,
@@ -285,12 +286,16 @@ export async function createEggentPiTools(options: {
           // A board card's run: the question waits on the card for the person,
           // and this run ends here. Their answer starts the card's next run.
           if (options.boardCardId) {
-            const placed = await putQuestionOnCard(options.boardCardId, {
-              text: question,
-              kind,
-              ...(choices.length > 0 ? { options: choices } : {}),
-              ...(params.placeholder?.trim() ? { placeholder: params.placeholder.trim() } : {}),
-            });
+            // The side that keeps the board writes the question on the card. On a computer in a
+            // pair that is the cloud, which handed this run here and reads the question from it.
+            const placed = boardRunsHere()
+              ? await putQuestionOnCard(options.boardCardId, {
+                  text: question,
+                  kind,
+                  ...(choices.length > 0 ? { options: choices } : {}),
+                  ...(params.placeholder?.trim() ? { placeholder: params.placeholder.trim() } : {}),
+                })
+              : true;
             if (placed) {
               return textResult(
                 JSON.stringify(

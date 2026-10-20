@@ -2,6 +2,8 @@ import { getServerTranslator } from "@/i18n/server";
 import { applyRunEnd, applyRunStart, DEFAULT_RUN_END_POLICY, type RunEnd, type RunEndPolicy } from "@/lib/board/logic";
 import { getCard, updateBoardState, updateCard } from "@/lib/board/store";
 import type { BoardCard, CardQuestion, CardRun } from "@/lib/board/types";
+import { localNode, remoteEnabled } from "@/lib/remote/config";
+import type { ChatHome } from "@/lib/remote/types";
 
 /**
  * What a run does to its card when it starts and when it ends, wherever the run
@@ -57,14 +59,14 @@ export async function finishCardRun(cardId: string, end: RunEnd, surface: CardRu
  * Quiet for a chat that is not a card, which is every other chat: one file that
  * does not exist is looked for and nothing else happens.
  */
-async function noteCardTurnStarted(chatId: string, runId: string, surface: "web" | "external"): Promise<boolean> {
+async function noteCardTurnStarted(chatId: string, runId: string, surface: "web" | "external", node: ChatHome | undefined): Promise<boolean> {
   try {
     const card = await getCard(chatId);
     if (!card) return false;
     const started = await updateCard(
       chatId,
       // Whatever the card was waiting for, the person is dealing with it in its chat now.
-      (current) => applyRunStart({ ...current, question: undefined }, { id: runId, surface, startedAt: new Date().toISOString() }),
+      (current) => applyRunStart({ ...current, question: undefined }, { id: runId, surface, startedAt: new Date().toISOString(), ...(node ? { node } : {}) }),
       "card_started"
     );
     return Boolean(started);
@@ -113,9 +115,15 @@ export interface CardTurn {
  * Follow a turn in a chat that may be a card. The end waits for the start to be
  * written, so the two land on the card in the order they happened even when the
  * turn is over before the first write is.
+ *
+ * In a pair the side that runs a turn follows it, as it writes the chat: the
+ * run is marked with that side, which is how the cloud knows to ask the computer
+ * about a run it does not hold itself. `node` names the side when it is not this
+ * one - a turn this side handed over and follows from its stream.
  */
-export function trackCardTurn(chatId: string, runId: string, surface: "web" | "external"): CardTurn {
-  const begun = noteCardTurnStarted(chatId, runId, surface);
+export function trackCardTurn(chatId: string, runId: string, surface: "web" | "external", node?: ChatHome): CardTurn {
+  const where = node ?? (remoteEnabled() ? localNode() ?? undefined : undefined);
+  const begun = noteCardTurnStarted(chatId, runId, surface, where);
   let ended = false;
   return {
     end(end) {

@@ -11,7 +11,9 @@ import {
   ArrowUp,
   CheckCheck,
   CircleHelp,
+  Cloud,
   Inbox,
+  Laptop,
   MessageSquare,
   Pencil,
   Play,
@@ -24,6 +26,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { Sheet, SheetContent, SheetDescription, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { FilesProduced } from "@/components/chat/files-produced";
 import { CardForm, type CardFormValues } from "@/components/board/card-form";
+import { cardPlace } from "@/components/board/card-place";
 import { WAITING_LABEL, clockTime, minutesSince } from "@/components/board/card-tile";
 import { useI18n } from "@/i18n/provider";
 import type { MessageKey } from "@/i18n/messages";
@@ -31,6 +34,7 @@ import { chatPath } from "@/lib/dashboard-routes";
 import * as board from "@/lib/board/client";
 import { waitingFor } from "@/lib/board/logic";
 import type { BoardCard, CardRunOutcome, CardStatus } from "@/lib/board/types";
+import { isDeviceHome, type ChatHome, type RemoteStatus } from "@/lib/remote/types";
 import type { Project } from "@/lib/types";
 
 const STATUS_LABEL: Record<CardStatus, MessageKey> = {
@@ -106,6 +110,8 @@ export function CardSheet({
   cards,
   live,
   projects,
+  node,
+  remote,
   now,
   onClose,
   onChanged,
@@ -115,6 +121,9 @@ export function CardSheet({
   cards: BoardCard[];
   live?: { startedAt: number; question: boolean };
   projects: Project[];
+  /** This side, in a pair; null where there is none. */
+  node: ChatHome | null;
+  remote: RemoteStatus | null;
   now: number;
   onClose: () => void;
   onChanged: () => void;
@@ -151,6 +160,7 @@ export function CardSheet({
   const running = card ? card.status === "running" || Boolean(live) : false;
   const pending = card ? waitingFor(card, byId) : [];
   const projectName = (id?: string) => (id ? projects.find((project) => project.id === id)?.name ?? id : t("nav.orchestrator"));
+  const place = card ? cardPlace(card.home, node, remote, t) : null;
 
   return (
     <Sheet open={open} onOpenChange={(next) => (next ? null : onClose())}>
@@ -166,6 +176,15 @@ export function CardSheet({
                 </span>
                 <span aria-hidden>·</span>
                 <span>{projectName(card.projectId)}</span>
+                {place ? (
+                  <>
+                    <span aria-hidden>·</span>
+                    <span className="inline-flex items-center gap-1" data-testid="card-sheet-place">
+                      {place.kind === "cloud" ? <Cloud aria-hidden className="size-3.5" /> : <Laptop aria-hidden className="size-3.5" />}
+                      {place.away ? t("board.card.deviceAway", { name: place.name }) : place.name}
+                    </span>
+                  </>
+                ) : null}
                 {card.createdBy === "agent" ? (
                   <>
                     <span aria-hidden>·</span>
@@ -194,11 +213,13 @@ export function CardSheet({
                     projectId: card.projectId ?? null,
                     after: card.after ?? [],
                     review: Boolean(card.review),
+                    home: card.home ?? null,
                   }}
                   cards={cards}
                   editingId={card.id}
                   projects={projects}
                   projectLocked={card.runs.length > 0}
+                  remote={remote}
                   busy={busy}
                   error={error}
                   onCancel={() => setEditing(false)}
@@ -300,6 +321,7 @@ export function CardSheet({
                             <span className="tabular-nums">{shortDate(run.startedAt)}</span>
                             <span className="text-foreground">{t(run.outcome ? OUTCOME_LABEL[run.outcome] : "board.outcome.running")}</span>
                             <span>{t(`board.surface.${run.surface}` as MessageKey)}</span>
+                            {isDeviceHome(run.node) ? <span>{t("board.run.place", { place: cardPlace(run.node, node, remote, t)?.name ?? t("chat.runPlace.yourComputer") })}</span> : null}
                             {run.detail ? <span className="w-full truncate" title={run.detail}>{run.detail}</span> : null}
                           </li>
                         ))}

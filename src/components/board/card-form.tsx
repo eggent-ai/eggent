@@ -6,9 +6,11 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { cardPlaceChoices, placeName } from "@/components/board/card-place";
 import { useI18n } from "@/i18n/provider";
 import { wouldCycle } from "@/lib/board/logic";
 import { MAX_BODY_CHARS, MAX_TITLE_CHARS, type BoardCard } from "@/lib/board/types";
+import { CLOUD_HOME, type ChatHome, type RemoteStatus } from "@/lib/remote/types";
 import type { Project } from "@/lib/types";
 
 const ORCHESTRATOR = "none";
@@ -19,6 +21,8 @@ export interface CardFormValues {
   projectId: string | null;
   after: string[];
   review: boolean;
+  /** Where it runs, in a pair; null leaves it to the default, which is the cloud. */
+  home: ChatHome | null;
 }
 
 /**
@@ -26,6 +30,10 @@ export interface CardFormValues {
  * what the buttons do - a new card is started or kept in the inbox, an edited
  * one is saved - and whether its project can still change: once a card has
  * run, its conversation is in that project.
+ *
+ * Where it runs is asked only where there is a choice: a workspace with a
+ * computer paired to it, or that computer. A place that is away can still be
+ * chosen - the card waits for it - and the sentence under the choice says so.
  */
 export function CardForm({
   initial,
@@ -33,6 +41,7 @@ export function CardForm({
   editingId,
   projects,
   projectLocked,
+  remote,
   busy,
   error,
   onSubmit,
@@ -44,6 +53,8 @@ export function CardForm({
   editingId?: string;
   projects: Project[];
   projectLocked?: boolean;
+  /** Whether there is a pair, and its computers; null while it loads or where there is none. */
+  remote?: RemoteStatus | null;
   busy: boolean;
   error?: string | null;
   onSubmit: (values: CardFormValues, start: boolean) => void;
@@ -65,6 +76,10 @@ export function CardForm({
         .slice(0, 40),
     [cards, editingId, ownId, values.after]
   );
+
+  const places = cardPlaceChoices(remote ?? null, values.home);
+  const place = values.home ?? CLOUD_HOME;
+  const chosen = places.find((choice) => choice.node === place) ?? null;
 
   const empty = !values.title.trim() && !values.body.trim();
   const toggleAfter = (cardId: string) =>
@@ -126,6 +141,34 @@ export function CardForm({
           </SelectContent>
         </Select>
       </div>
+
+      {places.length >= 2 ? (
+        <div className="grid gap-1.5">
+          <Label htmlFor={`${id}-place`}>{t("board.form.place")}</Label>
+          <Select value={place} onValueChange={(value) => setValues((current) => ({ ...current, home: value as ChatHome }))}>
+            <SelectTrigger id={`${id}-place`} className="w-full" data-testid="card-place">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {places.map((choice) => (
+                <SelectItem key={choice.node} value={choice.node}>
+                  {placeName(choice, t)}
+                  {choice.available ? null : <span className="text-muted-foreground"> · {t("board.form.placeAway")}</span>}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+          <p className="text-xs text-muted-foreground">
+            {place === CLOUD_HOME
+              ? t("board.form.placeCloud")
+              : chosen?.label === "thisComputer"
+                ? chosen.available
+                  ? t("board.form.placeHere")
+                  : t("board.form.placeHereOff")
+                : t("board.form.placeDevice", { name: chosen ? placeName(chosen, t) : t("chat.runPlace.yourComputer") })}
+          </p>
+        </div>
+      ) : null}
 
       {candidates.length > 0 ? (
         <fieldset className="grid gap-1.5">

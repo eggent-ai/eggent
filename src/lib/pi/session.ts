@@ -698,7 +698,15 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     ? (await getChat(options.chatId))?.mailReply
     : undefined;
   // A card's chat shares the card's id, so this is one file looked for, and found only for a card.
-  const boardCard = !liteMode && !publicShare && !options.visit && options.chatId ? await getCard(options.chatId) : null;
+  // A turn handed to a computer may arrive before the board's own folder has: the chat it waited
+  // for says it is a card's, and that is enough to know what to do with a question.
+  const boardCard = !liteMode && !publicShare && !options.visit && options.chatId
+    ? await getCard(options.chatId).then(async (card) => {
+        if (card) return { id: card.id, title: card.title };
+        const chat = options.remote ? await getChat(options.chatId as string) : null;
+        return chat?.boardCard ? { id: chat.id, title: chat.title } : null;
+      })
+    : null;
   const corePiToolsOnly = options.corePiToolsOnly === true || liteMode !== null || publicShare;
 
   const projectContext = liteMode || publicShare ? "" : buildEggentProjectContext({

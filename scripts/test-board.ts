@@ -301,6 +301,19 @@ await check("a card that waited for others starts with what they came to", () =>
   assert.match(message, /Files: \/x\/p1\/out\.md/);
 });
 
+await check("two copies of a card written on both sides at once join: the later decides, both sides' runs are kept", () => {
+  const run = (id: string, startedAt: string, endedAt?: string) => ({ id, surface: "board" as const, startedAt, ...(endedAt ? { endedAt, outcome: "done" as const } : {}) });
+  // The cloud saw the board's run end; the computer, a moment later, started a follow-up on its copy that had not heard.
+  const cloudCopy = baseCard({ status: "done", result: { text: "board", at: "2026-10-19T10:01:00.000Z" }, runs: [run("r1", "2026-10-19T10:00:00.000Z", "2026-10-19T10:01:00.000Z")], updatedAt: "2026-10-19T10:01:00.000Z" });
+  const deviceCopy = { ...cloudCopy, status: "running" as const, result: undefined, runs: [run("r1", "2026-10-19T10:00:00.000Z"), run("r2", "2026-10-19T10:01:05.000Z")], updatedAt: "2026-10-19T10:01:05.000Z" };
+  const joined = logic.mergeCardCopies(cloudCopy, deviceCopy);
+  assert.equal(joined.status, "running", "the later copy decides the column");
+  assert.deepEqual(joined.runs.map((entry) => [entry.id, Boolean(entry.endedAt)]), [["r1", true], ["r2", false]]);
+  assert.equal(joined.updatedAt, deviceCopy.updatedAt, "a join is not a new change");
+  // Whichever side joins them, the result is the same, to the byte.
+  assert.equal(JSON.stringify(logic.mergeCardCopies(deviceCopy, cloudCopy)), JSON.stringify(joined));
+});
+
 console.log("\nThe store\n");
 
 await check("an id that is not a card's is never looked up, so no request can name a path", async () => {
@@ -316,6 +329,19 @@ await check("changes to one card land one after another, none written over", asy
   );
   const after = await store.getCard(card.id);
   assert.equal(after?.body.length, 21);
+  await cards.deleteCard(card.id, "person");
+});
+await check("a conflict copy the sync left is joined into the card and let go of", async () => {
+  const [card] = await cards.createCards([{ title: "both sides", body: "x" }], { createdBy: "person" });
+  const dir = path.join(root, "data", "board", "cards");
+  const current = JSON.parse(fs.readFileSync(path.join(dir, `${card.id}.json`), "utf-8"));
+  const extraRun = { id: crypto.randomUUID(), surface: "web", startedAt: "2026-10-19T09:00:00.000Z", endedAt: "2026-10-19T09:01:00.000Z", outcome: "done" };
+  const older = { ...current, runs: [extraRun], updatedAt: "2026-10-19T09:01:00.000Z" };
+  fs.writeFileSync(path.join(dir, `${card.id}.sync-conflict-20261019-090100-ABCDEFG.json`), JSON.stringify(older));
+  const listed = (await store.listCards()).find((entry) => entry.id === card.id);
+  assert.deepEqual(listed?.runs.map((entry) => entry.id), [extraRun.id]);
+  assert.equal(listed?.updatedAt, current.updatedAt, "the join kept the later copy's time");
+  assert.ok(!fs.readdirSync(dir).some((name) => name.includes("sync-conflict")), "the copy was left behind");
   await cards.deleteCard(card.id, "person");
 });
 await check("a key pasted into a task is not kept on the card", async () => {

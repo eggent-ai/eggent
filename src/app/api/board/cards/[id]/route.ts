@@ -37,6 +37,7 @@ export async function PATCH(req: NextRequest, { params }: { params: Promise<{ id
       ...(typeof body.projectId === "string" || body.projectId === null ? { projectId: (body.projectId as string | null) ?? null } : {}),
       ...(Array.isArray(body.after) ? { after: stringList(body.after) } : {}),
       ...(typeof body.review === "boolean" ? { review: body.review } : {}),
+      ...(typeof body.home === "string" ? { home: body.home } : {}),
     };
     if (Object.keys(edits).length > 0) card = await editCard(id, edits, "person");
     const move = body.move && typeof body.move === "object" ? (body.move as { to?: unknown; position?: unknown }) : null;

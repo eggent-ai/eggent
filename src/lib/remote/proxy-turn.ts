@@ -577,7 +577,9 @@ export type HandedOverProgress =
  */
 export async function runHandedOverText(
   turn: HandedOverTurn,
-  onProgress?: (event: HandedOverProgress) => void
+  onProgress?: (event: HandedOverProgress) => void,
+  /** Shown every part of the other side's stream as it comes, for a caller that keeps a record of the turn (the task board). */
+  observe?: (chunk: Record<string, unknown>) => void
 ): Promise<HandedOverTextResult> {
   const { chatId, home } = turn;
   const t = await getServerTranslator();
@@ -595,7 +597,8 @@ export async function runHandedOverText(
     console.warn(`[remote] could not hand the turn to ${home}: ${failure.code} - ${failure.message}`);
     // The one way out a messenger has: bring the chat back to the side that is reading it.
     const hint = ["offline", "denied", "not-ready", "timeout"].includes(failure.code) ? ` ${t("remote.error.hintHere")}` : "";
-    throw new Error(`${remoteFailureMessage(failure, t, where)}${hint}`);
+    // The code goes along for a caller that acts on it: a computer that said no is not asked again by itself.
+    throw Object.assign(new Error(`${remoteFailureMessage(failure, t, where)}${hint}`), { remoteCode: failure.code });
   }
   rememberHandOver(chatId, home);
   handover.opened();
@@ -623,6 +626,13 @@ export async function runHandedOverText(
     upstream: opened.upstream.body as ReadableStream<Uint8Array>,
     lostText: async () => t("remote.error.lost", { where: await whereLabel(home, t) }),
     onChunk: (chunk) => {
+      if (observe && chunk && typeof chunk === "object") {
+        try {
+          observe(chunk as Record<string, unknown>);
+        } catch (error) {
+          console.warn("A stream observer failed:", error);
+        }
+      }
       const part = chunk as { type?: string; id?: string; delta?: string; toolCallId?: string; toolName?: string; errorText?: string; data?: { id?: string; status?: string } };
       switch (part.type) {
         case "text-start":

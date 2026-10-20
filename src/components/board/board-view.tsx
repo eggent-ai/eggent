@@ -9,9 +9,11 @@ import { Select, SelectContent, SelectItem, SelectSeparator, SelectTrigger, Sele
 import { Sheet, SheetContent, SheetHeader, SheetTitle } from "@/components/ui/sheet";
 import { SkeletonList } from "@/components/ui/skeleton-list";
 import { CardForm, type CardFormValues } from "@/components/board/card-form";
+import { cardPlace } from "@/components/board/card-place";
 import { CardSheet } from "@/components/board/card-sheet";
 import { CardTile } from "@/components/board/card-tile";
 import { useBackgroundSync } from "@/hooks/use-background-sync";
+import { useRemoteStatus } from "@/hooks/use-remote-status";
 import { useI18n } from "@/i18n/provider";
 import type { MessageKey } from "@/i18n/messages";
 import * as board from "@/lib/board/client";
@@ -77,6 +79,7 @@ export function BoardView() {
   const [mobileChoice, setMobileChoice] = useState<CardStatus | null>(null);
   const [now, setNow] = useState(() => Date.now());
   const [dragId, setDragId] = useState<string | null>(null);
+  const [remoteTick, setRemoteTick] = useState(0);
   const [dropTarget, setDropTarget] = useState<{ status: CardStatus; index: number } | null>(null);
   const listRefs = useRef(new Map<CardStatus, HTMLUListElement | null>());
   const tabStrip = useRef<HTMLDivElement>(null);
@@ -108,6 +111,16 @@ export function BoardView() {
   useEffect(() => {
     void load();
   }, [load, tick]);
+
+  // Which computers are paired, and which of them can take a card right now. Asked on
+  // its own slower clock: every card a run writes ticks the board, and this asks the cloud.
+  const node = snapshot?.node ?? null;
+  const { status: remote, refresh: refreshRemote } = useRemoteStatus(remoteTick);
+  useEffect(() => {
+    if (!node) return;
+    const timer = window.setInterval(() => setRemoteTick((value) => value + 1), 30_000);
+    return () => window.clearInterval(timer);
+  }, [node]);
 
   // The phone's column strip scrolls sideways; the column shown must not be the one past its edge.
   useEffect(() => {
@@ -285,6 +298,7 @@ export function BoardView() {
                 byId={byId}
                 live={snapshot?.live[card.id]}
                 projectName={filter === ALL ? projectName(card) : null}
+                place={cardPlace(card.home, node, remote, t)}
                 now={now}
                 draggable={card.status !== "running" && !snapshot?.live[card.id]}
                 dragging={dragId === card.id}
@@ -348,6 +362,7 @@ export function BoardView() {
             onClick={() => {
               setCreateError(null);
               setCreating(true);
+              if (node) void refreshRemote();
             }}
           >
             <Plus aria-hidden />
@@ -451,6 +466,7 @@ export function BoardView() {
                     card={card}
                     byId={byId}
                     projectName={filter === ALL ? projectName(card) : null}
+                    place={cardPlace(card.home, node, remote, t)}
                     now={now}
                     draggable={false}
                     dragging={false}
@@ -470,6 +486,8 @@ export function BoardView() {
         cards={cards}
         live={openCard ? snapshot?.live[openCard.id] : undefined}
         projects={projects}
+        node={node}
+        remote={remote}
         now={now}
         onClose={() => setParam("card", null)}
         onChanged={() => void load()}
@@ -484,9 +502,10 @@ export function BoardView() {
           <div className="p-4">
             {creating ? (
               <CardForm
-                initial={{ title: "", body: "", projectId: filter === ALL || filter === ORCHESTRATOR ? null : filter, after: [], review: false }}
+                initial={{ title: "", body: "", projectId: filter === ALL || filter === ORCHESTRATOR ? null : filter, after: [], review: false, home: null }}
                 cards={cards}
                 projects={projects}
+                remote={node ? remote : null}
                 busy={createBusy}
                 error={createError}
                 onCancel={() => setCreating(false)}

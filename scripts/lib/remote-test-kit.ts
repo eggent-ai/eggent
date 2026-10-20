@@ -235,6 +235,8 @@ export interface RelayState {
   historyShared: boolean;
   /** Requests carried, newest last. */
   carried: Array<{ from: "cloud" | "device"; method: string; path: string; status: number }>;
+  /** The computer says no to every turn handed to it, as a person pressing "Don't allow" would. */
+  denyTurns?: boolean;
   /** Make the next carried response of this path end early, to look like a lost connection. */
   cutStreamOf?: string;
   /**
@@ -256,12 +258,11 @@ export async function startRelay(sides: { cloud: () => Side; device: () => Side 
     const caller = from === "cloud-side" ? "cloud" : "device";
 
     if (req.method === "GET" && action === "devices") {
+      // The workspace hears about its computer; the computer, as the control plane does, about itself.
       res.writeHead(200, { "content-type": "application/json" });
       res.end(
         JSON.stringify({
-          devices: caller === "cloud"
-            ? [{ node: "device:test-mac", name: "Test Mac", online: state.deviceOnline, accept: state.deviceAccept, historyShared: state.historyShared, lastSeenAt: new Date().toISOString() }]
-            : [],
+          devices: [{ node: "device:test-mac", name: "Test Mac", online: state.deviceOnline, accept: state.deviceAccept, historyShared: state.historyShared, lastSeenAt: new Date().toISOString() }],
         })
       );
       return;
@@ -280,6 +281,11 @@ export async function startRelay(sides: { cloud: () => Side; device: () => Side 
       if (caller === "cloud" && (!state.deviceOnline || !state.deviceAccept)) {
         res.writeHead(503, { "content-type": "application/json", "x-eggent-relay-error": "offline" });
         res.end(JSON.stringify({ error: "the computer is not connected" }));
+        return;
+      }
+      if (caller === "cloud" && state.denyTurns && spec.method === "POST" && spec.path === "/api/chat") {
+        res.writeHead(403, { "content-type": "application/json" });
+        res.end(JSON.stringify({ error: "The person on the computer did not allow it.", code: "denied" }));
         return;
       }
       const target = caller === "cloud" ? sides.device() : sides.cloud();
@@ -367,7 +373,7 @@ export async function startRelay(sides: { cloud: () => Side; device: () => Side 
  * side. Slow on purpose, and it can be held, because the whole point of what is
  * being tested is what happens while the files have not arrived.
  */
-export function startSyncer(a: string, b: string, options: { delayMs: number }) {
+export function startSyncer(a: string, b: string, options: { delayMs: number; dirs?: string[] }) {
   let paused = false;
   let delayMs = options.delayMs;
   const copied: string[] = [];
@@ -378,7 +384,7 @@ export function startSyncer(a: string, b: string, options: { delayMs: number }) 
   const conflicts: string[] = [];
   /** The time a file had on both sides when it was last brought level. */
   const level = new Map<string, number>();
-  const dirs = ["data/chats", "data/pi-sessions", "data/chat-files"];
+  const dirs = options.dirs ?? ["data/chats", "data/pi-sessions", "data/chat-files"];
 
   /** Every file under a directory, as paths relative to it (attachments sit one folder down). */
   const listFiles = (directory: string, prefix = ""): string[] => {
@@ -400,7 +406,7 @@ export function startSyncer(a: string, b: string, options: { delayMs: number }) 
         const source = path.join(from, dir);
         for (const name of listFiles(source)) {
           // What the real folders' ignore lists leave out (the app's DEFAULT_IGNORE for the attachments).
-          if (path.basename(name) === ".DS_Store" || name.includes(".stversions") || name.endsWith(".sync-tmp")) continue;
+          if (path.basename(name) === ".DS_Store" || name.includes(".stversions") || name.endsWith(".sync-tmp") || name.endsWith(".tmp")) continue;
           const file = path.join(source, name);
           const target = path.join(to, dir, name);
           let sourceStat: fs.Stats;

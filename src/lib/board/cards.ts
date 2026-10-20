@@ -4,6 +4,11 @@ import { getActiveRun, stopActiveRun } from "@/lib/pi/active-runs";
 import { deleteChat } from "@/lib/storage/chat-store";
 import { getProject } from "@/lib/storage/project-store";
 import { wouldCycle } from "@/lib/board/logic";
+import { boardRunsHere, cardHome, defaultCardHome, homeAllowedHere } from "@/lib/board/place";
+import { finishCardRun } from "@/lib/board/runs";
+import { localNode } from "@/lib/remote/config";
+import { relayRequest } from "@/lib/remote/relay-client";
+import { parseHome, type ChatHome } from "@/lib/remote/types";
 import {
   deleteCardFile,
   endOfColumn,
@@ -39,7 +44,7 @@ import {
  * for a screen, which says it in the workspace's language.
  */
 export class BoardError extends Error {
-  readonly code: "not-found" | "invalid" | "running" | "conflict";
+  readonly code: "not-found" | "invalid" | "running" | "conflict" | "unavailable";
   readonly status: number;
   readonly key: MessageKey;
   readonly values?: MessageValues;
@@ -48,7 +53,7 @@ export class BoardError extends Error {
     super(message);
     this.name = "BoardError";
     this.code = code;
-    this.status = code === "not-found" ? 404 : code === "invalid" ? 400 : 409;
+    this.status = code === "not-found" ? 404 : code === "invalid" ? 400 : code === "unavailable" ? 503 : 409;
     this.key = key;
     this.values = values;
   }
@@ -60,6 +65,18 @@ export interface CardInput {
   projectId?: string | null;
   after?: string[];
   review?: boolean;
+  /** Where it runs, in a pair: "cloud" or "device:<id>". */
+  home?: string | null;
+}
+
+/** A home asked for, checked: one this side may give, or nothing when nothing was asked. */
+function checkHome(value: string | null | undefined): ChatHome | undefined {
+  if (value === undefined || value === null || value === "") return undefined;
+  const home = parseHome(value);
+  if (!home || !homeAllowedHere(home)) {
+    throw new BoardError("invalid", `A card cannot be put to run on "${value}" from here.`, "board.error.badHome");
+  }
+  return home;
 }
 
 function clean(value: unknown, max: number): string {
@@ -116,12 +133,14 @@ export async function createCards(
     });
     const after = checkAfter([...existing, ...created], id, resolvedAfter);
     const projectId = await checkProject(input.projectId);
+    const home = checkHome(input.home) ?? defaultCardHome();
     const now = new Date().toISOString();
     const card: BoardCard = {
       id,
       title: title || body.slice(0, MAX_TITLE_CHARS),
       body,
       ...(projectId ? { projectId } : {}),
+      ...(home ? { home } : {}),
       status,
       position: position++,
       ...(after?.length ? { after } : {}),
@@ -163,6 +182,8 @@ export async function editCard(id: string, input: CardInput, actor: "person" | "
     throw new BoardError("conflict", "The card has already run in its project, and its conversation is there.", "board.error.projectFixed");
   }
   const after = checkAfter(await listCards(), id, input.after);
+  // Where it runs can change while it is not running; its chat follows on the next run (see ensureCardChat).
+  const home = input.home !== undefined ? checkHome(input.home) : undefined;
   const updated = await updateCard(id, (current) => {
     const title = input.title !== undefined ? clean(input.title, MAX_TITLE_CHARS) : current.title;
     return {
@@ -172,6 +193,7 @@ export async function editCard(id: string, input: CardInput, actor: "person" | "
       projectId,
       ...(after !== undefined ? { after: after.length ? after : undefined } : {}),
       ...(input.review !== undefined ? { review: input.review || undefined } : {}),
+      ...(home ? { home } : {}),
     };
   }, "card_edited");
   if (!updated) throw new BoardError("not-found", `There is no card ${id}.`, "board.error.noCard");
@@ -266,12 +288,48 @@ export async function answerCard(id: string, text: string): Promise<BoardCard> {
   return updated;
 }
 
-/** Stop a card: a running one is stopped where it is; a queued one goes back to the inbox. */
+/**
+ * A card's chat was moved to run somewhere else, from the chat's own switch:
+ * the card goes with it, or its next run would move the chat straight back.
+ * Quiet for every chat that is not a card.
+ */
+export async function followChatHome(chatId: string, home: ChatHome): Promise<void> {
+  try {
+    await updateCard(chatId, (current) => (current.home === home ? null : { ...current, home }), "card_edited");
+  } catch (error) {
+    console.warn(`[board] card ${chatId.slice(0, 8)} did not follow its chat:`, error);
+  }
+}
+
+/**
+ * Stop a card: a running one is stopped where it is - on the other side of a
+ * pair through the same road a chat's stop takes - and a queued one goes back
+ * to the inbox.
+ */
 export async function stopCardWork(id: string): Promise<BoardCard> {
   const card = await requireCard(id);
   if (getActiveRun(id)) {
     await stopActiveRun(id);
     return card;
+  }
+  const home = cardHome(card);
+  if (card.status === "running" && home && home !== localNode()) {
+    let stoppedThere = false;
+    try {
+      const response = await relayRequest(home, { method: "POST", path: `/api/chat/${encodeURIComponent(id)}/stop`, body: "{}", headers: { "content-type": "application/json" } });
+      const answer = response.ok ? ((await response.json().catch(() => ({}))) as { stopped?: unknown }) : null;
+      if (!response.ok) await response.body?.cancel().catch(() => undefined);
+      stoppedThere = answer?.stopped === true;
+    } catch {
+      // Not reachable: see below.
+    }
+    if (stoppedThere) return card;
+    // Nothing over there to stop, or nobody to ask. The cloud keeps the board, so it
+    // closes the run itself: a computer that went away mid-run would otherwise leave
+    // the card working for ever. A computer asks the cloud and does not guess.
+    if (!boardRunsHere()) throw new BoardError("unavailable", "The other side cannot be reached to stop it.", "board.error.stopUnreachable");
+    const open = [...card.runs].reverse().find((run) => !run.endedAt);
+    return (await finishCardRun(id, { outcome: "stopped", ...(open ? { runId: open.id } : {}) }, open?.surface ?? "board")) ?? card;
   }
   if (card.status === "queued") return moveCard(id, "inbox");
   return card;

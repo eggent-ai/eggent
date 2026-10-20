@@ -15,6 +15,7 @@ import { applySchedulingToolPolicy, hasScheduleIntent, hasScheduleManagementInte
 import { describeProviderFailure, type ProviderFailure } from "@/lib/pi/provider-failure";
 import { isGatewayRefusal } from "@/lib/pi/gateway-refusal";
 import { trackCardTurn, type CardTurn } from "@/lib/board/runs";
+import type { CardQuestion } from "@/lib/board/types";
 import { isHelperToolName } from "@/lib/pi/subagent-format";
 import { chatAllowsVisits, grantVisits, mentionRuntimeText, planProjectMention, revokeVisits, takeVisitFiles, type MentionPlan } from "@/lib/pi/project-visit";
 import { collectProducedFiles, mergeProducedGroups, type ProducedGroup } from "@/lib/files/produced";
@@ -54,6 +55,21 @@ function textOfContent(content: unknown): string {
 /** A question put on a board card instead of to a person nobody could reach: see eggent_ask_user. */
 function isQuestionOnCard(toolName: string, output: unknown): boolean {
   return toolName === "eggent_ask_user" && asRecord(asRecord(output)?.details)?.onCard === true;
+}
+
+/** The question the ask tool was given, in the card's shape. */
+function cardQuestionFrom(input: unknown): Omit<CardQuestion, "askedAt"> | null {
+  const args = asRecord(input);
+  const text = typeof args?.question === "string" ? args.question.trim() : "";
+  if (!text) return null;
+  const options = Array.isArray(args?.options) ? args.options.filter((option): option is string => typeof option === "string" && Boolean(option.trim())).slice(0, 6) : [];
+  const kind = args?.kind === "confirm" ? "confirm" : args?.kind === "free_text" ? "free_text" : options.length >= 2 ? "choice" : "free_text";
+  return {
+    text,
+    kind,
+    ...(options.length ? { options } : {}),
+    ...(typeof args?.placeholder === "string" && args.placeholder.trim() ? { placeholder: args.placeholder.trim() } : {}),
+  };
 }
 
 function stringifyForDisplay(value: unknown): string {
@@ -765,6 +781,8 @@ export type PiAgentTextOptions = PiChatRunOptions & {
      * the chat may be behind by more than the turn.
      */
     chatBefore?: number;
+    /** The question the turn put on its board card and stopped at, nobody being there to answer it. */
+    question?: Omit<CardQuestion, "askedAt">;
   };
 };
 
@@ -773,29 +791,58 @@ async function handOverText(options: PiAgentTextOptions, home: ChatHome): Promis
   // other side's agent reads exactly what this side's would have.
   const runtimeSuffix = options.runtimeData ? `\n\nRuntime data:\n${JSON.stringify(options.runtimeData, null, 2)}` : "";
   const chat = await getChat(options.chatId);
-  const result = await runHandedOverText(
-    {
-      chatId: options.chatId,
-      home,
-      message: `${options.userMessage}${runtimeSuffix}`,
-      projectId: options.projectId,
-      contextMode: options.chatContextMode,
-      currentPath: options.cwd,
-      chatTitle: chat?.title,
-    },
-    (event) => {
-      if (!options.onProgress) return;
-      try {
-        options.onProgress(event);
-      } catch (error) {
-        console.warn("A progress listener failed:", error);
-      }
+  // Nobody watches it over there, so over there nobody follows it on its card: this side does,
+  // from the stream. The board's own runs it reads itself.
+  const cardTurn: CardTurn | null = options.boardRun ? null : trackCardTurn(options.chatId, options.runId ?? crypto.randomUUID(), "external", home);
+  // The other side runs the turn and keeps nothing of the board's: a question it put on the card is
+  // seen here, in its stream - what was asked, and that the run stopped at it.
+  const asked = new Map<string, unknown>();
+  let question: Omit<CardQuestion, "askedAt"> | null = null;
+  const observe = (part: Record<string, unknown>) => {
+    if (part.type === "tool-input-available" && part.toolName === "eggent_ask_user" && typeof part.toolCallId === "string") {
+      asked.set(part.toolCallId, part.input);
+    } else if (part.type === "tool-output-available" && typeof part.toolCallId === "string" && asked.has(part.toolCallId)) {
+      if (/"onCard"\s*:\s*true/.test(String(part.output ?? ""))) question = cardQuestionFrom(asked.get(part.toolCallId)) ?? question;
     }
+  };
+  let result: Awaited<ReturnType<typeof runHandedOverText>>;
+  try {
+    result = await runHandedOverText(
+      {
+        chatId: options.chatId,
+        home,
+        message: `${options.userMessage}${runtimeSuffix}`,
+        projectId: options.projectId,
+        contextMode: options.chatContextMode,
+        currentPath: options.cwd,
+        chatTitle: chat?.title,
+      },
+      (event) => {
+        if (!options.onProgress) return;
+        try {
+          options.onProgress(event);
+        } catch (error) {
+          console.warn("A progress listener failed:", error);
+        }
+      },
+      observe
+    );
+  } catch (error) {
+    cardTurn?.end({ outcome: "failed", detail: streamErrorText(error) });
+    throw error;
+  }
+  cardTurn?.end(
+    question
+      ? { outcome: "question", question }
+      : result.stopped
+        ? { outcome: "stopped" }
+        : { outcome: "done", finalText: result.finalText }
   );
   if (options.outcome) {
     if (result.stopped) options.outcome.stopped = true;
     options.outcome.finalText = result.finalText;
     if (result.chatBefore !== null) options.outcome.chatBefore = result.chatBefore;
+    if (question) options.outcome.question = question;
   }
   return result.text;
 }
@@ -1021,6 +1068,7 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
   let refusal: string | null = null;
   // A question this turn put on its board card, because nobody here could answer it.
   let questionOnCard = false;
+  let cardQuestion: Omit<CardQuestion, "askedAt"> | null = null;
   teardown.push(() => subagents.dispose());
   const unsubscribe = session.subscribe((event: unknown) => {
     const record = asRecord(event);
@@ -1122,7 +1170,12 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
       } else if (!record.isError && isMcpOAuthCompleteResult(toolName, output)) {
         mcpOAuthPending = false;
       }
-      if (!record.isError && isQuestionOnCard(toolName, output)) questionOnCard = true;
+      if (!record.isError && isQuestionOnCard(toolName, output)) {
+        questionOnCard = true;
+        cardQuestion = cardQuestionFrom(existing?.input) ?? cardQuestion;
+        // Nobody here can answer it, and the card waits for the person: the run ends at the question.
+        requestStop();
+      }
       tools.set(toolCallId, toolRecord);
       upsertTimelineTool(timelineParts, toolRecord);
       report({ type: "tool", name: toolName, phase: "end" });
@@ -1223,10 +1276,11 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
         options.outcome.refused = true;
         if (refusal) options.outcome.refusalText = refusal;
       }
+      if (cardQuestion) options.outcome.question = cardQuestion;
     }
     cardTurn?.end(
       questionOnCard
-        ? { outcome: "question" }
+        ? { outcome: "question", ...(cardQuestion ? { question: cardQuestion } : {}) }
         : refusal !== null
           ? { outcome: "refused", ...(refusal ? { detail: refusal } : {}) }
           : turn.stalled
@@ -1338,8 +1392,10 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         requestStop: () => runAbort.abort(),
         ...(options.remote ? { servedForRemote: true } : {}),
       });
-      // A chat that is a board card: the card follows this turn too.
-      const cardTurn = trackCardTurn(options.chatId, runId, "web");
+      // A chat that is a board card: the card follows this turn too, written by the side that runs it.
+      // A turn handed here with nobody watching - a board run, a messenger's - is the one exception:
+      // the side that handed it over reads how it ends from the stream and writes the card itself.
+      const cardTurn: CardTurn | null = options.interactive === false ? null : trackCardTurn(options.chatId, runId, "web");
       const stall: { stalled: StalledTurn | null } = { stalled: null };
       const thresholds = watchdogThresholds();
       const watchdog = thresholds
@@ -1363,7 +1419,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         watchdog?.stop();
         clearActiveRun(options.chatId, runId);
         cancelPendingInteractionsForRun(runId);
-        cardTurn.end({ outcome: "failed", detail: streamErrorText(error) });
+        cardTurn?.end({ outcome: "failed", detail: streamErrorText(error) });
         if (live) {
           live.push({ type: "error", errorText: streamErrorText(error) });
           live.finish();
@@ -1428,10 +1484,10 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         cancelPendingInteractionsForRun(runId);
         scope.abandon = undefined;
         if (!(error instanceof TurnAbortedError)) {
-          cardTurn.end({ outcome: "failed", detail: streamErrorText(error) });
+          cardTurn?.end({ outcome: "failed", detail: streamErrorText(error) });
           throw error;
         }
-        cardTurn.end({ outcome: stall.stalled ? "stalled" : "stopped" });
+        cardTurn?.end({ outcome: stall.stalled ? "stalled" : "stopped" });
         // Stopped, or given up on, before it began: say so, and keep it.
         const t = await getServerTranslator();
         const notice = stall.stalled ? await stalledNotice(stall.stalled) : t("external.run.stopped");
@@ -1454,6 +1510,8 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
       let refusal: string | null = null;
       // How the turn ended, for a board card: set where it fails, read where it ends.
       let turnFailure: string | null = null;
+      // A question this turn put on its board card: nobody watching could answer it, so the turn ends there.
+      let webCardQuestion: Omit<CardQuestion, "askedAt"> | null | undefined;
       let turnFiles: ProducedGroup[] | undefined;
       let textStarted = false;
       let currentTextId: string | null = null;
@@ -1790,6 +1848,8 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
           } else if (!isError && isMcpOAuthCompleteResult(toolName, output)) {
             mcpOAuthPending = false;
           }
+          const stopsAtQuestion = !isError && isQuestionOnCard(toolName, output);
+          if (stopsAtQuestion) webCardQuestion = cardQuestionFrom(existing?.input) ?? webCardQuestion ?? null;
           tools.set(toolCallId, toolRecord);
           upsertTimelineTool(timelineParts, toolRecord);
           checkpointProgress();
@@ -1809,6 +1869,9 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
               dynamic: true,
             });
           }
+          // After the result is out, not before: whoever handed this turn over reads the question
+          // from that result, and a stopped turn writes nothing more to its stream.
+          if (stopsAtQuestion) runAbort.abort();
         }
       });
 
@@ -1933,8 +1996,10 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         // else watching would be left with a stream that simply stopped.
         safeWrite({ type: "error", errorText: streamErrorText(error) });
       } finally {
-        cardTurn.end(
-          turnFailure !== null
+        cardTurn?.end(
+          webCardQuestion !== undefined
+            ? { outcome: "question", ...(webCardQuestion ? { question: webCardQuestion } : {}) }
+            : turnFailure !== null
             ? { outcome: "failed", detail: turnFailure }
             : stall.stalled
               ? { outcome: "stalled" }

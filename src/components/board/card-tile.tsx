@@ -1,6 +1,7 @@
 "use client";
 
-import { CircleHelp, Clock, Hourglass, OctagonAlert, Sparkles } from "lucide-react";
+import { CircleHelp, Clock, Hourglass, Laptop, OctagonAlert, Sparkles } from "lucide-react";
+import type { CardPlace } from "@/components/board/card-place";
 import { useI18n } from "@/i18n/provider";
 import type { MessageKey } from "@/i18n/messages";
 import { waitingFor } from "@/lib/board/logic";
@@ -57,6 +58,7 @@ export function CardTile({
   byId,
   live,
   projectName,
+  place,
   now,
   draggable,
   dragging,
@@ -69,6 +71,8 @@ export function CardTile({
   live?: { startedAt: number; question: boolean };
   /** Shown when the board shows more than one project. */
   projectName?: string | null;
+  /** Where it runs, in a pair. Only a computer is marked: the cloud is where a card runs unless somebody says otherwise. */
+  place?: CardPlace | null;
   now: number;
   draggable: boolean;
   dragging: boolean;
@@ -138,6 +142,13 @@ export function CardTile({
           ) : null}
           {card.review && card.status !== "done" ? <span>{t("board.card.review")}</span> : null}
           {projectName ? <span className="truncate">{projectName}</span> : null}
+          {place?.kind === "device" ? (
+            // Wraps rather than truncates: in a narrow column "is away" is the part that matters.
+            <span className="inline-flex min-w-0 items-start gap-1" data-testid="card-place-mark">
+              <Laptop aria-hidden className="mt-0.5 size-3.5 shrink-0" />
+              <span className="min-w-0 [overflow-wrap:anywhere]">{place.away && card.status === "queued" ? t("board.card.deviceAway", { name: place.name }) : place.name}</span>
+            </span>
+          ) : null}
           {card.createdBy === "agent" && card.status === "inbox" ? (
             <span className="inline-flex items-center gap-1" title={card.createdFrom?.title ? t("board.sheet.from", { chat: card.createdFrom.title }) : undefined}>
               <Sparkles aria-hidden className="size-3.5" />

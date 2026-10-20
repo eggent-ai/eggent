@@ -1,4 +1,5 @@
 import type { ProducedGroup } from "@/lib/files/produced-shape";
+import type { ChatHome } from "@/lib/remote/types";
 
 /**
  * The task board: work handed to the agent as cards, each one carried out in a
@@ -81,6 +82,8 @@ export interface CardRun {
   id: string;
   /** board = started by the board; web/external = somebody wrote in the card's chat. */
   surface: "board" | "web" | "external";
+  /** Which side of a paired workspace and computer ran it; absent where there is no pair. */
+  node?: ChatHome;
   startedAt: string;
   endedAt?: string;
   outcome?: CardRunOutcome;
@@ -104,6 +107,15 @@ export interface BoardCard {
   body: string;
   /** The project it runs in; absent for the orchestrator. */
   projectId?: string;
+  /**
+   * Where it runs when a workspace and a computer are paired: the cloud, or one
+   * computer. Both sides hold the same board and the cloud starts every card,
+   * handing the turn to the computer when it lives on one; its chat lives there
+   * too. Absent on a card from before the pair, which then runs in the cloud.
+   * Where there is no pair, a side runs only the cards with no home or its own
+   * (see lib/board/place).
+   */
+  home?: ChatHome;
   status: CardStatus;
   /** Order inside its column, smallest first. The queue starts the first card it can. */
   position: number;
@@ -147,6 +159,8 @@ export interface BoardState {
 export interface BoardSnapshot {
   cards: BoardCard[];
   state: BoardState;
+  /** This side, when it is one of a pair; null where there is no pair. */
+  node: ChatHome | null;
   /** Card ids with a turn in their chat right now, and since when. */
   live: Record<string, { startedAt: number; question: boolean }>;
   limits: { running: number; perProject: number };

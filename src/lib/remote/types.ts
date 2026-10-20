@@ -115,6 +115,11 @@ export interface RemoteStatus {
   nodeName: string | null;
   /** On the workspace: its paired computers. On a computer: empty (the only other place is the cloud). */
   devices: RemoteDevice[];
+  /**
+   * On a computer: this computer as the workspace sees it - whether the cloud can
+   * hand it anything right now. Null on the workspace, or when it was not said.
+   */
+  self?: RemoteDevice | null;
   /** Whether the control plane could be reached for the answer above. */
   reachable: boolean;
 }

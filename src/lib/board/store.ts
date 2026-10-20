@@ -3,6 +3,8 @@ import path from "path";
 import { publishUiSyncEvent } from "@/lib/realtime/event-bus";
 import { withoutSecrets } from "@/lib/secrets/mask";
 import { cleanProducedGroups } from "@/lib/files/produced-shape";
+import { parseHome } from "@/lib/remote/types";
+import { mergeCardCopies } from "@/lib/board/logic";
 import {
   CARD_STATUSES,
   MAX_AFTER,
@@ -100,9 +102,11 @@ function cleanRun(value: unknown): CardRun | null {
   if (typeof raw.id !== "string" || !raw.id) return null;
   const surface = raw.surface === "web" || raw.surface === "external" ? raw.surface : "board";
   const outcome = RUN_OUTCOMES.find((candidate) => candidate === raw.outcome);
+  const node = parseHome(raw.node);
   return {
     id: raw.id.slice(0, 80),
     surface,
+    ...(node ? { node } : {}),
     startedAt: isoOr(raw.startedAt, new Date(0).toISOString()),
     ...(typeof raw.endedAt === "string" ? { endedAt: isoOr(raw.endedAt, raw.startedAt ?? "") } : {}),
     ...(outcome ? { outcome } : {}),
@@ -126,12 +130,14 @@ export function normalizeCard(value: unknown): BoardCard | null {
   const nextKind = raw.next?.kind === "answer" || raw.next?.kind === "retry" ? raw.next.kind : "continue";
   const nextText = clip(raw.next?.text, MAX_BODY_CHARS);
   const resultText = typeof raw.result?.text === "string" ? raw.result.text : null;
+  const home = parseHome(raw.home);
   const files = raw.result ? cleanProducedGroups(raw.result.files) : [];
   return {
     id: raw.id,
     title: clip(raw.title, MAX_TITLE_CHARS) || "Untitled",
     body: clip(raw.body, MAX_BODY_CHARS),
     ...(typeof raw.projectId === "string" && raw.projectId.trim() && raw.projectId !== "none" ? { projectId: raw.projectId.trim() } : {}),
+    ...(home ? { home } : {}),
     status,
     position: typeof raw.position === "number" && Number.isFinite(raw.position) ? raw.position : 0,
     ...(after.length ? { after } : {}),
@@ -220,6 +226,46 @@ function publish(card: Pick<BoardCard, "id" | "projectId">, reason: string): voi
   publishUiSyncEvent({ topic: "board", chatId: card.id, projectId: card.projectId ?? null, reason });
 }
 
+/** `<id>.sync-conflict-<date>-<time>-<device>.json`: the copy the file sync kept when both sides wrote a card. */
+const CONFLICT_COPY = /^([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})\.sync-conflict-[A-Za-z0-9-]+\.json$/i;
+
+/**
+ * Settle the copies the file sync left when both sides of a pair wrote one card
+ * at once: the two are joined (see mergeCardCopies) - what was decided last,
+ * and every run either side recorded - and the copy is let go of. Every side
+ * does the same with the same two files and writes the same bytes, so they
+ * agree without asking each other.
+ */
+async function settleConflictCopies(names: string[]): Promise<void> {
+  for (const name of names) {
+    const match = CONFLICT_COPY.exec(name);
+    if (!match) continue;
+    const id = match[1];
+    const copyFile = path.join(CARDS_DIR(), name);
+    try {
+      const copy = normalizeCard(JSON.parse(await fs.readFile(copyFile, "utf-8")));
+      const current = await readCardFile(id);
+      if (copy && copy.id === id) {
+        if (!current) await insertCard(copy);
+        else {
+          await updateCard(
+            id,
+            (now) => {
+              const merged = mergeCardCopies(now, copy);
+              return JSON.stringify(merged) === JSON.stringify(now) ? null : merged;
+            },
+            "card_conflict_settled",
+            { keepTime: true }
+          ).catch(() => null);
+        }
+      }
+      await fs.rm(copyFile, { force: true });
+    } catch {
+      // Unreadable: left for a later look rather than guessed at.
+    }
+  }
+}
+
 /** Every card on the board, in no particular order. */
 export async function listCards(): Promise<BoardCard[]> {
   let names: string[];
@@ -227,6 +273,10 @@ export async function listCards(): Promise<BoardCard[]> {
     names = await fs.readdir(CARDS_DIR());
   } catch {
     return [];
+  }
+  if (names.some((name) => CONFLICT_COPY.test(name))) {
+    await settleConflictCopies(names);
+    names = await fs.readdir(CARDS_DIR()).catch(() => []);
   }
   const ids = names.filter((name) => name.endsWith(".json")).map((name) => name.slice(0, -5)).filter(isCardId);
   const cards = await Promise.all(ids.map((id) => readCardFile(id)));
@@ -248,7 +298,9 @@ export async function getCard(id: string | null | undefined): Promise<BoardCard 
 export async function updateCard(
   id: string,
   change: (card: BoardCard) => BoardCard | null | Promise<BoardCard | null>,
-  reason = "card_updated"
+  reason = "card_updated",
+  /** Keep the time the change says: a join of two copies is not a new change, and must read the same on every side. */
+  options: { keepTime?: boolean } = {}
 ): Promise<BoardCard | null> {
   if (!isCardId(id)) return null;
   const { queues } = storeState();
@@ -260,7 +312,7 @@ export async function updateCard(
       if (!current) return null;
       const next = await change(structuredClone(current));
       if (!next) return current;
-      const written = await writeCardFile({ ...next, id, updatedAt: new Date().toISOString() });
+      const written = await writeCardFile({ ...next, id, updatedAt: options.keepTime ? next.updatedAt : new Date().toISOString() });
       publish(written, reason);
       return written;
     });

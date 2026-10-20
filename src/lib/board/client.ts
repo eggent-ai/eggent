@@ -1,4 +1,5 @@
 import type { BoardCard, BoardSnapshot, BoardSummary } from "@/lib/board/types";
+import type { ChatHome } from "@/lib/remote/types";
 
 /**
  * The board page's side of the board's routes. Every write is JSON - the
@@ -48,6 +49,8 @@ export interface NewCard {
   projectId: string | null;
   after: string[];
   review: boolean;
+  /** Where it runs, in a pair; null for the default. */
+  home: ChatHome | null;
   start: boolean;
 }
 
@@ -57,7 +60,7 @@ export function createCard(card: NewCard): Promise<{ card: BoardCard }> {
 
 export function editCard(
   id: string,
-  edits: Partial<{ title: string; body: string; projectId: string | null; after: string[]; review: boolean }>
+  edits: Partial<{ title: string; body: string; projectId: string | null; after: string[]; review: boolean; home: ChatHome | null }>
 ): Promise<{ card: BoardCard }> {
   return request(`/api/board/cards/${encodeURIComponent(id)}`, { method: "PATCH", body: JSON.stringify(edits) });
 }

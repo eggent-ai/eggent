@@ -16,6 +16,12 @@ import {
 } from "@/lib/board/logic";
 import { getCard, listCards, readBoardState, updateCard } from "@/lib/board/store";
 import { finishCardRun } from "@/lib/board/runs";
+import { boardRunsHere, cardHome, cardRunsOnComputer, cardStartedHere } from "@/lib/board/place";
+import { localNode } from "@/lib/remote/config";
+import { remoteChatState } from "@/lib/remote/proxy-turn";
+import { stampAfter } from "@/lib/remote/stamp";
+import { listDevices } from "@/lib/remote/relay-client";
+import { isDeviceHome, type ChatHome } from "@/lib/remote/types";
 import type { BoardCard } from "@/lib/board/types";
 
 /**
@@ -110,12 +116,28 @@ function liveScopes(cards: BoardCard[]): Map<string, number> {
 }
 
 /** A card says it is running, and nothing is: the server stopped under it, or a turn ended without a word. */
-function isOrphanedRun(card: BoardCard, now: number): boolean {
+/** How long a run that says it started is given to show up before it counts as gone: a minute. */
+function orphanGraceMs(env: Record<string, string | undefined> = process.env): number {
+  const seconds = Number(env.EGGENT_BOARD_ORPHAN_GRACE_SECONDS);
+  return Number.isFinite(seconds) && seconds >= 0 ? Math.min(seconds, 3_600) * 1000 : 60_000;
+}
+
+async function isOrphanedRun(card: BoardCard, now: number, asked: Map<ChatHome, boolean>): Promise<boolean> {
   if (card.status !== "running") return false;
   if (dispatcherState().running.has(card.id) || getActiveRun(card.id)) return false;
   const open = [...card.runs].reverse().find((run) => !run.endedAt);
   // A turn somebody just started registers a moment after it says so; give it that moment.
-  return !open || now - Date.parse(open.startedAt) > 60_000;
+  if (open && now - Date.parse(open.startedAt) <= orphanGraceMs()) return false;
+  // A run on a computer - somebody wrote in the card's chat there - is that computer's to know
+  // about, so it is asked. One that cannot be reached is given the benefit of the doubt: the
+  // turn may be going on behind a shut lid, and Stop still closes the card from here.
+  if (open?.node && isDeviceHome(open.node) && open.node !== localNode()) {
+    if (asked.get(open.node) === false) return false;
+    const there = await remoteChatState(card.id, open.node);
+    if (!there) asked.set(open.node, false);
+    return there !== null && !there.running;
+  }
+  return true;
 }
 
 /** Where a parent card's file is, from wherever the child works. */
@@ -123,14 +145,27 @@ function absoluteFilePath(project: string, relativePath: string): string {
   return path.join(getWorkDir(project === "none" ? null : project), relativePath);
 }
 
-/** The chat a card's run writes into, made on its first run. */
+/**
+ * The chat a card's run writes into, made on its first run. In a pair it lives
+ * where the card runs, so a message typed into it on the other side is handed
+ * here - and a card moved to this side brings its chat along on its next run:
+ * this side is the one about to write it.
+ */
 async function ensureCardChat(card: BoardCard): Promise<void> {
+  const home = cardHome(card) ?? undefined;
   const existing = await getChat(card.id);
   if (existing) {
-    if (!existing.boardCard) await saveChat({ ...existing, boardCard: true });
+    if (existing.boardCard && (existing.home ?? undefined) === home) return;
+    await saveChat({
+      ...existing,
+      boardCard: true,
+      ...(home ? { home } : {}),
+      // The newer copy wins when the two sides' files are joined: a move must be newer than what it changes.
+      ...((existing.home ?? undefined) !== home ? { updatedAt: stampAfter(existing.updatedAt) } : {}),
+    });
     return;
   }
-  const chat = await createChat(card.id, card.title, card.projectId);
+  const chat = await createChat(card.id, card.title, card.projectId, undefined, home);
   await saveChat({ ...chat, boardCard: true });
 }
 
@@ -159,7 +194,10 @@ async function runCard(cardId: string): Promise<void> {
         if (current.status !== "queued" || current.archived) return null;
         firstRun = current.runs.length === 0 && !current.next;
         message = current.next?.text ?? "";
-        return applyRunStart(current, { id: runId, surface: "board", startedAt });
+        // Checked again on the card as it is now: somebody may have just moved it.
+        if (!cardStartedHere(current)) return null;
+        const node = cardHome(current) ?? undefined;
+        return applyRunStart(current, { id: runId, surface: "board", startedAt, ...(node ? { node } : {}) });
       },
       "card_started"
     );
@@ -201,18 +239,15 @@ async function runCard(cardId: string): Promise<void> {
       runId,
       // This runner reads how the run ended itself; the card must not also follow it as somebody else's turn.
       boardRun: true,
+      // A card that lives on a computer runs there: its chat lives there (ensureCardChat), and the
+      // turn is handed over through the relay and that computer's consent, as any of its chats is.
+      allowHandover: cardRunsOnComputer(started),
       outcome,
-      onSessionEvent: (event) => {
-        const record = event as { type?: unknown; toolName?: unknown; result?: { details?: { onCard?: unknown } } };
-        if (record.type !== "tool_execution_end" || record.toolName !== "eggent_ask_user") return;
-        if (record.result?.details?.onCard !== true) return;
-        // The question is on the card; nobody here can answer it, so the run ends where it is.
-        placeholder.questionAsked = true;
-        void stopActiveRun(cardId).catch(() => undefined);
-      },
     });
-    end = placeholder.questionAsked
-      ? { runId, outcome: "question" }
+    // The turn stops itself at a question it put on the card (the runner does it, on whichever side ran it).
+    placeholder.questionAsked = Boolean(outcome.question);
+    end = outcome.question
+      ? { runId, outcome: "question", question: outcome.question }
       : outcome.refused
         ? { runId, outcome: "refused", detail: outcome.refusalText }
         : outcome.stalled
@@ -221,7 +256,22 @@ async function runCard(cardId: string): Promise<void> {
             ? { runId, outcome: "stopped" }
             : { runId, outcome: "done", finalText: outcome.finalText || reply, files: outcome.files };
   } catch (error) {
-    end = placeholder.questionAsked ? { runId, outcome: "question" } : { runId, outcome: "failed", detail: describeError(error) };
+    const remoteCode = (error as { remoteCode?: unknown })?.remoteCode;
+    if (started && typeof remoteCode === "string" && NOT_STARTED_CODES.has(remoteCode)) {
+      // The computer could not take it - away, not ready, busy, its copy of the chat not there yet:
+      // the card never started, so it goes back to the queue as it was and waits for the computer.
+      forgetReachableComputers();
+      await updateCard(cardId, (current) => ({
+        ...current,
+        status: current.status === "running" ? "queued" : current.status,
+        runs: current.runs.filter((run) => run.id !== runId),
+      }), "card_not_started").catch(() => null);
+      console.log(`[board] card ${cardId.slice(0, 8)} waits for ${cardHome(started)}: ${remoteCode}`);
+      started = null;
+    } else {
+      // A computer that said no is not asked again by itself: the card waits for the person.
+      end = { runId, outcome: "failed", detail: describeError(error), ...(remoteCode === "denied" ? { noRetry: true } : {}) };
+    }
   } finally {
     if (started) {
       try {
@@ -236,6 +286,33 @@ async function runCard(cardId: string): Promise<void> {
   }
 }
 
+/** Why a computer could not take a card that leaves the card as if it had never been started. */
+const NOT_STARTED_CODES = new Set(["offline", "not-ready", "timeout", "busy", "not-synced"]);
+
+/** The computers that can take a card right now, asked of the control plane at most every 20 seconds. */
+const DEVICES_KEY = "__EGGENT_BOARD_DEVICES__";
+
+function forgetReachableComputers(): void {
+  const holder = globalThis as typeof globalThis & { [DEVICES_KEY]?: unknown };
+  delete holder[DEVICES_KEY];
+}
+async function reachableComputers(cards: BoardCard[]): Promise<Set<ChatHome>> {
+  const wanted = cards.some((card) => card.status === "queued" && !card.archived && cardStartedHere(card) && cardRunsOnComputer(card));
+  if (!wanted) return new Set();
+  const holder = globalThis as typeof globalThis & { [DEVICES_KEY]?: { at: number; online: Set<ChatHome> } };
+  const cached = holder[DEVICES_KEY];
+  if (cached && Date.now() - cached.at < 20_000) return cached.online;
+  let online = new Set<ChatHome>();
+  try {
+    const devices = await listDevices(AbortSignal.timeout(10_000));
+    online = new Set(devices.filter((device) => device.online && device.accept && device.historyShared).map((device) => device.node));
+  } catch (error) {
+    console.warn("[board] could not ask which computers are online:", error instanceof Error ? error.message : error);
+  }
+  holder[DEVICES_KEY] = { at: Date.now(), online };
+  return online;
+}
+
 /** Look at the board once: settle what nothing is running, start what may start. */
 async function pass(): Promise<void> {
   const state = dispatcherState();
@@ -248,18 +325,25 @@ async function pass(): Promise<void> {
     do {
       state.passAgain = false;
       const now = Date.now();
-      const cards = await listCards();
+      // A computer in a pair shows the board and carries nothing out: the cloud does.
+      if (!boardRunsHere()) continue;
+      const cards = (await listCards()).filter(cardStartedHere);
+      const asked = new Map<ChatHome, boolean>();
       for (const card of cards) {
-        if (isOrphanedRun(card, now)) await finishCardRun(card.id, { outcome: "interrupted" }, "board");
+        if (await isOrphanedRun(card, now, asked)) await finishCardRun(card.id, { outcome: "interrupted" }, "board");
       }
       const board = await readBoardState();
       if (board.paused || !boardEnabled()) continue;
       const fresh = await listCards();
+      const reachable = await reachableComputers(fresh);
+      // A card that lives on a computer waits in the queue while that computer cannot take it.
+      const ownFresh = fresh.filter((card) => cardStartedHere(card) && (!cardRunsOnComputer(card) || reachable.has(cardHome(card) as ChatHome)));
+      // Every card stays in view for what others wait for; only those this side can start now are picked.
       const picked = pickCardsToStart(fresh, {
         limits: boardLimits(),
         liveByScope: liveScopes(fresh),
         now,
-        exclude: new Set(state.running.keys()),
+        exclude: new Set([...state.running.keys(), ...fresh.filter((card) => !ownFresh.includes(card)).map((card) => card.id)]),
       });
       for (const card of picked) void runCard(card.id);
     } while (state.passAgain);

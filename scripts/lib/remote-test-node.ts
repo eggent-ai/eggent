@@ -53,6 +53,14 @@ const home = await import("../../src/app/api/chat/home/route.ts");
 const status = await import("../../src/app/api/remote/status/route.ts");
 const respond = await import("../../src/app/api/pi-runs/[runId]/interactions/[interactionId]/respond/route.ts");
 const external = await import("../../src/app/api/external/message/route.ts");
+// The task board, for the tests that run it across the pair (BOARD=1).
+const withBoard = process.env.BOARD === "1";
+const board = withBoard ? await import("../../src/app/api/board/route.ts") : null;
+const boardCards = withBoard ? await import("../../src/app/api/board/cards/route.ts") : null;
+const boardCard = withBoard ? await import("../../src/app/api/board/cards/[id]/route.ts") : null;
+const boardAnswer = withBoard ? await import("../../src/app/api/board/cards/[id]/answer/route.ts") : null;
+const boardStop = withBoard ? await import("../../src/app/api/board/cards/[id]/stop/route.ts") : null;
+if (withBoard) (await import("../../src/lib/board/dispatcher.ts")).startBoardDispatcher();
 
 type Handler = (req: InstanceType<typeof NextRequest>, ctx: { params: Promise<Record<string, string>> }) => Promise<Response> | Response;
 
@@ -83,6 +91,17 @@ const routes: Route[] = [
   route("GET", "/api/remote/status", status.GET),
   route("POST", "/api/pi-runs/:runId/interactions/:interactionId/respond", respond.POST),
   route("POST", "/api/external/message", external.POST),
+  ...(withBoard && board && boardCards && boardCard && boardAnswer && boardStop
+    ? [
+        route("GET", "/api/board", board.GET),
+        route("POST", "/api/board/cards", boardCards.POST),
+        route("GET", "/api/board/cards/:id", boardCard.GET),
+        route("PATCH", "/api/board/cards/:id", boardCard.PATCH),
+        route("DELETE", "/api/board/cards/:id", boardCard.DELETE),
+        route("POST", "/api/board/cards/:id/answer", boardAnswer.POST),
+        route("POST", "/api/board/cards/:id/stop", boardStop.POST),
+      ]
+    : []),
 ];
 
 function readBody(req: http.IncomingMessage): Promise<Buffer> {

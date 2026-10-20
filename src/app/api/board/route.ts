@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server";
 import { boardLimits, liveCards } from "@/lib/board/dispatcher";
 import { guardBoardRequest } from "@/lib/board/http";
 import { listCards, readBoardState } from "@/lib/board/store";
+import { localNode, remoteEnabled } from "@/lib/remote/config";
 import type { BoardSnapshot } from "@/lib/board/types";
 
 export const runtime = "nodejs";
@@ -22,6 +23,7 @@ export async function GET(req: NextRequest) {
     state: await readBoardState(),
     live: liveCards(cards),
     limits: boardLimits(),
+    node: remoteEnabled() ? localNode() : null,
   };
   return Response.json(snapshot, { headers: { "Cache-Control": "no-store" } });
 }

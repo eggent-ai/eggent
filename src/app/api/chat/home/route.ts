@@ -8,6 +8,7 @@ import { forgetHandOver, recallHandOver, remoteChatState, remoteFailureMessage, 
 import { stampAfter } from "@/lib/remote/stamp";
 import { listDevices } from "@/lib/remote/relay-client";
 import { isDeviceHome, parseHome, RemoteError, type ChatHome } from "@/lib/remote/types";
+import { followChatHome } from "@/lib/board/cards";
 import { getChat, saveChat } from "@/lib/storage/chat-store";
 import { checkTerminalRequest, guardStatus, jsonError } from "@/lib/terminal/guard";
 
@@ -107,5 +108,7 @@ export async function POST(req: NextRequest) {
   // The newer copy wins when the two sides' files are joined, so a switch has to be newer than the file it changes.
   chat.updatedAt = stampAfter(chat.updatedAt);
   await saveChat(chat);
+  // A board card and its chat run in one place.
+  if (home && chat.boardCard) await followChatHome(chatId, home);
   return Response.json({ ok: true, home, stored: true });
 }

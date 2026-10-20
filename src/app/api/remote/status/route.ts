@@ -36,6 +36,8 @@ export async function GET(req: NextRequest) {
     nodeName: localNodeName(),
     // A computer's only other place is the workspace; the list is the workspace's.
     devices: node === "cloud" ? devices : [],
+    // What a computer is told about itself: whether the cloud could start a card here.
+    self: node === "cloud" ? null : devices.find((device) => device.node === node) ?? null,
     reachable,
   };
   return Response.json(status, { headers: { "Cache-Control": "no-store" } });

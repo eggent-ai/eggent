@@ -25,6 +25,7 @@ export async function POST(req: NextRequest) {
           projectId: typeof body.projectId === "string" ? body.projectId : null,
           after: stringList(body.after),
           review: body.review === true,
+          home: typeof body.home === "string" ? body.home : undefined,
         },
       ],
       { createdBy: "person", start: body.start === true }
