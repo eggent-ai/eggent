@@ -29,6 +29,8 @@ const COLUMNS: Array<{ status: CardStatus; label: MessageKey; hint: MessageKey }
 ];
 
 const ALL = "all";
+/** How many finished cards the Done column shows before "show more". */
+const DONE_SHOWN = 10;
 const ORCHESTRATOR = "none";
 
 /** Which columns a card may be dropped into from where it is. Only the person moves cards, and never into "working". */
@@ -67,6 +69,7 @@ export function BoardView() {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [actionError, setActionError] = useState<string | null>(null);
   const [showArchived, setShowArchived] = useState(false);
+  const [showAllDone, setShowAllDone] = useState(false);
   const [creating, setCreating] = useState(false);
   const [createBusy, setCreateBusy] = useState(false);
   const [createError, setCreateError] = useState<string | null>(null);
@@ -221,7 +224,10 @@ export function BoardView() {
   };
 
   const column = (spec: (typeof COLUMNS)[number]) => {
-    const list = columns.get(spec.status) ?? [];
+    const all = columns.get(spec.status) ?? [];
+    // Done only grows: the most recent are shown, the rest one click away.
+    const capped = spec.status === "done" && !showAllDone && all.length > DONE_SHOWN;
+    const list = capped ? all.slice(0, DONE_SHOWN) : all;
     const accepting = dragged ? canDrop(dragged, spec.status) && !(spec.status === dragged.status && spec.status === "done") : false;
     const target = dropTarget?.status === spec.status ? dropTarget.index : null;
     return (
@@ -254,7 +260,7 @@ export function BoardView() {
           <h3 id={`board-column-${spec.status}`} className="text-sm font-semibold" title={t(spec.hint)}>
             {t(spec.label)}
           </h3>
-          <span className="text-xs/4 tabular-nums text-muted-foreground">{list.length}</span>
+          <span className="text-xs/4 tabular-nums text-muted-foreground">{all.length}</span>
           {spec.status === "inbox" && list.length > 1 ? (
             <Button
               size="sm"
@@ -297,8 +303,15 @@ export function BoardView() {
             );
           })}
           {target !== null && target >= list.filter((card) => card.id !== dragId).length ? <DropMarker /> : null}
+          {capped ? (
+            <li>
+              <Button size="sm" variant="ghost" className="h-8 w-full text-xs" onClick={() => setShowAllDone(true)}>
+                {t("board.showMoreDone", { count: all.length - DONE_SHOWN })}
+              </Button>
+            </li>
+          ) : null}
           {list.length === 0 ? (
-            <li className="flex flex-1 items-center justify-center rounded-lg border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">
+            <li className="flex items-center justify-center rounded-lg border border-dashed px-3 py-6 text-center text-xs text-muted-foreground">
               {accepting ? t("board.column.dropHere") : t("board.column.empty")}
             </li>
           ) : null}
@@ -414,7 +427,7 @@ export function BoardView() {
           </div>
           <div className="md:hidden">{column(COLUMNS.find((spec) => spec.status === mobileColumn) ?? COLUMNS[0])}</div>
 
-          <div className="hidden min-w-0 gap-3 overflow-x-auto pb-2 md:grid md:auto-cols-[minmax(13rem,1fr)] md:grid-flow-col">
+          <div className="hidden min-w-0 gap-3 overflow-x-auto pb-2 md:grid md:auto-cols-[minmax(11.5rem,1fr)] md:grid-flow-col">
             {COLUMNS.map((spec) => column(spec))}
           </div>
 

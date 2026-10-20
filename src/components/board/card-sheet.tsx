@@ -173,6 +173,16 @@ export function CardSheet({
                   </>
                 ) : null}
               </SheetDescription>
+              {/* Up here, not in the footer: the hosted workspace's help button sits over the bottom-right corner. */}
+              {card.runs.length > 0 ? (
+                <Link
+                  href={chatPath(card.id)}
+                  className="mt-1 inline-flex w-fit items-center gap-1.5 text-sm font-medium underline-offset-2 hover:underline"
+                >
+                  <MessageSquare aria-hidden className="size-4" />
+                  {t("board.sheet.openChat")}
+                </Link>
+              ) : null}
             </SheetHeader>
 
             <div className="flex flex-col gap-5 p-4">
@@ -316,14 +326,6 @@ export function CardSheet({
                   onEdit={() => setEditing(true)}
                   onMoveWithin={onMoveWithin}
                 />
-                {card.runs.length > 0 ? (
-                  <Button asChild variant="outline" size="sm" className="ml-auto">
-                    <Link href={chatPath(card.id)}>
-                      <MessageSquare aria-hidden />
-                      {t("board.sheet.openChat")}
-                    </Link>
-                  </Button>
-                ) : null}
               </div>
             ) : null}
           </>

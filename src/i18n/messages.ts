@@ -1151,6 +1151,7 @@ const enMessages = {
   "board.startAll": "Start all",
   "board.showArchived": "Show cards put away",
   "board.hideArchived": "Hide cards put away",
+  "board.showMoreDone": "Show {count} more",
   "board.limits": "Up to {running} cards work at once, {perProject} per project: cards of one project share its folder.",
   "board.loading": "Loading the board…",
   "board.errors.load": "Could not load the board.",
