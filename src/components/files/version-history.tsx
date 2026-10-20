@@ -203,10 +203,10 @@ export function VersionHistory({ projectId, path, fill = false, onRestored }: {
   const newerText = pair ? texts[pair.newer.n] : undefined;
   const ready = Boolean(pair && newerText !== undefined && (pair.older === null || olderText !== undefined));
   const failed = olderText === "error" || newerText === "error";
+  // The first version kept has nothing before it: there is nothing to compare, not "everything added".
   const model = useMemo(() => {
-    if (!ready || failed || !pair) return null;
-    const older = pair.older ? (olderText as VersionTextView).text : "";
-    return buildDiff(older, (newerText as VersionTextView).text);
+    if (!ready || failed || !pair?.older) return null;
+    return buildDiff((olderText as VersionTextView).text, (newerText as VersionTextView).text);
   }, [ready, failed, pair, olderText, newerText]);
 
   useEffect(() => {
@@ -219,9 +219,13 @@ export function VersionHistory({ projectId, path, fill = false, onRestored }: {
       if (!model || model.changes === 0) return;
       const next = Math.max(0, Math.min(model.changes - 1, index));
       setActiveChange(next);
-      const element = diffRef.current?.querySelector<HTMLElement>(`[data-change="${next}"]`);
+      const container = diffRef.current;
+      const element = container?.querySelector<HTMLElement>(`[data-change="${next}"]`);
+      if (!container || !element) return;
+      // The comparison scrolls, not the page around it: scrollIntoView would move every scrolling ancestor.
       const reduce = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-      element?.scrollIntoView({ block: "center", behavior: reduce ? "auto" : "smooth" });
+      const top = element.offsetTop - Math.max(0, (container.clientHeight - element.offsetHeight) / 2);
+      container.scrollTo({ top: Math.max(0, top), behavior: reduce ? "auto" : "smooth" });
     },
     [model]
   );
@@ -320,11 +324,15 @@ export function VersionHistory({ projectId, path, fill = false, onRestored }: {
   const selectedWhen = selectedVersion ? formatWhen(selectedVersion.at, locale, t) : null;
 
   return (
-    <div
-      className={cn("@container flex min-h-0 flex-col", fill ? "h-full" : "h-[70vh] min-h-[28rem] rounded-lg border")}
-      onKeyDown={onKeyDown}
-    >
-      <div className="grid min-h-0 flex-1 grid-rows-[minmax(0,auto)_minmax(0,1fr)] @3xl:grid-cols-[17rem_minmax(0,1fr)] @3xl:grid-rows-1">
+    <div className={cn("@container flex min-h-0 flex-col", fill ? "h-full" : "rounded-lg border")} onKeyDown={onKeyDown}>
+      {/* In the panel the history takes the panel's height; on the file's page it is as tall as it needs
+          on a phone, where the page scrolls, and side by side at a fixed height where there is room. */}
+      <div
+        className={cn(
+          "grid @3xl:grid-cols-[17rem_minmax(0,1fr)] @3xl:grid-rows-1",
+          fill ? "min-h-0 flex-1 grid-rows-[minmax(0,auto)_minmax(0,1fr)]" : "@3xl:h-[70vh] @3xl:min-h-[28rem]"
+        )}
+      >
         {/* The versions, newest first. */}
         <div className="flex min-h-0 flex-col border-b @3xl:border-b-0 @3xl:border-r">
           <div className="flex items-center justify-between gap-2 px-3 py-2 text-xs text-muted-foreground">
@@ -462,7 +470,14 @@ export function VersionHistory({ projectId, path, fill = false, onRestored }: {
             </div>
           ) : null}
 
-          <div ref={diffRef} className="min-h-0 flex-1 overflow-auto py-1" tabIndex={-1}>
+          <div
+            ref={diffRef}
+            className={cn(
+              "relative overflow-auto py-1",
+              fill ? "min-h-0 flex-1" : "min-h-[12rem] max-h-[65vh] @3xl:max-h-none @3xl:min-h-0 @3xl:flex-1"
+            )}
+            tabIndex={-1}
+          >
             {history.comparison === "none" ? (
               <p className="p-3 text-sm text-muted-foreground">{t("files.history.noComparison")}</p>
             ) : !pair ? null : failed ? (
@@ -474,7 +489,14 @@ export function VersionHistory({ projectId, path, fill = false, onRestored }: {
             ) : model?.tooLarge ? (
               <p className="p-3 text-sm text-muted-foreground">{t("files.history.tooLarge")}</p>
             ) : !pair.older ? (
-              <p className="p-3 text-sm text-muted-foreground">{t("files.history.firstVersion")}</p>
+              <div className="flex flex-col items-start gap-2 p-3 text-sm text-muted-foreground">
+                <p>{t("files.history.firstVersion")}</p>
+                {currentN !== null && selectedVersion && selectedVersion.n !== currentN ? (
+                  <Button size="sm" variant="outline" onClick={() => setCompareWith("current")}>
+                    {t("files.history.compareWithNow")}
+                  </Button>
+                ) : null}
+              </div>
             ) : model && model.changes === 0 ? (
               <p className="p-3 text-sm text-muted-foreground">
                 {history.comparison === "extracted" ? t("files.history.sameTextDocument") : t("files.history.same")}

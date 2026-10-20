@@ -174,6 +174,7 @@ const enMessages = {
   "files.history.comparing": "Comparing...",
   "files.history.tooLarge": "These versions differ too much to compare here. Download both to compare them.",
   "files.history.firstVersion": "This is the first version kept: there is nothing before it to compare with.",
+  "files.history.compareWithNow": "Compare with the file now",
   "files.history.same": "No difference in the text.",
   "files.history.sameTextDocument": "The text is the same. What changed is the formatting or something else inside the document.",
   "files.history.extractedNote": "Compared by the text inside the document; formatting is not compared.",

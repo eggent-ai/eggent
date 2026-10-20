@@ -20,8 +20,9 @@ import { cn } from "@/lib/utils";
 
 export type DiffMode = "text" | "lines";
 
-const DEL_MARK = "bg-destructive/20 line-through decoration-destructive/70 decoration-1 rounded-[2px]";
-const ADD_MARK = "bg-success/25 rounded-[2px]";
+// A hair of padding, so a word struck out and the word put in its place do not read as one.
+const DEL_MARK = "bg-destructive/20 line-through decoration-destructive/70 decoration-1 rounded-[2px] px-px";
+const ADD_MARK = "bg-success/25 rounded-[2px] px-px";
 
 function segmentsOf(segments: DiffSegment[] | undefined, text: string, kind: "add" | "del"): ReactNode {
   if (!segments) return text || " ";

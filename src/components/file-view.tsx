@@ -69,6 +69,7 @@ export function useFileContent(projectId: string, filePath: string) {
         setDraft(payload.content || "");
         setStatus(t("files.updatedElsewhere"));
       } else {
+        setStatus(null);
         setExternal(payload);
       }
     } catch {
@@ -260,7 +261,7 @@ export function FileBody({ file, fill = false, onSelectionChange }: {
     <div className={cn("flex min-h-0 flex-col", fill && "h-full")}>
       {file.external ? (
         <div role="alert" className="flex flex-wrap items-center gap-2 border-b border-l-2 border-l-warning bg-muted/50 px-3 py-2 text-xs">
-          <span className="min-w-0 flex-1">{t("files.changedWhileEditing")}</span>
+          <span className="min-w-[14rem] flex-1">{t("files.changedWhileEditing")}</span>
           <Button size="sm" variant="outline" className="h-7 text-xs" onClick={file.takeExternal}>{t("files.takeTheirs")}</Button>
           <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={file.keepMine}>{t("files.keepMine")}</Button>
         </div>
