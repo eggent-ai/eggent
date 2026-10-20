@@ -64,6 +64,15 @@ function subscribeSharedSync(subscriber: SyncSubscriber): () => void {
   };
 }
 
+/**
+ * Every event as it arrives, for a view that needs to know what an event is
+ * about rather than only that something changed - the open file, told that a
+ * new version of it was just written.
+ */
+export function subscribeUiSync(listener: (event: UiSyncEvent) => void): () => void {
+  return subscribeSharedSync(listener);
+}
+
 function matchesScope(
   event: UiSyncEvent,
   options: BackgroundSyncOptions

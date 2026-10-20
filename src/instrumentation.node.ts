@@ -6,6 +6,7 @@ import { sweepStoredChats } from "@/lib/secrets/sweep";
 import { startChatsWatcher } from "@/lib/storage/chats-watcher";
 import { startMailSync } from "@/lib/mail/sync";
 import { startBoardDispatcher } from "@/lib/board/dispatcher";
+import { startFileVersionsService } from "@/lib/files/versions/service";
 
 // A chat written by the sync with a paired workspace or computer shows up on screen as it arrives.
 startChatsWatcher();
@@ -45,6 +46,10 @@ restorePiSchedules().catch((error) => {
 // The task board: cards in the queue start when there is room, and a card a
 // restart cut off in the middle is picked up again (lib/board).
 startBoardDispatcher();
+
+// File history: changes made elsewhere are noticed, old versions are let go of,
+// and the agent's shell gets `eggent-history` (lib/files/versions).
+startFileVersionsService();
 
 /**
  * Provider catalogs are refreshed here and nowhere else.

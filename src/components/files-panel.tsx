@@ -17,9 +17,10 @@
 
 import { useCallback, useEffect, useState, type KeyboardEvent, type PointerEvent } from "react";
 import Link from "next/link";
-import { ArrowLeft, Download, ExternalLink, FolderOpen, Loader2, Maximize2, Save, X } from "lucide-react";
+import { ArrowLeft, Download, ExternalLink, FolderOpen, History, Loader2, Maximize2, Save, X } from "lucide-react";
 import { FileTree } from "@/components/file-tree";
 import { FileBody, formatFileSize, useFileContent } from "@/components/file-view";
+import { VersionHistory } from "@/components/files/version-history";
 import { Button } from "@/components/ui/button";
 import {
   clampFilePreviewWidth,
@@ -190,6 +191,15 @@ function FilePreview({ projectId, path, onBack, onClose }: {
   const file = useFileContent(projectId, path);
   const { metadata, dirty, saving, status, error, title } = file;
   const openable = isOpenableFile(path);
+  // The file, or its history in its place.
+  const [showHistory, setShowHistory] = useState(false);
+  const setSelection = useAppStore((state) => state.setFilePreviewSelection);
+  const setUnsaved = useAppStore((state) => state.setFilePreviewUnsaved);
+
+  // The chat beside this panel tells the agent about unsaved edits (openFileForAgent).
+  useEffect(() => {
+    setUnsaved(dirty);
+  }, [dirty, setUnsaved]);
 
   // Unsaved text is not dropped without asking - the panel is easy to leave.
   const leave = (then: () => void) => {
@@ -225,7 +235,7 @@ function FilePreview({ projectId, path, onBack, onClose }: {
           {facts ? <div className="truncate text-xs text-muted-foreground" title={path}>{facts}</div> : null}
         </div>
         <span className="flex shrink-0 items-center gap-0.5">
-          {!file.isMedia && !file.loading && metadata ? (
+          {!file.isMedia && !file.loading && metadata && !showHistory ? (
             <Button
               variant={dirty ? "default" : "ghost"}
               size="icon"
@@ -236,6 +246,19 @@ function FilePreview({ projectId, path, onBack, onClose }: {
               title={`${t("common.save")} (⌘S)`}
             >
               {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+            </Button>
+          ) : null}
+          {!file.isMedia ? (
+            <Button
+              variant="ghost"
+              size="icon"
+              className={showHistory ? "size-7 bg-accent text-accent-foreground" : panelIconButton}
+              onClick={() => setShowHistory((value) => !value)}
+              aria-pressed={showHistory}
+              aria-label={t("files.history.toggle")}
+              title={t("files.history.toggle")}
+            >
+              <History className="size-4" />
             </Button>
           ) : null}
           {openable ? (
@@ -291,9 +314,15 @@ function FilePreview({ projectId, path, onBack, onClose }: {
           {error && metadata ? error : status}
         </div>
       ) : null}
-      <div className={file.isMedia || file.loading || !metadata ? "min-h-0 flex-1 overflow-auto p-2" : "min-h-0 flex-1"}>
-        <FileBody file={file} fill />
-      </div>
+      {showHistory ? (
+        <div className="min-h-0 flex-1">
+          <VersionHistory projectId={projectId} path={path} fill onRestored={() => void file.refresh()} />
+        </div>
+      ) : (
+        <div className={file.isMedia || file.loading || !metadata ? "min-h-0 flex-1 overflow-auto p-2" : "min-h-0 flex-1"}>
+          <FileBody file={file} fill onSelectionChange={setSelection} />
+        </div>
+      )}
     </div>
   );
 }

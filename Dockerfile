@@ -156,6 +156,9 @@ RUN PI_CODING_AGENT_DIR=/opt/eggent-pi-seed TMPDIR=/tmp npm_config_cache=/tmp/eg
 COPY --from=builder /app/.next ./.next
 COPY --from=builder /app/next.config.mjs ./next.config.mjs
 COPY --from=builder /app/scripts/docker-entrypoint.sh ./scripts/docker-entrypoint.sh
+# `eggent-history`, the file history for the agent's shell and the terminal; the
+# server puts this folder on the PATH of what it starts (lib/files/versions).
+COPY --from=builder /app/scripts/bin ./scripts/bin
 COPY --from=whisper /usr/local/bin/whisper-cli /usr/local/bin/whisper-cli
 COPY --from=whisper /usr/local/lib/ /usr/local/lib/
 
@@ -175,7 +178,7 @@ RUN for path in /app/src /app/app /app/components /app/hooks /app/store /app/.gi
     fi
 
 RUN mkdir -p /app/data/tmp /app/data/models/whisper /app/data/ms-playwright /app/data/npm-cache /app/data/.cache \
-  && chmod +x /app/scripts/docker-entrypoint.sh /app/scripts/ensure-pi-packages.mjs \
+  && chmod +x /app/scripts/docker-entrypoint.sh /app/scripts/ensure-pi-packages.mjs /app/scripts/bin/eggent-history \
   && chown -R node:node /app/data "${PYTHON_VENV}"
 
 USER node

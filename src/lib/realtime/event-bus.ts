@@ -31,6 +31,7 @@ export function publishUiSyncEvent(input: {
   projectId?: string | null;
   chatId?: string;
   reason?: string;
+  paths?: string[];
 }): UiSyncEvent {
   const state = getBusState();
   const event: UiSyncEvent = {
@@ -41,6 +42,7 @@ export function publishUiSyncEvent(input: {
       input.projectId === undefined ? undefined : input.projectId ?? null,
     chatId: input.chatId,
     reason: input.reason,
+    ...(input.paths ? { paths: input.paths } : {}),
   };
 
   for (const listener of state.listeners.values()) {

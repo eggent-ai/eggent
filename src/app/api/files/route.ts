@@ -4,6 +4,7 @@ import path from "path";
 import { getProjectFiles, getWorkDir } from "@/lib/storage/project-store";
 import { publishUiSyncEvent } from "@/lib/realtime/event-bus";
 import { getServerTranslator } from "@/i18n/server";
+import { forgetHistory } from "@/lib/files/versions/capture";
 
 export async function GET(req: NextRequest) {
   const projectId = req.nextUrl.searchParams.get("project");
@@ -107,6 +108,9 @@ export async function DELETE(req: NextRequest) {
     } else {
       await fs.unlink(resolved.filePath);
     }
+    // A file deleted here takes its history with it: that history counts
+    // against the disk, and deleting to make room has to make room.
+    await forgetHistory(projectId, filePath, { folder: stat.isDirectory() }).catch(() => undefined);
     publishUiSyncEvent({
       topic: "files",
       projectId: projectId === "none" ? null : projectId,

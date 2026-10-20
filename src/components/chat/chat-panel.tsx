@@ -9,7 +9,7 @@ import { MailReplyBanner, MailReplyProvider } from "@/components/mail/mail-reply
 import { CardChatBanner } from "@/components/board/card-chat-banner";
 import type { MailReplyInfo } from "@/lib/mail/types";
 import { ChatInput } from "./chat-input";
-import { useAppStore } from "@/store/app-store";
+import { openFileForAgent, useAppStore } from "@/store/app-store";
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import type { ChatContextMode, ChatMessage, ChatMessagePart } from "@/lib/types";
 import type { PiRuntimeStats } from "@/lib/pi/types";
@@ -644,14 +644,19 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     () =>
       new DefaultChatTransport({
         api: process.env.NEXT_PUBLIC_EGGENT_CHAT_API || "/api/chat",
-        body: () => ({
-          chatId: internalChatIdRef.current,
-          projectId: activeProjectIdRef.current,
-          contextMode: contextModeRef.current,
-          currentPath: currentPathRef.current,
-          // Read by the server only for a chat it has not got yet.
-          ...(chatHomeRef.current ? { home: chatHomeRef.current } : {}),
-        }),
+        body: () => {
+          // The file open beside the chat, so "here" means something to the agent.
+          const openFile = contextModeRef.current === "plain" ? null : openFileForAgent(useAppStore.getState());
+          return {
+            chatId: internalChatIdRef.current,
+            projectId: activeProjectIdRef.current,
+            contextMode: contextModeRef.current,
+            currentPath: currentPathRef.current,
+            // Read by the server only for a chat it has not got yet.
+            ...(chatHomeRef.current ? { home: chatHomeRef.current } : {}),
+            ...(openFile ? { openFile } : {}),
+          };
+        },
       }),
     []
   );

@@ -7,5 +7,7 @@ export interface UiSyncEvent {
   projectId?: string | null;
   chatId?: string;
   reason?: string;
+  /** For a file event: the files it is about, by their path under the projects folder. */
+  paths?: string[];
 }
 

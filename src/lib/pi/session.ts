@@ -19,6 +19,8 @@ import { normalizePiScheduleStore } from "@/lib/pi/schedule-host";
 import { openChatSessionManager } from "@/lib/pi/session-files";
 import { logExtensionError, ownsScheduleStore, shutdownSessionExtensions } from "@/lib/pi/session-lifecycle";
 import { createSchedulePolicyExtension } from "@/lib/pi/schedule-policy";
+import { createFileVersionsExtension } from "@/lib/files/versions/agent-hooks";
+import { fileHistoryGuidance } from "@/lib/files/versions/service";
 import { ensureHelperToolsExtension, withoutHelperTools } from "@/lib/pi/helper-tools";
 import { isScheduledRunSessionId, SCHEDULED_RUN_REFUSAL } from "@/lib/pi/scheduled-run-state";
 import { bindSubagentMonitor, createSubagentPolicyExtension, MAX_PARALLEL_SUBAGENTS, SubagentMonitor, VISIT_MAX_PARALLEL_SUBAGENTS } from "@/lib/pi/subagents";
@@ -310,6 +312,9 @@ function buildEggentProjectContext(options: {
     "- Files panel: the file tree, opened from the folder button in the top right of the workspace, and the Files page of the dashboard. Every file there opens in a preview and has a download button, so anything written into the working directory is already available to the user without any extra step.",
     "- Whenever you produce or change a file the user asked for, end by naming it and saying it is in the Files panel and can be downloaded from there. A bare absolute path is not an answer: the person reads it as \"nothing was saved\".",
     "- In Telegram there is no Files panel, so send the file itself with telegram_send_file instead of describing where it landed.",
+    // People who hand documents back and forth ask to "go back to yesterday's
+    // version" and to see what changed; the agent has to know that exists.
+    fileHistoryGuidance(),
     // One workspace asked for keyword clustering and the agent put 1.7 GB of
     // Python libraries beside the projects directory, where the file tree
     // cannot reach. The person deleted the project to make room, which removed
@@ -763,6 +768,15 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
   } catch (error) {
     console.warn("[helper-tools] could not write the extension file:", error);
   }
+  // What belongs to the turn this session is serving, read by the tools when they run rather than when
+  // they were built: a session kept for its schedules is lent to the chat's next turn, and must show
+  // that turn's questions and obey that turn's stop.
+  const turn: TurnBinding = {
+    runId: options.runId,
+    abortSignal: options.abortSignal,
+    onPiInteraction: options.onPiInteraction,
+    toolRuntimeData: options.toolRuntimeData,
+  };
   const resourceLoader = new DefaultResourceLoader({
     cwd,
     agentDir,
@@ -773,6 +787,8 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
         ...(options.visit ? { maxParallel: VISIT_MAX_PARALLEL_SUBAGENTS } : {}),
       }),
       ...(!options.visit && mailEnabled() ? [createMailToolGuardExtension(() => messagesRunner)] : []),
+      // What the agent writes into a file is kept as a version of it (lib/files/versions).
+      createFileVersionsExtension({ chatId: options.chatId, runOf: () => turn.runId }),
     ],
     additionalSkillPaths: projectSkillPaths,
     extensionsOverride: withoutHelperTools,
@@ -854,15 +870,6 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
   // creating them starts MCP watchers and registers a UI context this chat has
   // no use for. "files" needs switch_project and list_projects from the set,
   // and the allowlist below decides which of them the model is shown.
-  // What belongs to the turn this session is serving, read by the tools when they run rather than when
-  // they were built: a session kept for its schedules is lent to the chat's next turn, and must show
-  // that turn's questions and obey that turn's stop.
-  const turn: TurnBinding = {
-    runId: options.runId,
-    abortSignal: options.abortSignal,
-    onPiInteraction: options.onPiInteraction,
-    toolRuntimeData: options.toolRuntimeData,
-  };
   const eggentTools = options.enableEggentTools === false || liteMode === "plain" || publicShare
     ? { tools: [], cleanup: async () => {} }
     : await createEggentPiTools({

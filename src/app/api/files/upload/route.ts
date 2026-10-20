@@ -7,6 +7,7 @@ import { pipeline } from "stream/promises";
 import { getWorkDir } from "@/lib/storage/project-store";
 import { publishUiSyncEvent } from "@/lib/realtime/event-bus";
 import { getServerTranslator } from "@/i18n/server";
+import { captureAfter, captureBefore } from "@/lib/files/versions/capture";
 import { formatUploadSize, MAX_UPLOAD_LABEL, oversizedRequestBytes } from "@/lib/files/upload-limits";
 import {
   resolveConflictPolicy,
@@ -129,12 +130,16 @@ export async function POST(req: NextRequest) {
         continue;
       }
 
+      // A file being replaced is kept as a version before it goes.
+      if (target.overwrite) await captureBefore(targetPath).catch(() => undefined);
+
       // Streamed to disk rather than buffered again: the parsed body is already
       // one copy of the file, and a second one buys nothing.
       await pipeline(
         Readable.fromWeb(file.stream() as Parameters<typeof Readable.fromWeb>[0]),
         createWriteStream(targetPath, { flags: target.overwrite ? "w" : "wx" })
       );
+      await captureAfter(targetPath, { kind: "upload" }).catch(() => undefined);
 
       const relativePath = path.posix
         .join(dirPath.replace(/\\/g, "/"), target.relativePath)

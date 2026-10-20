@@ -64,6 +64,8 @@ export interface PiChatRunOptions extends PiSessionOptions {
   chatId: string;
   userMessage: string;
   projectId?: string;
+  /** The file open beside the chat, told to the model after the message for this turn (lib/files/open-file-context). */
+  openFileNote?: string;
 }
 
 /**

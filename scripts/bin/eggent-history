@@ -1,0 +1,405 @@
+#!/usr/bin/env node
+/**
+ * eggent-history - the versions Eggent keeps of a file, for the agent's shell
+ * and the terminal panel.
+ *
+ *   eggent-history list <file>              every version, newest first
+ *   eggent-history show <file> <n>          version n as it was, to standard output
+ *   eggent-history text <file> <n>          version n as text (a document's text)
+ *   eggent-history diff <file> <a> [<b>]    what changed from version a to b (default: the newest)
+ *
+ * It reads what the workspace keeps in data/versions and changes nothing. To go
+ * back to a version, write its content into the file: what that replaces is
+ * kept as a version too. The formats it reads are written by
+ * src/lib/files/versions/store.ts, and the text of a document is read the way
+ * src/lib/files/versions/text.ts reads it; a test holds the two together.
+ */
+"use strict";
+
+const crypto = require("node:crypto");
+const fs = require("node:fs");
+const path = require("node:path");
+const zlib = require("node:zlib");
+
+function fail(message) {
+  process.stderr.write(`eggent-history: ${message}\n`);
+  process.exit(1);
+}
+
+function projectsDir() {
+  if (process.env.EGGENT_PROJECTS_DIR) return path.resolve(process.env.EGGENT_PROJECTS_DIR);
+  return path.resolve("/app/data/projects");
+}
+
+function versionsDir() {
+  if (process.env.EGGENT_VERSIONS_DIR) return path.resolve(process.env.EGGENT_VERSIONS_DIR);
+  return path.join(path.dirname(projectsDir()), "versions");
+}
+
+function realOr(value) {
+  try {
+    return fs.realpathSync(value);
+  } catch {
+    return value;
+  }
+}
+
+function keyOf(file) {
+  const root = realOr(projectsDir());
+  const absolute = path.resolve(file);
+  let parent;
+  try {
+    parent = fs.realpathSync(path.dirname(absolute));
+  } catch {
+    parent = path.dirname(absolute);
+  }
+  const key = path.relative(root, path.join(parent, path.basename(absolute))).split(path.sep).join("/");
+  if (!key || key.startsWith("..") || path.isAbsolute(key)) fail(`${file} is not inside the projects folder (${root}), and only files there have a history.`);
+  return key;
+}
+
+function sha256(value) {
+  return crypto.createHash("sha256").update(value).digest("hex");
+}
+
+function readJournal(key) {
+  const hash = sha256(key);
+  const file = path.join(versionsDir(), "files", hash.slice(0, 2), `${hash}.json`);
+  try {
+    const journal = JSON.parse(fs.readFileSync(file, "utf8"));
+    if (journal.key !== key || !Array.isArray(journal.versions)) return null;
+    journal.versions.sort((a, b) => a.n - b.n);
+    return journal;
+  } catch {
+    return null;
+  }
+}
+
+function readObject(sha) {
+  if (!sha) return null;
+  try {
+    return zlib.gunzipSync(fs.readFileSync(path.join(versionsDir(), "objects", sha.slice(0, 2), `${sha}.gz`)));
+  } catch {
+    return null;
+  }
+}
+
+function author(entry) {
+  if (entry.deleted) return "file deleted";
+  const by = entry.by || {};
+  switch (by.kind) {
+    case "person": return "the user, in the editor";
+    case "agent": return `${by.helper ? "a helper of the agent" : "the agent"}${by.chat ? ` (chat ${by.chat})` : ""}`;
+    case "upload": return "uploaded";
+    case "restore": return `restored from v${by.restoredFrom}`;
+    case "earlier": return "as it was before the first change";
+    default: return "changed outside (sync, a command or another program)";
+  }
+}
+
+function size(bytes) {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+// --- The text of a version: the same rules as text.ts. ----------------------
+
+const TEXT_EXTENSIONS = new Set(("md markdown mdx txt text rst adoc asciidoc org tex bib csv tsv json jsonl ndjson yaml yml toml ini cfg conf properties " +
+  "xml html htm xhtml svg css scss sass less js mjs cjs jsx ts mts cts tsx vue svelte astro py ipynb rb go rs java kt kts swift c h cc cpp hpp cs " +
+  "php sh bash zsh fish ps1 sql r lua pl pm dart scala ex exs erl hrl hs ml mli clj edn graphql gql proto tf srt vtt").split(" "));
+
+function extensionOf(name) {
+  const base = path.basename(name).toLowerCase();
+  const dot = base.lastIndexOf(".");
+  return dot > 0 ? base.slice(dot + 1) : "";
+}
+
+function listZip(data) {
+  let end = -1;
+  for (let at = data.length - 22; at >= Math.max(0, data.length - 22 - 0xffff); at -= 1) {
+    if (data.readUInt32LE(at) === 0x06054b50) {
+      end = at;
+      break;
+    }
+  }
+  if (end < 0) throw new Error("not a zip");
+  const total = data.readUInt16LE(end + 10);
+  let at = data.readUInt32LE(end + 16);
+  const entries = [];
+  for (let index = 0; index < total; index += 1) {
+    if (data.readUInt32LE(at) !== 0x02014b50) throw new Error("damaged zip");
+    const method = data.readUInt16LE(at + 10);
+    const compressedSize = data.readUInt32LE(at + 20);
+    const nameLength = data.readUInt16LE(at + 28);
+    const extraLength = data.readUInt16LE(at + 30);
+    const commentLength = data.readUInt16LE(at + 32);
+    const localOffset = data.readUInt32LE(at + 42);
+    const name = data.subarray(at + 46, at + 46 + nameLength).toString("utf8").replace(/\\/g, "/");
+    entries.push({ name, method, compressedSize, localOffset });
+    at += 46 + nameLength + extraLength + commentLength;
+  }
+  return entries;
+}
+
+function readPart(data, entries, name) {
+  const entry = entries.find((candidate) => candidate.name === name);
+  if (!entry) return null;
+  const header = entry.localOffset;
+  const start = header + 30 + data.readUInt16LE(header + 26) + data.readUInt16LE(header + 28);
+  const packed = data.subarray(start, start + entry.compressedSize);
+  return (entry.method === 0 ? packed : zlib.inflateRawSync(packed)).toString("utf8");
+}
+
+function decodeXml(value) {
+  const point = (code) => {
+    try {
+      return Number.isFinite(code) && code > 0 ? String.fromCodePoint(code) : "";
+    } catch {
+      return "";
+    }
+  };
+  return value
+    .replace(/&#x([0-9a-f]+);/gi, (_, hex) => point(parseInt(hex, 16)))
+    .replace(/&#(\d+);/g, (_, dec) => point(parseInt(dec, 10)))
+    .replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&amp;/g, "&");
+}
+
+function runsOf(xml, textTag) {
+  let text = "";
+  const pattern = new RegExp(`<${textTag}(?:\\s[^>]*)?>([\\s\\S]*?)</${textTag}>|<(?:w:tab|a:tab|text:tab)\\b[^>]*/>|<(?:w:br|a:br|text:line-break)\\b[^>]*/>`, "g");
+  for (const match of xml.matchAll(pattern)) {
+    if (match[1] !== undefined) text += decodeXml(match[1]);
+    else if (/tab/.test(match[0])) text += "\t";
+    else text += "\n";
+  }
+  return text;
+}
+
+function docxText(data) {
+  const entries = listZip(data);
+  const xml = readPart(data, entries, "word/document.xml");
+  if (xml === null) return null;
+  const body = xml.replace(/<w:del\b[\s\S]*?<\/w:del>/g, "");
+  const lines = [];
+  for (const part of body.split(/(<w:tbl\b[\s\S]*?<\/w:tbl>)/g)) {
+    if (part.startsWith("<w:tbl")) {
+      for (const row of part.matchAll(/<w:tr\b[\s\S]*?<\/w:tr>/g)) {
+        const cells = [...row[0].matchAll(/<w:tc\b[\s\S]*?<\/w:tc>/g)].map((cell) =>
+          [...cell[0].matchAll(/<w:p\b[\s\S]*?<\/w:p>/g)].map((p) => runsOf(p[0], "w:t")).join(" ").trim()
+        );
+        if (cells.some(Boolean)) lines.push(cells.join(" | "));
+      }
+      continue;
+    }
+    for (const paragraph of part.matchAll(/<w:p\b[^>]*\/>|<w:p\b[\s\S]*?<\/w:p>/g)) lines.push(runsOf(paragraph[0], "w:t"));
+  }
+  return lines.join("\n");
+}
+
+function odtText(data) {
+  const entries = listZip(data);
+  const xml = readPart(data, entries, "content.xml");
+  if (xml === null) return null;
+  const lines = [];
+  for (const paragraph of xml.matchAll(/<text:(p|h)\b[^>]*\/>|<text:(p|h)\b[^>]*>([\s\S]*?)<\/text:\2>/g)) {
+    const inner = paragraph[3] || "";
+    lines.push(decodeXml(inner
+      .replace(/<text:tab\b[^>]*\/>/g, "\t")
+      .replace(/<text:line-break\b[^>]*\/>/g, "\n")
+      .replace(/<text:s\b[^>]*\/>/g, " ")
+      .replace(/<[^>]+>/g, "")));
+  }
+  return lines.join("\n");
+}
+
+function numbered(entries, pattern) {
+  const number = (name) => Number((/(\d+)\.xml$/.exec(name) || [])[1] || 0);
+  return entries.map((entry) => entry.name).filter((name) => pattern.test(name)).sort((a, b) => number(a) - number(b));
+}
+
+function pptxText(data) {
+  const entries = listZip(data);
+  const slides = numbered(entries, /^ppt\/slides\/slide\d+\.xml$/);
+  if (slides.length === 0) return null;
+  const lines = [];
+  slides.forEach((name, index) => {
+    const xml = readPart(data, entries, name);
+    if (xml === null) return;
+    if (lines.length > 0) lines.push("");
+    lines.push(`## Slide ${index + 1}`);
+    for (const paragraph of xml.matchAll(/<a:p\b[\s\S]*?<\/a:p>/g)) {
+      const text = runsOf(paragraph[0], "a:t");
+      if (text.trim()) lines.push(text);
+    }
+  });
+  return lines.join("\n");
+}
+
+function xlsxText(data) {
+  const entries = listZip(data);
+  const shared = [];
+  const sharedXml = readPart(data, entries, "xl/sharedStrings.xml");
+  if (sharedXml) for (const item of sharedXml.matchAll(/<si\b[\s\S]*?<\/si>/g)) shared.push(runsOf(item[0].replace(/<rPh\b[\s\S]*?<\/rPh>/g, ""), "t"));
+  const workbook = readPart(data, entries, "xl/workbook.xml") || "";
+  const relations = readPart(data, entries, "xl/_rels/workbook.xml.rels") || "";
+  const targets = new Map();
+  for (const relation of relations.matchAll(/<Relationship\b[^>]*>/g)) {
+    const id = (/\bId="([^"]+)"/.exec(relation[0]) || [])[1];
+    const target = (/\bTarget="([^"]+)"/.exec(relation[0]) || [])[1];
+    if (id && target) targets.set(id, target.replace(/^\/?(xl\/)?/, "xl/"));
+  }
+  const names = new Map();
+  const order = [];
+  for (const sheet of workbook.matchAll(/<sheet\b[^>]*>/g)) {
+    const name = decodeXml((/\bname="([^"]*)"/.exec(sheet[0]) || [])[1] || "");
+    const id = (/\br:id="([^"]+)"/.exec(sheet[0]) || [])[1];
+    const target = id ? targets.get(id) : undefined;
+    if (target) {
+      names.set(target, name);
+      order.push(target);
+    }
+  }
+  const sheets = order.length > 0 ? order : numbered(entries, /^xl\/worksheets\/sheet\d+\.xml$/);
+  if (sheets.length === 0) return null;
+  const lines = [];
+  sheets.forEach((part, index) => {
+    const xml = readPart(data, entries, part);
+    if (xml === null) return;
+    if (lines.length > 0) lines.push("");
+    lines.push(`## ${names.get(part) || `Sheet${index + 1}`}`);
+    for (const row of xml.matchAll(/<row\b([^>]*)>([\s\S]*?)<\/row>/g)) {
+      const rowNumber = (/\br="(\d+)"/.exec(row[1]) || [])[1] || "";
+      const cells = [];
+      for (const cell of row[2].matchAll(/<c\b([^>]*?)(?:\/>|>([\s\S]*?)<\/c>)/g)) {
+        const attributes = cell[1];
+        const inner = cell[2] || "";
+        const reference = (/\br="([A-Z]+\d+)"/.exec(attributes) || [])[1] || "";
+        const type = (/\bt="([^"]+)"/.exec(attributes) || [])[1];
+        const raw = (/<v>([\s\S]*?)<\/v>/.exec(inner) || [])[1];
+        let value = "";
+        if (type === "s" && raw !== undefined) value = shared[Number(raw)] || "";
+        else if (type === "inlineStr") value = runsOf(inner, "t");
+        else if (type === "b") value = raw === "1" ? "TRUE" : raw === "0" ? "FALSE" : "";
+        else if (raw !== undefined) value = decodeXml(raw);
+        const formula = (/<f\b[^>]*>([\s\S]*?)<\/f>/.exec(inner) || [])[1];
+        if (formula) value = value ? `${value} (=${decodeXml(formula)})` : `=${decodeXml(formula)}`;
+        if (value !== "") cells.push(`${(/^[A-Z]+/.exec(reference) || [""])[0]}: ${value.replace(/\n/g, " ")}`);
+      }
+      if (cells.length > 0) lines.push(`${rowNumber}. ${cells.join(" | ")}`);
+    }
+  });
+  return lines.join("\n");
+}
+
+function textOf(name, content) {
+  const extension = extensionOf(name);
+  if (TEXT_EXTENSIONS.has(extension) || !extension) return content.toString("utf8").replace(/^﻿/, "");
+  try {
+    const text = extension === "docx" ? docxText(content)
+      : extension === "xlsx" ? xlsxText(content)
+      : extension === "pptx" ? pptxText(content)
+      : extension === "odt" ? odtText(content)
+      : null;
+    return text;
+  } catch {
+    return null;
+  }
+}
+
+// --- Commands. ---------------------------------------------------------------
+
+function entryOf(journal, value) {
+  const n = Number(value);
+  if (!Number.isInteger(n) || n < 1) fail(`"${value}" is not a version number (see: eggent-history list <file>).`);
+  const entry = journal.versions.find((candidate) => candidate.n === n);
+  if (!entry) fail(`there is no version ${n} of this file (see: eggent-history list <file>).`);
+  return entry;
+}
+
+function main(argv) {
+  const [command, file, ...rest] = argv;
+  if (!command || command === "help" || command === "--help" || command === "-h") {
+    process.stdout.write([
+      "eggent-history list <file>              every version, newest first",
+      "eggent-history show <file> <n>          version n as it was, to standard output",
+      "eggent-history text <file> <n>          version n as text (for a document, the text inside it)",
+      "eggent-history diff <file> <a> [<b>]    what changed from version a to version b (default: the newest)",
+      "",
+      "To go back to a version, write its content into the file, e.g.",
+      "  eggent-history show notes.md 3 > notes.md",
+      "What it replaces stays in the history.",
+      "",
+    ].join("\n"));
+    return;
+  }
+  if (!file) fail("name a file.");
+  const key = keyOf(file);
+  const journal = readJournal(key);
+  if (!journal || journal.versions.length === 0) {
+    if (command === "list") {
+      process.stdout.write(`${key} has no history yet: versions are kept from its first change on.\n`);
+      return;
+    }
+    fail(`${key} has no history yet.`);
+  }
+  const name = path.basename(key);
+
+  if (command === "list") {
+    const newest = journal.versions[journal.versions.length - 1];
+    process.stdout.write(`History of ${key} (${journal.versions.length} versions, newest first):\n`);
+    for (const entry of [...journal.versions].reverse()) {
+      const when = new Date(entry.at).toISOString().replace("T", " ").slice(0, 16) + " UTC";
+      const stats = typeof entry.added === "number" && typeof entry.removed === "number" ? `  +${entry.added} -${entry.removed}` : "";
+      const current = entry === newest && !entry.deleted ? "  (current)" : "";
+      process.stdout.write(`v${entry.n}  ${when}  ${author(entry)}  ${size(entry.size)}${stats}${current}\n`);
+    }
+    return;
+  }
+
+  if (command === "show") {
+    const entry = entryOf(journal, rest[0]);
+    if (entry.deleted) fail(`version ${entry.n} records the file's deletion and holds nothing.`);
+    const content = readObject(entry.sha);
+    if (!content) fail(`version ${entry.n} is not available any more.`);
+    process.stdout.write(content);
+    return;
+  }
+
+  if (command === "text") {
+    const entry = entryOf(journal, rest[0]);
+    if (entry.deleted) fail(`version ${entry.n} records the file's deletion and holds nothing.`);
+    const content = readObject(entry.sha);
+    if (!content) fail(`version ${entry.n} is not available any more.`);
+    const text = textOf(name, content);
+    if (text === null) fail(`the text of this kind of file cannot be read here; use show to get the file.`);
+    process.stdout.write(text.endsWith("\n") ? text : `${text}\n`);
+    return;
+  }
+
+  if (command === "diff") {
+    const older = entryOf(journal, rest[0]);
+    const newer = rest[1] ? entryOf(journal, rest[1]) : journal.versions[journal.versions.length - 1];
+    const read = (entry) => {
+      if (entry.deleted) return "";
+      const content = readObject(entry.sha);
+      if (!content) fail(`version ${entry.n} is not available any more.`);
+      const text = textOf(name, content);
+      if (text === null) fail("versions of this kind of file cannot be compared as text; use show to get both.");
+      return text;
+    };
+    const { createTwoFilesPatch, structuredPatch } = require("diff");
+    const olderText = read(older);
+    const newerText = read(newer);
+    if (structuredPatch("a", "b", olderText, newerText, "", "", { context: 0 }).hunks.length === 0) {
+      process.stdout.write(`No difference in the text between v${older.n} and v${newer.n}.\n`);
+      return;
+    }
+    process.stdout.write(createTwoFilesPatch(`${key} v${older.n}`, `${key} v${newer.n}`, olderText, newerText, "", "", { context: 3 }));
+    return;
+  }
+
+  fail(`unknown command "${command}" (try: eggent-history help).`);
+}
+
+main(process.argv.slice(2));

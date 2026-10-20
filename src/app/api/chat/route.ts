@@ -8,6 +8,7 @@ import { ensureChatHomeIsHere, prepareRelayedTurn } from "@/lib/remote/executing
 import { recallHandOver, runHandedOverTurn } from "@/lib/remote/proxy-turn";
 import { cleanHead, parseHome, REMOTE_HEADERS, type ChatHome } from "@/lib/remote/types";
 import { getServerTranslator } from "@/i18n/server";
+import { describeOpenFile, parseOpenFile } from "@/lib/files/open-file-context";
 import type { MessageKey } from "@/i18n/messages";
 
 export const maxDuration = 300; // 5 min max for long agent runs
@@ -130,6 +131,11 @@ export async function POST(req: NextRequest) {
       });
     }
 
+    // The file open beside the chat, for a turn typed here: a turn the other side
+    // handed over was typed beside a screen this side cannot see.
+    const openFile = relayedFrom || contextMode === "plain" ? null : parseOpenFile(body.openFile);
+    const openFileNote = openFile ? await describeOpenFile(openFile).catch(() => null) : null;
+
     if (process.env.EGGENT_AGENT_BACKEND !== "legacy") {
       // Deliberately not `req.signal`: a turn belongs to the chat, not to the
       // connection that started it. Tying the two together meant closing the tab
@@ -141,6 +147,7 @@ export async function POST(req: NextRequest) {
         projectId,
         chatContextMode: contextMode,
         cwd: resolvedCurrentPath,
+        ...(openFileNote ? { openFileNote } : {}),
         ...(relayedFrom ? { remote: { servedFor: relayedFrom } } : {}),
         // A messenger's turn that was handed over has nobody to answer a question card.
         ...(relayedFrom && req.headers.get(REMOTE_HEADERS.interactive) === "0" ? { interactive: false } : {}),

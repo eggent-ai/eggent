@@ -1,5 +1,6 @@
 import { NextRequest } from "next/server";
 import { getSettings, saveSettings } from "@/lib/storage/settings-store";
+import { forgetVersionsSwitch } from "@/lib/files/versions/config";
 import type { AppSettings } from "@/lib/types";
 
 export async function GET() {
@@ -13,6 +14,8 @@ export async function PUT(req: NextRequest) {
     const current = await getSettings();
     const sanitized = restoreMaskedKeys(body, current);
     const updated = await saveSettings(sanitized);
+    // The file history switch is read from a short cache on every write a tool makes.
+    forgetVersionsSwitch();
     return Response.json(maskSettingsKeys(updated));
   } catch (error) {
     return Response.json(

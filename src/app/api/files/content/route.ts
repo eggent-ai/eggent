@@ -5,6 +5,7 @@ import { getWorkDir } from "@/lib/storage/project-store";
 import { publishUiSyncEvent } from "@/lib/realtime/event-bus";
 import { getServerTranslator } from "@/i18n/server";
 import { audioContentType, fileDownloadUrl } from "@/lib/files/openable";
+import { captureAfter, captureBefore, writeFileInside } from "@/lib/files/versions/capture";
 
 const MAX_TEXT_FILE_BYTES = 1024 * 1024;
 
@@ -120,8 +121,17 @@ export async function PUT(req: NextRequest) {
     return Response.json({ error: t("api.error.invalidFilePath") }, { status: 403 });
   }
 
-  await fs.mkdir(path.dirname(resolved.filePath), { recursive: true });
-  await fs.writeFile(resolved.filePath, body.content, "utf-8");
+  // What the file held is kept as a version first, if its history does not have
+  // it, and what is saved becomes the next one: a save can always be undone.
+  await captureBefore(resolved.filePath).catch(() => undefined);
+  try {
+    // Into the file's place in one step, and never through a link at its name:
+    // the agent can leave one there, pointing anywhere.
+    await writeFileInside(resolved.filePath, body.content, await fs.realpath(resolved.workDir));
+  } catch {
+    return Response.json({ error: t("api.error.invalidFilePath") }, { status: 403 });
+  }
+  await captureAfter(resolved.filePath, { kind: "person" }).catch(() => undefined);
   const stat = await fs.stat(resolved.filePath);
   publishUiSyncEvent({
     topic: "files",

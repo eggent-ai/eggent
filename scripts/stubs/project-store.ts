@@ -44,6 +44,13 @@ export function getWorkDir(projectId: string | null): string {
 
 export const PROJECT_CONTEXT_FILENAME = "context.md";
 
+// The names the Files panel keeps out of sight, as the real store has them.
+const HIDDEN_FILE_NAMES = new Set([".meta", ".venv", "venv", "cron.json", "project.json", ".stfolder", ".stignore", ".stversions"]);
+
+export function isHiddenFileName(name: string): boolean {
+  return HIDDEN_FILE_NAMES.has(name);
+}
+
 export function getProjectContextPath(projectId: string): string {
   return path.join(getWorkDir(projectId), PROJECT_CONTEXT_FILENAME);
 }

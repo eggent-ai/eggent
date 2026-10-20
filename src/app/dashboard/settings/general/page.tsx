@@ -1,8 +1,8 @@
 "use client";
 
 /**
- * Theme, language and the dashboard sign-in: settings about the person at the
- * screen rather than about what the agent does.
+ * Theme, language, the history of files and the dashboard sign-in: settings
+ * about the person at the screen rather than about what the agent does.
  *
  * They used to share a page with the model, under one Save button that also
  * wrote whatever model choice happened to be pending. Theme and language now
@@ -14,6 +14,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Check, Loader2, Moon, ShieldCheck, Sun } from "lucide-react";
 import { SettingsPageHeader, SettingsShell } from "@/components/settings-shell";
+import { FileHistorySettings } from "@/components/file-history-settings";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -201,6 +202,11 @@ export default function GeneralSettingsPage() {
               </Select>
             </div>
           </section>
+
+          <FileHistorySettings
+            enabled={settings.fileHistory?.enabled !== false}
+            onToggle={(enabled) => change("fileHistory.enabled", enabled)}
+          />
 
           <section className="space-y-4 rounded-xl border bg-card p-5">
             <div className="flex items-center gap-2">

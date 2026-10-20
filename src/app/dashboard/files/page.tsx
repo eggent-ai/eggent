@@ -1,8 +1,8 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { Download, ExternalLink, FileAudio, FileText, ImageIcon, Loader2, Save } from "lucide-react";
+import { Download, ExternalLink, FileAudio, FileText, History, ImageIcon, Loader2, Save } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { AppSidebar } from "@/components/app-sidebar";
@@ -11,6 +11,7 @@ import { Button } from "@/components/ui/button";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { SidePanels } from "@/components/side-panels";
 import { FileBody, formatFileSize, useFileContent } from "@/components/file-view";
+import { VersionHistory } from "@/components/files/version-history";
 import { useI18n } from "@/i18n/provider";
 import { fileDownloadUrl, isOpenableFile } from "@/lib/files/openable";
 
@@ -21,6 +22,7 @@ export default function GenericFileEditorPage() {
   const filePath = searchParams.get("path") || "";
   const file = useFileContent(projectId, filePath);
   const { metadata, loading, saving, status, error, save, dirty, title } = file;
+  const [showHistory, setShowHistory] = useState(false);
 
   const downloadHref = useMemo(() => fileDownloadUrl(projectId, filePath), [projectId, filePath]);
 
@@ -69,7 +71,18 @@ export default function GenericFileEditorPage() {
                       </div>
                     </div>
                   </div>
-                  <div className="flex items-center gap-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    {!isMediaPreview ? (
+                      <Button
+                        variant={showHistory ? "secondary" : "outline"}
+                        className="gap-2"
+                        onClick={() => setShowHistory((value) => !value)}
+                        aria-pressed={showHistory}
+                      >
+                        <History className="size-4" />
+                        {t("files.history.title")}
+                      </Button>
+                    ) : null}
                     {isOpenable ? (
                       <Button variant="outline" asChild className="gap-2">
                         <a href={openHref} target="_blank" rel="noopener noreferrer">
@@ -84,7 +97,7 @@ export default function GenericFileEditorPage() {
                         {t("common.download")}
                       </a>
                     </Button>
-                    {!isMediaPreview ? (
+                    {!isMediaPreview && !showHistory ? (
                       <Button onClick={() => void save()} disabled={loading || saving || !dirty} className="gap-2">
                         {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
                         {t("common.save")}
@@ -100,7 +113,11 @@ export default function GenericFileEditorPage() {
                   </Alert>
                 ) : null}
 
-                <FileBody file={file} />
+                {showHistory ? (
+                  <VersionHistory projectId={projectId} path={filePath} onRestored={() => void file.refresh()} />
+                ) : (
+                  <FileBody file={file} />
+                )}
               </section>
             </div>
           </SidebarInset>

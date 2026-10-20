@@ -605,10 +605,18 @@ function preparePromptForRuntime(text: string): string {
  * day at 9" is work for the shop, and must not make this chat withhold its own
  * tools to schedule something.
  */
-function promptForMessage(text: string, runtimeSuffix: string, mention: MentionPlan | null): { runtime: string; policy: string } {
-  if (!mention) return { runtime: preparePromptForRuntime(`${text}${runtimeSuffix}`), policy: `${text}${runtimeSuffix}` };
+/**
+ * What the model is sent for the person's message, and what the turn's rules
+ * read (`policy`). `note` - the file open beside the chat - goes to the model
+ * only: a selected paragraph that mentions "every morning" is not a request
+ * for a schedule. A message for another project carries none: the open file is
+ * this chat's, not the project's.
+ */
+function promptForMessage(text: string, runtimeSuffix: string, mention: MentionPlan | null, note = ""): { runtime: string; policy: string } {
+  const tail = note ? `\n\n${note}` : "";
+  if (!mention) return { runtime: `${preparePromptForRuntime(`${text}${runtimeSuffix}`)}${tail}`, policy: `${text}${runtimeSuffix}` };
   const runtime = mentionRuntimeText(mention, runtimeSuffix);
-  if (mention.kind === "self") return { runtime: preparePromptForRuntime(runtime), policy: mention.task };
+  if (mention.kind === "self") return { runtime: `${preparePromptForRuntime(runtime)}${tail}`, policy: mention.task };
   return { runtime, policy: mention.directive };
 }
 
@@ -1504,7 +1512,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         disabled: options.enableEggentTools === false || Boolean(options.visit) || !chatAllowsVisits(options.chatContextMode),
         currentProjectId: options.projectId,
       });
-      const promptFor = promptForMessage(options.userMessage, "", mention);
+      const promptFor = promptForMessage(options.userMessage, "", mention, options.openFileNote);
 
       // A question the agent asks is put on this response's stream, and saved with the turn so far.
       // A turn nobody is watching - a messenger handed it over - has no one to put one to.

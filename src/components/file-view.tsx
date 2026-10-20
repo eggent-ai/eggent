@@ -6,11 +6,14 @@
  * holds or how it is written back.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState, type SyntheticEvent } from "react";
 import { Loader2 } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
+import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
+import { subscribeUiSync } from "@/hooks/use-background-sync";
 import { useI18n } from "@/i18n/provider";
+import { historyKeyOf } from "@/lib/files/versions/rules";
 import { cn } from "@/lib/utils";
 
 export type FilePayload = {
@@ -41,6 +44,60 @@ export function useFileContent(projectId: string, filePath: string) {
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  // A newer text written while this one had unsaved edits: offered, never put over them.
+  const [external, setExternal] = useState<FilePayload | null>(null);
+  const latest = useRef({ content: "", draft: "" });
+  latest.current = { content, draft };
+
+  /**
+   * Read the file again after something else wrote it - the agent, a restore,
+   * the sync. Unedited text is replaced quietly; text with edits in it is left
+   * alone and the newer one is offered beside it.
+   */
+  const refresh = useCallback(async () => {
+    if (!filePath) return;
+    try {
+      const params = new URLSearchParams({ project: projectId, path: filePath });
+      const res = await fetch(`/api/files/content?${params.toString()}`, { cache: "no-store" });
+      if (!res.ok) return;
+      const payload = (await res.json()) as FilePayload;
+      const { content: shown, draft: typed } = latest.current;
+      setMetadata(payload);
+      if ((payload.content || "") === shown) return;
+      if (typed === shown) {
+        setContent(payload.content || "");
+        setDraft(payload.content || "");
+        setStatus(t("files.updatedElsewhere"));
+      } else {
+        setExternal(payload);
+      }
+    } catch {
+      // The next change will try again.
+    }
+  }, [projectId, filePath, t]);
+
+  const takeExternal = useCallback(() => {
+    if (!external) return;
+    setContent(external.content || "");
+    setDraft(external.content || "");
+    setMetadata(external);
+    setExternal(null);
+    setStatus(t("files.updatedElsewhere"));
+  }, [external, t]);
+
+  // Saving now writes over the newer text; that text stays in the file's history.
+  const keepMine = useCallback(() => {
+    if (!external) return;
+    setContent(external.content || "");
+    setExternal(null);
+  }, [external]);
+
+  useEffect(() => {
+    const key = historyKeyOf(projectId, filePath);
+    return subscribeUiSync((event) => {
+      if (event.reason === "file_version" && event.paths?.includes(key)) void refresh();
+    });
+  }, [projectId, filePath, refresh]);
 
   useEffect(() => {
     let cancelled = false;
@@ -54,6 +111,7 @@ export function useFileContent(projectId: string, filePath: string) {
       setStatus(null);
       setError(null);
       setMetadata(null);
+      setExternal(null);
       try {
         const params = new URLSearchParams({ project: projectId, path: filePath });
         const res = await fetch(`/api/files/content?${params.toString()}`, { cache: "no-store" });
@@ -95,6 +153,7 @@ export function useFileContent(projectId: string, filePath: string) {
       setMetadata(payload);
       setContent(payload.content || draft);
       setDraft(payload.content || draft);
+      setExternal(null);
       setStatus(t("files.saved"));
     } catch (saveError) {
       setError(saveError instanceof Error ? saveError.message : t("files.saveFailed"));
@@ -115,6 +174,10 @@ export function useFileContent(projectId: string, filePath: string) {
     status,
     error,
     save,
+    refresh,
+    external: external !== null,
+    takeExternal,
+    keepMine,
     dirty: draft !== content,
     isImage,
     isAudio,
@@ -129,9 +192,30 @@ export type FileContentState = ReturnType<typeof useFileContent>;
  * What the file holds: a picture, a player, or its text to edit. `fill` makes
  * the text take the height it is given instead of a fixed page-sized box.
  */
-export function FileBody({ file, fill = false }: { file: FileContentState; fill?: boolean }) {
+/** The lines a selection in the text covers, and its text, or null for no selection. */
+export function selectionOf(value: string, start: number, end: number): { startLine: number; endLine: number; text: string } | null {
+  if (end <= start) return null;
+  const text = value.slice(start, end);
+  if (!text.trim()) return null;
+  const startLine = value.slice(0, start).split("\n").length;
+  // A selection that ends at the start of a line does not take that line.
+  const endLine = startLine + text.replace(/\n$/, "").split("\n").length - 1;
+  return { startLine, endLine, text: text.slice(0, 4000) };
+}
+
+export function FileBody({ file, fill = false, onSelectionChange }: {
+  file: FileContentState;
+  fill?: boolean;
+  /** Told what the person has selected in the text, so the chat beside it can tell the agent. */
+  onSelectionChange?: (selection: { startLine: number; endLine: number; text: string } | null) => void;
+}) {
   const { t } = useI18n();
   const { metadata } = file;
+  const reportSelection = (event: SyntheticEvent<HTMLTextAreaElement>) => {
+    if (!onSelectionChange) return;
+    const area = event.currentTarget;
+    onSelectionChange(selectionOf(area.value, area.selectionStart, area.selectionEnd));
+  };
 
   if (file.loading) {
     return (
@@ -173,17 +257,27 @@ export function FileBody({ file, fill = false }: { file: FileContentState; fill?
     );
   }
   return (
+    <div className={cn("flex min-h-0 flex-col", fill && "h-full")}>
+      {file.external ? (
+        <div role="alert" className="flex flex-wrap items-center gap-2 border-b border-l-2 border-l-warning bg-muted/50 px-3 py-2 text-xs">
+          <span className="min-w-0 flex-1">{t("files.changedWhileEditing")}</span>
+          <Button size="sm" variant="outline" className="h-7 text-xs" onClick={file.takeExternal}>{t("files.takeTheirs")}</Button>
+          <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={file.keepMine}>{t("files.keepMine")}</Button>
+        </div>
+      ) : null}
     <Textarea
       value={file.draft}
       onChange={(event) => file.setDraft(event.target.value)}
+      onSelect={reportSelection}
       disabled={file.saving}
       rows={fill ? undefined : 24}
       spellCheck={false}
       aria-label={file.title}
       className={cn(
         "font-mono text-sm",
-        fill ? "h-full min-h-0 resize-none rounded-none border-0 shadow-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" : "min-h-[560px]"
+        fill ? "h-full min-h-0 flex-1 resize-none rounded-none border-0 shadow-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" : "min-h-[560px]"
       )}
     />
+    </div>
   );
 }

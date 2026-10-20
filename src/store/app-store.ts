@@ -69,6 +69,18 @@ interface AppState {
   filePreview: { projectId: string; path: string } | null;
   openFilePreview: (projectId: string, path: string) => void;
   closeFilePreview: () => void;
+  /**
+   * What the agent is told, with the next message, about the file in the
+   * panel: the lines selected in it and whether it has unsaved edits. The
+   * person can stop that for the file on screen (`filePreviewShared`), and it
+   * starts again with the next file opened.
+   */
+  filePreviewSelection: { startLine: number; endLine: number; text: string } | null;
+  filePreviewUnsaved: boolean;
+  filePreviewShared: boolean;
+  setFilePreviewSelection: (selection: { startLine: number; endLine: number; text: string } | null) => void;
+  setFilePreviewUnsaved: (unsaved: boolean) => void;
+  setFilePreviewShared: (shared: boolean) => void;
   filePreviewWidth: number;
   setFilePreviewWidth: (width: number, remember?: boolean) => void;
   /**
@@ -208,13 +220,23 @@ export const useAppStore = create<AppState>((set) => ({
   openFilePreview: (projectId, path) => {
     rememberFilesPanel(true);
     if (isNarrowScreen()) rememberTerminalPanel(TERMINAL_PANEL_KEY, "0");
-    set((state) => ({
-      filePreview: { projectId, path },
-      filesPanelOpen: true,
-      terminalPanelOpen: isNarrowScreen() ? false : state.terminalPanelOpen,
-    }));
+    set((state) => {
+      const same = state.filePreview?.projectId === projectId && state.filePreview.path === path;
+      return {
+        filePreview: { projectId, path },
+        filesPanelOpen: true,
+        terminalPanelOpen: isNarrowScreen() ? false : state.terminalPanelOpen,
+        ...(same ? {} : { filePreviewSelection: null, filePreviewUnsaved: false, filePreviewShared: true }),
+      };
+    });
   },
-  closeFilePreview: () => set({ filePreview: null }),
+  closeFilePreview: () => set({ filePreview: null, filePreviewSelection: null, filePreviewUnsaved: false, filePreviewShared: true }),
+  filePreviewSelection: null,
+  filePreviewUnsaved: false,
+  filePreviewShared: true,
+  setFilePreviewSelection: (selection) => set({ filePreviewSelection: selection }),
+  setFilePreviewUnsaved: (unsaved) => set({ filePreviewUnsaved: unsaved }),
+  setFilePreviewShared: (shared) => set({ filePreviewShared: shared }),
   filePreviewWidth: FILE_PREVIEW_DEFAULT_WIDTH,
   setFilePreviewWidth: (width, remember = true) => {
     const next = clampFilePreviewWidth(width);
@@ -305,3 +327,22 @@ export const useAppStore = create<AppState>((set) => ({
   sidebarTab: "chats",
   setSidebarTab: (tab) => set({ sidebarTab: tab }),
 }));
+
+/**
+ * The file the agent is told about with the next message, or null: the panel
+ * must be open and showing a file, and the person must not have stopped it.
+ */
+export function openFileForAgent(state: Pick<AppState, "filesPanelOpen" | "filePreview" | "filePreviewShared" | "filePreviewSelection" | "filePreviewUnsaved">): {
+  project: string;
+  path: string;
+  selection?: { startLine: number; endLine: number; text: string };
+  unsaved?: boolean;
+} | null {
+  if (!state.filesPanelOpen || !state.filePreview || !state.filePreviewShared) return null;
+  return {
+    project: state.filePreview.projectId,
+    path: state.filePreview.path,
+    ...(state.filePreviewSelection ? { selection: state.filePreviewSelection } : {}),
+    ...(state.filePreviewUnsaved ? { unsaved: true } : {}),
+  };
+}

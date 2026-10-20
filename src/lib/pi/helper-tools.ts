@@ -29,8 +29,11 @@ export const HELPER_TOOLS_FILE = "eggent-helper-tools.js";
 const PROVIDER_KEY = Symbol.for("eggent.helperTools");
 
 const EXTENSION_SOURCE = `// Written by Eggent at start and rewritten on every start; edits are lost.
-// Gives a helper started with the Agent tool the Eggent tools it may use.
+// Gives a helper started with the Agent tool the Eggent tools it may use, and
+// keeps the versions of the files it writes.
 export default function eggentHelperTools(pi) {
+  const hooks = globalThis[Symbol.for("eggent.helperHooks")];
+  if (typeof hooks === "function") hooks(pi);
   const provide = globalThis[Symbol.for("eggent.helperTools")];
   if (typeof provide !== "function") return;
   for (const tool of provide()) pi.registerTool(tool);

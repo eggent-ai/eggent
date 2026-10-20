@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useCallback, useState, useEffect, useMemo } from "react";
-import { Send, Square, Paperclip, X, FileIcon, ImageIcon, Sparkles, Check, Gauge, SquareTerminal, FolderOpen } from "lucide-react";
+import { Send, Square, Paperclip, X, FileIcon, FileText, ImageIcon, Sparkles, Check, Gauge, SquareTerminal, FolderOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -250,6 +250,20 @@ export function ChatInput({
   const [selectedMentionIndex, setSelectedMentionIndex] = useState(0);
   const [mentionMenuDismissed, setMentionMenuDismissed] = useState(false);
   const allProjects = useAppStore((state) => state.projects);
+  // The file open beside the chat goes with the message (see openFileForAgent); said here, so it is not a surprise.
+  const filesPanelOpen = useAppStore((state) => state.filesPanelOpen);
+  const filePreview = useAppStore((state) => state.filePreview);
+  const filePreviewShared = useAppStore((state) => state.filePreviewShared);
+  const filePreviewSelection = useAppStore((state) => state.filePreviewSelection);
+  const setFilePreviewShared = useAppStore((state) => state.setFilePreviewShared);
+  const sharedFileLine = useMemo(() => {
+    if (contextMode === "plain" || pendingInteraction || !filesPanelOpen || !filePreview || !filePreviewShared) return null;
+    const name = filePreview.path.split("/").pop() || filePreview.path;
+    if (!filePreviewSelection) return t("chat.openFile.sees", { name });
+    return filePreviewSelection.startLine === filePreviewSelection.endLine
+      ? t("chat.openFile.seesLine", { name, line: filePreviewSelection.startLine })
+      : t("chat.openFile.seesLines", { name, from: filePreviewSelection.startLine, to: filePreviewSelection.endLine });
+  }, [contextMode, pendingInteraction, filesPanelOpen, filePreview, filePreviewShared, filePreviewSelection, t]);
   // What looks like a credential in the message about to be sent.
   const [secretWarning, setSecretWarning] = useState<{ kind: SecretKind; text: string } | null>(null);
 
@@ -907,6 +921,21 @@ export function ChatInput({
             <div className="mb-1.5 flex items-center gap-1.5 px-1 text-xs text-muted-foreground" role="status">
               <FolderOpen className="size-3.5 shrink-0" aria-hidden />
               <span className="truncate">{t("chat.projects.willAsk", { project: mentionTarget.name })}</span>
+            </div>
+          ) : null}
+          {sharedFileLine && !shellMode && !(mentionTarget && !showMentionMenu) ? (
+            <div className="mb-1.5 flex items-center gap-1.5 px-1 text-xs text-muted-foreground" role="status">
+              <FileText className="size-3.5 shrink-0" aria-hidden />
+              <span className="min-w-0 truncate">{sharedFileLine}</span>
+              <button
+                type="button"
+                onClick={() => setFilePreviewShared(false)}
+                className="-my-1 inline-flex size-6 shrink-0 items-center justify-center rounded-md hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                aria-label={t("chat.openFile.stop")}
+                title={t("chat.openFile.stop")}
+              >
+                <X className="size-3.5" aria-hidden />
+              </button>
             </div>
           ) : null}
           {shellMode ? (

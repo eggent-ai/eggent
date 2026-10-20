@@ -65,6 +65,10 @@ export interface AppSettings {
   learning?: {
     enabled: boolean;
   };
+  /** Whether every change to a file in a project is kept as a version. On unless false. */
+  fileHistory?: {
+    enabled: boolean;
+  };
   auth: {
     enabled: boolean;
     username: string;

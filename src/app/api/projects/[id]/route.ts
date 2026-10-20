@@ -3,8 +3,10 @@ import {
   getProject,
   updateProject,
   deleteProject,
+  GLOBAL_PROJECT_ID,
 } from "@/lib/storage/project-store";
 import { getServerTranslator } from "@/i18n/server";
+import { forgetHistory } from "@/lib/files/versions/capture";
 
 export async function GET(
   _req: NextRequest,
@@ -43,5 +45,7 @@ export async function DELETE(
   if (!deleted) {
     return Response.json({ error: t("api.error.projectNotFound") }, { status: 404 });
   }
+  // The history of its files goes with it (it would go at the next daily sweep anyway).
+  await forgetHistory(GLOBAL_PROJECT_ID, id, { folder: true }).catch(() => undefined);
   return Response.json({ success: true });
 }

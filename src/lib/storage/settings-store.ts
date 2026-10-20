@@ -56,6 +56,9 @@ export const DEFAULT_SETTINGS: AppSettings = {
   learning: {
     enabled: true,
   },
+  fileHistory: {
+    enabled: true,
+  },
   auth: {
     enabled: true,
     username: DEFAULT_AUTH_USERNAME,
