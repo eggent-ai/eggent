@@ -188,7 +188,7 @@ export function FileShare({ projectId, path, fill = false, version = 0 }: { proj
       {actionError ? <p role="alert" className="text-sm text-destructive">{actionError}</p> : null}
       <div className="flex flex-wrap items-center gap-2">
         <Button type="button" onClick={() => void save()} disabled={!changed || busy !== null || (!share && chosen.length === 0)} className="gap-2">
-          {busy === "save" ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+          {busy === "save" ? <Loader2 className="size-4 animate-spin" /> : share ? <Save className="size-4" /> : <Users className="size-4" />}
           {share ? t("shares.file.save") : t("shares.file.share")}
         </Button>
         {saved && !changed ? <span role="status" className="text-xs text-muted-foreground">{t("shares.file.saved")}</span> : null}
