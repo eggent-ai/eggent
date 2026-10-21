@@ -82,6 +82,7 @@ const { stopActiveRun } = await import("../src/lib/pi/active-runs.ts");
 const registry = await import("../src/lib/engines/registry.ts");
 const store = await import("../src/lib/engines/store.ts");
 const { buildEngineRecap } = await import("../src/lib/engines/brief.ts");
+const limits = await import("../src/lib/engines/limits.ts");
 
 import type { Engine, EngineRunRequest, EngineRunResult } from "../src/lib/engines/host-types.ts";
 import type { EngineStatus } from "../src/lib/engines/types.ts";
@@ -272,6 +273,17 @@ await check("a subscription limit says until when", async () => {
   const reply = await runPiAgentText({ chatId: id, projectId: "p1", userMessage: "LIMIT please" });
   assert.match(reply, /reached the limit of your subscription \(it opens again at \d\d:\d\d\)/);
 });
+await check("once a program has said its limit is reached, the next messages are told so without starting it again", async () => {
+  const id = await newChat("Limited", "p1");
+  requests.length = 0;
+  const reply = await runPiAgentText({ chatId: id, projectId: "p1", userMessage: "anything at all" });
+  assert.equal(requests.length, 0, "the program was started for a message that could only hear the limit again");
+  assert.match(reply, /reached the limit of your subscription \(it opens again at \d\d:\d\d\)/);
+  limits.forgetEngineLimit("fake");
+  const after = await runPiAgentText({ chatId: id, projectId: "p1", userMessage: "and now?" });
+  assert.equal(requests.length, 1);
+  assert.match(after, /fake: and now\?/);
+});
 await check("Stop reaches the program and the turn ends", async () => {
   const id = await newChat("Stop", "p1");
   const pending = runPiAgentText({ chatId: id, projectId: "p1", userMessage: "SLOW work" });
@@ -280,6 +292,83 @@ await check("Stop reaches the program and the turn ends", async () => {
   const reply = await Promise.race([pending, sleep(8000).then(() => "TIMED OUT")]);
   assert.notEqual(reply, "TIMED OUT");
   assert.ok(requests.at(-1)!.signal.aborted, "the program never heard the stop");
+});
+
+console.log("\nA few at a time\n");
+
+await check("no more programs run at once than the cap allows, and the others wait their turn in order", async () => {
+  process.env.EGGENT_ENGINE_MAX_PARALLEL = "2";
+  limits.resetEngineLimitsForTest();
+  const slots = [] as Array<Awaited<ReturnType<typeof limits.acquireEngineSlot>>>;
+  slots.push(await limits.acquireEngineSlot(undefined));
+  slots.push(await limits.acquireEngineSlot(undefined));
+  const order: string[] = [];
+  let waited = 0;
+  const third = limits.acquireEngineSlot(undefined, () => { waited += 1; }).then((slot) => { order.push("third"); return slot; });
+  const fourth = limits.acquireEngineSlot(undefined, () => { waited += 1; }).then((slot) => { order.push("fourth"); return slot; });
+  await sleep(50);
+  assert.deepEqual(order, [], "a place was given out beyond the cap");
+  assert.equal(waited, 2, "the waiting callers were not told they were waiting");
+  slots[0]!.release();
+  const thirdSlot = await third;
+  assert.deepEqual(order, ["third"]);
+  slots[1]!.release();
+  const fourthSlot = await fourth;
+  assert.deepEqual(order, ["third", "fourth"]);
+  slots[0]!.release(); // releasing twice must not hand out a second place
+  thirdSlot!.release();
+  fourthSlot!.release();
+  const again = [await limits.acquireEngineSlot(undefined), await limits.acquireEngineSlot(undefined)];
+  let extra = false;
+  void limits.acquireEngineSlot(undefined).then(() => { extra = true; });
+  await sleep(30);
+  assert.equal(extra, false, "the count of running programs leaked");
+  again.forEach((slot) => slot!.release());
+  await sleep(10);
+  limits.resetEngineLimitsForTest();
+});
+await check("a stop given while a run waits for its place ends the wait and takes nothing", async () => {
+  process.env.EGGENT_ENGINE_MAX_PARALLEL = "1";
+  limits.resetEngineLimitsForTest();
+  const first = await limits.acquireEngineSlot(undefined);
+  const controller = new AbortController();
+  const waiting = limits.acquireEngineSlot(controller.signal);
+  await sleep(20);
+  controller.abort();
+  assert.equal(await waiting, null);
+  first!.release();
+  const next = await Promise.race([limits.acquireEngineSlot(undefined), sleep(500).then(() => "STUCK" as const)]);
+  assert.notEqual(next, "STUCK", "the abandoned wait still held the place");
+  if (next && next !== "STUCK") next.release();
+  delete process.env.EGGENT_ENGINE_MAX_PARALLEL;
+  limits.resetEngineLimitsForTest();
+});
+await check("three chats started together on one program run two and the third waits, and all three answer", async () => {
+  process.env.EGGENT_ENGINE_MAX_PARALLEL = "2";
+  limits.resetEngineLimitsForTest();
+  let live = 0;
+  let peak = 0;
+  const run = fake.run;
+  fake.run = async (request) => {
+    live += 1;
+    peak = Math.max(peak, live);
+    await sleep(250);
+    try {
+      return await run(request);
+    } finally {
+      live -= 1;
+    }
+  };
+  try {
+    const ids = await Promise.all([newChat("P-a", "p1"), newChat("P-b", "p1"), newChat("P-c", "p1")]);
+    const replies = await Promise.all(ids.map((id, index) => runPiAgentText({ chatId: id, projectId: "p1", userMessage: `parallel ${index}` })));
+    assert.deepEqual(replies, ["fake: parallel 0", "fake: parallel 1", "fake: parallel 2"]);
+    assert.equal(peak, 2, `${peak} programs ran at once`);
+  } finally {
+    fake.run = run;
+    delete process.env.EGGENT_ENGINE_MAX_PARALLEL;
+    limits.resetEngineLimitsForTest();
+  }
 });
 
 console.log("\nWhat is not on an engine\n");

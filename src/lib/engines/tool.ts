@@ -16,6 +16,7 @@ import { buildEngineBrief, buildEngineRecap, indexOfLastUserMessage } from "@/li
 import type { EngineErrorCode, EngineEvent, EngineRunResult } from "@/lib/engines/host-types";
 import { ENGINE_ERROR_MESSAGE, explainBlockedStatus } from "@/lib/engines/explain";
 import { engineNotReady, type EngineRun } from "@/lib/engines/resolve";
+import { acquireEngineSlot, engineLimitedUntil, noteEngineLimit } from "@/lib/engines/limits";
 import { forgetEngineStatus } from "@/lib/engines/registry";
 import { readEngineSession, writeEngineSession } from "@/lib/engines/store";
 import { ENGINE_TOOL_NAME } from "@/lib/engines/types";
@@ -183,16 +184,38 @@ export function createEngineTool(options: EngineToolOptions): ToolDefinition {
 
       report();
       let freshSession = !resumable;
-      let result = await attempt(resumable?.sessionId ?? null, freshSession);
-      if (!result.ok && result.error?.code === "session-lost" && !signal?.aborted) {
-        // The program no longer has the conversation: begin again, and tell it what was said.
-        if (options.chatId) await writeEngineSession(options.chatId, null);
-        freshSession = true;
-        steps.length = 0;
-        earlierSteps = 0;
-        toolUses = 0;
-        result = await attempt(null, true);
+
+      // A limit the program has just reported holds for the next runs: they are told so
+      // at once instead of each starting a program to hear it again.
+      const limitedUntil = engineLimitedUntil(run.engine.id);
+      if (limitedUntil !== null) {
+        const until = t("engines.error.limitUntil", { time: clockTime(Math.floor(limitedUntil / 1000)) });
+        return finish(t("engines.error.limit", { engine: label, until, detail: "" }), { ok: false, errorCode: "limit", toolUses: 0, seconds: 0 });
       }
+
+      // A few programs at a time; the others wait their turn, and the card says so.
+      const slot = await acquireEngineSlot(signal, () => {
+        activity = t("engines.waiting");
+        report();
+      });
+      if (!slot) return finish(t("engines.stopped"), { ok: false, stopped: true, toolUses: 0, seconds: 0 });
+      activity = undefined;
+      let result: EngineRunResult;
+      try {
+        result = await attempt(resumable?.sessionId ?? null, freshSession);
+        if (!result.ok && result.error?.code === "session-lost" && !signal?.aborted) {
+          // The program no longer has the conversation: begin again, and tell it what was said.
+          if (options.chatId) await writeEngineSession(options.chatId, null);
+          freshSession = true;
+          steps.length = 0;
+          earlierSteps = 0;
+          toolUses = 0;
+          result = await attempt(null, true);
+        }
+      } finally {
+        slot.release();
+      }
+      if (!result.ok && result.error?.code === "limit") noteEngineLimit(run.engine.id, result.resetsAt);
 
       if (result.sessionId && options.chatId) {
         await writeEngineSession(options.chatId, {

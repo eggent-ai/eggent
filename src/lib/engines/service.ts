@@ -5,6 +5,7 @@ import fs from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import type { EngineLogin, EngineRunResult } from "@/lib/engines/host-types";
+import { forgetEngineLimit } from "@/lib/engines/limits";
 import { engineInfo, forgetEngineStatus, getEngine, listEngineInfos } from "@/lib/engines/registry";
 import { forgetEngineModels } from "@/lib/engines/resolve";
 import { readEngineChoice, readEngineConsents, writeEngineChoice } from "@/lib/engines/store";
@@ -104,6 +105,8 @@ export async function startEngineLogin(engineId: string): Promise<"started" | "r
       if (logins().get(engineId) === login) logins().delete(engineId);
       forgetEngineStatus(engineId);
       forgetEngineModels(engineId);
+      // Signed in again, perhaps to another plan: a limit noticed before no longer holds.
+      forgetEngineLimit(engineId);
     });
   return "started";
 }

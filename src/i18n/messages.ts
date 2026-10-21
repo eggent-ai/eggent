@@ -1468,6 +1468,7 @@ const enMessages = {
   "mail.sendTo.failed": "Not sent: {error}",
   "mail.sendTo.empty": "There is nothing to send: write the message first.",
 
+  "engines.waiting": "waiting for a free place",
   "engines.stopped": "Stopped.",
   "engines.noAnswer": "{engine} finished without writing an answer.",
   "engines.error.notInstalled": "{engine} is not installed on this computer, so this project cannot run on it. Install it, or pick another model in Settings → Models.",
