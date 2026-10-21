@@ -11,6 +11,7 @@
 import { Type } from "typebox";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { getServerTranslator } from "@/i18n/server";
+import { getChatFiles, getChatFilesDir } from "@/lib/storage/chat-files-store";
 import { getChat } from "@/lib/storage/chat-store";
 import { buildEngineBrief, buildEngineRecap, indexOfLastUserMessage } from "@/lib/engines/brief";
 import type { EngineErrorCode, EngineEvent, EngineRunResult } from "@/lib/engines/host-types";
@@ -157,6 +158,14 @@ export function createEngineTool(options: EngineToolOptions): ToolDefinition {
         }
       };
 
+      // What the person attached to this chat lives outside the project's folder, and the program has no
+      // idea of it unless told: the files it has not been told about yet are listed in the message, and the
+      // folder is opened to it. (A normal session lists every chat file in its prompt; there is none here.)
+      const attached = options.chatId ? await getChatFiles(options.chatId).catch(() => []) : [];
+      const since = resumable ? Date.parse(resumable.at) - 1000 : 0;
+      const news = attached.filter((file) => !Number.isFinite(since) || Date.parse(file.uploadedAt) > since);
+      const extraDirs = options.chatId && attached.length > 0 ? [getChatFilesDir(options.chatId)] : [];
+
       const attempt = async (sessionId: string | null, fresh: boolean): Promise<EngineRunResult> => {
         let recap = "";
         let promptForRun = prompt;
@@ -169,8 +178,15 @@ export function createEngineTool(options: EngineToolOptions): ToolDefinition {
           // The person changed their instructions since this session began: tell it, in the message.
           promptForRun = `The instructions for this project have changed. They are now:\n\n${brief.text}\n\n---\n\n${prompt}`;
         }
+        // A session that starts again is told of every file, one that goes on of the new ones.
+        const told = fresh ? attached : news;
+        if (told.length > 0) {
+          const lines = told.slice(0, 20).map((file) => `- ${file.path} (${file.type}, ${Math.max(1, Math.round(file.size / 1024))} KB)`);
+          promptForRun = `${promptForRun}\n\nFiles the person attached to this conversation (you can read them at these paths):\n${lines.join("\n")}${told.length > 20 ? `\n(and ${told.length - 20} more in the same folder)` : ""}`;
+        }
         return run.engine.run({
           prompt: promptForRun,
+          extraDirs,
           brief: fresh ? brief.text : "",
           recap,
           cwd: options.cwd,

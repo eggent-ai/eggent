@@ -24,6 +24,8 @@ export interface EngineRunRequest {
   /** What was said in this chat before, for a session that is only starting. */
   recap: string;
   cwd: string;
+  /** Folders outside `cwd` the program may read: where the files attached to this chat were put. */
+  extraDirs?: string[];
   /** The program's own session to continue, or null to start one. */
   sessionId: string | null;
   /** An id from the engine's model list; empty for its default. */

@@ -255,6 +255,55 @@ await check("a session the program has lost starts over, and is told what was sa
   assert.match(reply, /fake: LOST then continue/);
 });
 
+console.log("\nFiles attached to the chat\n");
+
+await check("files the person attached are named to the program and their folder is opened to it, and later only the new ones are named", async () => {
+  const id = await newChat("Attached", "p1");
+  const filesDir = path.join(root, "data", "chat-files", id);
+  fs.mkdirSync(filesDir, { recursive: true });
+  fs.writeFileSync(path.join(filesDir, "report.pdf"), "x".repeat(2048));
+  await sleep(1300);
+  requests.length = 0;
+  await runPiAgentText({ chatId: id, projectId: "p1", userMessage: "read the report" });
+  assert.match(requests[0].prompt, /Files the person attached/);
+  assert.match(requests[0].prompt, /report\.pdf/);
+  assert.deepEqual(requests[0].extraDirs?.map((dir) => fs.realpathSync(dir)), [fs.realpathSync(filesDir)]);
+
+  requests.length = 0;
+  await runPiAgentText({ chatId: id, projectId: "p1", userMessage: "and the summary?" });
+  assert.doesNotMatch(requests[0].prompt, /report\.pdf/, "a file already named was named again");
+  assert.deepEqual(requests[0].extraDirs?.map((dir) => fs.realpathSync(dir)), [fs.realpathSync(filesDir)], "the folder stays open");
+
+  await sleep(1300);
+  fs.writeFileSync(path.join(filesDir, "photo.png"), "y");
+  requests.length = 0;
+  await runPiAgentText({ chatId: id, projectId: "p1", userMessage: "and this photo?" });
+  assert.match(requests[0].prompt, /photo\.png/);
+  assert.doesNotMatch(requests[0].prompt, /report\.pdf/);
+});
+await check("a chat with nothing attached opens no folder and adds nothing to the message", async () => {
+  const id = await newChat("Nothing attached", "p1");
+  requests.length = 0;
+  await runPiAgentText({ chatId: id, projectId: "p1", userMessage: "plain" });
+  assert.equal(requests[0].prompt, "plain");
+  assert.deepEqual(requests[0].extraDirs, []);
+});
+await check("a session that starts again is told of every file, not only the new ones", async () => {
+  const id = await newChat("Attached lost", "p1");
+  const filesDir = path.join(root, "data", "chat-files", id);
+  fs.mkdirSync(filesDir, { recursive: true });
+  fs.writeFileSync(path.join(filesDir, "old.txt"), "o");
+  await sleep(1300);
+  await runPiAgentText({ chatId: id, projectId: "p1", userMessage: "first" });
+  await sleep(1300);
+  requests.length = 0;
+  lostOnce = false;
+  await runPiAgentText({ chatId: id, projectId: "p1", userMessage: "LOST again" });
+  assert.equal(requests.length, 2);
+  assert.doesNotMatch(requests[0].prompt, /old\.txt/);
+  assert.match(requests[1].prompt, /old\.txt/, "the new session was not told of the file");
+});
+
 console.log("\nWhen it cannot\n");
 
 await check("a program that is not signed in says so in the chat and is not started", async () => {
