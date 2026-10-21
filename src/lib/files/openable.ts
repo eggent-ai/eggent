@@ -171,6 +171,11 @@ export function fileDownloadUrl(
   return `/api/files/download?${params.toString()}`;
 }
 
+/** Saving a file as a PDF: a tab of its own that lays the file out and opens the print dialog. */
+export function filePrintUrl(projectId: string, filePath: string): string {
+  return `/api/files/page-print?${new URLSearchParams({ project: projectId, path: filePath }).toString()}`;
+}
+
 export function filesPageUrl(projectId: string, path: string): string {
   const params = new URLSearchParams({ project: projectId, path });
   return `/dashboard/files?${params.toString()}`;

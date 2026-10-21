@@ -17,7 +17,7 @@
 
 import { useCallback, useEffect, useState, type KeyboardEvent, type PointerEvent } from "react";
 import Link from "next/link";
-import { ArrowLeft, ClipboardCheck, Download, ExternalLink, FolderOpen, History, Loader2, Maximize2, Save, X } from "lucide-react";
+import { ArrowLeft, ClipboardCheck, Download, ExternalLink, FolderOpen, History, Loader2, Maximize2, Printer, Save, X } from "lucide-react";
 import { FileTree } from "@/components/file-tree";
 import { FileBody, formatFileSize, useFileContent } from "@/components/file-view";
 import { VersionHistory } from "@/components/files/version-history";
@@ -31,7 +31,7 @@ import {
   useAppStore,
 } from "@/store/app-store";
 import { useI18n } from "@/i18n/provider";
-import { fileDownloadUrl, filesPageUrl, isModifiedClick, isOpenableFile } from "@/lib/files/openable";
+import { fileDownloadUrl, filePrintUrl, filesPageUrl, isModifiedClick, isOpenableFile } from "@/lib/files/openable";
 
 const KEYBOARD_STEP_PX = 32;
 
@@ -298,6 +298,13 @@ function FilePreview({ projectId, path, onBack, onClose }: {
                 title={t("files.open")}
               >
                 <ExternalLink className="size-4" />
+              </a>
+            </Button>
+          ) : null}
+          {!file.isMedia && metadata ? (
+            <Button variant="ghost" size="icon" className={panelIconButton} asChild>
+              <a href={filePrintUrl(projectId, path)} target="_blank" rel="noopener noreferrer" aria-label={t("files.print")} title={t("files.print")}>
+                <Printer className="size-4" />
               </a>
             </Button>
           ) : null}

@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { ClipboardCheck, Download, ExternalLink, FileAudio, FileText, History, ImageIcon, Loader2, Save } from "lucide-react";
+import { ClipboardCheck, Download, ExternalLink, FileAudio, FileText, History, ImageIcon, Loader2, Printer, Save } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { AppSidebar } from "@/components/app-sidebar";
@@ -15,7 +15,7 @@ import { VersionHistory } from "@/components/files/version-history";
 import { FileApproval, FileApprovalNotice, useFileApproval } from "@/components/approvals/file-approval";
 import { useApprovalsSummary } from "@/components/approvals/use-approvals-summary";
 import { useI18n } from "@/i18n/provider";
-import { fileDownloadUrl, isOpenableFile } from "@/lib/files/openable";
+import { fileDownloadUrl, filePrintUrl, isOpenableFile } from "@/lib/files/openable";
 
 export default function GenericFileEditorPage() {
   const { t } = useI18n();
@@ -112,6 +112,14 @@ export default function GenericFileEditorPage() {
                         <a href={openHref} target="_blank" rel="noopener noreferrer">
                           <ExternalLink className="size-4" />
                           {t("files.open")}
+                        </a>
+                      </Button>
+                    ) : null}
+                    {!isMediaPreview && metadata ? (
+                      <Button variant="outline" asChild className="gap-2">
+                        <a href={filePrintUrl(projectId, filePath)} target="_blank" rel="noopener noreferrer">
+                          <Printer className="size-4" />
+                          {t("files.print")}
                         </a>
                       </Button>
                     ) : null}

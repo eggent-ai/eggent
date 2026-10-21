@@ -12,6 +12,8 @@ function isPublicApi(req: NextRequest, pathname: string): boolean {
   if (pathname === "/api/auth/status") return true;
   // The one-time sign-in link is the credential; minting one still needs a session.
   if (pathname === "/api/auth/handoff/redeem") return true;
+  // A page shown in a sandboxed frame carries no cookie; its token is checked by the route.
+  if (pathname.startsWith("/api/files/page/")) return true;
   if (pathname === "/api/external/message") return true;
   if (pathname === "/api/external/media-message") return true;
   if (pathname === "/api/external/telegram/sent" && req.method === "POST") return true;
