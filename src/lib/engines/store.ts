@@ -72,17 +72,39 @@ function cleanChoice(value: unknown): EngineChoice | null {
   };
 }
 
-export async function readEngineChoices(): Promise<Record<string, EngineChoice>> {
+interface ChoicesDocument {
+  choices: Record<string, EngineChoice>;
+  /** What the person has said yes to, kept when they turn a program off: asking again each time would be a nuisance. */
+  consents: Record<string, Record<string, string>>;
+}
+
+async function readDocument(): Promise<ChoicesDocument> {
   const document = await readJson(choicesPath());
+  const choices: Record<string, EngineChoice> = {};
   const raw = document.choices;
-  const out: Record<string, EngineChoice> = {};
   if (raw && typeof raw === "object" && !Array.isArray(raw)) {
     for (const [key, value] of Object.entries(raw as Record<string, unknown>)) {
       const choice = cleanChoice(value);
-      if (choice) out[key] = choice;
+      if (choice) choices[key] = choice;
     }
   }
-  return out;
+  const consents: Record<string, Record<string, string>> = {};
+  const rawConsents = document.consents;
+  if (rawConsents && typeof rawConsents === "object" && !Array.isArray(rawConsents)) {
+    for (const [key, perEngine] of Object.entries(rawConsents as Record<string, unknown>)) {
+      if (!perEngine || typeof perEngine !== "object" || Array.isArray(perEngine)) continue;
+      const clean: Record<string, string> = {};
+      for (const [engine, at] of Object.entries(perEngine as Record<string, unknown>)) {
+        if (typeof at === "string" && at) clean[engine] = at;
+      }
+      if (Object.keys(clean).length > 0) consents[key] = clean;
+    }
+  }
+  return { choices, consents };
+}
+
+export async function readEngineChoices(): Promise<Record<string, EngineChoice>> {
+  return (await readDocument()).choices;
 }
 
 export async function readEngineChoice(projectId: string | null | undefined): Promise<EngineChoice | null> {
@@ -90,20 +112,37 @@ export async function readEngineChoice(projectId: string | null | undefined): Pr
   return Object.prototype.hasOwnProperty.call(choices, engineScopeKey(projectId)) ? choices[engineScopeKey(projectId)] : null;
 }
 
-/** Sets a project's engine, or clears it with null. */
+/** The programs this project (or the orchestrator) has been confirmed for, with the time of each yes. */
+export async function readEngineConsents(projectId: string | null | undefined): Promise<Record<string, string>> {
+  const { consents } = await readDocument();
+  const key = engineScopeKey(projectId);
+  return Object.prototype.hasOwnProperty.call(consents, key) ? { ...consents[key] } : {};
+}
+
+/** Sets a project's engine, or clears it with null. A confirmed choice is remembered even after it is cleared. */
 export async function writeEngineChoice(projectId: string | null | undefined, choice: EngineChoice | null): Promise<void> {
   const key = engineScopeKey(projectId);
   await serialized(choicesPath(), async () => {
-    const choices = await readEngineChoices();
-    if (choice) choices[key] = choice;
-    else delete choices[key];
-    await writeAtomic(choicesPath(), { version: 1, choices });
+    const document = await readDocument();
+    if (choice) {
+      document.choices[key] = choice;
+      if (choice.consentAt) document.consents[key] = { ...(document.consents[key] ?? {}), [choice.engine]: choice.consentAt };
+    } else {
+      delete document.choices[key];
+    }
+    await writeAtomic(choicesPath(), { version: 1, ...document });
   });
 }
 
-/** Removes a project's choice when the project goes. */
+/** Removes everything kept about a project when the project goes. */
 export async function forgetEngineProject(projectId: string): Promise<void> {
-  await writeEngineChoice(projectId, null);
+  const key = engineScopeKey(projectId);
+  await serialized(choicesPath(), async () => {
+    const document = await readDocument();
+    delete document.choices[key];
+    delete document.consents[key];
+    await writeAtomic(choicesPath(), { version: 1, ...document });
+  });
 }
 
 async function readSessions(): Promise<Record<string, EngineSessionRecord>> {

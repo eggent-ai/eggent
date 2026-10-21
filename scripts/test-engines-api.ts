@@ -97,7 +97,7 @@ await check("with no engines module the list is empty and the screens stay out o
   assert.equal(await registry.enginesAvailable(), false);
   const response = await enginesRoute.GET(request("/api/engines"));
   assert.equal(response.status, 200);
-  assert.deepEqual(await json(response), { available: false, engines: [], choice: null });
+  assert.deepEqual(await json(response), { available: false, engines: [], choice: null, consents: {} });
 });
 await check("a choice cannot name a program nobody registered", async () => {
   await projectStore.createProject({ id: "p1", name: "One", description: "", instructions: "", memoryMode: "isolated" } as never);
@@ -247,6 +247,26 @@ await check("what the project is labelled with follows its program, and says no 
   assert.equal(stats.engine, true);
   assert.equal(stats.context, undefined);
 });
+await check("a yes is remembered after the program is turned off, so turning it on again needs no sheet", async () => {
+  const before = (await store.readEngineChoice("p1"))!;
+  assert.ok(before.consentAt);
+  assert.deepEqual(await service.applyEngineChoice("p1", { engine: null }), { ok: true, choice: null });
+  const state = await service.engineState("p1");
+  assert.equal(state.choice, null);
+  assert.equal(state.consents.fake, before.consentAt, "the screen is told which programs are already confirmed");
+  const again = await service.applyEngineChoice("p1", { engine: "fake", model: "fast" });
+  assert.ok(again.ok && again.choice?.consentAt === before.consentAt);
+  assert.deepEqual(await service.engineState("other-project").then((s) => s.consents), {}, "a yes belongs to the project it was given for");
+});
+await check("a change is announced to the open chats, so the footer and the note follow at once", async () => {
+  const seen: Array<{ topic: string; projectId?: string | null; reason?: string }> = [];
+  const { subscribeUiSyncEvents } = await import("../src/lib/realtime/event-bus.ts");
+  const stop = subscribeUiSyncEvents((event) => seen.push(event));
+  await service.applyEngineChoice("p1", { engine: null });
+  await service.applyEngineChoice("p1", { engine: "fake" });
+  stop();
+  assert.equal(seen.filter((event) => event.topic === "projects" && event.projectId === "p1" && event.reason === "engine_changed").length, 2);
+});
 await check("turning it off puts the project back on a model", async () => {
   const outcome = await service.applyEngineChoice("p1", { engine: null });
   assert.deepEqual(outcome, { ok: true, choice: null });
@@ -259,6 +279,7 @@ await check("deleting a project forgets what it was set to, so a new project of 
   assert.ok(await store.readEngineChoice("p1"));
   assert.equal(await projectStore.deleteProject("p1"), true);
   assert.equal(await store.readEngineChoice("p1"), null);
+  assert.deepEqual(await store.readEngineConsents("p1"), {}, "a new project of that name must not inherit the old project's yes");
   await projectStore.createProject({ id: "p1", name: "One", description: "", instructions: "", memoryMode: "isolated" } as never);
 });
 

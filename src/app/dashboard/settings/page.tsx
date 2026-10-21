@@ -1,5 +1,6 @@
 "use client";
 
+import { EnginesPlate } from "@/components/engines/engines-plate";
 import { ProjectModelSettings } from "@/components/project-model-settings";
 import { SettingsScopeSelect, useSettingsScope } from "@/components/settings-scope";
 import { SettingsPageHeader, SettingsShell } from "@/components/settings-shell";
@@ -25,6 +26,8 @@ export default function ModelsPage() {
         description={t("settings.models.description")}
         scope={<SettingsScopeSelect scope={scope} />}
       />
+      {/* Programs found on this computer; nothing at all where there are none. */}
+      <EnginesPlate key={scope.scopeId} projectId={scope.isOrchestrator ? null : scope.scopeId} />
       {scope.isOrchestrator ? (
         <WorkspaceModelSettings />
       ) : (

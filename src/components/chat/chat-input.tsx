@@ -197,6 +197,8 @@ interface ChatInputProps {
   onFilesUploaded?: (files: ChatFile[]) => void;
   focusSignal?: number;
   runtimeStats?: PiRuntimeStats | null;
+  /** The program of this computer the chat runs on, when it runs on one: it replaces the line about tokens. */
+  engineLabel?: string | null;
   contextMode?: ChatContextMode;
   onContextModeChange?: (mode: ChatContextMode) => void;
   contextModeLocked?: boolean;
@@ -218,6 +220,7 @@ export function ChatInput({
   onFilesUploaded,
   focusSignal,
   runtimeStats,
+  engineLabel,
   contextMode = "full",
   onContextModeChange,
   contextModeLocked = false,
@@ -1035,12 +1038,17 @@ export function ChatInput({
         <DictationStatus dictation={dictation} className="mt-2 text-center" />
         <div className="mt-2 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
           {runPlace ? <RunPlaceControl {...runPlace} /> : null}
-          <ContextModeControl
-            mode={contextMode}
-            locked={contextModeLocked}
-            onChange={onContextModeChange}
-          />
-          {runtimeStats?.engine ? null : (
+          {/* A program does the work with its own tools: Eggent's light modes have nothing to switch. */}
+          {engineLabel || runtimeStats?.engine ? null : (
+            <ContextModeControl
+              mode={contextMode}
+              locked={contextModeLocked}
+              onChange={onContextModeChange}
+            />
+          )}
+          {engineLabel ? (
+            <span className="max-w-xl text-center">{t("engines.chatNotice", { engine: engineLabel })}</span>
+          ) : runtimeStats?.engine ? null : (
             <>
               <span className="font-mono">in {formatTokenCount(runtimeStats?.session?.input ?? runtimeStats?.lastTurn?.input)}</span>
               <span className="font-mono">out {formatTokenCount(runtimeStats?.session?.output ?? runtimeStats?.lastTurn?.output)}</span>

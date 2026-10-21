@@ -7,6 +7,7 @@ import { CodeBlock } from "./code-block";
 import { ToolOutput } from "./tool-output";
 import { ToolGroup } from "./tool-group";
 import { SubagentGroup, type HelperItem } from "./subagent-group";
+import { EngineFallbackButton } from "./engine-fallback";
 import { isAgentToolName, isEngineToolName, isProjectToolName } from "@/lib/pi/subagent-format";
 import type { SubagentSnapshot } from "@/lib/pi/types";
 import { FileMention } from "./file-mention";
@@ -321,6 +322,10 @@ export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
         {renderedParts}
         {producedFiles.length > 0 ? <FilesProduced groups={producedFiles} /> : null}
         {learned ? <LearnedNote notice={learned} /> : null}
+        {/* A program that could not finish: carry on with a model instead. Only under a complete answer. */}
+        {shellScope && [...helperProgress.values()].some((snapshot) => snapshot.kind === "engine" && snapshot.engineError) ? (
+          <EngineFallbackButton messageId={message.id} />
+        ) : null}
         {/* Only once the answer is complete: the scope is withheld from the one still streaming. */}
         {mailReply && shellScope ? (
           <SendToContact

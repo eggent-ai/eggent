@@ -18,7 +18,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, ExternalLink, Loader2, Lock, Search, Sparkles } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { EngineConsentSheet } from "@/components/engines/engine-consent-sheet";
+import { useEngines } from "@/hooks/use-engines";
 import { useI18n } from "@/i18n/provider";
+import { engineChoiceLabel, saveEngineChoice, visibleEngines } from "@/lib/engines/client";
+import type { EngineInfo } from "@/lib/engines/types";
 import { parseProjectModelFile, serializeProjectModelFile } from "@/lib/pi/project-model-choice";
 
 interface PickerModel {
@@ -60,7 +64,14 @@ interface ModelOption {
   group: string;
   /** Listed so it can be seen, but this workspace cannot use it right now. */
   locked?: boolean;
+  /** A program of this computer and one of its models, not a model of this workspace. */
+  engine?: { id: string; modelId: string };
+  /** Why a locked row is locked, when it is not the deployment's own sentence. */
+  note?: string;
 }
+
+/** The provider id the rows of programs carry here; it never reaches a file. */
+const ENGINE_OPTION_PROVIDER = "engine";
 
 export function ModelPicker({ projectId, triggerClassName, compact }: ModelPickerProps) {
   const { t } = useI18n();
@@ -72,6 +83,9 @@ export function ModelPicker({ projectId, triggerClassName, compact }: ModelPicke
   const [saving, setSaving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  const { state: engines, refresh: refreshEngines } = useEngines(projectId ?? null);
+  // A program asked for before the person has confirmed it for this project: the sheet comes first.
+  const [asking, setAsking] = useState<{ info: EngineInfo; model: string } | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -137,13 +151,44 @@ export function ModelPicker({ projectId, triggerClassName, compact }: ModelPicke
           .filter((model) => model.available === false && (!model.kind || model.kind === "text"))
           .map((model) => ({ provider: managedId, id: model.id, label: model.name || model.id, group: managedGroup(model.family), locked: true }))
       : [];
-    return [...usable, ...locked];
-  }, [state, managedId]);
+    // Programs of this computer: one row per model of each that is ready, and
+    // one locked row for each that is installed but cannot answer yet. Programs
+    // that are not on the computer are not mentioned.
+    const group = t("engines.picker.group");
+    const programs: ModelOption[] = visibleEngines(engines).flatMap((info) =>
+      info.status.state === "ready"
+        ? info.models.map((model) => ({
+            provider: ENGINE_OPTION_PROVIDER,
+            id: `${info.id}/${model.id}`,
+            label: engineChoiceLabel(info, { model: model.id }),
+            group,
+            engine: { id: info.id, modelId: model.id },
+          }))
+        : [{
+            provider: ENGINE_OPTION_PROVIDER,
+            id: `${info.id}/`,
+            label: info.label,
+            group,
+            locked: true,
+            note: t("engines.picker.signInNote"),
+            engine: { id: info.id, modelId: "" },
+          }]
+    );
+    return [...usable, ...locked, ...programs];
+  }, [state, managedId, engines, t]);
+
+  /** The program this project is set to, if any, with the model it was told to use. */
+  const engineInUse = useMemo(() => {
+    const choice = engines?.choice;
+    if (!choice) return null;
+    const info = visibleEngines(engines).find((candidate) => candidate.id === choice.engine);
+    return info ? { info, choice } : null;
+  }, [engines]);
 
   /** The deployment's own sentence about the unavailable ones, and where to go. */
   const lockedHint = useMemo(() => {
     const first = (state?.managedModels ?? []).find((model) => model.available === false && model.note);
-    return first && options.some((option) => option.locked) ? { note: first.note as string, manage: first.manage } : null;
+    return first && options.some((option) => option.locked && !option.engine) ? { note: first.note as string, manage: first.manage } : null;
   }, [state, options]);
 
   const groups = useMemo(() => {
@@ -172,6 +217,7 @@ export function ModelPicker({ projectId, triggerClassName, compact }: ModelPicke
   }, [options, query]);
 
   const currentLabel = useMemo(() => {
+    if (engineInUse) return engineChoiceLabel(engineInUse.info, engineInUse.choice);
     if (!chosen) return null;
     const find = (provider: string, model: string) => options.find((option) => option.id === model && (option.provider === provider
       || provider === "eggent-ai" || option.provider === "eggent-ai"));
@@ -183,17 +229,50 @@ export function ModelPicker({ projectId, triggerClassName, compact }: ModelPicke
       if (fallback && !fallback.locked) return fallback.label;
     }
     return match?.label || chosen.model;
-  }, [chosen, options, state]);
+  }, [chosen, engineInUse, options, state]);
 
   const thinking = state?.settings?.defaultThinkingLevel;
 
+  async function chooseProgram(option: ModelOption) {
+    const target = option.engine && visibleEngines(engines).find((info) => info.id === option.engine!.id);
+    if (!option.engine || !target) return;
+    // The first time for this project the person is told what it means; after that it is a switch.
+    if (!engines?.consents[target.id]) {
+      setOpen(false);
+      setQuery("");
+      setAsking({ info: target, model: option.engine.modelId });
+      return;
+    }
+    setSaving(option.id);
+    setError(null);
+    const saved = await saveEngineChoice(projectId ?? null, { engine: target.id, model: option.engine.modelId });
+    setSaving(null);
+    if (!saved.ok) {
+      setError(t("chat.modelPicker.saveFailed"));
+      return;
+    }
+    setOpen(false);
+    setQuery("");
+    await refreshEngines();
+  }
+
   async function choose(option: ModelOption) {
     if (saving || option.locked) return;
+    if (option.engine) {
+      await chooseProgram(option);
+      return;
+    }
     setSaving(option.id);
     setError(null);
     const previous = chosen;
     setChosen({ provider: option.provider, model: option.id });
     try {
+      // A model picked while a program is doing the work puts the program down first.
+      if (engineInUse) {
+        const released = await saveEngineChoice(projectId ?? null, { engine: null });
+        if (!released.ok) throw new Error(t("chat.modelPicker.saveFailed"));
+        await refreshEngines();
+      }
       if (projectId) {
         // Carry the file's other keys across: this form owns three of them.
         const parsed = parseProjectModelFile(projectFile ?? "");
@@ -237,6 +316,7 @@ export function ModelPicker({ projectId, triggerClassName, compact }: ModelPicke
   }
 
   return (
+    <>
     <Popover
       open={open}
       onOpenChange={(next) => {
@@ -301,15 +381,18 @@ export function ModelPicker({ projectId, triggerClassName, compact }: ModelPicke
                         key={`${option.provider}/${option.id}`}
                         type="button"
                         aria-disabled="true"
-                        aria-describedby={lockedHint ? "model-picker-locked-hint" : undefined}
+                        aria-describedby={option.engine ? undefined : lockedHint ? "model-picker-locked-hint" : undefined}
                         className="flex w-full cursor-default items-center gap-2 px-3 py-1.5 text-left text-sm text-muted-foreground"
                       >
                         <span className="flex-1 truncate">{option.label}</span>
+                        {option.note ? <span className="shrink-0 text-xs">{option.note}</span> : null}
                         <Lock className="size-3 shrink-0" aria-hidden="true" />
                       </button>
                     );
                   }
-                  const active = chosen?.model === option.id;
+                  const active = option.engine
+                    ? engineInUse?.info.id === option.engine.id && (engineInUse.choice.model || "") === option.engine.modelId
+                    : !engineInUse && chosen?.model === option.id;
                   return (
                     <button
                       key={`${option.provider}/${option.id}`}
@@ -361,5 +444,16 @@ export function ModelPicker({ projectId, triggerClassName, compact }: ModelPicke
         )}
       </PopoverContent>
     </Popover>
+    <EngineConsentSheet
+      engine={asking?.info ?? null}
+      initialModel={asking?.model ?? ""}
+      projectId={projectId ?? null}
+      open={asking !== null}
+      onOpenChange={(next) => {
+        if (!next) setAsking(null);
+      }}
+      onConfirmed={() => void refreshEngines(true)}
+    />
+    </>
   );
 }

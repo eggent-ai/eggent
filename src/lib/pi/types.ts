@@ -141,6 +141,8 @@ export interface SubagentSnapshot {
   /** For an engine: its name and the model it was asked to use. */
   engineName?: string;
   engineModel?: string;
+  /** For an engine that could not finish: why, as the code the host named. */
+  engineError?: string;
   projectId?: string;
   projectName?: string;
   /** The chat the project worked in: where its whole answer and its history are. */

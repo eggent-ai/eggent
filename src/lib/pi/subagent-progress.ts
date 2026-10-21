@@ -319,6 +319,9 @@ export class SubagentProgressTracker {
         if (!snapshot.engineModel && typeof verdict.modelLabel === "string") snapshot.engineModel = clip(verdict.modelLabel, 60);
         if (typeof verdict.toolUses === "number") snapshot.toolUses = Math.max(snapshot.toolUses, verdict.toolUses);
         if (verdict.ok === false) status = verdict.stopped === true ? "stopped" : "failed";
+        if (verdict.ok === false && verdict.stopped !== true && typeof verdict.errorCode === "string") {
+          snapshot.engineError = clip(verdict.errorCode, 24);
+        }
       }
     }
     snapshot.status = status;

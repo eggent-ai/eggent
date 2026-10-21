@@ -7,7 +7,8 @@ import path from "node:path";
 import type { EngineLogin, EngineRunResult } from "@/lib/engines/host-types";
 import { engineInfo, forgetEngineStatus, getEngine, listEngineInfos } from "@/lib/engines/registry";
 import { forgetEngineModels } from "@/lib/engines/resolve";
-import { readEngineChoice, writeEngineChoice } from "@/lib/engines/store";
+import { readEngineChoice, readEngineConsents, writeEngineChoice } from "@/lib/engines/store";
+import { publishUiSyncEvent } from "@/lib/realtime/event-bus";
 import { isEngineAccess, ORCHESTRATOR_ENGINE_KEY, type EngineChoice, type EngineInfo } from "@/lib/engines/types";
 import { getProject } from "@/lib/storage/project-store";
 
@@ -17,6 +18,8 @@ export interface EnginesState {
   engines: EngineInfo[];
   /** What this project (or the orchestrator) is set to, if anything. */
   choice: EngineChoice | null;
+  /** The programs the person has already confirmed for it, with the time: turning one on again needs no sheet. */
+  consents: Record<string, string>;
 }
 
 const LOGINS_KEY = Symbol.for("eggent.engines.logins");
@@ -36,7 +39,12 @@ export async function engineState(projectId: string | null, options: { fresh?: b
     ...info,
     ...(logins().has(info.id) ? { loggingIn: true } : {}),
   }));
-  return { available: engines.length > 0, engines, choice: await readEngineChoice(projectId) };
+  return {
+    available: engines.length > 0,
+    engines,
+    choice: await readEngineChoice(projectId),
+    consents: await readEngineConsents(projectId),
+  };
 }
 
 export type ChoiceInput = {
@@ -55,6 +63,7 @@ export async function applyEngineChoice(projectId: string | null, input: ChoiceI
   if (projectId && !(await getProject(projectId).catch(() => null))) return { ok: false, status: 404, code: "project" };
   if (input.engine === null) {
     await writeEngineChoice(projectId, null);
+    announceChange(projectId);
     return { ok: true, choice: null };
   }
   const engine = await getEngine(input.engine);
@@ -66,12 +75,20 @@ export async function applyEngineChoice(projectId: string | null, input: ChoiceI
   // an empty one asks for the program's own default.
   const model = typeof input.model === "string" ? input.model.trim() : sameEngine && existing ? existing.model : "";
   if (model && !models.some((candidate) => candidate.id === model)) return { ok: false, status: 400, code: "model" };
-  const consentAt = sameEngine && existing?.consentAt ? existing.consentAt : input.confirm === true ? new Date().toISOString() : undefined;
+  const consentAt = (sameEngine && existing?.consentAt)
+    || (await readEngineConsents(projectId))[engine.id]
+    || (input.confirm === true ? new Date().toISOString() : undefined);
   if (!consentAt) return { ok: false, status: 409, code: "consent-required" };
   const access = isEngineAccess(input.access) ? input.access : sameEngine && existing ? existing.access : "project";
   const choice: EngineChoice = { engine: engine.id, model, access, consentAt };
   await writeEngineChoice(projectId, choice);
+  announceChange(projectId);
   return { ok: true, choice };
+}
+
+/** The open chats re-read what answers them: the label under the composer, and the note about the mode. */
+function announceChange(projectId: string | null): void {
+  publishUiSyncEvent({ topic: "projects", projectId, reason: "engine_changed" });
 }
 
 /** Starts the program's own sign-in, which opens the browser; the screen then watches the status. */

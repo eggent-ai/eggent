@@ -27,6 +27,8 @@ import { generateClientId } from "@/lib/utils";
 import { parseShellInput } from "@/lib/terminal/format";
 import { useShellRuns } from "@/store/shell-runs";
 import { ShellActionsProvider, type ShellActions } from "@/components/chat/shell-actions";
+import { EngineFallbackProvider, type EngineFallback } from "@/components/chat/engine-fallback";
+import { saveEngineChoice } from "@/lib/engines/client";
 
 /** Convert stored ChatMessage to UIMessage (parts format for useChat) */
 function isPiRuntimeStats(value: unknown): value is PiRuntimeStats {
@@ -1306,6 +1308,29 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     if (await selectHome(here) && text) dispatchMessage(text);
   }, [dispatchMessage, remote.status?.node, selectHome]);
 
+  // The program this project runs on could not finish: put the project back on
+  // a model and say the same words to it. Offered under the newest answer only.
+  const [engineFallbackBusy, setEngineFallbackBusy] = useState(false);
+  const continueWithModel = useCallback(async () => {
+    if (engineFallbackBusy) return;
+    const lastUser = [...messagesRef.current].reverse().find((message) => message.role === "user");
+    const text = lastUser
+      ? lastUser.parts.map((part) => (part.type === "text" ? part.text : "")).join("\n").trim()
+      : "";
+    setEngineFallbackBusy(true);
+    const saved = await saveEngineChoice(activeProjectId ?? null, { engine: null });
+    setEngineFallbackBusy(false);
+    if (saved.ok && text) dispatchMessage(text);
+  }, [activeProjectId, dispatchMessage, engineFallbackBusy]);
+  const engineFallback = useMemo<EngineFallback>(() => ({
+    lastAssistantId: [...messages].reverse().find((message) => message.role === "assistant")?.id ?? null,
+    busy: engineFallbackBusy,
+    run: () => void continueWithModel(),
+  }), [continueWithModel, engineFallbackBusy, messages]);
+  // Named from what the project is configured to run on, not from a turn's own stats: the note must be
+  // there before anything is sent, and the stats of a turn name the stand-in model the program is behind.
+  const engineLabel = configuredRuntimeStats?.engine ? configuredRuntimeStats.model?.provider ?? null : null;
+
   const errorActions = useMemo(() => {
     if (!handoverFailure) return undefined;
     const actions: Array<{ label: string; onClick: () => void }> = [];
@@ -1320,6 +1345,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
 
   return (
     <ShellActionsProvider value={shellActions}>
+    <EngineFallbackProvider value={engineFallback}>
     <MailReplyProvider value={activeChatId && mailReply ? mailReply : null}>
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       {activeChatId && mailReply ? <MailReplyBanner info={mailReply} /> : null}
@@ -1350,6 +1376,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         currentPath={currentPath}
         focusSignal={inputFocusSignal}
         runtimeStats={displayRuntimeStats}
+        engineLabel={engineLabel}
         contextMode={contextMode}
         onContextModeChange={setContextMode}
         // The first message fixes it. The prompt prefix is cached per shape,
@@ -1366,6 +1393,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
       />
     </div>
     </MailReplyProvider>
+    </EngineFallbackProvider>
     </ShellActionsProvider>
   );
 }

@@ -331,11 +331,12 @@ await check("a turn started from the web chat runs on the engine too", async () 
   } as never);
   const reader = stream.getReader();
   let text = "";
-  let stats: { engine?: boolean; context?: unknown; session?: unknown; model?: { name?: string } } | null = null;
+  type Stats = { engine?: boolean; context?: unknown; session?: unknown; model?: { name?: string } };
+  let stats = null as Stats | null;
   for (;;) {
     const { value, done } = await reader.read();
     if (done) break;
-    const chunk = value as { type?: string; delta?: string; data?: typeof stats };
+    const chunk = value as { type?: string; delta?: string; data?: Stats };
     if (chunk.type === "text-delta" && chunk.delta) text += chunk.delta;
     if (chunk.type === "data-piStats" && chunk.data) stats = chunk.data;
   }
