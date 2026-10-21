@@ -113,7 +113,7 @@ export function engineModel(info: EngineInfo, modelId: string): EngineModelInfo 
   return info.models.find((model) => model.id === modelId) ?? info.models[0] ?? { id: "", label: "" };
 }
 
-/** "Claude Code", or "Claude Code · Opus" when the project names a model of its own. */
+/** The program's name, or "Name · Model" when the project names a model of its own. */
 export function engineChoiceLabel(info: EngineInfo, choice: Pick<EngineChoice, "model">): string {
   const model = choice.model ? engineModel(info, choice.model) : null;
   return model && model.id ? `${info.label} · ${model.label}` : info.label;

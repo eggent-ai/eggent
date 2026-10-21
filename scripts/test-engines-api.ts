@@ -301,7 +301,7 @@ await check("a turn done by a program is not handed to the learning look-back", 
     startedAt: new Date().toISOString(),
   };
   assert.equal(learnFromTurn({ ...turn, model: { provider: "engine-fake", id: "default" } }), false);
-  assert.equal(learnFromTurn({ ...turn, model: { provider: "openai", id: "x" } }), true, "other turns are untouched");
+  assert.equal(learnFromTurn({ ...turn, model: { provider: "other-provider", id: "x" } }), true, "other turns are untouched");
 });
 
 console.log("\nSigning in\n");
