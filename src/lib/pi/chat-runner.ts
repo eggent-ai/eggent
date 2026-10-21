@@ -19,6 +19,7 @@ import type { CardQuestion } from "@/lib/board/types";
 import { isHelperToolName } from "@/lib/pi/subagent-format";
 import { chatAllowsVisits, grantVisits, mentionRuntimeText, planProjectMention, revokeVisits, takeVisitFiles, type MentionPlan } from "@/lib/pi/project-visit";
 import { resolveEngineRun } from "@/lib/engines/resolve";
+import { isEngineProviderId } from "@/lib/engines/types";
 import { collectProducedFiles, mergeProducedGroups, type ProducedGroup } from "@/lib/files/produced";
 import { SubagentProgressTracker } from "@/lib/pi/subagent-progress";
 import type { AgentProgressEvent, PiChatRunOptions, PiRuntimeStats, PiToolRecord, SubagentSnapshot } from "@/lib/pi/types";
@@ -283,6 +284,15 @@ function buildPiRuntimeStats(session: {
   };
   getContextUsage?: () => PiRuntimeStats["context"] | undefined;
 }, lastTurn?: PiRuntimeStats["lastTurn"], sessionUsageOverride?: PiRuntimeStats["session"]): PiRuntimeStats {
+  // The stand-in model of an engine counts nothing, and a row of zeros under
+  // the composer would read as a program that cost nothing to run rather than
+  // one whose cost is not ours to show.
+  if (isEngineProviderId(session.model?.provider)) {
+    return {
+      model: { provider: session.model?.provider, id: session.model?.id, name: session.model?.name },
+      engine: true,
+    };
+  }
   let sessionStats: ReturnType<NonNullable<typeof session.getSessionStats>> | undefined;
   try {
     sessionStats = session.getSessionStats?.();

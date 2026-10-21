@@ -1,4 +1,6 @@
 import { getServerTranslator } from "@/i18n/server";
+import { engineBlockedReason } from "@/lib/engines/explain";
+import { engineNotReady, resolveEngineRun } from "@/lib/engines/resolve";
 import { getActiveRun } from "@/lib/pi/active-runs";
 import { coverWaitMs, isRemoteHome, localNode, remoteEnabled } from "@/lib/remote/config";
 import { stampAfter } from "@/lib/remote/stamp";
@@ -34,7 +36,13 @@ async function refusal(error: RemoteError, from: ChatHome | undefined): Promise<
   return {
     ok: false,
     response: Response.json(
-      { error: remoteFailureMessage(error, t, where), code: error.code, ...(from ? { home: from } : {}) },
+      {
+        // The reason of a program that cannot take the chat goes out as it is: the side that asked
+        // puts it after the name of this computer, which only that side knows how to write.
+        error: error.code === "engine" ? error.message : remoteFailureMessage(error, t, where),
+        code: error.code,
+        ...(from ? { home: from } : {}),
+      },
       { status: error.status }
     ),
   };
@@ -73,6 +81,19 @@ export async function prepareRelayedTurn(
   // late: that turn is over, and what it asked is not a new turn for nobody to watch.
   if (req.headers.get(REMOTE_HEADERS.steer) === "1") {
     return refusal(new RemoteError("not-running", "No turn is running in this chat to join.", { home: from }), from);
+  }
+
+  // A project set to run on a program of this computer needs that program to be
+  // there and signed in. If it is not, this is said now, in its own words, and the
+  // person is offered the other side instead - never a silent run on some model
+  // they did not choose for this project.
+  const engineRun = await resolveEngineRun(input.projectId);
+  if (engineRun) {
+    const blocked = await engineNotReady(engineRun);
+    if (blocked) {
+      const t = await getServerTranslator();
+      return refusal(new RemoteError("engine", engineBlockedReason(blocked, engineRun.engine.label, t), { home: from }), from);
+    }
   }
 
   const want = input.head ?? null;

@@ -3,6 +3,7 @@ import os from "node:os";
 import path from "node:path";
 import { redactSecrets } from "@/lib/pi/provider-failure";
 import {
+  isEngineToolName,
   isHelperToolName,
   isProjectToolName,
   parseSubagentActivity,
@@ -159,7 +160,10 @@ export class SubagentProgressTracker {
     if (!record || !isHelperToolName(record.toolName)) return;
     const toolCallId = typeof record.toolCallId === "string" ? record.toolCallId : "";
     if (!toolCallId) return;
-    if (record.type === "tool_execution_start") this.start(toolCallId, record.args, isProjectToolName(record.toolName));
+    if (record.type === "tool_execution_start") {
+      if (isEngineToolName(record.toolName)) this.startEngine(toolCallId, record.args);
+      else this.start(toolCallId, record.args, isProjectToolName(record.toolName));
+    }
     else if (record.type === "tool_execution_update") this.update(toolCallId, record.partialResult);
     else if (record.type === "tool_execution_end") this.end(toolCallId, record.result, record.isError === true);
   }
@@ -218,6 +222,32 @@ export class SubagentProgressTracker {
       finished: false,
     });
     this.ensurePolling();
+    this.report(toolCallId, true);
+  }
+
+  /** The program a project runs on: the request is the description, the steps arrive with its progress. */
+  private startEngine(toolCallId: string, rawArgs: unknown): void {
+    if (this.entries.has(toolCallId)) return;
+    const args = asRecord(rawArgs) ?? {};
+    this.entries.set(toolCallId, {
+      snapshot: {
+        toolCallId,
+        description: clip(typeof args.prompt === "string" ? args.prompt : "", 120),
+        kind: "engine",
+        status: "running",
+        startedAt: new Date().toISOString(),
+        now: { kind: "thinking" },
+        toolUses: 0,
+        steps: [],
+      },
+      // No transcript of ours to read: the program keeps its own.
+      prompt: "",
+      stepIndex: new Map(),
+      lastEmitAt: 0,
+      emittedKey: "",
+      timer: null,
+      finished: false,
+    });
     this.report(toolCallId, true);
   }
 
@@ -281,6 +311,16 @@ export class SubagentProgressTracker {
         if (visit.ok === false) status = visit.stopped === true ? "stopped" : "failed";
       }
     }
+    if (snapshot.kind === "engine") {
+      // The program's own verdict: the tool answers in words either way.
+      const verdict = asRecord(details?.engine);
+      if (verdict) {
+        if (!snapshot.engineName && typeof verdict.label === "string") snapshot.engineName = clip(verdict.label, 60);
+        if (!snapshot.engineModel && typeof verdict.modelLabel === "string") snapshot.engineModel = clip(verdict.modelLabel, 60);
+        if (typeof verdict.toolUses === "number") snapshot.toolUses = Math.max(snapshot.toolUses, verdict.toolUses);
+        if (verdict.ok === false) status = verdict.stopped === true ? "stopped" : "failed";
+      }
+    }
     snapshot.status = status;
     if (status === "failed") {
       const reason = error
@@ -306,9 +346,15 @@ export class SubagentProgressTracker {
     if (typeof details.modelName === "string" && details.modelName.trim()) snapshot.model = details.modelName.trim();
     if (!snapshot.description && typeof details.description === "string") snapshot.description = clip(details.description, 120);
     if (!snapshot.agentType && typeof details.subagentType === "string") snapshot.agentType = details.subagentType;
-    if (snapshot.kind === "project") {
-      if (typeof details.projectName === "string" && details.projectName.trim()) snapshot.projectName = clip(details.projectName, 120);
-      if (typeof details.visitChatId === "string") snapshot.visitChatId = details.visitChatId;
+    if (snapshot.kind === "engine") {
+      if (typeof details.engineName === "string" && details.engineName.trim()) snapshot.engineName = clip(details.engineName, 60);
+      if (typeof details.engineModel === "string" && details.engineModel.trim()) snapshot.engineModel = clip(details.engineModel, 60);
+    }
+    if (snapshot.kind === "project" || snapshot.kind === "engine") {
+      if (snapshot.kind === "project") {
+        if (typeof details.projectName === "string" && details.projectName.trim()) snapshot.projectName = clip(details.projectName, 120);
+        if (typeof details.visitChatId === "string") snapshot.visitChatId = details.visitChatId;
+      }
       if (Array.isArray(details.steps)) {
         const steps: SubagentStep[] = [];
         for (const item of details.steps.slice(-MAX_STEPS)) {

@@ -7,7 +7,7 @@ import { CodeBlock } from "./code-block";
 import { ToolOutput } from "./tool-output";
 import { ToolGroup } from "./tool-group";
 import { SubagentGroup, type HelperItem } from "./subagent-group";
-import { isAgentToolName, isProjectToolName } from "@/lib/pi/subagent-format";
+import { isAgentToolName, isEngineToolName, isProjectToolName } from "@/lib/pi/subagent-format";
 import type { SubagentSnapshot } from "@/lib/pi/types";
 import { FileMention } from "./file-mention";
 import { StickyCopyButton, UserMessageFooter } from "./user-message-footer";
@@ -251,12 +251,13 @@ export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
     // A scheduled Agent call registers a job and returns; it is not a helper
     // at work in this message, so it stays an ordinary tool card.
     const projectCall = isProjectToolName(tool.toolName);
-    if (projectCall || (isAgentToolName(tool.toolName) && !(typeof input.schedule === "string" && input.schedule.trim()))) {
+    const engineCall = isEngineToolName(tool.toolName);
+    if (projectCall || engineCall || (isAgentToolName(tool.toolName) && !(typeof input.schedule === "string" && input.schedule.trim()))) {
       // At most one of the two groups is ever open: starting either closes the other.
       if (pendingTools.length) flushTools();
       pendingHelpers.push({
         toolCallId: tool.toolCallId || `agent-${idx}`,
-        ...(projectCall ? { kind: "project" as const } : {}),
+        ...(projectCall ? { kind: "project" as const } : engineCall ? { kind: "engine" as const } : {}),
         input,
         toolState:
           tool.state === "output-available" ? "output" : tool.state === "output-error" ? "error" : "running",

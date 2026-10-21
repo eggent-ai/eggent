@@ -87,6 +87,8 @@ export interface PiRuntimeStats {
     id?: string;
     name?: string;
   };
+  /** A program of this computer did the turn: there are no tokens of ours to count. */
+  engine?: boolean;
   lastTurn?: {
     input?: number;
     output?: number;
@@ -131,8 +133,14 @@ export interface SubagentSnapshot {
   toolCallId: string;
   description: string;
   agentType?: string;
-  /** Set when this is not a helper but another project doing work asked of it with @. */
-  kind?: "project";
+  /**
+   * Set when this is not a helper: another project doing work asked of it with @,
+   * or the program of this computer that a project is set to run on.
+   */
+  kind?: "project" | "engine";
+  /** For an engine: its name and the model it was asked to use. */
+  engineName?: string;
+  engineModel?: string;
   projectId?: string;
   projectName?: string;
   /** The chat the project worked in: where its whole answer and its history are. */

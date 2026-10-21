@@ -1040,9 +1040,13 @@ export function ChatInput({
             locked={contextModeLocked}
             onChange={onContextModeChange}
           />
-          <span className="font-mono">in {formatTokenCount(runtimeStats?.session?.input ?? runtimeStats?.lastTurn?.input)}</span>
-          <span className="font-mono">out {formatTokenCount(runtimeStats?.session?.output ?? runtimeStats?.lastTurn?.output)}</span>
-          <span className="font-mono">{formatContextUsage(runtimeStats)}</span>
+          {runtimeStats?.engine ? null : (
+            <>
+              <span className="font-mono">in {formatTokenCount(runtimeStats?.session?.input ?? runtimeStats?.lastTurn?.input)}</span>
+              <span className="font-mono">out {formatTokenCount(runtimeStats?.session?.output ?? runtimeStats?.lastTurn?.output)}</span>
+              <span className="font-mono">{formatContextUsage(runtimeStats)}</span>
+            </>
+          )}
         </div>
       </div>
     </div>

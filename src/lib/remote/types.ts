@@ -151,6 +151,8 @@ export type RemoteFailureCode =
   | "offline"
   | "denied"
   | "not-ready"
+  /** The program the chat is set to run on, on that computer, cannot take it right now. */
+  | "engine"
   | "not-synced"
   | "busy"
   | "not-running"

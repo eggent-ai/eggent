@@ -331,15 +331,22 @@ await check("a turn started from the web chat runs on the engine too", async () 
   } as never);
   const reader = stream.getReader();
   let text = "";
+  let stats: { engine?: boolean; context?: unknown; session?: unknown; model?: { name?: string } } | null = null;
   for (;;) {
     const { value, done } = await reader.read();
     if (done) break;
-    const chunk = value as { type?: string; delta?: string };
+    const chunk = value as { type?: string; delta?: string; data?: typeof stats };
     if (chunk.type === "text-delta" && chunk.delta) text += chunk.delta;
+    if (chunk.type === "data-piStats" && chunk.data) stats = chunk.data;
   }
   assert.equal(requests.length, 1);
   assert.equal(requests[0].prompt, "from the web");
   assert.match(text, /fake: from the web/);
+  // The footer must not show a row of zero tokens for a program that is not ours to count.
+  assert.ok(stats, "no runtime stats were streamed");
+  assert.equal(stats!.engine, true);
+  assert.equal(stats!.context, undefined);
+  assert.equal(stats!.session, undefined);
 });
 
 provider.close();

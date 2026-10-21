@@ -4,6 +4,8 @@
  * import it without pulling the runtime along.
  */
 
+import { ENGINE_TOOL_NAME } from "@/lib/engines/types";
+
 export const AGENT_TOOL_NAME = "Agent";
 
 /** The tool that has another project do a piece of work; see project-visit.ts. */
@@ -17,6 +19,11 @@ export function isProjectToolName(name: unknown): boolean {
   return name === PROJECT_TOOL_NAME;
 }
 
+/** The tool a session on an engine hands every request to; see lib/engines. */
+export function isEngineToolName(name: unknown): boolean {
+  return name === ENGINE_TOOL_NAME;
+}
+
 /**
  * A call the chat draws as a card with a progress of its own: a helper, or a
  * project asked to do something. They share the card; what they do not share is
@@ -24,7 +31,7 @@ export function isProjectToolName(name: unknown): boolean {
  * `isAgentToolName`.
  */
 export function isHelperToolName(name: unknown): boolean {
-  return isAgentToolName(name) || isProjectToolName(name);
+  return isAgentToolName(name) || isProjectToolName(name) || isEngineToolName(name);
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {

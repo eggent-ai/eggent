@@ -54,6 +54,8 @@ export interface EngineInfo {
   /** The first one is the engine's default. */
   models: EngineModelInfo[];
   status: EngineStatus;
+  /** A sign-in the person started is still waiting for them. */
+  loggingIn?: boolean;
 }
 
 /** What a project (or the orchestrator) is set to run on, kept per computer. */

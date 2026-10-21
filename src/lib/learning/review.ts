@@ -26,6 +26,7 @@ import type { PiToolRecord } from "@/lib/pi/types";
 import { redactSecrets } from "@/lib/pi/provider-failure";
 import { getChat } from "@/lib/storage/chat-store";
 import { currentBudgetLevel } from "@/lib/usage/budget-level";
+import { isEngineProviderId } from "@/lib/engines/types";
 
 /**
  * Looking back over a conversation, once it is over, and keeping what is worth
@@ -318,6 +319,10 @@ export interface FinishedTurn {
 export function learnFromTurn(turn: FinishedTurn): boolean {
   if (turn.contextMode === "plain" || turn.contextMode === "files") return false;
   if (turn.isPublicShare) return false;
+  // A program of the person's own computer did this turn, with its own memory:
+  // there is no model of this workspace to run the look-back on, and nothing
+  // spent on one would be the person's to spend on it.
+  if (isEngineProviderId(turn.model?.provider)) return false;
   if (!turn.userMessage.trim()) return false;
   queueLearning({
     chatId: turn.chatId,

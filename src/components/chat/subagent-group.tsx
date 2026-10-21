@@ -44,8 +44,8 @@ export type HelperState = "running" | "done" | "failed" | "stopped" | "detached"
 
 export interface HelperItem {
   toolCallId: string;
-  /** A project asked to do something with @, not a helper: same card, other words. */
-  kind?: "project";
+  /** A project asked to do something with @, or the program a project runs on: not a helper, same card, other words. */
+  kind?: "project" | "engine";
   input: Record<string, unknown>;
   /** The tool call's own state: still running, returned, or returned an error. */
   toolState: "running" | "output" | "error";
@@ -68,6 +68,10 @@ const openRows = new Set<string>();
 
 function isProjectItem(item: HelperItem): boolean {
   return item.kind === "project" || item.snapshot?.kind === "project";
+}
+
+function isEngineItem(item: HelperItem): boolean {
+  return item.kind === "engine" || item.snapshot?.kind === "engine";
 }
 
 export function helperState(item: HelperItem): HelperState {
@@ -164,6 +168,8 @@ export function SubagentGroup({ items, renderMarkdown }: SubagentGroupProps) {
   };
   const now = useNow(running > 0);
   const projectsOnly = items.length > 0 && items.every(isProjectItem);
+  const enginesOnly = items.length > 0 && items.every(isEngineItem);
+  const engineTitle = enginesOnly ? items[0].snapshot?.engineName || t("engines.plate.title") : "";
 
   const starts = items
     .map((item) => (item.snapshot?.startedAt ? Date.parse(item.snapshot.startedAt) : NaN))
@@ -192,12 +198,14 @@ export function SubagentGroup({ items, renderMarkdown }: SubagentGroupProps) {
         className="flex w-full items-center gap-2 px-3 py-2 text-left text-xs text-muted-foreground transition-colors hover:text-foreground"
       >
         {expanded ? <ChevronDown className="size-3.5 shrink-0" /> : <ChevronRight className="size-3.5 shrink-0" />}
-        {projectsOnly ? <FolderOpen className="size-3.5 shrink-0" /> : <Users className="size-3.5 shrink-0" />}
-        <span className="font-medium">{projectsOnly ? t("chat.projects.title") : t("chat.helpers.title")}</span>
+        {enginesOnly ? <Terminal className="size-3.5 shrink-0" /> : projectsOnly ? <FolderOpen className="size-3.5 shrink-0" /> : <Users className="size-3.5 shrink-0" />}
+        <span className="font-medium">{enginesOnly ? engineTitle : projectsOnly ? t("chat.projects.title") : t("chat.helpers.title")}</span>
         {/* Pinned leading, as in the tools group: an arbitrary size resets it. */}
-        <span className="inline-flex min-w-5 justify-center rounded-full bg-muted px-1.5 py-0.5 text-[11px]/4 font-medium tabular-nums text-foreground">
-          {items.length}
-        </span>
+        {enginesOnly ? null : (
+          <span className="inline-flex min-w-5 justify-center rounded-full bg-muted px-1.5 py-0.5 text-[11px]/4 font-medium tabular-nums text-foreground">
+            {items.length}
+          </span>
+        )}
         <span className="truncate" aria-live="polite">{summary}</span>
         {groupElapsed ? <span className="ml-auto shrink-0 tabular-nums">{groupElapsed}</span> : null}
       </button>
@@ -242,18 +250,24 @@ function HelperRow({
   };
   const snapshot = item.snapshot;
   const project = isProjectItem(item);
+  const engine = isEngineItem(item);
   const projectName = project
     ? snapshot?.projectName || (typeof item.input.project === "string" ? item.input.project : "") || t("chat.projects.title")
     : "";
-  const description = project
+  const description = engine
+    ? [snapshot?.engineName, snapshot?.engineModel].filter(Boolean).join(" · ") || t("engines.plate.title")
+    : project
     ? projectName
     : (typeof item.input.description === "string" && item.input.description.trim()) ||
       snapshot?.description ||
       t("chat.helpers.title");
   const agentType =
     snapshot?.agentType ?? (typeof item.input.subagent_type === "string" ? item.input.subagent_type : undefined);
-  const showType = !project && agentType && agentType.toLowerCase() !== "general-purpose";
-  const prompt = project
+  const showType = !project && !engine && agentType && agentType.toLowerCase() !== "general-purpose";
+  // The request of an engine is the message right above the card: not said twice.
+  const prompt = engine
+    ? ""
+    : project
     ? typeof item.input.task === "string" ? item.input.task.trim() : ""
     : typeof item.input.prompt === "string" ? item.input.prompt.trim() : "";
   const elapsed = elapsedMs(snapshot, now);
@@ -353,7 +367,7 @@ function HelperRow({
             </section>
           ) : null}
 
-          {state !== "running" && state !== "detached" ? (
+          {state !== "running" && state !== "detached" && !engine ? (
             <section>
               <h4 className="mb-1 text-xs font-medium text-muted-foreground">{t("chat.helpers.result")}</h4>
               {failure ? <p className="mb-1 text-xs text-destructive">{failure}</p> : null}

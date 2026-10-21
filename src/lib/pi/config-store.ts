@@ -1656,6 +1656,24 @@ export async function setPiDefaultToFirstAvailableModel(
 export async function getResolvedPiRuntimeModel(projectId?: string | null): Promise<PiRuntimeStats> {
   const normalizedProjectId = projectId?.trim() && projectId.trim() !== "none" ? projectId.trim() : undefined;
   const cwd = normalizedProjectId ? getWorkDir(normalizedProjectId) : getWorkDir(null);
+
+  // A project set to run on a program of this computer is answered by that
+  // program, and the label says so. Asked through the one function the session
+  // asks, so the two cannot disagree; loaded when needed, since the engines
+  // read the agent folder from this very module.
+  const { resolveEngineRun } = await import("@/lib/engines/resolve");
+  const engineRun = await resolveEngineRun(normalizedProjectId);
+  if (engineRun) {
+    return {
+      model: {
+        provider: engineRun.engine.label,
+        id: engineRun.model.id || "default",
+        name: engineRun.model.label,
+      },
+      engine: true,
+    };
+  }
+
   const modelRuntime = await getPiModelRuntime();
   const modelRegistry = await getPiModelRegistry(modelRuntime);
   const settingsManager = getPiSettingsManager(cwd);

@@ -11,10 +11,10 @@
 import { Type } from "typebox";
 import { defineTool, type ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { getServerTranslator } from "@/i18n/server";
-import type { MessageKey } from "@/i18n/messages";
 import { getChat } from "@/lib/storage/chat-store";
 import { buildEngineBrief, buildEngineRecap, indexOfLastUserMessage } from "@/lib/engines/brief";
 import type { EngineErrorCode, EngineEvent, EngineRunResult } from "@/lib/engines/host-types";
+import { ENGINE_ERROR_MESSAGE, explainBlockedStatus } from "@/lib/engines/explain";
 import { engineNotReady, type EngineRun } from "@/lib/engines/resolve";
 import { forgetEngineStatus } from "@/lib/engines/registry";
 import { readEngineSession, writeEngineSession } from "@/lib/engines/store";
@@ -41,16 +41,6 @@ interface Step {
 function textResult(text: string, details: Record<string, unknown> = {}) {
   return { content: [{ type: "text" as const, text }], details };
 }
-
-const ERROR_MESSAGE: Record<Exclude<EngineErrorCode, "session-lost">, MessageKey> = {
-  "not-installed": "engines.error.notInstalled",
-  "signed-out": "engines.error.signedOut",
-  limit: "engines.error.limit",
-  "unsupported-model": "engines.error.unsupportedModel",
-  "api-key": "engines.error.apiKey",
-  timeout: "engines.error.timeout",
-  failed: "engines.error.failed",
-};
 
 function clockTime(unixSeconds: number): string {
   const when = new Date(unixSeconds * 1000);
@@ -105,17 +95,7 @@ export function createEngineTool(options: EngineToolOptions): ToolDefinition {
       // Not signed in, not installed, a problem of its own: said before anything is started.
       const blocked = await engineNotReady(run);
       if (blocked) {
-        const code: EngineErrorCode = blocked.state === "not-installed"
-          ? "not-installed"
-          : blocked.state === "signed-out"
-            ? "signed-out"
-            : blocked.code === "api-key"
-              ? "api-key"
-              : "failed";
-        const key = ERROR_MESSAGE[code as Exclude<EngineErrorCode, "session-lost">];
-        const text = code === "failed"
-          ? t("engines.error.problem", { engine: label, detail: blocked.detail ?? "not ready" })
-          : t(key, { engine: label, until: "", detail: "" });
+        const { code, text } = explainBlockedStatus(blocked, label, t);
         return finish(text, { ok: false, errorCode: code });
       }
 
@@ -237,7 +217,7 @@ export function createEngineTool(options: EngineToolOptions): ToolDefinition {
         return finish(text, { ...common, ok: true });
       }
       const code = (result.error?.code ?? "failed") as EngineErrorCode;
-      const key = ERROR_MESSAGE[(code === "session-lost" ? "failed" : code) as Exclude<EngineErrorCode, "session-lost">];
+      const key = ENGINE_ERROR_MESSAGE[(code === "session-lost" ? "failed" : code) as Exclude<EngineErrorCode, "session-lost">];
       const until = result.resetsAt ? t("engines.error.limitUntil", { time: clockTime(result.resetsAt) }) : "";
       const detail = (result.error?.message || result.text || "").trim().slice(0, 400);
       return finish(t(key, { engine: label, until, detail }), { ...common, ok: false, errorCode: code });

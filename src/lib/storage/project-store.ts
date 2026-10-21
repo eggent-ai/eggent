@@ -1851,6 +1851,11 @@ export async function deleteProject(projectId: string): Promise<boolean> {
   try {
     // Remove chats that belong to this project
     await deleteChatsByProjectId(projectId);
+    // A program this computer was set to run the project on is no longer its business;
+    // a new project that takes the same name must not start out on it. Loaded when
+    // needed, since the engines read the agent folder through this module's neighbours.
+    const { forgetEngineProject } = await import("@/lib/engines/store");
+    await forgetEngineProject(projectId).catch(() => undefined);
     // Remove project's vector memory (dir and in-memory cache)
     const memoryDir = path.join(DATA_DIR, "memory", projectId);
     await fs.rm(memoryDir, { recursive: true, force: true });

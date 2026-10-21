@@ -157,6 +157,9 @@ export function remoteFailureMessage(error: RemoteError, t: Translator, where: s
       return t("remote.error.denied", { where });
     case "not-ready":
       return t("remote.error.notReady", { where });
+    case "engine":
+      // The computer says why in its own words; the cloud only adds where it happened.
+      return t("remote.error.engine", { where, reason: error.message });
     case "not-synced":
       return t("remote.error.notSynced", { where });
     case "busy":
@@ -596,7 +599,7 @@ export async function runHandedOverText(
     const where = await whereLabel(home, t);
     console.warn(`[remote] could not hand the turn to ${home}: ${failure.code} - ${failure.message}`);
     // The one way out a messenger has: bring the chat back to the side that is reading it.
-    const hint = ["offline", "denied", "not-ready", "timeout"].includes(failure.code) ? ` ${t("remote.error.hintHere")}` : "";
+    const hint = ["offline", "denied", "not-ready", "engine", "timeout"].includes(failure.code) ? ` ${t("remote.error.hintHere")}` : "";
     // The code goes along for a caller that acts on it: a computer that said no is not asked again by itself.
     throw Object.assign(new Error(`${remoteFailureMessage(failure, t, where)}${hint}`), { remoteCode: failure.code });
   }

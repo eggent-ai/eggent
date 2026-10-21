@@ -10,7 +10,7 @@ export interface HandoverFailure {
   home?: ChatHome;
 }
 
-const CODES = new Set(["disabled", "offline", "denied", "not-ready", "not-synced", "busy", "not-running", "moved", "failed", "timeout"]);
+const CODES = new Set(["disabled", "offline", "denied", "not-ready", "engine", "not-synced", "busy", "not-running", "moved", "failed", "timeout"]);
 
 /**
  * A failed send, as a refusal to hand the message over - or null when it was
@@ -35,7 +35,7 @@ export function parseHandoverFailure(error: unknown): HandoverFailure | null {
 
 /** Refusals that moving the chat to this side fixes. */
 export function canRunHereInstead(failure: HandoverFailure): boolean {
-  return failure.code === "offline" || failure.code === "not-ready" || failure.code === "denied" || failure.code === "timeout";
+  return failure.code === "offline" || failure.code === "not-ready" || failure.code === "denied" || failure.code === "timeout" || failure.code === "engine";
 }
 
 export type PlaceChoice =

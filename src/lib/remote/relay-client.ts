@@ -26,6 +26,7 @@ const RELAY_CODES = new Set<RemoteFailureCode>([
   "offline",
   "denied",
   "not-ready",
+  "engine",
   "not-synced",
   "busy",
   "not-running",

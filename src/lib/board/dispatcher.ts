@@ -270,7 +270,7 @@ async function runCard(cardId: string): Promise<void> {
       started = null;
     } else {
       // A computer that said no is not asked again by itself: the card waits for the person.
-      end = { runId, outcome: "failed", detail: describeError(error), ...(remoteCode === "denied" ? { noRetry: true } : {}) };
+      end = { runId, outcome: "failed", detail: describeError(error), ...(remoteCode === "denied" || remoteCode === "engine" ? { noRetry: true } : {}) };
     }
   } finally {
     if (started) {
