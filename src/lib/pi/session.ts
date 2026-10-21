@@ -49,6 +49,10 @@ import {
 import { deploymentContext, ensureWebSearchWorkflow, fallbackRuntimeModel, getEggentAiModelLockState, getManagedProviderId, getPiModelRegistry, getPiModelRuntime, getPiSettingsManager, isManagedProviderId } from "@/lib/pi/config-store";
 import { managedDefaultTextModel, readManagedCatalog } from "@/lib/pi/managed-models";
 import { pickManagedRuntimeModel } from "@/lib/pi/project-model-choice";
+import { engineProviderConfig, engineRegisteredModelId } from "@/lib/engines/provider";
+import { resolveEngineRun } from "@/lib/engines/resolve";
+import { createEngineTool } from "@/lib/engines/tool";
+import { ENGINE_TOOL_NAME, engineProviderId } from "@/lib/engines/types";
 import { currentBudgetLevel } from "@/lib/usage/budget-level";
 import { isUsageProviderConfigured } from "@/lib/usage/usage-provider";
 import { getServerTranslator } from "@/i18n/server";
@@ -527,6 +531,14 @@ function buildLiteSystemPrompt(options: {
   ].join("\n");
 }
 
+/**
+ * The system prompt of a session on an engine. The stand-in model never reads
+ * it; the runtime still wants one, and it says what the session is for.
+ */
+function buildEngineSystemPrompt(label: string): string {
+  return `You pass every request of the person to ${label}, which does the work on their computer, by calling ${ENGINE_TOOL_NAME} with the request word for word. You answer with what it returns.`;
+}
+
 function createSessionManager(options: PiSessionOptions, cwd: string): SessionManager {
   if (!options.chatId) {
     return SessionManager.inMemory(cwd);
@@ -599,6 +611,16 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
   const agentDir = options.agentDir || getAgentDir();
   await ensureWebSearchWorkflow();
   const modelRuntime = await getPiModelRuntime();
+  // A project set to run on a program of this computer talks to a stand-in for a
+  // model and hands every request to that program (see lib/engines). Never for a
+  // public link, which is narrower than anything a workspace keeps.
+  const engineRun = publicShare ? null : await resolveEngineRun(projectId);
+  if (engineRun) {
+    (modelRuntime as unknown as { registerProvider: (id: string, config: unknown) => void }).registerProvider(
+      engineProviderId(engineRun.engine.id),
+      engineProviderConfig(engineRun.engine.id, engineRun.engine.label, engineRun.models),
+    );
+  }
   const modelRegistry = await getPiModelRegistry(modelRuntime);
   const settingsManager = getPiSettingsManager(cwd);
   await modelRegistry.refresh();
@@ -648,7 +670,14 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
       })()
     : undefined;
 
-  const configuredModel = managedModel
+  const engineModel = engineRun
+    ? modelRuntime.getModel(engineProviderId(engineRun.engine.id), engineRegisteredModelId(engineRun.model.id))
+    : undefined;
+  if (engineRun && !engineModel) {
+    throw new Error(`${engineRun.engine.label} could not be set up as this project's model.`);
+  }
+  const configuredModel = engineModel
+    || managedModel
     || projectConfiguredModel
     || globalConfiguredModel
     || (modelLock.locked ? availableModels[0] : await fallbackRuntimeModel(availableModels));
@@ -679,15 +708,18 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
   // the orchestrator has only the file.
   // Everything from here to the resource loader exists to build the full
   // context. A light chat sends none of it, so it is not read either.
-  const workspaceInstructions = liteMode
+  // A light chat and an engine's session share this: none of the workspace's
+  // context is built, because none of it is sent anywhere.
+  const bare = liteMode !== null || engineRun !== null;
+  const workspaceInstructions = bare
     ? ""
     : project
       ? project.instructions
       : await readProjectContext(scopeId);
-  const ownSkills = liteMode || publicShare ? [] : await loadProjectSkillsMetadata(scopeId);
+  const ownSkills = bare || publicShare ? [] : await loadProjectSkillsMetadata(scopeId);
   // What the agent has learned is learned for the person, not for one project,
   // so a project sees those skills too. Its own skills win a clash of names.
-  const sharedLearnedSkills = liteMode || publicShare || !projectId
+  const sharedLearnedSkills = bare || publicShare || !projectId
     ? []
     : (await loadProjectSkillsMetadata(GLOBAL_PROJECT_ID)).filter(
         (skill) => skill.learned && !ownSkills.some((own) => own.name.toLowerCase() === skill.name.toLowerCase())
@@ -697,24 +729,24 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
   // Read the scope's own file rather than the session cwd: an orchestrator run
   // started inside a project directory would otherwise report that project's
   // servers as its own.
-  const mcpServerIds = liteMode || publicShare ? [] : loadConfiguredMcpServerIds(getWorkDir(scopeId));
-  const chatFiles = !liteMode && !publicShare && options.chatId ? await getChatFiles(options.chatId) : [];
-  const mailReply = !liteMode && !publicShare && options.chatId && mailEnabled()
+  const mcpServerIds = bare || publicShare ? [] : loadConfiguredMcpServerIds(getWorkDir(scopeId));
+  const chatFiles = !bare && !publicShare && options.chatId ? await getChatFiles(options.chatId) : [];
+  const mailReply = !bare && !publicShare && options.chatId && mailEnabled()
     ? (await getChat(options.chatId))?.mailReply
     : undefined;
   // A card's chat shares the card's id, so this is one file looked for, and found only for a card.
   // A turn handed to a computer may arrive before the board's own folder has: the chat it waited
   // for says it is a card's, and that is enough to know what to do with a question.
-  const boardCard = !liteMode && !publicShare && !options.visit && options.chatId
+  const boardCard = !bare && !publicShare && !options.visit && options.chatId
     ? await getCard(options.chatId).then(async (card) => {
         if (card) return { id: card.id, title: card.title };
         const chat = options.remote ? await getChat(options.chatId as string) : null;
         return chat?.boardCard ? { id: chat.id, title: chat.title } : null;
       })
     : null;
-  const corePiToolsOnly = options.corePiToolsOnly === true || liteMode !== null || publicShare;
+  const corePiToolsOnly = options.corePiToolsOnly === true || bare || publicShare;
 
-  const projectContext = liteMode || publicShare ? "" : buildEggentProjectContext({
+  const projectContext = bare || publicShare ? "" : buildEggentProjectContext({
     projectId,
     projectName: project?.name,
     projectDescription: project?.description,
@@ -753,7 +785,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     mailAvailable: !options.visit && mailEnabled(),
     ...(boardCard ? { boardCard: { title: boardCard.title } } : {}),
   });
-  const explicitContextFiles = liteMode || publicShare ? [] : loadEggentContextFiles(cwd, agentDir);
+  const explicitContextFiles = bare || publicShare ? [] : loadEggentContextFiles(cwd, agentDir);
 
   // Helpers started with the Agent tool report back inside the turn that started
   // them; see subagents.ts for why they cannot be left detached here.
@@ -808,6 +840,8 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
               projectInstructions: workspaceInstructions,
             }),
         }
+      : engineRun
+      ? { systemPromptOverride: () => buildEngineSystemPrompt(engineRun.engine.label) }
       : liteMode
       ? {
           systemPromptOverride: () =>
@@ -819,7 +853,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
       // context, not context.md, not an AGENTS.md the loader found on the way
       // up. The whole prompt is the one built above. Nor does a public share,
       // whose prompt carries the project's instructions itself.
-      if (liteMode || publicShare) return { agentsFiles: [] };
+      if (bare || publicShare) return { agentsFiles: [] };
       const seen = new Set<string>();
       const agentsFiles = [
         ...current.agentsFiles,
@@ -870,7 +904,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
   // creating them starts MCP watchers and registers a UI context this chat has
   // no use for. "files" needs switch_project and list_projects from the set,
   // and the allowlist below decides which of them the model is shown.
-  const eggentTools = options.enableEggentTools === false || liteMode === "plain" || publicShare
+  const eggentTools = options.enableEggentTools === false || liteMode === "plain" || publicShare || engineRun
     ? { tools: [], cleanup: async () => {} }
     : await createEggentPiTools({
         chatId: options.chatId,
@@ -900,7 +934,9 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
       return (result.content || []).map((part) => part.text ?? "").join("\n");
     };
   }
-  const customTools = publicShare ? await createPublicShareTools(cwd) : [
+  const customTools = publicShare ? await createPublicShareTools(cwd) : engineRun ? [
+    createEngineTool({ run: engineRun, chatId: options.chatId, projectId: projectId ?? null, cwd }),
+  ] : [
     ...eggentTools.tools,
     // ls is not among the runtime's default tools, and read without it is a
     // tool that can only open a path somebody already knew.
@@ -909,7 +945,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     ...(liteMode === "files" ? [createLsToolDefinition(cwd) as ToolDefinition] : []),
     // The interactive bash tool replaces the runtime's own bash. A light chat
     // has no bash, so building it would only add a tool the allowlist drops.
-    ...(options.runId && !liteMode
+    ...(options.runId && !bare
       ? [createEggentInteractiveBashTool({
           cwd,
           get runId() { return turn.runId as string; },
@@ -926,6 +962,8 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
   // what "plain" means; an allowlist is what every other mode narrows through.
   const toolSelection = publicShare
     ? { tools: PUBLIC_SHARE_TOOL_NAMES }
+    : engineRun
+    ? { tools: [ENGINE_TOOL_NAME] }
     : liteMode === "plain"
     ? { noTools: "all" as const }
     : liteMode === "files"

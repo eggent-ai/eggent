@@ -18,6 +18,7 @@ import { trackCardTurn, type CardTurn } from "@/lib/board/runs";
 import type { CardQuestion } from "@/lib/board/types";
 import { isHelperToolName } from "@/lib/pi/subagent-format";
 import { chatAllowsVisits, grantVisits, mentionRuntimeText, planProjectMention, revokeVisits, takeVisitFiles, type MentionPlan } from "@/lib/pi/project-visit";
+import { resolveEngineRun } from "@/lib/engines/resolve";
 import { collectProducedFiles, mergeProducedGroups, type ProducedGroup } from "@/lib/files/produced";
 import { SubagentProgressTracker } from "@/lib/pi/subagent-progress";
 import type { AgentProgressEvent, PiChatRunOptions, PiRuntimeStats, PiToolRecord, SubagentSnapshot } from "@/lib/pi/types";
@@ -1023,11 +1024,14 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
 
   await persistUserMessage({ ...options, userMessage: prompt }, userMessageId);
 
+  // A project on an engine hands the person's words to a program that has none of Eggent's tools,
+  // so nothing is added to them that those tools would read.
+  const onEngine = !options.publicShare && (await resolveEngineRun(options.projectId)) !== null;
   const mention = await planProjectMention(options.userMessage, {
-    disabled: options.enableEggentTools === false || Boolean(options.visit) || !chatAllowsVisits(options.chatContextMode),
+    disabled: options.enableEggentTools === false || Boolean(options.visit) || !chatAllowsVisits(options.chatContextMode) || onEngine,
     currentProjectId: options.projectId,
   });
-  const promptFor = promptForMessage(options.userMessage, runtimeSuffix, mention);
+  const promptFor = promptForMessage(options.userMessage, onEngine ? "" : runtimeSuffix, mention);
 
   let session: Awaited<ReturnType<typeof createEggentPiSession>>;
   try {
@@ -1508,8 +1512,9 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         }
       };
 
+      const onEngine = (await resolveEngineRun(options.projectId)) !== null;
       const mention = await planProjectMention(options.userMessage, {
-        disabled: options.enableEggentTools === false || Boolean(options.visit) || !chatAllowsVisits(options.chatContextMode),
+        disabled: options.enableEggentTools === false || Boolean(options.visit) || !chatAllowsVisits(options.chatContextMode) || onEngine,
         currentProjectId: options.projectId,
       });
       const promptFor = promptForMessage(options.userMessage, "", mention, options.openFileNote);
