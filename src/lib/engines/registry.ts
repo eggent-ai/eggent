@@ -24,14 +24,16 @@ interface RegistryState {
   loading: Promise<void> | null;
   loadError: string | null;
   cache: Map<string, { at: number; info: EngineInfo }>;
-  inflight: Map<string, Promise<EngineInfo>>;
+  inflight: Map<string, { promise: Promise<EngineInfo>; generation: number }>;
+  /** Raised each time what is known about an engine is dropped, so a look that began before cannot put the old answer back. */
+  generation: Map<string, number>;
 }
 
 function state(): RegistryState {
   const holder = globalThis as unknown as Record<symbol, RegistryState | undefined>;
   let current = holder[KEY];
   if (!current) {
-    current = { engines: new Map(), loading: null, loadError: null, cache: new Map(), inflight: new Map() };
+    current = { engines: new Map(), loading: null, loadError: null, cache: new Map(), inflight: new Map(), generation: new Map() };
     holder[KEY] = current;
   }
   return current;
@@ -129,7 +131,7 @@ async function readInfo(engine: Engine): Promise<EngineInfo> {
       .then((list) => (Array.isArray(list) && list.length > 0 ? list : DEFAULT_MODELS))
       .catch(() => DEFAULT_MODELS),
   ]);
-  return { id: engine.id, label: engine.label, models, status };
+  return { id: engine.id, label: engine.label, ...(engine.experimental ? { experimental: true } : {}), models, status };
 }
 
 /** One engine's model list and status; `fresh` skips the short memory of the last answer. */
@@ -139,17 +141,19 @@ export async function engineInfo(id: string, options: { fresh?: boolean } = {}):
   const current = state();
   const cached = current.cache.get(id);
   if (!options.fresh && cached && Date.now() - cached.at < STATUS_TTL_MS) return cached.info;
+  const generation = current.generation.get(id) ?? 0;
   const pending = current.inflight.get(id);
-  if (pending) return pending;
+  // A look that began before something changed (a sign-in finished) is no answer to a question asked after.
+  if (pending && pending.generation === generation) return pending.promise;
   const started = readInfo(engine)
     .then((info) => {
-      current.cache.set(id, { at: Date.now(), info });
+      if ((current.generation.get(id) ?? 0) === generation) current.cache.set(id, { at: Date.now(), info });
       return info;
     })
     .finally(() => {
-      current.inflight.delete(id);
+      if (current.inflight.get(id)?.promise === started) current.inflight.delete(id);
     });
-  current.inflight.set(id, started);
+  current.inflight.set(id, { promise: started, generation });
   return started;
 }
 
@@ -161,5 +165,7 @@ export async function listEngineInfos(options: { fresh?: boolean } = {}): Promis
 
 /** Drops what is remembered about an engine, after a sign-in or a change the person made. */
 export function forgetEngineStatus(id: string): void {
-  state().cache.delete(id);
+  const current = state();
+  current.cache.delete(id);
+  current.generation.set(id, (current.generation.get(id) ?? 0) + 1);
 }

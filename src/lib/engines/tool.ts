@@ -83,12 +83,18 @@ export function createEngineTool(options: EngineToolOptions): ToolDefinition {
       prompt: Type.String({ description: "The person's request, word for word." }),
     }),
     execute: async (_toolCallId, params, signal, onUpdate) => {
-      const t = await getServerTranslator();
       const label = run.engine.label;
+      // The default model has no name worth showing beside the program's.
+      const modelLabel = run.model.id ? run.model.label : "";
+      // The card names the program from its first moment, not from the first thing the program does.
+      onUpdate?.({
+        content: [{ type: "text" as const, text: "" }],
+        details: engineProgressDetails({ label, modelLabel, steps: [], earlierSteps: 0, toolUses: 0 }),
+      });
+      const t = await getServerTranslator();
       const prompt = typeof params.prompt === "string" ? params.prompt.trim() : "";
       if (!prompt) return textResult(t("engines.noAnswer", { engine: label }), { engine: { ok: false, id: run.engine.id } });
 
-      const modelLabel = run.model.label;
       const finish = (text: string, extra: Record<string, unknown>) =>
         textResult(text, { engine: { id: run.engine.id, label, model: run.model.id, modelLabel, ...extra } });
 

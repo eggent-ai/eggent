@@ -47,8 +47,18 @@ export function useEngines(projectId: string | null | undefined): {
   }, [refresh]);
 
   const waiting = state?.engines.some((engine) => engine.loggingIn) ?? false;
+  const wasWaiting = useRef(false);
   useEffect(() => {
-    if (!waiting) return;
+    if (!waiting) {
+      // A sign-in has just ended: look once more a moment later, so the answer shown is the one after it.
+      if (wasWaiting.current) {
+        wasWaiting.current = false;
+        const settle = window.setTimeout(() => void refresh(true), 1200);
+        return () => window.clearTimeout(settle);
+      }
+      return;
+    }
+    wasWaiting.current = true;
     const timer = window.setInterval(() => void refresh(true), 2000);
     return () => window.clearInterval(timer);
   }, [waiting, refresh]);

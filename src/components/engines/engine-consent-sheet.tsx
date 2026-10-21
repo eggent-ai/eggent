@@ -93,6 +93,7 @@ export function EngineConsentSheet({ engine, projectId, initialModel = "", open,
             <li>{t("engines.consent.cost")}</li>
             <li>{t("engines.consent.data", { engine: name })}</li>
             <li>{t("engines.consent.missing")}</li>
+            {engine.experimental ? <li>{t("engines.consent.experimental", { engine: name })}</li> : null}
           </ul>
 
           {engine.models.length > 1 ? (
@@ -129,9 +130,11 @@ export function EngineConsentSheet({ engine, projectId, initialModel = "", open,
                   className="mt-1"
                 />
                 <span className="space-y-0.5">
-                  <span className="block font-medium">{t(level === "project" ? "engines.access.project" : "engines.access.full")}</span>
+                  <span className="block font-medium">
+                    {t(level === "full" ? "engines.access.full" : projectId ? "engines.access.project" : "engines.access.projectHere")}
+                  </span>
                   <span className="block text-xs text-muted-foreground">
-                    {t(level === "project" ? "engines.access.projectNote" : "engines.access.fullNote", { engine: name })}
+                    {t(level === "full" ? "engines.access.fullNote" : projectId ? "engines.access.projectNote" : "engines.access.projectNoteHere", { engine: name })}
                   </span>
                 </span>
               </label>

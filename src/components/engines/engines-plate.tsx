@@ -185,6 +185,7 @@ function EngineRow({ info, state, projectId, busy, tried, onUse, onStop, onSignI
           <div className="flex flex-wrap items-center gap-2">
             <span className="font-medium">{info.label}</span>
             {status.version ? <span className="text-xs text-muted-foreground">{status.version}</span> : null}
+            {info.experimental ? <Badge variant="outline">{t("engines.row.experimental")}</Badge> : null}
             {inUse ? (
               <Badge variant="secondary" className="gap-1">
                 <Check aria-hidden="true" />
@@ -265,7 +266,7 @@ function EngineRow({ info, state, projectId, busy, tried, onUse, onStop, onSignI
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="project">{t("engines.access.project")}</SelectItem>
+                  <SelectItem value="project">{t(projectId ? "engines.access.project" : "engines.access.projectHere")}</SelectItem>
                   <SelectItem value="full">{t("engines.access.full")}</SelectItem>
                 </SelectContent>
               </Select>

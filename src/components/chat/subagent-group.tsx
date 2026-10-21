@@ -289,9 +289,12 @@ function HelperRow({
 
   const subline =
     state === "running" ? doing :
-    state === "failed" ? failure || t("chat.helpers.status.failed") :
+    // The program's own words are the answer below the card; the card only says that it failed.
+    state === "failed" ? (engine ? t("chat.helpers.status.failed") : failure || t("chat.helpers.status.failed")) :
     state === "detached" ? t("chat.helpers.detachedNote") :
     state === "stopped" ? t("chat.helpers.status.stopped") :
+    // The answer of a program stands right below its card; the card does not say it twice.
+    engine ? t("chat.helpers.status.done") :
     firstLine(result, description) || t("chat.helpers.status.done");
 
   return (

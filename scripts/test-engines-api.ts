@@ -190,6 +190,13 @@ await check("the state lists the program with its models, its status and no choi
   assert.equal(state.engines[0].status.state, "ready");
   assert.equal(state.choice, null);
 });
+await check("a program offered as an experiment is marked so for the screens, and one that is not is not", async () => {
+  registry.registerEngine({ ...fake, id: "trial", label: "Trial Code", experimental: true });
+  const state = await service.engineState("p1", { fresh: true });
+  assert.equal(state.engines.find((engine) => engine.id === "trial")?.experimental, true);
+  assert.equal(state.engines.find((engine) => engine.id === "fake")?.experimental, undefined);
+  registry.unregisterEngine("trial");
+});
 await check("a program cannot be switched on until the person has confirmed the first-use sheet", async () => {
   const outcome = await service.applyEngineChoice("p1", { engine: "fake" });
   assert.deepEqual(outcome, { ok: false, status: 409, code: "consent-required" });
@@ -311,6 +318,39 @@ await check("signing in is started once, shown while it waits, and forgotten whe
   const after = await service.engineState(null);
   assert.equal(after.engines[0].loggingIn, undefined);
   assert.equal(after.engines[0].status.state, "ready", "the status shown must be looked at again once signed in");
+});
+await check("a look at the status that began before a sign-in ended is not the answer after it", async () => {
+  // The program reports "signed out" slowly; the person finishes signing in while that look is under way.
+  let signedIn = false;
+  let begun: () => void = () => {};
+  const looking = new Promise<void>((resolve) => {
+    begun = resolve;
+  });
+  let slowOnce = true;
+  const slow: Engine = {
+    ...fake,
+    id: "slow",
+    label: "Slow Code",
+    status: async () => {
+      const seen: EngineStatus = signedIn ? { state: "ready", version: "1.2.3", account: "Max" } : { state: "signed-out" };
+      if (slowOnce) {
+        slowOnce = false;
+        begun();
+        await new Promise((resolve) => setTimeout(resolve, 150));
+      }
+      return seen;
+    },
+  };
+  registry.registerEngine(slow);
+  const before = registry.engineInfo("slow", { fresh: true });
+  await looking;
+  signedIn = true;
+  registry.forgetEngineStatus("slow");
+  const stale = await before;
+  assert.equal(stale?.status.state, "signed-out", "the look that began earlier answers for itself");
+  const after = await registry.engineInfo("slow");
+  assert.equal(after?.status.state, "ready", "...but must not be remembered over what happened since");
+  registry.unregisterEngine("slow");
 });
 await check("giving up a sign-in clears it", async () => {
   assert.equal(await service.startEngineLogin("fake"), "started");

@@ -1322,14 +1322,15 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     setEngineFallbackBusy(false);
     if (saved.ok && text) dispatchMessage(text);
   }, [activeProjectId, dispatchMessage, engineFallbackBusy]);
-  const engineFallback = useMemo<EngineFallback>(() => ({
-    lastAssistantId: [...messages].reverse().find((message) => message.role === "assistant")?.id ?? null,
-    busy: engineFallbackBusy,
-    run: () => void continueWithModel(),
-  }), [continueWithModel, engineFallbackBusy, messages]);
   // Named from what the project is configured to run on, not from a turn's own stats: the note must be
   // there before anything is sent, and the stats of a turn name the stand-in model the program is behind.
   const engineLabel = configuredRuntimeStats?.engine ? configuredRuntimeStats.model?.provider ?? null : null;
+  const engineFallback = useMemo<EngineFallback>(() => ({
+    // Offered only while the project is still on the program: once it is back on a model there is nothing to carry on from.
+    lastAssistantId: engineLabel ? [...messages].reverse().find((message) => message.role === "assistant")?.id ?? null : null,
+    busy: engineFallbackBusy,
+    run: () => void continueWithModel(),
+  }), [continueWithModel, engineFallbackBusy, engineLabel, messages]);
 
   const errorActions = useMemo(() => {
     if (!handoverFailure) return undefined;

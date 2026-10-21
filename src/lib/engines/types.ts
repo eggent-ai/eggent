@@ -51,6 +51,7 @@ export interface EngineStatus {
 export interface EngineInfo {
   id: string;
   label: string;
+  experimental?: boolean;
   /** The first one is the engine's default. */
   models: EngineModelInfo[];
   status: EngineStatus;

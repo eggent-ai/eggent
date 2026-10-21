@@ -19,6 +19,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronDown, ExternalLink, Loader2, Lock, Search, Sparkles } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { EngineConsentSheet } from "@/components/engines/engine-consent-sheet";
+import { useBackgroundSync } from "@/hooks/use-background-sync";
 import { useEngines } from "@/hooks/use-engines";
 import { useI18n } from "@/i18n/provider";
 import { engineChoiceLabel, saveEngineChoice, visibleEngines } from "@/lib/engines/client";
@@ -84,6 +85,12 @@ export function ModelPicker({ projectId, triggerClassName, compact }: ModelPicke
   const [error, setError] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
   const { state: engines, refresh: refreshEngines } = useEngines(projectId ?? null);
+  // A program put down or taken up elsewhere (the chat's own "carry on with a model" button, the
+  // Models tab, another window) is announced as a change to the project: the label follows it.
+  const syncTick = useBackgroundSync({ topics: ["projects"], fallbackIntervalMs: 0 });
+  useEffect(() => {
+    if (syncTick > 0) void refreshEngines();
+  }, [syncTick, refreshEngines]);
   // A program asked for before the person has confirmed it for this project: the sheet comes first.
   const [asking, setAsking] = useState<{ info: EngineInfo; model: string } | null>(null);
 

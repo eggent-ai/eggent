@@ -70,6 +70,8 @@ export interface EngineLogin {
 export interface Engine {
   id: string;
   label: string;
+  /** Offered as an experiment: the screens say so, and that it may change or stop working. */
+  experimental?: boolean;
   models: () => Promise<EngineModelInfo[]> | EngineModelInfo[];
   status: () => Promise<EngineStatus>;
   startLogin: () => Promise<EngineLogin>;
