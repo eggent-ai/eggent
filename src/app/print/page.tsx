@@ -2,8 +2,10 @@
 
 /**
  * A text file laid out for paper, and the print dialog opened on it: Markdown
- * as a document, anything else as its text. Pages (HTML) print themselves
- * (/api/files/page-print sends them elsewhere).
+ * as a document, anything else as its text - a file of this workspace
+ * (`project` and `path`), or one a colleague shared (`share`). Pages (HTML)
+ * print themselves (/api/files/page-print and /api/shares/<id>/print send
+ * them elsewhere).
  */
 
 import { useEffect, useState } from "react";
@@ -27,20 +29,26 @@ function resolveImage(project: string, filePath: string, src: string): string {
 
 export default function PrintPage() {
   const params = useSearchParams();
+  const share = params.get("share") || "";
   const project = params.get("project") || "none";
-  const filePath = params.get("path") || "";
+  const [filePath, setFilePath] = useState(params.get("path") || "");
   const [text, setText] = useState<string | null>(null);
   const [failed, setFailed] = useState(false);
 
   useEffect(() => {
-    fetch(`/api/files/content?${new URLSearchParams({ project, path: filePath }).toString()}`, { cache: "no-store" })
+    const url = share
+      ? `/api/shares/${encodeURIComponent(share)}/text`
+      : `/api/files/content?${new URLSearchParams({ project, path: params.get("path") || "" }).toString()}`;
+    fetch(url, { cache: "no-store" })
       .then(async (response) => {
-        const data = (await response.json()) as { content?: string };
-        if (!response.ok || typeof data.content !== "string") throw new Error("failed");
-        setText(data.content);
+        const data = (await response.json()) as { content?: string; text?: string; name?: string };
+        const body = share ? data.text : data.content;
+        if (!response.ok || typeof body !== "string") throw new Error("failed");
+        if (share && data.name) setFilePath(data.name);
+        setText(body);
       })
       .catch(() => setFailed(true));
-  }, [project, filePath]);
+  }, [project, share, params]);
 
   useEffect(() => {
     if (text === null) return;
@@ -55,8 +63,10 @@ export default function PrintPage() {
 
   if (failed) return <p className="p-8 text-sm">This file cannot be printed.</p>;
   if (text === null) return null;
+  // A shared file brings no pictures of its own folder: only one on the web shows.
   const components: Components = {
-    img: ({ src, alt }) => (typeof src === "string" ? <img src={resolveImage(project, filePath, src)} alt={alt || ""} /> : null),
+    img: ({ src, alt }) =>
+      typeof src !== "string" ? null : share ? (/^(https?:|data:)/i.test(src) ? <img src={src} alt={alt || ""} /> : <span>{alt || ""}</span>) : <img src={resolveImage(project, filePath, src)} alt={alt || ""} />,
   };
   return (
     <main className="eggent-print mx-auto max-w-[46rem] px-8 py-10 text-[11pt]/[1.55] text-black">

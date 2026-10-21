@@ -15,10 +15,13 @@
  * is changed by replacing the characters of each piece of text where it is.
  * Every change names its piece by the element's number and its place among
  * that element's text, plus what it read before - the server checks both.
+ * `edit: false` points and picks only: for a file somebody may comment on but
+ * not change.
  */
-export function editingScript(sha: string, nonce: string): string {
+export function editingScript(sha: string, nonce: string, options: { edit?: boolean } = {}): string {
   const code = `(() => {
   const SHA = ${JSON.stringify(sha)};
+  const EDIT = ${options.edit === false ? "false" : "true"};
   const post = (message) => parent.postMessage(Object.assign({ eggent: 1 }, message), "*");
   const host = document.createElement("eggent-overlay");
   host.style.cssText = "position:fixed;inset:0;pointer-events:none;z-index:2147483647;display:block;";
@@ -160,7 +163,7 @@ export function editingScript(sha: string, nonce: string): string {
     event.preventDefault();
     event.stopPropagation();
     const el = numbered(event.target);
-    if (el) begin(el, event);
+    if (el && EDIT) begin(el, event);
   }, true);
   document.addEventListener("submit", (event) => event.preventDefault(), true);
   addEventListener("message", (event) => {

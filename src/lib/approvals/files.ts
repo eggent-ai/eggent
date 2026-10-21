@@ -3,20 +3,19 @@ import fs from "node:fs/promises";
 import path from "node:path";
 import { pathIsSensitive } from "@/lib/files/zip-walk";
 import { openPlainFile } from "@/lib/files/safe-open";
-import { captureBefore, projectsDirectory, versionTarget } from "@/lib/files/versions/capture";
+import { captureBefore, versionTarget } from "@/lib/files/versions/capture";
+import { absoluteOfKey, keyOfFile, projectsRootReal } from "@/lib/files/project-keys";
 import { versionsEnabled } from "@/lib/files/versions/config";
 import { getVersionStore } from "@/lib/files/versions/store";
-import { getWorkDir } from "@/lib/storage/project-store";
 import { APPROVAL_MAX_FILE_BYTES } from "@/lib/approvals/types";
 
 /**
  * The files of this workspace an approval is about.
  *
- * A file is named by its path under the projects folder - the same key its
- * history goes by - so one file is one approval whichever project's screen it
- * was sent from. What is sent is its bytes as they are this moment, read
- * through a handle that follows no link and takes no file with a second name;
- * a file that holds credentials is never sent.
+ * A file is named by its path under the projects folder (project-keys.ts).
+ * What is sent is its bytes as they are this moment, read through a handle
+ * that follows no link and takes no file with a second name; a file that
+ * holds credentials is never sent.
  */
 
 const MIME_BY_EXTENSION: Record<string, string> = {
@@ -52,46 +51,7 @@ export function sha256Of(data: Buffer): string {
   return createHash("sha256").update(data).digest("hex");
 }
 
-let realRoot: { of: string; real: string } | null = null;
-
-/** The projects folder with every link on its way resolved, which a real path is compared with. */
-async function projectsRoot(): Promise<string> {
-  const configured = projectsDirectory();
-  if (realRoot?.of === configured) return realRoot.real;
-  realRoot = { of: configured, real: await fs.realpath(configured).catch(() => configured) };
-  return realRoot.real;
-}
-
-/** The absolute path a scope and a path in it name, or null when it leaves the scope's folder. */
-export function absoluteInScope(projectId: string, filePath: string): string | null {
-  let workDir: string;
-  try {
-    workDir = path.resolve(getWorkDir(projectId));
-  } catch {
-    return null;
-  }
-  const absolute = path.resolve(workDir, filePath);
-  return absolute.startsWith(workDir + path.sep) ? absolute : null;
-}
-
-const BAD_SEGMENT = (segment: string) => !segment || segment === "." || segment === "..";
-
-/** The path of a file under the projects folder, with forward slashes; null for anything outside it. */
-export async function keyOfFile(absolute: string): Promise<string | null> {
-  const root = await projectsRoot();
-  const parent = await fs.realpath(path.dirname(path.resolve(absolute))).catch(() => null);
-  if (!parent || (parent !== root && !parent.startsWith(root + path.sep))) return null;
-  const key = path.relative(root, path.join(parent, path.basename(absolute))).split(path.sep).join("/");
-  if (!key || key.startsWith("..") || key.split("/").some(BAD_SEGMENT)) return null;
-  return key;
-}
-
-/** Where a key is on disk; null for a key that is not a plain path under the projects folder. */
-export async function absoluteOfKey(key: string): Promise<string | null> {
-  const segments = String(key || "").split("/");
-  if (!key || segments.some(BAD_SEGMENT) || segments.some((segment) => segment.includes("\\"))) return null;
-  return path.join(await projectsRoot(), ...segments);
-}
+export { absoluteInScope, absoluteOfKey, keyOfFile } from "@/lib/files/project-keys";
 
 export type ReadFailure = "outside" | "missing" | "notFile" | "sensitive" | "tooLarge" | "empty";
 
@@ -114,7 +74,7 @@ export async function readFileForApproval(absolute: string): Promise<{ file: Fil
   if (!stat.isFile()) return { error: "notFile" };
   if (stat.size > APPROVAL_MAX_FILE_BYTES) return { error: "tooLarge" };
   if (stat.size === 0) return { error: "empty" };
-  const handle = await openPlainFile(absolute, { root: await projectsRoot() });
+  const handle = await openPlainFile(absolute, { root: await projectsRootReal() });
   if (!handle) return { error: "notFile" };
   let data: Buffer;
   try {
@@ -141,7 +101,7 @@ export async function currentStateOfKey(key: string): Promise<
   if (stat === null) return { kind: "missing" };
   if (!stat || !stat.isFile()) return { kind: "unreadable" };
   if (stat.size > APPROVAL_MAX_FILE_BYTES) return { kind: "tooLarge", size: stat.size };
-  const handle = await openPlainFile(absolute, { root: await projectsRoot() });
+  const handle = await openPlainFile(absolute, { root: await projectsRootReal() });
   if (!handle) return { kind: "unreadable" };
   try {
     const data = await handle.readFile();

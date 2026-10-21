@@ -39,6 +39,7 @@ export const RESERVED_DASHBOARD_SEGMENTS: readonly string[] = [
   "projects",
   "schedules",
   "settings",
+  "shared",
   "skills",
 ];
 

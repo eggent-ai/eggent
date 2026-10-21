@@ -378,10 +378,10 @@ function HtmlFileView({ file, onSelectionChange }: {
       </div>
       {view === "page" ? (
         <HtmlPreview
-          projectId={metadata.projectId}
-          path={metadata.path}
+          source={{ kind: "project", projectId: metadata.projectId, path: metadata.path }}
           version={`${metadata.updatedAt || ""}|${metadata.size ?? ""}`}
           selecting={selecting && !file.dirty}
+          picked={picked !== null}
           onPick={pick}
           onSaved={() => void file.refresh({ quiet: true })}
           className="flex-1"

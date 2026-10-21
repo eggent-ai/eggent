@@ -48,6 +48,8 @@ export interface VersionInfo {
   removed?: number;
   /** The chat's title, for an agent's version, while the chat still exists. */
   chatTitle?: string;
+  /** A colleague changed the file through a share, and this is what they wrote: their name. */
+  sharedBy?: string;
 }
 
 export interface FileHistoryView {

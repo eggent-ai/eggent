@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server";
 import { checkTerminalRequest, guardStatus, jsonError } from "@/lib/terminal/guard";
-import { applyTextEdits, type TextEdit } from "@/lib/files/html-source";
+import { applyTextEdits } from "@/lib/files/html-source";
+import { parseTextEdits } from "@/lib/files/page-blocks";
 import { MAX_PAGE_BYTES, readScopeFile, savePageAsPerson, scopeFile, sourceSha } from "@/lib/files/pages";
 
 /**
@@ -13,9 +14,6 @@ import { MAX_PAGE_BYTES, readScopeFile, savePageAsPerson, scopeFile, sourceSha }
  * is now (`sha`), and each piece must still read what the person saw (`was`),
  * or nothing is written. It is the person's save: a version in the history.
  */
-const MAX_EDITS = 200;
-const MAX_TEXT = 20_000;
-
 export async function POST(req: NextRequest) {
   const failure = await checkTerminalRequest(req, { write: true });
   if (failure) return jsonError(failure, guardStatus(failure));
@@ -23,15 +21,8 @@ export async function POST(req: NextRequest) {
   const project = typeof body?.project === "string" ? body.project.trim() : "";
   const file = await scopeFile(project, typeof body?.path === "string" ? body.path.trim() : "");
   if (!file) return Response.json({ error: "Not a file of this workspace.", code: "outside" }, { status: 403 });
-  const raw = Array.isArray(body?.edits) ? body.edits : [];
-  const edits: TextEdit[] = [];
-  for (const entry of raw.slice(0, MAX_EDITS)) {
-    const edit = (entry && typeof entry === "object" ? entry : {}) as Record<string, unknown>;
-    if (!Number.isInteger(edit.el) || !Number.isInteger(edit.slot) || typeof edit.was !== "string" || typeof edit.text !== "string" || edit.text.length > MAX_TEXT) {
-      return Response.json({ error: "A change is not well formed.", code: "badRequest" }, { status: 400 });
-    }
-    edits.push({ el: edit.el as number, slot: edit.slot as number, was: edit.was, text: edit.text });
-  }
+  const edits = parseTextEdits(body?.edits);
+  if (!edits) return Response.json({ error: "A change is not well formed.", code: "badRequest" }, { status: 400 });
   if (!edits.length) return Response.json({ error: "Nothing to change.", code: "badRequest" }, { status: 400 });
   const bytes = await readScopeFile(file, MAX_PAGE_BYTES);
   if (!Buffer.isBuffer(bytes)) return Response.json({ error: "The file cannot be read.", code: "unreadable" }, { status: 404 });

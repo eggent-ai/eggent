@@ -32,6 +32,7 @@ import { getChat } from "@/lib/storage/chat-store";
 import { getCard } from "@/lib/board/store";
 import { mailEnabled } from "@/lib/mail/config";
 import { approvalsEnabled } from "@/lib/approvals/config";
+import { sharesEnabled } from "@/lib/shares/config";
 import { formatMailReplyContext } from "@/lib/mail/reply-context";
 import { createMailToolGuardExtension, type MessagesRunner } from "@/lib/mail/tool-guard";
 import type { MailReplyInfo } from "@/lib/mail/types";
@@ -239,6 +240,8 @@ function buildEggentProjectContext(options: {
   mailAvailable?: boolean;
   /** This workspace can send files for approval to its company's people: see eggent_approvals. */
   approvalsAvailable?: boolean;
+  /** This workspace shares files with its company's people: see eggent_shares. */
+  sharesAvailable?: boolean;
   /** This chat is a card on the task board: see lib/board. */
   boardCard?: { title: string };
 }): string {
@@ -431,6 +434,9 @@ function buildEggentProjectContext(options: {
       : "",
     options.approvalsAvailable
       ? "Approvals: eggent_approvals is one of your own tools - call it directly, never through mcp. When your person asks to send a file for approval (to agree, sign off, get it approved by someone in the company), send it with eggent_approvals to the people they name, in their order. Any change to a file on approval voids it: say so when you change such a file, and offer to send the new version. Approving or returning a version is your person's alone - you cannot do it and never say you did; point them to Approvals in the sidebar."
+      : "",
+    options.sharesAvailable
+      ? "Shared files: eggent_shares is one of your own tools - call it directly, never through mcp. When your person asks to share a file with someone in the company (show it, give access, let them comment or change it), share it with eggent_shares in the role they say - view when they do not. It also lists and reads what colleagues shared with your person and their comments, and comments in your person's name when asked. Changing a colleague's file is your person's alone: you never do it; point them to Shared in the sidebar."
       : "",
     // Supplied by the operator of this deployment. Eggent does not know what it
     // says, so it is quoted rather than summarized, and it outranks guesswork.
@@ -758,6 +764,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     mailReply,
     mailAvailable: !options.visit && mailEnabled(),
     approvalsAvailable: !options.visit && approvalsEnabled(),
+    sharesAvailable: !options.visit && sharesEnabled(),
     ...(boardCard ? { boardCard: { title: boardCard.title } } : {}),
   });
   const explicitContextFiles = liteMode || publicShare ? [] : loadEggentContextFiles(cwd, agentDir);
