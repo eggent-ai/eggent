@@ -3,6 +3,8 @@ import path from "node:path";
 import { getProject, isOrchestratorScope } from "@/lib/storage/project-store";
 import { projectFolderIsLink, workDirOrNull } from "@/lib/files/workspace-root";
 import { pathIsSensitive } from "@/lib/files/zip-walk";
+import { keyOfFile } from "@/lib/approvals/files";
+import { watchedApprovalKeys } from "@/lib/approvals/watch";
 
 /**
  * The file the person has open beside the chat, told to the agent with their
@@ -80,6 +82,11 @@ export async function describeOpenFile(input: OpenFileInput): Promise<string | n
   ];
   if (input.unsaved) {
     lines.push("It has edits in their editor that are not saved yet. Before changing the file, ask them to save it, or their edits and yours will collide.");
+  }
+  // Known without asking anybody: the files on approval are the ones this workspace watches.
+  const key = await keyOfFile(absolute);
+  if (key && watchedApprovalKeys().includes(key)) {
+    lines.push("It is on approval with the company's people, or approved: any change to it voids that, and the changed file has to go round again from the start. Before changing it, tell the person so.");
   }
   if (input.selection) {
     const { startLine, endLine, text } = input.selection;

@@ -47,6 +47,7 @@ import { Button } from "@/components/ui/button";
 import { UsageWidget } from "@/components/usage-widget";
 import { MailNav } from "@/components/mail/mail-nav";
 import { BoardNav } from "@/components/board/board-nav";
+import { ApprovalsNav } from "@/components/approvals/approvals-nav";
 import { CreateProjectForm } from "@/components/create-project-form";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
@@ -267,6 +268,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         </div>
         <div className="px-3">
           <BoardNav />
+          <ApprovalsNav />
         </div>
       </SidebarHeader>
 

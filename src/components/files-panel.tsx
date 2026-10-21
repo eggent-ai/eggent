@@ -17,10 +17,12 @@
 
 import { useCallback, useEffect, useState, type KeyboardEvent, type PointerEvent } from "react";
 import Link from "next/link";
-import { ArrowLeft, Download, ExternalLink, FolderOpen, History, Loader2, Maximize2, Save, X } from "lucide-react";
+import { ArrowLeft, ClipboardCheck, Download, ExternalLink, FolderOpen, History, Loader2, Maximize2, Save, X } from "lucide-react";
 import { FileTree } from "@/components/file-tree";
 import { FileBody, formatFileSize, useFileContent } from "@/components/file-view";
 import { VersionHistory } from "@/components/files/version-history";
+import { FileApproval, FileApprovalNotice, useFileApproval } from "@/components/approvals/file-approval";
+import { useApprovalsSummary } from "@/components/approvals/use-approvals-summary";
 import { Button } from "@/components/ui/button";
 import {
   clampFilePreviewWidth,
@@ -191,8 +193,13 @@ function FilePreview({ projectId, path, onBack, onClose }: {
   const file = useFileContent(projectId, path);
   const { metadata, dirty, saving, status, error, title } = file;
   const openable = isOpenableFile(path);
-  // The file, or its history in its place.
+  // The file, or its history or its approval in its place.
   const [showHistory, setShowHistory] = useState(false);
+  const [showApproval, setShowApproval] = useState(false);
+  const approvalsOn = Boolean(useApprovalsSummary()?.enabled);
+  // Asked again after every save, so the line about what a change does stays true.
+  const savedAt = metadata?.updatedAt ? Date.parse(metadata.updatedAt) || 0 : 0;
+  const fileApproval = useFileApproval(projectId, path, approvalsOn && !showApproval, savedAt);
   const setSelection = useAppStore((state) => state.setFilePreviewSelection);
   const setUnsaved = useAppStore((state) => state.setFilePreviewUnsaved);
 
@@ -235,7 +242,7 @@ function FilePreview({ projectId, path, onBack, onClose }: {
           {facts ? <div className="truncate text-xs text-muted-foreground" title={path}>{facts}</div> : null}
         </div>
         <span className="flex shrink-0 items-center gap-0.5">
-          {!file.isMedia && !file.loading && metadata && !showHistory ? (
+          {!file.isMedia && !file.loading && metadata && !showHistory && !showApproval ? (
             <Button
               variant={dirty ? "default" : "ghost"}
               size="icon"
@@ -253,12 +260,32 @@ function FilePreview({ projectId, path, onBack, onClose }: {
               variant="ghost"
               size="icon"
               className={showHistory ? "size-7 bg-accent text-accent-foreground" : panelIconButton}
-              onClick={() => setShowHistory((value) => !value)}
+              onClick={() => {
+                setShowHistory((value) => !value);
+                setShowApproval(false);
+              }}
               aria-pressed={showHistory}
               aria-label={t("files.history.toggle")}
               title={t("files.history.toggle")}
             >
               <History className="size-4" />
+            </Button>
+          ) : null}
+          {approvalsOn ? (
+            <Button
+              variant="ghost"
+              size="icon"
+              className={showApproval ? "size-7 bg-accent text-accent-foreground" : panelIconButton}
+              onClick={() => {
+                if (!showApproval && dirty && !window.confirm(t("files.panel.discardChanges"))) return;
+                setShowApproval((value) => !value);
+                setShowHistory(false);
+              }}
+              aria-pressed={showApproval}
+              aria-label={t("approvals.file.toggle")}
+              title={t("approvals.file.toggle")}
+            >
+              <ClipboardCheck className="size-4" />
             </Button>
           ) : null}
           {openable ? (
@@ -314,9 +341,14 @@ function FilePreview({ projectId, path, onBack, onClose }: {
           {error && metadata ? error : status}
         </div>
       ) : null}
+      {!showApproval && !showHistory ? <FileApprovalNotice status={fileApproval.status} className="border-b" /> : null}
       {showHistory ? (
         <div className="min-h-0 flex-1">
           <VersionHistory projectId={projectId} path={path} fill onRestored={() => void file.refresh()} />
+        </div>
+      ) : showApproval ? (
+        <div className="min-h-0 flex-1">
+          <FileApproval projectId={projectId} path={path} fill version={savedAt} />
         </div>
       ) : (
         <div className={file.isMedia || file.loading || !metadata ? "min-h-0 flex-1 overflow-auto p-2" : "min-h-0 flex-1"}>
