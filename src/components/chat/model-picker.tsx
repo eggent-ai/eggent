@@ -89,7 +89,8 @@ export function ModelPicker({ projectId, triggerClassName, compact }: ModelPicke
   // Models tab, another window) is announced as a change to the project: the label follows it.
   const syncTick = useBackgroundSync({ topics: ["projects"], fallbackIntervalMs: 0 });
   useEffect(() => {
-    if (syncTick > 0) void refreshEngines();
+    if (syncTick > 0 && engines?.available !== false) void refreshEngines();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- only a new event should look again
   }, [syncTick, refreshEngines]);
   // A program asked for before the person has confirmed it for this project: the sheet comes first.
   const [asking, setAsking] = useState<{ info: EngineInfo; model: string } | null>(null);

@@ -33,7 +33,11 @@ export function useEngines(projectId: string | null | undefined): {
     void refresh();
   }, [scope, refresh]);
 
+  // Where there are no programs at all (the cloud, a plain install) nothing can appear without a
+  // restart, so coming back to the window is not worth a request.
+  const nothingToOffer = state?.available === false;
   useEffect(() => {
+    if (nothingToOffer) return;
     const onFocus = () => void refresh(true);
     const onVisible = () => {
       if (document.visibilityState === "visible") void refresh(true);
@@ -44,7 +48,7 @@ export function useEngines(projectId: string | null | undefined): {
       window.removeEventListener("focus", onFocus);
       document.removeEventListener("visibilitychange", onVisible);
     };
-  }, [refresh]);
+  }, [refresh, nothingToOffer]);
 
   const waiting = state?.engines.some((engine) => engine.loggingIn) ?? false;
   const wasWaiting = useRef(false);
