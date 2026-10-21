@@ -5,6 +5,7 @@ import { restorePiSchedules } from "@/lib/pi/schedule-host";
 import { sweepStoredChats } from "@/lib/secrets/sweep";
 import { startChatsWatcher } from "@/lib/storage/chats-watcher";
 import { startMailSync } from "@/lib/mail/sync";
+import { startApprovalsWatch } from "@/lib/approvals/watch";
 import { startBoardDispatcher } from "@/lib/board/dispatcher";
 import { startFileVersionsService } from "@/lib/files/versions/service";
 
@@ -36,6 +37,10 @@ sweepChats(true);
 
 // Files sent with messages are copied here while the workspace is up (lib/mail).
 startMailSync();
+
+// A file sent for approval and changed here voids that round: the files on
+// approval are watched while the workspace is up (lib/approvals).
+startApprovalsWatch();
 
 // A scheduled job is armed inside a live session and dies with it, so without
 // this every restart ends every schedule while its store still says enabled.

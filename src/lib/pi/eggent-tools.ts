@@ -31,6 +31,8 @@ import { listChatSummaries, readChatConversation, searchChats } from "@/lib/stor
 import { chatPath } from "@/lib/dashboard-routes";
 import { mailEnabled } from "@/lib/mail/config";
 import { createMessagesTool } from "@/lib/mail/tool";
+import { approvalsEnabled } from "@/lib/approvals/config";
+import { createApprovalsTool } from "@/lib/approvals/tool";
 import { isScheduledRunSessionId } from "@/lib/pi/scheduled-run-state";
 import { createBoardTool } from "@/lib/board/tool";
 import { putQuestionOnCard } from "@/lib/board/runs";
@@ -1281,6 +1283,10 @@ export async function createEggentPiTools(options: {
       marksRead: () => !isScheduledRunSessionId(options.chatId),
     }));
   }
+
+  // Approvals of file versions with the company's people (EGGENT_APPROVALS_API_URL).
+  // Reading and sending only: deciding is the person's. Not inside a visit.
+  if (approvalsEnabled() && !options.visit) tools.push(createApprovalsTool({ cwd: options.cwd }));
 
   // A project can be asked to do a piece of work, by name, from any chat: see
   // project-visit.ts. Only when there is another project to ask, and never from

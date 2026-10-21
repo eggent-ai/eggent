@@ -185,7 +185,27 @@ function scopeOfKey(key: string): string | null {
   return slash > 0 ? key.slice(0, slash) : null;
 }
 
+// Who else wants to know, at once, that a file's history moved: approvals
+// watch the files sent for approval (lib/approvals/watch.ts).
+const CHANGE_KEY = Symbol.for("eggent.fileVersions.onChange");
+function changeListeners(): Set<(key: string) => void> {
+  const holder = globalThis as unknown as Record<symbol, Set<(key: string) => void> | undefined>;
+  if (!holder[CHANGE_KEY]) holder[CHANGE_KEY] = new Set();
+  return holder[CHANGE_KEY] as Set<(key: string) => void>;
+}
+export function onHistoryChange(listener: (key: string) => void): () => void {
+  changeListeners().add(listener);
+  return () => changeListeners().delete(listener);
+}
+
 function announce(key: string): void {
+  for (const listener of changeListeners()) {
+    try {
+      listener(key);
+    } catch {
+      // A listener's failure is its own; the history and the screen go on.
+    }
+  }
   const scope = scopeOfKey(key);
   const bucket = scope ?? "";
   const pending = pendingEvents();

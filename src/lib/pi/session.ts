@@ -31,6 +31,7 @@ import { getChatFiles } from "@/lib/storage/chat-files-store";
 import { getChat } from "@/lib/storage/chat-store";
 import { getCard } from "@/lib/board/store";
 import { mailEnabled } from "@/lib/mail/config";
+import { approvalsEnabled } from "@/lib/approvals/config";
 import { formatMailReplyContext } from "@/lib/mail/reply-context";
 import { createMailToolGuardExtension, type MessagesRunner } from "@/lib/mail/tool-guard";
 import type { MailReplyInfo } from "@/lib/mail/types";
@@ -236,6 +237,8 @@ function buildEggentProjectContext(options: {
   mailReply?: MailReplyInfo;
   /** The workspace has messages with its company's people (EGGENT_MAIL_API_URL). */
   mailAvailable?: boolean;
+  /** This workspace can send files for approval to its company's people: see eggent_approvals. */
+  approvalsAvailable?: boolean;
   /** This chat is a card on the task board: see lib/board. */
   boardCard?: { title: string };
 }): string {
@@ -425,6 +428,9 @@ function buildEggentProjectContext(options: {
     // operator's block, a model reached for the mcp proxy with its arguments.
     options.mailAvailable
       ? "Messages: eggent_messages is one of your own tools - call it directly, never through mcp. The other people of this workspace's company are its contacts: when your person asks you to write, tell, answer or send something to one of them, look them up there and send it with eggent_messages - that is where colleagues are written to, so do not ask which channel. It also reads what they wrote (inbox, read) and keeps what each does (describe)."
+      : "",
+    options.approvalsAvailable
+      ? "Approvals: eggent_approvals is one of your own tools - call it directly, never through mcp. When your person asks to send a file for approval (to agree, sign off, get it approved by someone in the company), send it with eggent_approvals to the people they name, in their order. Any change to a file on approval voids it: say so when you change such a file, and offer to send the new version. Approving or returning a version is your person's alone - you cannot do it and never say you did; point them to Approvals in the sidebar."
       : "",
     // Supplied by the operator of this deployment. Eggent does not know what it
     // says, so it is quoted rather than summarized, and it outranks guesswork.
@@ -751,6 +757,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     remote: options.remote,
     mailReply,
     mailAvailable: !options.visit && mailEnabled(),
+    approvalsAvailable: !options.visit && approvalsEnabled(),
     ...(boardCard ? { boardCard: { title: boardCard.title } } : {}),
   });
   const explicitContextFiles = liteMode || publicShare ? [] : loadEggentContextFiles(cwd, agentDir);

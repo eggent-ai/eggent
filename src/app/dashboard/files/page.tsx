@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { Download, ExternalLink, FileAudio, FileText, History, ImageIcon, Loader2, Save } from "lucide-react";
+import { ClipboardCheck, Download, ExternalLink, FileAudio, FileText, History, ImageIcon, Loader2, Save } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { AppSidebar } from "@/components/app-sidebar";
@@ -12,6 +12,8 @@ import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { SidePanels } from "@/components/side-panels";
 import { FileBody, formatFileSize, useFileContent } from "@/components/file-view";
 import { VersionHistory } from "@/components/files/version-history";
+import { FileApproval, FileApprovalNotice, useFileApproval } from "@/components/approvals/file-approval";
+import { useApprovalsSummary } from "@/components/approvals/use-approvals-summary";
 import { useI18n } from "@/i18n/provider";
 import { fileDownloadUrl, isOpenableFile } from "@/lib/files/openable";
 
@@ -23,6 +25,10 @@ export default function GenericFileEditorPage() {
   const file = useFileContent(projectId, filePath);
   const { metadata, loading, saving, status, error, save, dirty, title } = file;
   const [showHistory, setShowHistory] = useState(false);
+  const [showApproval, setShowApproval] = useState(false);
+  const approvalsOn = Boolean(useApprovalsSummary()?.enabled);
+  const savedAt = metadata?.updatedAt ? Date.parse(metadata.updatedAt) || 0 : 0;
+  const fileApproval = useFileApproval(projectId, filePath, approvalsOn && !showApproval, savedAt);
 
   const downloadHref = useMemo(() => fileDownloadUrl(projectId, filePath), [projectId, filePath]);
 
@@ -76,11 +82,29 @@ export default function GenericFileEditorPage() {
                       <Button
                         variant={showHistory ? "secondary" : "outline"}
                         className="gap-2"
-                        onClick={() => setShowHistory((value) => !value)}
+                        onClick={() => {
+                          setShowHistory((value) => !value);
+                          setShowApproval(false);
+                        }}
                         aria-pressed={showHistory}
                       >
                         <History className="size-4" />
                         {t("files.history.title")}
+                      </Button>
+                    ) : null}
+                    {approvalsOn ? (
+                      <Button
+                        variant={showApproval ? "secondary" : "outline"}
+                        className="gap-2"
+                        onClick={() => {
+                          if (!showApproval && dirty && !window.confirm(t("files.panel.discardChanges"))) return;
+                          setShowApproval((value) => !value);
+                          setShowHistory(false);
+                        }}
+                        aria-pressed={showApproval}
+                      >
+                        <ClipboardCheck className="size-4" />
+                        {t("approvals.file.title")}
                       </Button>
                     ) : null}
                     {isOpenable ? (
@@ -97,7 +121,7 @@ export default function GenericFileEditorPage() {
                         {t("common.download")}
                       </a>
                     </Button>
-                    {!isMediaPreview && !showHistory ? (
+                    {!isMediaPreview && !showHistory && !showApproval ? (
                       <Button onClick={() => void save()} disabled={loading || saving || !dirty} className="gap-2">
                         {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
                         {t("common.save")}
@@ -113,8 +137,11 @@ export default function GenericFileEditorPage() {
                   </Alert>
                 ) : null}
 
+                {!showApproval && !showHistory ? <FileApprovalNotice status={fileApproval.status} /> : null}
                 {showHistory ? (
                   <VersionHistory projectId={projectId} path={filePath} onRestored={() => void file.refresh()} />
+                ) : showApproval ? (
+                  <FileApproval projectId={projectId} path={filePath} version={savedAt} />
                 ) : (
                   <FileBody file={file} />
                 )}
