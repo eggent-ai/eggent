@@ -2,7 +2,7 @@
 
 import { useMemo, useState } from "react";
 import { useSearchParams } from "next/navigation";
-import { ClipboardCheck, Download, ExternalLink, FileAudio, FileText, History, ImageIcon, Loader2, Save } from "lucide-react";
+import { ClipboardCheck, Download, ExternalLink, FileAudio, FileText, History, ImageIcon, Loader2, Printer, Save, Users } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { AppSidebar } from "@/components/app-sidebar";
@@ -14,8 +14,10 @@ import { FileBody, formatFileSize, useFileContent } from "@/components/file-view
 import { VersionHistory } from "@/components/files/version-history";
 import { FileApproval, FileApprovalNotice, useFileApproval } from "@/components/approvals/file-approval";
 import { useApprovalsSummary } from "@/components/approvals/use-approvals-summary";
+import { FileShare, FileShareNotice, useFileShare } from "@/components/shares/file-share";
+import { useSharesSummary } from "@/components/shares/use-shares-summary";
 import { useI18n } from "@/i18n/provider";
-import { fileDownloadUrl, isOpenableFile } from "@/lib/files/openable";
+import { fileDownloadUrl, filePrintUrl, isOpenableFile } from "@/lib/files/openable";
 
 export default function GenericFileEditorPage() {
   const { t } = useI18n();
@@ -26,9 +28,13 @@ export default function GenericFileEditorPage() {
   const { metadata, loading, saving, status, error, save, dirty, title } = file;
   const [showHistory, setShowHistory] = useState(false);
   const [showApproval, setShowApproval] = useState(false);
+  const [showShare, setShowShare] = useState(false);
   const approvalsOn = Boolean(useApprovalsSummary()?.enabled);
+  const sharesOn = Boolean(useSharesSummary()?.enabled);
   const savedAt = metadata?.updatedAt ? Date.parse(metadata.updatedAt) || 0 : 0;
   const fileApproval = useFileApproval(projectId, filePath, approvalsOn && !showApproval, savedAt);
+  const fileShare = useFileShare(projectId, filePath, sharesOn && !showShare, savedAt);
+  const paneOpen = showHistory || showApproval || showShare;
 
   const downloadHref = useMemo(() => fileDownloadUrl(projectId, filePath), [projectId, filePath]);
 
@@ -85,6 +91,7 @@ export default function GenericFileEditorPage() {
                         onClick={() => {
                           setShowHistory((value) => !value);
                           setShowApproval(false);
+                          setShowShare(false);
                         }}
                         aria-pressed={showHistory}
                       >
@@ -100,11 +107,28 @@ export default function GenericFileEditorPage() {
                           if (!showApproval && dirty && !window.confirm(t("files.panel.discardChanges"))) return;
                           setShowApproval((value) => !value);
                           setShowHistory(false);
+                          setShowShare(false);
                         }}
                         aria-pressed={showApproval}
                       >
                         <ClipboardCheck className="size-4" />
                         {t("approvals.file.title")}
+                      </Button>
+                    ) : null}
+                    {sharesOn ? (
+                      <Button
+                        variant={showShare ? "secondary" : "outline"}
+                        className="gap-2"
+                        onClick={() => {
+                          if (!showShare && dirty && !window.confirm(t("files.panel.discardChanges"))) return;
+                          setShowShare((value) => !value);
+                          setShowHistory(false);
+                          setShowApproval(false);
+                        }}
+                        aria-pressed={showShare}
+                      >
+                        <Users className="size-4" />
+                        {t("shares.file.title")}
                       </Button>
                     ) : null}
                     {isOpenable ? (
@@ -115,13 +139,21 @@ export default function GenericFileEditorPage() {
                         </a>
                       </Button>
                     ) : null}
+                    {!isMediaPreview && metadata ? (
+                      <Button variant="outline" asChild className="gap-2">
+                        <a href={filePrintUrl(projectId, filePath)} target="_blank" rel="noopener noreferrer">
+                          <Printer className="size-4" />
+                          {t("files.print")}
+                        </a>
+                      </Button>
+                    ) : null}
                     <Button variant="outline" asChild className="gap-2">
                       <a href={downloadHref} download={title}>
                         <Download className="size-4" />
                         {t("common.download")}
                       </a>
                     </Button>
-                    {!isMediaPreview && !showHistory && !showApproval ? (
+                    {!isMediaPreview && !paneOpen ? (
                       <Button onClick={() => void save()} disabled={loading || saving || !dirty} className="gap-2">
                         {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
                         {t("common.save")}
@@ -137,11 +169,14 @@ export default function GenericFileEditorPage() {
                   </Alert>
                 ) : null}
 
-                {!showApproval && !showHistory ? <FileApprovalNotice status={fileApproval.status} /> : null}
+                {!paneOpen ? <FileApprovalNotice status={fileApproval.status} /> : null}
+                {!paneOpen ? <FileShareNotice status={fileShare.status} /> : null}
                 {showHistory ? (
                   <VersionHistory projectId={projectId} path={filePath} onRestored={() => void file.refresh()} />
                 ) : showApproval ? (
                   <FileApproval projectId={projectId} path={filePath} version={savedAt} />
+                ) : showShare ? (
+                  <FileShare projectId={projectId} path={filePath} version={savedAt} />
                 ) : (
                   <FileBody file={file} />
                 )}

@@ -7,6 +7,8 @@ import { historyCapBytes } from "@/lib/files/versions/service";
 import { getVersionStore } from "@/lib/files/versions/store";
 import { extractVersionText } from "@/lib/files/versions/text";
 import type { FileHistoryView, VersionInfo, VersionTextView, VersionUsageView } from "@/lib/files/versions/shape";
+import { fetchShareEdits } from "@/lib/shares/client";
+import { sharesEnabled } from "@/lib/shares/config";
 
 /**
  * What the history routes answer, kept out of the routes so the agent's own
@@ -46,6 +48,21 @@ async function chatTitle(chatId: string): Promise<string | null> {
   return title;
 }
 
+const EDITS_TIMEOUT_MS = 2500;
+
+/** Who wrote which content of a shared file through its share, by the hash of what they wrote. */
+async function colleagueEdits(key: string): Promise<Map<string, string>> {
+  if (!sharesEnabled()) return new Map();
+  try {
+    const edits = await fetchShareEdits(key, EDITS_TIMEOUT_MS);
+    // Newest first: the earliest edit that wrote a content is the one that made it.
+    return new Map([...edits].reverse().map((edit) => [edit.sha256, edit.by]));
+  } catch {
+    // Not shared, or the service is away: the history names nobody it cannot.
+    return new Map();
+  }
+}
+
 export async function historyOf(projectId: string, filePath: string): Promise<{ target: VersionTarget | null; view: FileHistoryView }> {
   const retention = versionRetention();
   const enabled = await versionsEnabled();
@@ -63,12 +80,14 @@ export async function historyOf(projectId: string, filePath: string): Promise<{ 
     if (outcome === "too-large" || outcome === "unreadable") unkept = outcome;
   }
   const journal = await store.journal(target.key);
+  const colleagues = journal ? await colleagueEdits(target.key) : new Map<string, string>();
   const versions: VersionInfo[] = [];
   for (const entry of [...(journal?.versions ?? [])].reverse()) {
-    const { sha: _sha, ...info } = entry;
-    void _sha;
+    const { sha, ...info } = entry;
     const title = info.by.chat ? await chatTitle(info.by.chat) : null;
-    versions.push(title ? { ...info, chatTitle: title } : info);
+    // Written by the host for a colleague, it was only seen to change: the sharing service knows who wrote it.
+    const sharedBy = info.by.kind === "outside" && !info.deleted && sha ? colleagues.get(sha) : undefined;
+    versions.push({ ...info, ...(title ? { chatTitle: title } : {}), ...(sharedBy ? { sharedBy } : {}) });
   }
   return {
     target,

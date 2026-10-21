@@ -33,6 +33,8 @@ import { mailEnabled } from "@/lib/mail/config";
 import { createMessagesTool } from "@/lib/mail/tool";
 import { approvalsEnabled } from "@/lib/approvals/config";
 import { createApprovalsTool } from "@/lib/approvals/tool";
+import { createSharesTool } from "@/lib/shares/tool";
+import { sharesEnabled } from "@/lib/shares/config";
 import { isScheduledRunSessionId } from "@/lib/pi/scheduled-run-state";
 import { createBoardTool } from "@/lib/board/tool";
 import { putQuestionOnCard } from "@/lib/board/runs";
@@ -1287,6 +1289,10 @@ export async function createEggentPiTools(options: {
   // Approvals of file versions with the company's people (EGGENT_APPROVALS_API_URL).
   // Reading and sending only: deciding is the person's. Not inside a visit.
   if (approvalsEnabled() && !options.visit) tools.push(createApprovalsTool({ cwd: options.cwd }));
+
+  // Files shared with the company's people (EGGENT_SHARES_API_URL): reading,
+  // sharing and commenting; changing a colleague's file is the person's. Not inside a visit.
+  if (sharesEnabled() && !options.visit) tools.push(createSharesTool({ cwd: options.cwd }));
 
   // A project can be asked to do a piece of work, by name, from any chat: see
   // project-visit.ts. Only when there is another project to ask, and never from

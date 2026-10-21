@@ -76,6 +76,7 @@ export function useVersionAuthor() {
   return useCallback(
     (version: VersionInfo): string => {
       if (version.deleted) return t("files.history.by.deleted");
+      if (version.sharedBy) return t("files.history.by.colleague", { name: version.sharedBy });
       switch (version.by.kind) {
         case "person":
           return t("files.history.by.person");

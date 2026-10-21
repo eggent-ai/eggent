@@ -6,11 +6,12 @@
  * holds or how it is written back.
  */
 
-import { useCallback, useEffect, useRef, useState, type SyntheticEvent } from "react";
-import { Loader2 } from "lucide-react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { Loader2, MousePointerClick, X } from "lucide-react";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
+import { CodeEditor } from "@/components/code-editor";
+import { HtmlPreview, type PickedBlock } from "@/components/files/html-preview";
 import { subscribeUiSync } from "@/hooks/use-background-sync";
 import { useI18n } from "@/i18n/provider";
 import { historyKeyOf } from "@/lib/files/versions/rules";
@@ -54,7 +55,7 @@ export function useFileContent(projectId: string, filePath: string) {
    * the sync. Unedited text is replaced quietly; text with edits in it is left
    * alone and the newer one is offered beside it.
    */
-  const refresh = useCallback(async () => {
+  const refresh = useCallback(async (options: { quiet?: boolean } = {}) => {
     if (!filePath) return;
     try {
       const params = new URLSearchParams({ project: projectId, path: filePath });
@@ -67,7 +68,7 @@ export function useFileContent(projectId: string, filePath: string) {
       if (typed === shown) {
         setContent(payload.content || "");
         setDraft(payload.content || "");
-        setStatus(t("files.updatedElsewhere"));
+        if (!options.quiet) setStatus(t("files.updatedElsewhere"));
       } else {
         setStatus(null);
         setExternal(payload);
@@ -212,11 +213,6 @@ export function FileBody({ file, fill = false, onSelectionChange }: {
 }) {
   const { t } = useI18n();
   const { metadata } = file;
-  const reportSelection = (event: SyntheticEvent<HTMLTextAreaElement>) => {
-    if (!onSelectionChange) return;
-    const area = event.currentTarget;
-    onSelectionChange(selectionOf(area.value, area.selectionStart, area.selectionEnd));
-  };
 
   if (file.loading) {
     return (
@@ -258,7 +254,7 @@ export function FileBody({ file, fill = false, onSelectionChange }: {
     );
   }
   return (
-    <div className={cn("flex min-h-0 flex-col", fill && "h-full")}>
+    <div className={cn("flex min-h-0 flex-col", fill ? "h-full" : "h-[70vh] min-h-[560px] overflow-hidden rounded-lg border")}>
       {file.external ? (
         <div role="alert" className="flex flex-wrap items-center gap-2 border-b border-l-2 border-l-warning bg-muted/50 px-3 py-2 text-xs">
           <span className="min-w-[14rem] flex-1">{t("files.changedWhileEditing")}</span>
@@ -266,19 +262,145 @@ export function FileBody({ file, fill = false, onSelectionChange }: {
           <Button size="sm" variant="ghost" className="h-7 text-xs" onClick={file.keepMine}>{t("files.keepMine")}</Button>
         </div>
       ) : null}
-    <Textarea
-      value={file.draft}
-      onChange={(event) => file.setDraft(event.target.value)}
-      onSelect={reportSelection}
-      disabled={file.saving}
-      rows={fill ? undefined : 24}
-      spellCheck={false}
-      aria-label={file.title}
-      className={cn(
-        "font-mono text-sm",
-        fill ? "h-full min-h-0 flex-1 resize-none rounded-none border-0 shadow-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring" : "min-h-[560px]"
+      {metadata && isHtmlName(metadata.filename || "") ? (
+        <HtmlFileView file={file} onSelectionChange={onSelectionChange} />
+      ) : (
+        <CodeEditor
+          value={file.draft}
+          onChange={file.setDraft}
+          fileName={file.title}
+          readOnly={file.saving}
+          onSelectionChange={onSelectionChange}
+          onSave={() => {
+            if (file.dirty && !file.saving) void file.save();
+          }}
+          ariaLabel={file.title}
+          className="flex-1"
+        />
       )}
-    />
+    </div>
+  );
+}
+
+function isHtmlName(name: string): boolean {
+  return /\.html?$/i.test(name);
+}
+
+/**
+ * A page: how it looks, or its code. Looking at it, a block can be picked -
+ * the chat beside it is told which lines it is - or its words typed over on
+ * the page and saved into the file where they came from.
+ */
+function HtmlFileView({ file, onSelectionChange }: {
+  file: FileContentState;
+  onSelectionChange?: (selection: { startLine: number; endLine: number; text: string } | null) => void;
+}) {
+  const { t } = useI18n();
+  const metadata = file.metadata as FilePayload;
+  const [view, setView] = useState<"page" | "code">("page");
+  const [selecting, setSelecting] = useState(false);
+  const [picked, setPicked] = useState<PickedBlock | null>(null);
+  const [reveal, setReveal] = useState<{ from: number; to: number; key: number } | null>(null);
+  const tellChat = useRef(onSelectionChange);
+  tellChat.current = onSelectionChange;
+
+  const pick = useCallback((block: PickedBlock | null) => {
+    setPicked(block);
+    tellChat.current?.(block ? { startLine: block.startLine, endLine: block.endLine, text: block.source } : null);
+  }, []);
+
+  const linesOf = (block: PickedBlock) =>
+    block.startLine === block.endLine ? t("files.page.line", { line: block.startLine }) : t("files.page.lines", { start: block.startLine, end: block.endLine });
+
+  const showInCode = () => {
+    if (!picked) return;
+    setView("code");
+    setReveal({ from: picked.start, to: picked.end, key: Date.now() });
+  };
+
+  const tab = (which: "page" | "code", label: string) => (
+    <button
+      type="button"
+      aria-pressed={view === which}
+      onClick={() => setView(which)}
+      className={cn(
+        "rounded px-2.5 py-1 text-xs transition-colors outline-none focus-visible:ring-2 focus-visible:ring-ring",
+        view === which ? "bg-accent font-medium text-accent-foreground" : "text-muted-foreground hover:text-foreground"
+      )}
+    >
+      {label}
+    </button>
+  );
+
+  // One row that never changes height: what is picked, a hint or a note takes
+  // the space beside the switches, so the page below never moves between the
+  // two clicks of a double click.
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex min-h-10 items-center gap-2 border-b px-2 py-1">
+        <div role="group" aria-label={t("files.page.views")} className="inline-flex shrink-0 rounded-md border p-0.5">
+          {tab("page", t("files.page.page"))}
+          {tab("code", t("files.page.code"))}
+        </div>
+        {view === "page" ? (
+          <Button
+            type="button"
+            size="sm"
+            variant={selecting ? "secondary" : "ghost"}
+            className="h-7 shrink-0 gap-1.5 text-xs"
+            aria-pressed={selecting}
+            disabled={file.dirty}
+            title={file.dirty ? t("files.page.saveFirst") : t("files.page.selectHelp")}
+            onClick={() => setSelecting((value) => !value)}
+          >
+            <MousePointerClick className="size-3.5" />
+            {t("files.page.select")}
+          </Button>
+        ) : null}
+        <div role="status" className="flex min-w-0 flex-1 items-center gap-1.5 text-xs">
+          {picked ? (
+            <>
+              <span className="min-w-0 truncate" title={`${picked.label} · ${linesOf(picked)}`}>
+                <span className="font-medium">{picked.label}</span>
+                <span className="text-muted-foreground"> · {linesOf(picked)}{onSelectionChange ? ` · ${t("files.page.agentSees")}` : ""}</span>
+              </span>
+              <Button type="button" size="sm" variant="ghost" className="h-6 shrink-0 px-2 text-xs" onClick={showInCode}>{t("files.page.showInCode")}</Button>
+              <Button type="button" size="icon" variant="ghost" className="size-6 shrink-0" aria-label={t("files.page.clearPick")} onClick={() => pick(null)}>
+                <X className="size-3.5" />
+              </Button>
+            </>
+          ) : view === "page" && file.dirty ? (
+            <span className="truncate text-muted-foreground">{t("files.page.unsavedNotShown")}</span>
+          ) : view === "page" && selecting ? (
+            <span className="truncate text-muted-foreground">{t("files.page.selectHint")}</span>
+          ) : null}
+        </div>
+      </div>
+      {view === "page" ? (
+        <HtmlPreview
+          source={{ kind: "project", projectId: metadata.projectId, path: metadata.path }}
+          version={`${metadata.updatedAt || ""}|${metadata.size ?? ""}`}
+          selecting={selecting && !file.dirty}
+          picked={picked !== null}
+          onPick={pick}
+          onSaved={() => void file.refresh({ quiet: true })}
+          className="flex-1"
+        />
+      ) : (
+        <CodeEditor
+          value={file.draft}
+          onChange={file.setDraft}
+          fileName={file.title}
+          readOnly={file.saving}
+          onSelectionChange={onSelectionChange}
+          onSave={() => {
+            if (file.dirty && !file.saving) void file.save();
+          }}
+          ariaLabel={file.title}
+          reveal={reveal}
+          className="flex-1"
+        />
+      )}
     </div>
   );
 }

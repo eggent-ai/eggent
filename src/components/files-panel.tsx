@@ -17,12 +17,14 @@
 
 import { useCallback, useEffect, useState, type KeyboardEvent, type PointerEvent } from "react";
 import Link from "next/link";
-import { ArrowLeft, ClipboardCheck, Download, ExternalLink, FolderOpen, History, Loader2, Maximize2, Save, X } from "lucide-react";
+import { ArrowLeft, ClipboardCheck, Download, ExternalLink, FolderOpen, History, Loader2, Maximize2, Printer, Save, Users, X } from "lucide-react";
 import { FileTree } from "@/components/file-tree";
 import { FileBody, formatFileSize, useFileContent } from "@/components/file-view";
 import { VersionHistory } from "@/components/files/version-history";
 import { FileApproval, FileApprovalNotice, useFileApproval } from "@/components/approvals/file-approval";
 import { useApprovalsSummary } from "@/components/approvals/use-approvals-summary";
+import { FileShare, FileShareNotice, useFileShare } from "@/components/shares/file-share";
+import { useSharesSummary } from "@/components/shares/use-shares-summary";
 import { Button } from "@/components/ui/button";
 import {
   clampFilePreviewWidth,
@@ -31,7 +33,7 @@ import {
   useAppStore,
 } from "@/store/app-store";
 import { useI18n } from "@/i18n/provider";
-import { fileDownloadUrl, filesPageUrl, isModifiedClick, isOpenableFile } from "@/lib/files/openable";
+import { fileDownloadUrl, filePrintUrl, filesPageUrl, isModifiedClick, isOpenableFile } from "@/lib/files/openable";
 
 const KEYBOARD_STEP_PX = 32;
 
@@ -196,10 +198,14 @@ function FilePreview({ projectId, path, onBack, onClose }: {
   // The file, or its history or its approval in its place.
   const [showHistory, setShowHistory] = useState(false);
   const [showApproval, setShowApproval] = useState(false);
+  const [showShare, setShowShare] = useState(false);
   const approvalsOn = Boolean(useApprovalsSummary()?.enabled);
+  const sharesOn = Boolean(useSharesSummary()?.enabled);
   // Asked again after every save, so the line about what a change does stays true.
   const savedAt = metadata?.updatedAt ? Date.parse(metadata.updatedAt) || 0 : 0;
   const fileApproval = useFileApproval(projectId, path, approvalsOn && !showApproval, savedAt);
+  const fileShare = useFileShare(projectId, path, sharesOn && !showShare, savedAt);
+  const paneOpen = showHistory || showApproval || showShare;
   const setSelection = useAppStore((state) => state.setFilePreviewSelection);
   const setUnsaved = useAppStore((state) => state.setFilePreviewUnsaved);
 
@@ -242,7 +248,7 @@ function FilePreview({ projectId, path, onBack, onClose }: {
           {facts ? <div className="truncate text-xs text-muted-foreground" title={path}>{facts}</div> : null}
         </div>
         <span className="flex shrink-0 items-center gap-0.5">
-          {!file.isMedia && !file.loading && metadata && !showHistory && !showApproval ? (
+          {!file.isMedia && !file.loading && metadata && !paneOpen ? (
             <Button
               variant={dirty ? "default" : "ghost"}
               size="icon"
@@ -263,6 +269,7 @@ function FilePreview({ projectId, path, onBack, onClose }: {
               onClick={() => {
                 setShowHistory((value) => !value);
                 setShowApproval(false);
+                setShowShare(false);
               }}
               aria-pressed={showHistory}
               aria-label={t("files.history.toggle")}
@@ -280,12 +287,31 @@ function FilePreview({ projectId, path, onBack, onClose }: {
                 if (!showApproval && dirty && !window.confirm(t("files.panel.discardChanges"))) return;
                 setShowApproval((value) => !value);
                 setShowHistory(false);
+                setShowShare(false);
               }}
               aria-pressed={showApproval}
               aria-label={t("approvals.file.toggle")}
               title={t("approvals.file.toggle")}
             >
               <ClipboardCheck className="size-4" />
+            </Button>
+          ) : null}
+          {sharesOn ? (
+            <Button
+              variant="ghost"
+              size="icon"
+              className={showShare ? "size-7 bg-accent text-accent-foreground" : panelIconButton}
+              onClick={() => {
+                if (!showShare && dirty && !window.confirm(t("files.panel.discardChanges"))) return;
+                setShowShare((value) => !value);
+                setShowHistory(false);
+                setShowApproval(false);
+              }}
+              aria-pressed={showShare}
+              aria-label={t("shares.file.toggle")}
+              title={t("shares.file.toggle")}
+            >
+              <Users className="size-4" />
             </Button>
           ) : null}
           {openable ? (
@@ -298,6 +324,13 @@ function FilePreview({ projectId, path, onBack, onClose }: {
                 title={t("files.open")}
               >
                 <ExternalLink className="size-4" />
+              </a>
+            </Button>
+          ) : null}
+          {!file.isMedia && metadata ? (
+            <Button variant="ghost" size="icon" className={panelIconButton} asChild>
+              <a href={filePrintUrl(projectId, path)} target="_blank" rel="noopener noreferrer" aria-label={t("files.print")} title={t("files.print")}>
+                <Printer className="size-4" />
               </a>
             </Button>
           ) : null}
@@ -341,7 +374,8 @@ function FilePreview({ projectId, path, onBack, onClose }: {
           {error && metadata ? error : status}
         </div>
       ) : null}
-      {!showApproval && !showHistory ? <FileApprovalNotice status={fileApproval.status} className="border-b" /> : null}
+      {!paneOpen ? <FileApprovalNotice status={fileApproval.status} className="border-b" /> : null}
+      {!paneOpen ? <FileShareNotice status={fileShare.status} className="border-b" /> : null}
       {showHistory ? (
         <div className="min-h-0 flex-1">
           <VersionHistory projectId={projectId} path={path} fill onRestored={() => void file.refresh()} />
@@ -349,6 +383,10 @@ function FilePreview({ projectId, path, onBack, onClose }: {
       ) : showApproval ? (
         <div className="min-h-0 flex-1">
           <FileApproval projectId={projectId} path={path} fill version={savedAt} />
+        </div>
+      ) : showShare ? (
+        <div className="min-h-0 flex-1">
+          <FileShare projectId={projectId} path={path} fill version={savedAt} />
         </div>
       ) : (
         <div className={file.isMedia || file.loading || !metadata ? "min-h-0 flex-1 overflow-auto p-2" : "min-h-0 flex-1"}>
