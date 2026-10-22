@@ -31,7 +31,7 @@ export interface EngineRunRequest {
   /** An id from the engine's model list; empty for its default. */
   model: string;
   access: EngineAccess;
-  /** A trial run: leave no session of the program's own behind. */
+  /** A probe run: leave no session of the program's own behind. */
   ephemeral?: boolean;
   signal: AbortSignal;
   onEvent: (event: EngineEvent) => void;

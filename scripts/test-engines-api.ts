@@ -2,7 +2,7 @@
  * The part of engines a person reaches from the settings screen and from the
  * other side of a pair: which programs this computer offers, setting a project
  * onto one (and the first-use confirmation that has to come first), signing in,
- * the trial request, and what a computer says when the cloud hands it a chat
+ * the probe request, and what a computer says when the cloud hands it a chat
  * that its program cannot take.
  *
  * Drives the real handlers and the real session guard. The program is a fake
@@ -191,11 +191,11 @@ await check("the state lists the program with its models, its status and no choi
   assert.equal(state.choice, null);
 });
 await check("a program offered as an experiment is marked so for the screens, and one that is not is not", async () => {
-  registry.registerEngine({ ...fake, id: "trial", label: "Trial Code", experimental: true });
+  registry.registerEngine({ ...fake, id: "sample", label: "Sample Code", experimental: true });
   const state = await service.engineState("p1", { fresh: true });
-  assert.equal(state.engines.find((engine) => engine.id === "trial")?.experimental, true);
+  assert.equal(state.engines.find((engine) => engine.id === "sample")?.experimental, true);
   assert.equal(state.engines.find((engine) => engine.id === "fake")?.experimental, undefined);
-  registry.unregisterEngine("trial");
+  registry.unregisterEngine("sample");
 });
 await check("a program cannot be switched on until the person has confirmed the first-use sheet", async () => {
   const outcome = await service.applyEngineChoice("p1", { engine: "fake" });
@@ -363,7 +363,7 @@ await check("a program nobody registered has no sign-in", async () => {
   assert.equal(await service.startEngineLogin("ghost"), "unknown");
 });
 
-console.log("\nThe trial request\n");
+console.log("\nThe probe request\n");
 
 await check("it asks the program for one word in an empty folder of its own and leaves nothing behind", async () => {
   runs.length = 0;
@@ -371,7 +371,7 @@ await check("it asks the program for one word in an empty folder of its own and 
   assert.ok(result?.ok);
   assert.equal(runs.length, 1);
   const run = runs[0];
-  assert.equal(run.ephemeral, true, "a trial must not leave a session of the program's own");
+  assert.equal(run.ephemeral, true, "a probe must not leave a session of the program's own");
   assert.equal(run.access, "project");
   assert.equal(run.brief, "");
   assert.equal(run.sessionId, null);
@@ -399,7 +399,7 @@ await check("a program that never answers is stopped", async () => {
   assert.ok(Date.now() - started < 5000);
   assert.ok(runs.at(-1)!.signal.aborted);
 });
-await check("a program nobody registered has no trial", async () => {
+await check("a program nobody registered has no probe", async () => {
   assert.equal(await service.probeEngine("ghost", ""), null);
 });
 
@@ -447,7 +447,7 @@ await check("a program is turned off with null, and a model it lacks is a 400", 
   assert.equal(off.status, 200);
   assert.equal((await json(off))?.choice, null);
 });
-await check("signing in and the trial request need the same guard", async () => {
+await check("signing in and the probe request need the same guard", async () => {
   assert.equal((await loginRoute.POST(request("/api/engines/fake/login", { method: "POST", body: {}, cookie: null }), idParams("fake"))).status, 401);
   assert.equal((await loginRoute.POST(request("/api/engines/fake/login", { method: "POST", body: {}, origin: "https://evil.example.test" }), idParams("fake"))).status, 403);
   assert.equal((await probeRoute.POST(request("/api/engines/fake/probe", { method: "POST", body: {}, cookie: null }), idParams("fake"))).status, 401);
@@ -463,7 +463,7 @@ await check("the login route starts it, and a second press and a cancel are told
   const unknown = await loginRoute.POST(request("/api/engines/ghost/login", { method: "POST", body: {} }), idParams("ghost"));
   assert.equal(unknown.status, 404);
 });
-await check("the trial route answers with what the program said", async () => {
+await check("the probe route answers with what the program said", async () => {
   const ok = await probeRoute.POST(request("/api/engines/fake/probe", { method: "POST", body: {} }), idParams("fake"));
   assert.equal(ok.status, 200);
   assert.deepEqual(await json(ok), { ok: true, text: "OK" });
@@ -498,8 +498,8 @@ await check("a project set to a program that is signed out is refused, with the 
 await check("the side that asked says it in its own words, with the name of that computer", async () => {
   const t = (key: Parameters<typeof translate>[1], values?: Parameters<typeof translate>[2]) => translate("en", key, values);
   const failure = new RemoteError("engine", "Fake Code is not signed in there.", { home: "device:AAAAAAA-BBBBBBB" });
-  const text = remoteFailureMessage(failure, t, "Ilia's Mac");
-  assert.match(text, /^Ilia's Mac can't run this chat right now\. Fake Code is not signed in there\./);
+  const text = remoteFailureMessage(failure, t, "Studio Mac");
+  assert.match(text, /^Studio Mac can't run this chat right now\. Fake Code is not signed in there\./);
   assert.match(text, /run this chat here instead/);
 });
 await check("the screen offers to run it on this side instead", () => {
