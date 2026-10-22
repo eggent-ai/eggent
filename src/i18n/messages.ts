@@ -459,6 +459,8 @@ const enMessages = {
   "chat.errors.providerRefusedWithStatus": "{provider} refused the request ({status}): {details}",
   "chat.errors.providerRejectedKey": "{provider} rejected the API key, so nothing can run. Open Settings → Models and login and paste a valid key.",
   "chat.errors.providerModelMissing": "{provider} answered, but does not offer the model \"{model}\", so every request comes back empty. It offers: {models}. Pick one of those in Settings → Models and login.",
+  "chat.errors.theProvider": "The provider",
+  "chat.errors.turnFailed": "The model stopped with an error before it finished. What was done above is saved - send the message again to carry on.",
   "chat.errors.returnToIncluded": "You can also go back to the included Eggent AI model in Settings → Models and login and keep working straight away.",
   "chat.errors.emptyFinal": "The model stopped before producing a final response. Please retry.",
   "chat.errors.noFinalAfterTools": "Tools completed, but the final answer was not produced. Send `continue`, and I will finish the response.",

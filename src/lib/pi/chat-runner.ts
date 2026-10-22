@@ -488,15 +488,14 @@ async function emptyTurnError(failure?: ProviderFailure | null): Promise<Error> 
   try {
     const state = await getPiModelsState();
     const provider = state.settings?.defaultProvider?.trim();
-    if (!provider) {
-      return await withFallback(t("chat.errors.noModelSelected"));
-    }
-    const name = state.providers?.find((item) => item.id === provider)?.name || provider;
+    const name = provider ? state.providers?.find((item) => item.id === provider)?.name || provider : t("chat.errors.theProvider");
 
-    // The provider's own words outrank everything below. Settings checks and the
-    // probe exist to work out what went wrong when nothing said; when something
-    // did say, guessing over it is how "your key may be wrong" got shown to a
-    // user whose key was fine and whose service account had been disabled.
+    // The provider's own words outrank everything below, the settings included.
+    // Settings checks and the probe exist to work out what went wrong when
+    // nothing said; when something did say, guessing over it is how "your key
+    // may be wrong" got shown to a user whose key was fine and whose service
+    // account had been disabled, and "no model is selected" to one whose
+    // provider had refused a request it was plainly sent.
     if (failure?.message) {
       return await withFallback(
         failure.status
@@ -507,6 +506,9 @@ async function emptyTurnError(failure?: ProviderFailure | null): Promise<Error> 
             })
           : t("chat.errors.providerRefused", { provider: name, details: failure.message })
       );
+    }
+    if (!provider) {
+      return await withFallback(t("chat.errors.noModelSelected"));
     }
 
     const connected = (state.availableModels ?? []).some((model) => model.provider === provider);
@@ -540,6 +542,58 @@ async function emptyTurnError(failure?: ProviderFailure | null): Promise<Error> 
   }
   return await withFallback(t("chat.errors.emptyResponse"));
 }
+
+/** How the last model call of a turn ended. */
+interface LastCall {
+  stopReason?: unknown;
+  errorMessage?: unknown;
+  /** What that call wrote, which may be nothing even when earlier calls wrote plenty. */
+  text: string;
+}
+
+function lastCallOf(message: Record<string, unknown>, text: string): LastCall {
+  return { stopReason: message.stopReason, errorMessage: message.errorMessage, text };
+}
+
+/**
+ * The error a turn ended on after it had already done some work, worded for the
+ * person; null when it did not end on one.
+ *
+ * A turn that fails before doing anything is caught as an empty turn. One that
+ * fails after a few tool calls was stored as a success with no text: the person
+ * saw an empty answer while the provider's own sentence ("the key's budget is
+ * spent") sat in the agent's session where nobody reads it.
+ */
+async function failureAfterWork(last: LastCall, failure: ProviderFailure | null): Promise<string | null> {
+  if (last.stopReason !== "error") return null;
+  const said = failure ?? describeProviderFailure(last.errorMessage);
+  if (said) return (await emptyTurnError(said)).message;
+  const t = await getServerTranslator();
+  return t("chat.errors.turnFailed");
+}
+
+/**
+ * True when the model's last call finished normally and wrote nothing, after a
+ * turn that did something: what the person sees is the narration before the
+ * work, or an empty bubble. Reasoning models do this - they think the answer
+ * through and stop without writing it.
+ */
+function endedWithoutAnswer(last: LastCall | null, tools: Iterable<PiToolRecord>, usage?: PiRuntimeStats["lastTurn"]): boolean {
+  if (!last || last.stopReason !== "stop" || last.text.trim()) return false;
+  for (const tool of tools) {
+    // The answer already went to the person's chat as a message of its own.
+    if (/^telegram_send_/.test(tool.toolName) && tool.status === "completed") return false;
+  }
+  for (const tool of tools) {
+    if (tool.status === "completed" || tool.status === "error") return true;
+  }
+  return (usage?.output ?? 0) > 0;
+}
+
+/** Sent once, unseen by the person, when a turn ends without an answer. */
+const ANSWER_NUDGE =
+  "[Eggent] The turn ended without a reply: the person sees nothing from you. Write the reply now - what came out, " +
+  "where any files are, and what is left to do if anything. Do not call tools again unless something essential is missing.";
 
 function isDefaultChatTitle(title: string): boolean {
   return DEFAULT_CHAT_TITLES.includes(title.trim());
@@ -1102,6 +1156,7 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
   let lastTurnUsage: PiRuntimeStats["lastTurn"] | undefined;
   let currentPromptUsage: PiRuntimeStats["lastTurn"] | undefined;
   let providerFailure: ProviderFailure | null = null;
+  let lastCall: LastCall | null = null;
   const baselineUsage = getSessionTokenUsage(session);
   const tools = new Map<string, PiToolRecord>();
   const timelineParts: ChatMessagePart[] = [];
@@ -1205,6 +1260,7 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
           message.stopReason === "error"
             ? describeProviderFailure(message.errorMessage) ?? providerFailure
             : null;
+        lastCall = lastCallOf(message, messageText);
         live?.push({
           type: "data-piStats",
           id: "pi-runtime-stats",
@@ -1309,6 +1365,34 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
     if (!stopped && isEmptyZeroTokenTurn(assistantText, tools.values(), currentPromptUsage)) {
       throw await emptyTurnError(providerFailure);
     }
+    // See the web runner: no answer after the work is asked for once, and a
+    // provider's refusal after the work is said, not stored as success.
+    let failedAfterWork: string | null = null;
+    if (!stopped && !turn.stalled) {
+      const appendLine = (line: string) => {
+        const separator = assistantText.trim() ? "\n\n" : "";
+        assistantText = `${assistantText}${separator}${line}`;
+        appendTimelineText(timelineParts, `${separator}${line}`);
+        liveText(`${separator}${line}`);
+        liveCloseText();
+      };
+      if (endedWithoutAnswer(lastCall, tools.values(), currentPromptUsage)) {
+        try {
+          await session.prompt(ANSWER_NUDGE);
+        } catch (error) {
+          if (!stopped) throw error;
+        }
+        liveCloseText();
+        currentPromptUsage = subtractUsage(getSessionTokenUsage(session), baselineUsage);
+        if (!stopped && endedWithoutAnswer(lastCall, tools.values(), currentPromptUsage)) {
+          appendLine((await getServerTranslator())("chat.errors.noFinalAfterTools"));
+        }
+      }
+      if (!stopped) {
+        failedAfterWork = await failureAfterWork(lastCall ?? { text: "" }, providerFailure);
+        if (failedAfterWork) appendLine(failedAfterWork);
+      }
+    }
     const producedFiles = await producedForTurn({
       chatId: options.chatId,
       tools: tools.values(),
@@ -1364,7 +1448,9 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
         ? { outcome: "question", ...(cardQuestion ? { question: cardQuestion } : {}) }
         : refusal !== null
           ? { outcome: "refused", ...(refusal ? { detail: refusal } : {}) }
-          : turn.stalled
+          : failedAfterWork
+            ? { outcome: "failed", detail: failedAfterWork }
+            : turn.stalled
             ? stalledCardEnd(turn.stalled, turn.question)
             : stopped
               ? { outcome: "stopped" }
@@ -1602,6 +1688,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
       let lastTurnUsage: PiRuntimeStats["lastTurn"] | undefined;
       let currentPromptUsage: PiRuntimeStats["lastTurn"] | undefined;
       let providerFailure: ProviderFailure | null = null;
+      let lastCall: LastCall | null = null;
       const baselineUsage = getSessionTokenUsage(session);
       const tools = new Map<string, PiToolRecord>();
       const timelineParts: ChatMessagePart[] = [];
@@ -1715,6 +1802,31 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         );
       }
 
+      // A line of our own at the end of the answer, in the stored turn and on the stream alike.
+      const appendNotice = (notice: string) => {
+        const separator = assistantText.trim() ? "\n\n" : "";
+        assistantText = `${assistantText}${separator}${notice}`;
+        appendTimelineText(timelineParts, `${separator}${notice}`);
+        // On the stream too, not only in the stored turn: whoever reads the
+        // stream - a messenger on the other side of a handover is the case - is
+        // told why the turn stopped, in the same words the stored chat has.
+        // Not through safeWrite: that goes quiet once the turn is aborted, and a turn
+        // that has been stopped is exactly this one.
+        const noticeId = `pi-text-${crypto.randomUUID()}`;
+        for (const part of [
+          { type: "text-start" as const, id: noticeId },
+          { type: "text-delta" as const, id: noticeId, delta: `${separator}${notice}` },
+          { type: "text-end" as const, id: noticeId },
+        ]) {
+          try {
+            if (live) live.push(part);
+            else writer.write(part);
+          } catch {
+            // the reader is gone; the stored turn has it
+          }
+        }
+      };
+
       const persistPartialAssistant = async (runtimeStats: PiRuntimeStats = currentStats()) => {
         if (persisted) return;
         persisted = true;
@@ -1722,28 +1834,14 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         closeTextPart();
         if (stall.stalled) {
           // Given up on for going quiet, or for a question nobody answered: the stored turn says so, in the person's words.
-          const notice = await stallEnding(stall.stalled, stall.question);
-          const separator = assistantText.trim() ? "\n\n" : "";
-          assistantText = `${assistantText}${separator}${notice}`;
-          appendTimelineText(timelineParts, `${separator}${notice}`);
-          // On the stream too, not only in the stored turn: whoever reads the
-          // stream - a messenger on the other side of a handover is the case - is
-          // told why the turn stopped, in the same words the stored chat has.
-          // Not through safeWrite: that goes quiet once the turn is aborted, and a turn
-          // that has been given up on is exactly this one.
-          const noticeId = `pi-text-${crypto.randomUUID()}`;
-          for (const part of [
-            { type: "text-start" as const, id: noticeId },
-            { type: "text-delta" as const, id: noticeId, delta: `${separator}${notice}` },
-            { type: "text-end" as const, id: noticeId },
-          ]) {
-            try {
-              if (live) live.push(part);
-              else writer.write(part);
-            } catch {
-              // the reader is gone; the stored turn has it
-            }
-          }
+          appendNotice(await stallEnding(stall.stalled, stall.question));
+        } else if (webCardQuestion === undefined) {
+          // Stopped. It used to be stored as whatever had been written so far,
+          // which after a few silent tool calls is nothing: an empty bubble
+          // under the person's message, read as the agent having failed. A turn
+          // that stopped at a question for its board card is not this - the
+          // question is the card's.
+          appendNotice(tCompaction("external.run.stopped"));
         }
         // A stopped turn keeps the files it had made, as the same turn on the other surface does.
         const files = await producedForTurn({
@@ -1835,6 +1933,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
               message.stopReason === "error"
                 ? describeProviderFailure(message.errorMessage) ?? providerFailure
                 : null;
+            lastCall = lastCallOf(message, messageText);
             emitStats(buildPiRuntimeStats(session, currentPromptUsage, addUsage(baselineUsage, currentPromptUsage)));
           }
           return;
@@ -2003,6 +2102,27 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         lastTurnUsage = lastTurnUsage ?? currentPromptUsage;
         if (isEmptyZeroTokenTurn(assistantText, tools.values(), currentPromptUsage)) {
           throw await emptyTurnError(providerFailure);
+        }
+        // Did the work and wrote no answer: asked once more, out of the person's sight.
+        if (endedWithoutAnswer(lastCall, tools.values(), currentPromptUsage)) {
+          await session.prompt(ANSWER_NUDGE);
+          if (aborted) {
+            await abortPromise;
+            await persistPartialAssistant();
+            return;
+          }
+          currentPromptUsage = subtractUsage(getSessionTokenUsage(session), baselineUsage);
+          if (endedWithoutAnswer(lastCall, tools.values(), currentPromptUsage)) {
+            closeTextPart();
+            appendNotice(tCompaction("chat.errors.noFinalAfterTools"));
+          }
+        }
+        // Failed after doing some of the work: the provider's own reason is the answer's last line.
+        const failedAfterWork = await failureAfterWork(lastCall ?? { text: "" }, providerFailure);
+        if (failedAfterWork) {
+          closeTextPart();
+          appendNotice(failedAfterWork);
+          turnFailure = failedAfterWork;
         }
         const finalStats = buildPiRuntimeStats(session, currentPromptUsage, addUsage(baselineUsage, currentPromptUsage));
         emitStats(finalStats);

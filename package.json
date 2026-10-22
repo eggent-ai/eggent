@@ -40,6 +40,7 @@
     "test:turn-checkpoint": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-turn-checkpoint.ts",
     "test:card-attachments": "EGGENT_TEST_STUBS=i18n/server node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-card-attachments.ts",
     "test:confirm-options": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-confirm-options.ts",
+    "test:empty-answers": "EGGENT_TEST_STUBS=i18n/server node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-empty-answers.ts",
     "test:ask-user-checkpoint": "EGGENT_TEST_STUBS=i18n/server node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-ask-user-checkpoint.ts",
     "test:question-wait": "EGGENT_TEST_STUBS=i18n/server node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-question-wait.ts",
     "test:cloud-transcription": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-cloud-transcription.ts",
