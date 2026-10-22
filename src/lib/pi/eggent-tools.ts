@@ -276,7 +276,7 @@ export async function createEggentPiTools(options: {
         placeholder: Type.Optional(Type.String({ description: "Hint shown in the input field for kind=free_text." })),
         title: Type.Optional(Type.String({ description: "Short card heading. Defaults to the question." })),
       }),
-      execute: async (_toolCallId, params, _signal, _onUpdate, ctx) => {
+      execute: async (_toolCallId, params) => {
         const question = params.question?.trim();
         if (!question) return textResult(JSON.stringify({ success: false, error: "question is required" }, null, 2));
 
@@ -286,10 +286,10 @@ export async function createEggentPiTools(options: {
 
         // Without someone able to answer, the question would hang until it times
         // out, which reads to the user as the agent freezing. Say so instead and
-        // let it keep working. `hasUI` is not enough on its own: every run
-        // registers a UI context, but Telegram and the external API have no
-        // channel to deliver an interaction card on.
-        if (options.interactive === false || ctx?.hasUI === false) {
+        // let it keep working. Whether someone can answer is the turn's, not the
+        // session's: a session restored at boot for its schedules has no UI context
+        // (ctx.hasUI is false) yet serves the chat's next web turn, which can.
+        if (options.interactive === false) {
           // A board card's run: the question waits on the card for the person,
           // and this run ends here. Their answer starts the card's next run.
           if (options.boardCardId) {

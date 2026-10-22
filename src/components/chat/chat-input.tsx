@@ -459,12 +459,15 @@ export function ChatInput({
     });
   }, [mentionable, setInput]);
 
-  const canSubmit = pendingInteraction
-    ? Boolean(input.trim()) || pendingInteraction.kind === "confirm" || cardFileNames.length > 0
-    : Boolean(input.trim()) || uploadedFiles.length > 0;
   // `!command` runs in the shell and has nothing to do with the agent's turn,
   // so it may be sent while one is going.
   const shellMode = !pendingInteraction && parseShellInput(input)?.kind === "command";
+  // A message sent while a file is still on its way goes without it: the agent
+  // answered the words and never saw the picture they were about.
+  const waitingForUpload = uploadingFiles.length > 0 && !shellMode;
+  const canSubmit = !waitingForUpload && (pendingInteraction
+    ? Boolean(input.trim()) || pendingInteraction.kind === "confirm" || cardFileNames.length > 0
+    : Boolean(input.trim()) || uploadedFiles.length > 0);
   const submitCurrentMessage = useCallback(() => {
     if (!canSubmit) return;
     if (!pendingInteraction && isLoading && !shellMode) return;
@@ -491,9 +494,10 @@ export function ChatInput({
   }, [input, secretWarning]);
 
   const sendDespiteSecret = useCallback(() => {
+    if (waitingForUpload) return;
     setSecretWarning(null);
     onSubmit(input.trim() ? undefined : t("chat.attachmentOnlyPrompt"));
-  }, [input, onSubmit, t]);
+  }, [input, onSubmit, t, waitingForUpload]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -1028,6 +1032,8 @@ export function ChatInput({
                 size="icon"
                 onClick={submitCurrentMessage}
                 disabled={!canSubmit || disabled}
+                aria-label={waitingForUpload ? t("chat.waitForUpload") : undefined}
+                title={waitingForUpload ? t("chat.waitForUpload") : undefined}
                 className="h-10 w-10 shrink-0 rounded-xl"
               >
                 <Send className="size-4" />

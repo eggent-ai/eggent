@@ -40,6 +40,60 @@ export interface EggentActionNotice {
   actionUrl?: string;
 }
 
+/**
+ * What the last message shows, folded into one string that changes whenever
+ * anything on screen moves: text growing, a tool card starting or ending.
+ */
+function visibleProgress(message: UIMessage | undefined): string {
+  if (!message) return "";
+  let folded = `${message.id}:${message.parts.length}`;
+  for (const part of message.parts) {
+    if (part.type === "text" || part.type === "reasoning") folded += `|${part.text.length}`;
+    else if ("state" in part && typeof part.state === "string") folded += `|${part.state}`;
+  }
+  return folded;
+}
+
+/**
+ * The line under a turn that is still going. A reasoning model can think for
+ * minutes before its first word, and a line that only said "Thinking..." the
+ * whole time read as a hang: people pressed Stop on answers that were coming.
+ * It counts the time since anything last appeared and, past a minute, says that
+ * this is normal.
+ */
+function WorkingLine({ progress }: { progress: string }) {
+  const { t } = useI18n();
+  const [since, setSince] = useState(() => Date.now());
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    setSince(Date.now());
+  }, [progress]);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const seconds = Math.max(0, Math.floor((now - since) / 1000));
+  const elapsed = seconds < 60
+    ? t("chat.thinkingSeconds", { seconds })
+    : t("chat.thinkingMinutes", { minutes: Math.floor(seconds / 60), seconds: String(seconds % 60).padStart(2, "0") });
+  return (
+    <div className="flex gap-3 py-3" role="status" aria-live="polite">
+      <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+        <Loader2 className="size-4 animate-spin" />
+      </div>
+      <div className="flex min-w-0 flex-col justify-center gap-0.5">
+        <span className="text-sm text-muted-foreground">
+          {t("chat.thinking")}
+          {seconds >= 5 ? <span className="tabular-nums"> {elapsed}</span> : null}
+        </span>
+        {seconds >= 60 ? (
+          <span className="text-xs text-muted-foreground">{t("chat.thinkingLong")}</span>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
 interface ChatMessagesProps {
   messages: UIMessage[];
   isLoading: boolean;
@@ -490,16 +544,7 @@ export function ChatMessages({ messages, isLoading, errorMessage, errorActions, 
         ) : null}
 
         {isLoading && messages.length > 0 && !compactionStatus && !pendingInteraction ? (
-          <div className="flex gap-3 py-3">
-            <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
-              <Loader2 className="size-4 animate-spin" />
-            </div>
-            <div className="flex items-center">
-              <span className="text-sm text-muted-foreground">
-                {t("chat.thinking")}
-              </span>
-            </div>
-          </div>
+          <WorkingLine progress={visibleProgress(messages[messages.length - 1])} />
         ) : null}
 
         {errorMessage ? (

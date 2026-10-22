@@ -142,6 +142,26 @@ await check("a session kept for its schedules serves no one, and nothing it hold
   assert.equal(second.length, before, "a card was raised for a turn that is over");
 });
 
+console.log("\nA session restored at boot for its schedules\n");
+
+await check("lent to a web turn, its question becomes a card although the session was bound with no UI", async () => {
+  // A session restored at boot is bound with no UI context, so the SDK hands its tools hasUI: false
+  // for good. The web turn it is lent to can still answer: the card must go up, not a refusal.
+  const restored = await createEggentPiSession({ chatId: "22222222-2222-4222-8222-222222222222" } as never);
+  const restoredTools = (restored as unknown as { agent: { state: { tools: Tool[] } } }).agent.state.tools;
+  const ask = restoredTools.find((candidate) => candidate.name === "eggent_ask_user");
+  assert.ok(ask);
+  const raised: PiPendingInteraction[] = [];
+  const stop = new AbortController();
+  rebindSessionTurn(restored, { runId: "run-boot", abortSignal: stop.signal, onPiInteraction: (interaction: PiPendingInteraction) => void raised.push(interaction) });
+  const asked = ask.execute("qb", { question: "Which day?", options: ["Mon", "Tue"] }, undefined, undefined, { hasUI: false });
+  await sleep(100);
+  assert.equal(raised.length, 1, "the question was refused as if nobody could answer");
+  stop.abort();
+  await asked;
+  restored.dispose();
+});
+
 console.log("\nWhere the turn came from\n");
 
 const fromTelegram = async (): Promise<boolean> => {
