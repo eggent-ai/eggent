@@ -14,7 +14,8 @@
  * well as a 200, which is the whole point of the probe.
  */
 import assert from "node:assert/strict";
-import { canProbeProviderApi, isLocalOnlyBaseUrl, probeModelProvider } from "../src/lib/pi/provider-probe.ts";
+import { createServer } from "node:http";
+import { canProbeProviderApi, entryAcceptsImages, isLocalOnlyBaseUrl, probeModelProvider } from "../src/lib/pi/provider-probe.ts";
 
 let failed = 0;
 let ran = 0;
@@ -81,6 +82,65 @@ for (const api of [
   "openai-codex-responses",
 ]) {
   await check(`do not probe: ${api}`, () => assert.equal(canProbeProviderApi(api), false));
+}
+
+
+console.log("\nentryAcceptsImages - what a model list says about pictures:");
+await check("architecture.input_modalities with image", () =>
+  assert.equal(entryAcceptsImages({ id: "a", architecture: { input_modalities: ["text", "image", "file"] } }), true)
+);
+await check("architecture.input_modalities without image", () =>
+  assert.equal(entryAcceptsImages({ id: "a", architecture: { input_modalities: ["text"] } }), false)
+);
+await check("modality string, image on the input side", () =>
+  assert.equal(entryAcceptsImages({ id: "a", architecture: { modality: "text+image->text" } }), true)
+);
+await check("modality string, image only on the output side", () =>
+  assert.equal(entryAcceptsImages({ id: "a", architecture: { modality: "text->image" } }), false)
+);
+await check("flat input_modalities and modalities.input", () => {
+  assert.equal(entryAcceptsImages({ id: "a", input_modalities: ["image"] }), true);
+  assert.equal(entryAcceptsImages({ id: "a", modalities: { input: ["text"] } }), false);
+});
+await check("a vision flag", () => {
+  assert.equal(entryAcceptsImages({ id: "a", capabilities: { vision: true } }), true);
+  assert.equal(entryAcceptsImages({ id: "a", supports_vision: false }), false);
+});
+await check("an id alone says nothing", () => {
+  assert.equal(entryAcceptsImages({ id: "a", object: "model" }), undefined);
+  assert.equal(entryAcceptsImages("a"), undefined);
+});
+
+console.log("\nprobeModelProvider - pictures from a local model list:");
+{
+  let body: unknown = {};
+  const server = createServer((_req, res) => {
+    res.setHeader("Content-Type", "application/json");
+    res.end(JSON.stringify(body));
+  });
+  await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+  const { port } = server.address() as { port: number };
+  const baseUrl = `http://127.0.0.1:${port}/v1`;
+  try {
+    // Past the first 20 too: a reseller's list runs to hundreds.
+    const filler = Array.from({ length: 30 }, (_, i) => ({ id: `lab/text-${i}`, architecture: { input_modalities: ["text"] } }));
+    body = { data: [...filler, { id: "lab/sees-1", architecture: { input_modalities: ["text", "image"] } }] };
+    await check("a described list reports its picture models", async () => {
+      const r = await probeModelProvider({ baseUrl, model: "lab/sees-1" });
+      assert.equal(r.ok, true);
+      assert.equal(r.describesInputs, true);
+      assert.deepEqual(r.imageModels, ["lab/sees-1"]);
+    });
+    body = { data: [{ id: "lab/plain-1" }, { id: "lab/plain-2" }] };
+    await check("a list of ids only says nothing about pictures", async () => {
+      const r = await probeModelProvider({ baseUrl, model: "lab/plain-1" });
+      assert.equal(r.ok, true);
+      assert.equal(r.describesInputs, undefined);
+      assert.equal(r.imageModels, undefined);
+    });
+  } finally {
+    server.close();
+  }
 }
 
 console.log("\nprobeModelProvider - classification:");

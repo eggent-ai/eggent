@@ -25,6 +25,44 @@ export interface ProviderProbe {
   detail?: string;
   /** Model ids the endpoint reported, when it reported any. */
   models?: string[];
+  /**
+   * True when the list said, for at least one model, what it accepts as input.
+   * Many OpenAI-compatible lists carry ids only, and silence there is not a "no".
+   */
+  describesInputs?: boolean;
+  /** Ids from the whole list (not only the first 20) that accept pictures. */
+  imageModels?: string[];
+}
+
+/**
+ * What one entry of a model list says about pictures: true, false, or nothing.
+ *
+ * OpenRouter and the resellers built on it put this under `architecture`
+ * (`input_modalities`, or a `text+image->text` modality string); other servers
+ * use a flat `input_modalities`, `modalities.input` or a vision flag.
+ */
+export function entryAcceptsImages(item: unknown): boolean | undefined {
+  if (!item || typeof item !== "object") return undefined;
+  const entry = item as Record<string, unknown>;
+  const architecture = entry.architecture && typeof entry.architecture === "object"
+    ? entry.architecture as Record<string, unknown>
+    : undefined;
+  const modalities = entry.modalities && typeof entry.modalities === "object"
+    ? entry.modalities as Record<string, unknown>
+    : undefined;
+  for (const list of [architecture?.input_modalities, entry.input_modalities, modalities?.input]) {
+    if (Array.isArray(list)) return list.some((value) => String(value).toLowerCase() === "image");
+  }
+  if (typeof architecture?.modality === "string" && architecture.modality.includes("->")) {
+    return architecture.modality.split("->")[0].split("+").some((value) => value.trim().toLowerCase() === "image");
+  }
+  const capabilities = entry.capabilities && typeof entry.capabilities === "object"
+    ? entry.capabilities as Record<string, unknown>
+    : undefined;
+  for (const flag of [capabilities?.vision, entry.supports_vision, entry.vision, entry.supports_image_input]) {
+    if (typeof flag === "boolean") return flag;
+  }
+  return undefined;
 }
 
 /**
@@ -98,22 +136,30 @@ export async function probeModelProvider(params: {
     }
 
     let ids: string[] = [];
+    let describesInputs = false;
+    const imageModels: string[] = [];
     try {
       const body = (await response.json()) as { data?: unknown; models?: unknown };
-      const list = Array.isArray(body?.data) ? body.data : Array.isArray(body?.models) ? body.models : [];
-      ids = list
-        .map((item) => (typeof item === "string" ? item : (item as { id?: unknown })?.id))
-        .filter((id): id is string => typeof id === "string" && Boolean(id));
+      const list: unknown[] = Array.isArray(body?.data) ? body.data : Array.isArray(body?.models) ? body.models : [];
+      for (const item of list) {
+        const id = typeof item === "string" ? item : (item as { id?: unknown })?.id;
+        if (typeof id !== "string" || !id) continue;
+        ids.push(id);
+        const images = entryAcceptsImages(item);
+        if (images !== undefined) describesInputs = true;
+        if (images) imageModels.push(id);
+      }
     } catch {
       // A provider that answers 200 with something we cannot parse has still
       // proved the endpoint and the key, which is what we came to find out.
       return { ok: true, reason: "ok", status: response.status };
     }
 
+    const inputs = describesInputs ? { describesInputs, imageModels } : {};
     if (params.model && ids.length > 0 && !ids.includes(params.model)) {
-      return { ok: false, reason: "model_missing", status: response.status, models: ids.slice(0, 20) };
+      return { ok: false, reason: "model_missing", status: response.status, models: ids.slice(0, 20), ...inputs };
     }
-    return { ok: true, reason: "ok", status: response.status, models: ids.slice(0, 20) };
+    return { ok: true, reason: "ok", status: response.status, models: ids.slice(0, 20), ...inputs };
   } catch (error) {
     return {
       ok: false,

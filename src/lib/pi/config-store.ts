@@ -858,9 +858,15 @@ export async function upsertCustomModelProvider(params: {
   api?: string;
   apiKey?: string;
   env?: Record<string, string>;
+  /** Which models accept pictures: all, none, or these ids. Left out, the provider's own list decides. */
+  images?: boolean | string[];
 }): Promise<{
   provider: string;
   models: string[];
+  /** The registered models that will be sent pictures. */
+  imageModels: string[];
+  /** Where imageModels came from: what the caller said, the provider's list, or nothing known. */
+  imageSource: "given" | "provider" | "unknown";
   hasKey: boolean;
   api: string;
   localOnly: boolean;
@@ -898,16 +904,6 @@ export async function upsertCustomModelProvider(params: {
     throw new Error("At least one model id is required.");
   }
 
-  const parsed = readJsonRecord(await readPiModelsJson());
-  const providers = parsed.providers && typeof parsed.providers === "object" && !Array.isArray(parsed.providers)
-    ? { ...(parsed.providers as Record<string, unknown>) }
-    : {};
-  providers[id] = { baseUrl, api, models: models.map((model) => ({ id: model })) };
-
-  const filePath = getPiModelsPath();
-  await fs.mkdir(path.dirname(filePath), { recursive: true });
-  await fs.writeFile(filePath, `${JSON.stringify({ ...parsed, providers }, null, 2)}\n`, "utf-8");
-
   const apiKey = params.apiKey?.trim();
   const auth = await readAuthJson().catch((): Record<string, StoredCredentialRecord> => ({}));
   if (apiKey) {
@@ -922,13 +918,55 @@ export async function upsertCustomModelProvider(params: {
   const stored = auth[id] as { key?: unknown } | undefined;
   const hasKey = Boolean(apiKey) || Boolean(typeof stored?.key === "string" && stored.key.trim());
 
+  // Probed before models.json is written, because the provider's list is also
+  // the best word on which models can see pictures.
   const effectiveKey = apiKey || (typeof stored?.key === "string" ? stored.key : undefined);
   const localOnly = isLocalOnlyBaseUrl(baseUrl);
   const check = localOnly || !canProbeProviderApi(api)
     ? ({ ok: false, reason: "not_checked" } as ProviderProbe)
     : await probeModelProvider({ baseUrl, apiKey: effectiveKey, model: models[0] });
 
-  return { provider: id, models, hasKey, api, localOnly, check };
+  // The runtime treats a model with no `input` as text-only and drops every
+  // picture sent to it, so a vision model registered by id alone could not read
+  // a single drawing. A model marked for pictures that cannot take them fails
+  // loudly instead, which is why nothing is guessed: the caller says, or the
+  // provider's list does, or the model stays text-only.
+  const { imageModels, imageSource } = resolveImageModels(models, params.images, check);
+  const withImages = new Set(imageModels);
+
+  const parsed = readJsonRecord(await readPiModelsJson());
+  const providers = parsed.providers && typeof parsed.providers === "object" && !Array.isArray(parsed.providers)
+    ? { ...(parsed.providers as Record<string, unknown>) }
+    : {};
+  providers[id] = {
+    baseUrl,
+    api,
+    models: models.map((model) => (withImages.has(model) ? { id: model, input: ["text", "image"] } : { id: model })),
+  };
+
+  const filePath = getPiModelsPath();
+  await fs.mkdir(path.dirname(filePath), { recursive: true });
+  await fs.writeFile(filePath, `${JSON.stringify({ ...parsed, providers }, null, 2)}\n`, "utf-8");
+
+  return { provider: id, models, imageModels, imageSource, hasKey, api, localOnly, check };
+}
+
+function resolveImageModels(
+  models: string[],
+  images: boolean | string[] | undefined,
+  check: ProviderProbe
+): { imageModels: string[]; imageSource: "given" | "provider" | "unknown" } {
+  if (images === true) return { imageModels: [...models], imageSource: "given" };
+  if (images === false) return { imageModels: [], imageSource: "given" };
+  if (Array.isArray(images)) {
+    const given = new Set(images.map((model) => model.trim()));
+    return { imageModels: models.filter((model) => given.has(model)), imageSource: "given" };
+  }
+  if (check.describesInputs) {
+    const listed = new Set(check.imageModels || []);
+    return { imageModels: models.filter((model) => listed.has(model)), imageSource: "provider" };
+  }
+  return { imageModels: [], imageSource: "unknown" };
 }
 
 /**

@@ -445,6 +445,7 @@ export async function createEggentPiTools(options: {
         models: Type.Optional(Type.Array(Type.String(), { description: "Model ids exactly as the provider names them, for add_provider." })),
         api: Type.Optional(Type.String({ description: "Streaming API. Defaults to openai-completions, which fits almost every OpenAI-compatible endpoint." })),
         api_key: Type.Optional(Type.String({ description: "Provider API key. Optional: when omitted, the provider is registered without a key and the user can paste it in Settings instead of sending it through chat." })),
+        images: Type.Optional(Type.Union([Type.Boolean(), Type.Array(Type.String())], { description: "Which of these models accept pictures: true for all, false for none, or a list of ids, for add_provider. Leave it out to take it from the provider's own model list. A model not marked for pictures never sees an attached image." })),
         model: Type.Optional(Type.String({ description: "Model id to make default, for use_provider." })),
       }),
       execute: async (_toolCallId, params) => {
@@ -464,7 +465,11 @@ export async function createEggentPiTools(options: {
               models: params.models,
               api: params.api,
               apiKey: params.api_key,
+              images: params.images,
             });
+            const pictures = result.imageSource === "unknown"
+              ? " The provider's list does not say which models accept pictures, so all are registered as text-only and attached images will be left out. If any of them can read images, call add_provider again with images set."
+              : "";
             // Say now whether this provider can actually answer. Switching to
             // one that cannot leaves the workspace with no working model at
             // all, and the person discovers it one empty reply at a time.
@@ -483,7 +488,14 @@ export async function createEggentPiTools(options: {
               JSON.stringify({
                 success: true,
                 ...result,
-                next,
+                // A reseller lists hundreds of models; the whole list would be
+                // read back into the turn for nothing.
+                models: result.models.length > 30 ? `${result.models.length} models` : result.models,
+                imageModels: result.imageModels.length > 30
+                  ? `${result.imageModels.length} of them accept pictures`
+                  : result.imageModels,
+                check: { ...result.check, imageModels: undefined },
+                next: next + pictures,
                 settingsHint: "Settings -> Models and login",
               }, null, 2)
             );
