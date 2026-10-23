@@ -37,7 +37,7 @@ export interface ProviderProbe {
 /**
  * What one entry of a model list says about pictures: true, false, or nothing.
  *
- * OpenRouter and the resellers built on it put this under `architecture`
+ * Some aggregating providers put this under `architecture`
  * (`input_modalities`, or a `text+image->text` modality string); other servers
  * use a flat `input_modalities`, `modalities.input` or a vision flag.
  */
