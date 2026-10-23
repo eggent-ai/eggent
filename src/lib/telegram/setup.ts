@@ -9,6 +9,7 @@
 
 import {
   buildTelegramWebhookUrl,
+  detectTelegramMode,
   generateTelegramWebhookSecret,
   getTelegramIntegrationRuntimeConfig,
   getTelegramIntegrationStoredSettings,
@@ -128,10 +129,26 @@ async function setTelegramWebhook(params: {
 }
 
 /**
+ * How a bot is connected when nobody asked for a particular way.
+ *
+ * Polling works anywhere, so it stays the default. A deployment that sets
+ * `TELEGRAM_MODE=webhook` says its workspaces have a public address and may be
+ * stopped while idle: a polling bot keeps its workspace running for ever,
+ * because nothing outside would wake it for the next message, while a webhook
+ * is an ordinary request that does. Webhook is used only when the address is
+ * one Telegram can reach.
+ */
+export function defaultTelegramSetupMode(publicBaseUrl: string): TelegramSetupMode {
+  if (process.env.TELEGRAM_MODE?.trim().toLowerCase() !== "webhook") return "polling";
+  return detectTelegramMode({ mode: "auto", publicBaseUrl }) === "webhook" ? "webhook" : "polling";
+}
+
+/**
  * Validate the token, persist the integration, and start receiving updates.
  *
  * `botToken` may be omitted to re-apply the already stored token. Throws with a
- * Telegram-provided message when the token is rejected.
+ * Telegram-provided message when the token is rejected. Without `mode` the
+ * deployment's own choice is used (`defaultTelegramSetupMode`).
  */
 export async function connectTelegramBot(params: {
   botToken?: string;
@@ -149,16 +166,18 @@ export async function connectTelegramBot(params: {
   const botToken = inputToken || storedToken || runtime.botToken.trim();
   if (!botToken) throw new Error(t("api.error.telegramTokenRequired"));
 
-  const mode: TelegramSetupMode = params.mode === "webhook" ? "webhook" : "polling";
-  const botInfo = await getTelegramBotInfo(botToken);
-
-  const claimWarning = mode === "polling" ? await claimHostedTelegramBot(botToken, t) : null;
-  if (claimWarning) console.warn("Telegram cloud claim warning:", claimWarning);
-
   const webhookSecret =
     stored.webhookSecret.trim() || runtime.webhookSecret.trim() || generateTelegramWebhookSecret();
   const publicBaseUrl =
     stored.publicBaseUrl.trim() || runtime.publicBaseUrl.trim() || params.fallbackPublicBaseUrl?.trim() || "";
+
+  const mode: TelegramSetupMode = params.mode ?? defaultTelegramSetupMode(publicBaseUrl);
+  const botInfo = await getTelegramBotInfo(botToken);
+
+  // Whichever way updates arrive, a shared bot polling this token would take
+  // them first, so the claim is made for webhook too.
+  const claimWarning = await claimHostedTelegramBot(botToken, t);
+  if (claimWarning) console.warn("Telegram cloud claim warning:", claimWarning);
 
   await saveTelegramIntegrationStoredSettings({
     botToken: inputToken ? botToken : storedToken || undefined,
@@ -174,6 +193,9 @@ export async function connectTelegramBot(params: {
   if (mode === "webhook") {
     if (!publicBaseUrl) throw new Error(t("api.error.telegramPublicUrlRequired"));
     const webhookUrl = buildTelegramWebhookUrl(publicBaseUrl);
+    // A bot that was polling until now would otherwise keep asking for updates
+    // that Telegram no longer hands out while a webhook is set.
+    if (telegramPollingService.status.isRunning) telegramPollingService.stop();
     await setTelegramWebhook({ botToken, webhookUrl, webhookSecret });
     await setEggentTelegramBotCommands(botToken);
     await setTelegramBotWelcome(botToken, t);

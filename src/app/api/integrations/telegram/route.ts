@@ -7,6 +7,7 @@ import {
   processTelegramUpdate,
   type TelegramUpdate,
 } from "@/lib/telegram/telegram-message-handler";
+import { enqueueTelegramWebhookUpdate } from "@/lib/telegram/webhook-queue";
 
 function safeTokenMatch(actual: string, expected: string): boolean {
   const actualBytes = Buffer.from(actual);
@@ -50,8 +51,12 @@ export async function POST(req: NextRequest) {
 
   try {
     const body = (await req.json()) as TelegramUpdate;
-    const result = await processTelegramUpdate(body, runtime);
-    return Response.json(result);
+    if (typeof body?.update_id !== "number" || !Number.isInteger(body.update_id)) {
+      return Response.json({ error: "Invalid update_id" }, { status: 400 });
+    }
+    // Answered before the turn runs: see webhook-queue.ts.
+    void enqueueTelegramWebhookUpdate(body, runtime, processTelegramUpdate);
+    return Response.json({ ok: true, accepted: true });
   } catch (error) {
     console.error("Telegram webhook error:", error);
     return Response.json(

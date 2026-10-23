@@ -544,7 +544,7 @@ export async function createEggentPiTools(options: {
         ),
         mode: Type.Optional(
           Type.Union([Type.Literal("polling"), Type.Literal("webhook")], {
-            description: "Delivery mode. Defaults to polling, which works without a public URL.",
+            description: "Delivery mode. Leave it out: the deployment's own way is used (polling where there is no public address).",
           })
         ),
         user_id: Type.Optional(
@@ -735,7 +735,7 @@ export async function createEggentPiTools(options: {
 
           const result = await connectTelegramBot({
             botToken: params.bot_token,
-            mode: params.mode === "webhook" ? "webhook" : "polling",
+            mode: params.mode === "webhook" || params.mode === "polling" ? params.mode : undefined,
             fallbackPublicBaseUrl: process.env.APP_BASE_URL?.trim(),
             t,
           });

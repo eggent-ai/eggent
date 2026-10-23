@@ -461,7 +461,7 @@ export function TelegramIntegrationManager() {
                   const res = await fetch("/api/integrations/telegram/setup", {
                     method: "POST",
                     headers: { "Content-Type": "application/json" },
-                    body: JSON.stringify({ botToken: trimmedToken, mode: "polling" }),
+                    body: JSON.stringify({ botToken: trimmedToken }),
                   });
                   const data = (await res.json()) as {
                     error?: string;

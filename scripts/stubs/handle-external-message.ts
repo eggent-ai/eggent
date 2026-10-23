@@ -5,7 +5,8 @@
  * Telegram handler or of the external routes does not need: what it needs is a
  * turn that fails, or answers, the way the test says. A test sets
  * `globalThis.__eggentTestTurn` to an error to throw or a reply to return, and
- * may give `deltas`, the pieces of text reported while the turn "runs".
+ * may give `deltas`, the pieces of text reported while the turn "runs", and
+ * `gate`, a promise the turn waits on before it ends.
  */
 export class ExternalMessageError extends Error {
   status: number;
@@ -28,7 +29,7 @@ export function describeExternalError(
   return { status: 500, payload: { error: error instanceof Error ? error.message : fallback } };
 }
 
-type TestTurn = { error?: unknown; reply?: string; deltas?: string[] };
+type TestTurn = { error?: unknown; reply?: string; deltas?: string[]; gate?: Promise<void> };
 type ProgressInput = { onProgress?: (event: { type: "text"; delta: string }) => void };
 
 export async function handleExternalMessage(
@@ -39,6 +40,7 @@ export async function handleExternalMessage(
     input?.onProgress?.({ type: "text", delta });
     await new Promise((resolve) => setTimeout(resolve, 5));
   }
+  if (turn.gate) await turn.gate;
   if (turn.error !== undefined) throw turn.error;
   return { reply: turn.reply || "ok", context: { activeProjectName: null } };
 }

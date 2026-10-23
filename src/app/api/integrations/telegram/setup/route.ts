@@ -41,7 +41,7 @@ export async function POST(req: NextRequest) {
 
     const result = await connectTelegramBot({
       botToken: typeof body.botToken === "string" ? body.botToken : undefined,
-      mode: body.mode === "webhook" ? "webhook" : "polling",
+      mode: body.mode === "webhook" || body.mode === "polling" ? body.mode : undefined,
       fallbackPublicBaseUrl: inferPublicBaseUrl(req),
       t,
     });
