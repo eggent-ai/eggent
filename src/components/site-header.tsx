@@ -6,6 +6,7 @@ import { Separator } from "@/components/ui/separator"
 import { useSidebar } from "@/components/ui/sidebar"
 import { FilesPanelTrigger } from "@/components/files-panel"
 import { TerminalPanelTrigger } from "@/components/terminal-panel"
+import { BrowserPanelTrigger } from "@/components/browser-panel"
 
 export function SiteHeader({ title }: { title?: string }) {
   const { toggleSidebar } = useSidebar()
@@ -28,6 +29,7 @@ export function SiteHeader({ title }: { title?: string }) {
         {/* Right corner, opposite the sidebar toggle: the two are the same
             kind of control, one for each side of the screen. */}
         <div className="ml-auto flex items-center gap-1">
+          <BrowserPanelTrigger />
           <TerminalPanelTrigger />
           <FilesPanelTrigger />
         </div>

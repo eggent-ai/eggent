@@ -1260,6 +1260,28 @@ const enMessages = {
   "terminal.panel.closed.timeout": "The terminal ran out of time.",
   "terminal.panel.closed.error": "The terminal stopped working.",
 
+  // The agent's browser, in a panel of its own.
+  "browser.panel.toggle": "Browser",
+  "browser.panel.title": "Browser",
+  "browser.panel.close": "Close the browser panel",
+  "browser.panel.notOpen": "The agent's browser is not open. The agent opens it when a task needs one; you can open it yourself to sign in somewhere first.",
+  "browser.panel.open": "Open the browser",
+  "browser.panel.opening": "Opening the browser…",
+  "browser.panel.connecting": "Connecting to the browser…",
+  "browser.panel.closeBrowser": "Close the browser",
+  "browser.panel.take": "Take control",
+  "browser.panel.return": "Hand back to the agent",
+  "browser.panel.youHaveControl": "You have control: click, scroll and type on the picture. The agent waits until you hand it back.",
+  "browser.panel.agentHasControl": "The agent is using the browser. Take control to sign in or to do a step yourself.",
+  "browser.panel.minutes": "{left} of {monthly} min left this month",
+  "browser.panel.forget": "Forget sign-ins",
+  "browser.panel.forgetConfirm": "Close the browser and forget every site it is signed in to?",
+  "browser.panel.forgotten": "The browser is closed and its sign-ins are forgotten.",
+  "browser.panel.closed": "The browser closed ({reason}).",
+  "browser.panel.error": "The browser could not be reached: {reason}",
+  "browser.panel.picture": "The page in the agent's browser",
+  "browser.panel.typing": "Type here to type on the page",
+
   // Running a chat on the other side of a paired workspace and computer.
   "remote.where.cloud": "the cloud",
   "remote.where.yourComputer": "your computer",

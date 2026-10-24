@@ -21,6 +21,7 @@ import { logExtensionError, ownsScheduleStore, shutdownSessionExtensions } from 
 import { createSchedulePolicyExtension } from "@/lib/pi/schedule-policy";
 import { createFileVersionsExtension } from "@/lib/files/versions/agent-hooks";
 import { fileHistoryGuidance } from "@/lib/files/versions/service";
+import { browserGuidance } from "@/lib/browser/guidance";
 import { ensureHelperToolsExtension, withoutHelperTools } from "@/lib/pi/helper-tools";
 import { isScheduledRunSessionId, SCHEDULED_RUN_REFUSAL } from "@/lib/pi/scheduled-run-state";
 import { bindSubagentMonitor, createSubagentPolicyExtension, MAX_PARALLEL_SUBAGENTS, SubagentMonitor, VISIT_MAX_PARALLEL_SUBAGENTS } from "@/lib/pi/subagents";
@@ -325,6 +326,9 @@ function buildEggentProjectContext(options: {
     // People who hand documents back and forth ask to "go back to yesterday's
     // version" and to see what changed; the agent has to know that exists.
     fileHistoryGuidance(),
+    // A page that needs clicks, a form or a sign-in is beyond fetch_content;
+    // where the deployment has a browser for the agent, it is named here.
+    browserGuidance(),
     // One workspace asked for keyword clustering and the agent put 1.7 GB of
     // Python libraries beside the projects directory, where the file tree
     // cannot reach. The person deleted the project to make room, which removed

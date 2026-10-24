@@ -178,7 +178,7 @@ RUN for path in /app/src /app/app /app/components /app/hooks /app/store /app/.gi
     fi
 
 RUN mkdir -p /app/data/tmp /app/data/models/whisper /app/data/ms-playwright /app/data/npm-cache /app/data/.cache \
-  && chmod +x /app/scripts/docker-entrypoint.sh /app/scripts/ensure-pi-packages.mjs /app/scripts/bin/eggent-history \
+  && chmod +x /app/scripts/docker-entrypoint.sh /app/scripts/ensure-pi-packages.mjs /app/scripts/bin/eggent-history /app/scripts/bin/eggent-browser \
   && chown -R node:node /app/data "${PYTHON_VENV}"
 
 USER node

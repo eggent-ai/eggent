@@ -1,0 +1,382 @@
+#!/usr/bin/env node
+/**
+ * eggent-browser - a real browser for the agent, on a machine of its own.
+ *
+ *   eggent-browser open <url>            open a page (starts the browser when needed) and read it
+ *   eggent-browser read                  the page again: what can be clicked or typed into, numbered, and its text
+ *   eggent-browser text                  all the visible text of the page
+ *   eggent-browser click <n|"text">      click item n from the last read, or the first item with that text
+ *   eggent-browser type <n> <text>       type into item n; --enter presses Enter after, --clear empties it first
+ *   eggent-browser press <key>           a key: Enter, Tab, Escape, ArrowDown, PageDown, Backspace...
+ *   eggent-browser scroll [down|up]      scroll by most of a screen
+ *   eggent-browser back                  go back
+ *   eggent-browser screenshot [file]     a picture of the page, saved as a PNG file
+ *   eggent-browser tabs | tab <n>        list the open tabs, switch to one
+ *   eggent-browser status                is a browser open, and how many minutes are left this month
+ *   eggent-browser close                 close the browser
+ *   eggent-browser forget-logins         close it and forget every sign-in it keeps
+ *
+ * The browser stays open between commands and keeps its sign-ins between
+ * sessions. The person can watch it and take over in the Browser panel; while
+ * they have control, commands wait for them to hand it back. It is reached
+ * through the deployment's gateway (EGGENT_BROWSER_API_URL) with the
+ * workspace's token, and the page this program works on is remembered in
+ * EGGENT_BROWSER_STATE_DIR so the panel shows the same one.
+ */
+"use strict";
+
+const fs = require("node:fs");
+const path = require("node:path");
+
+const API = (process.env.EGGENT_BROWSER_API_URL || "").replace(/\/+$/, "");
+const TOKEN = process.env.EGGENT_USAGE_API_TOKEN || "";
+const STATE_DIR = process.env.EGGENT_BROWSER_STATE_DIR || path.join("/app/data", "tmp", "browser");
+const STATE_FILE = path.join(STATE_DIR, "state.json");
+const CONTROL_FILE = path.join(STATE_DIR, "control.json");
+const NAV_TIMEOUT_MS = 30_000;
+const MAX_ITEMS = 150;
+
+function fail(message, code = 1) {
+  process.stderr.write(`eggent-browser: ${message}\n`);
+  process.exit(code);
+}
+
+function readJson(file) {
+  try {
+    return JSON.parse(fs.readFileSync(file, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function writeState(state) {
+  fs.mkdirSync(STATE_DIR, { recursive: true });
+  const tmp = `${STATE_FILE}.${process.pid}.tmp`;
+  fs.writeFileSync(tmp, JSON.stringify(state));
+  fs.renameSync(tmp, STATE_FILE);
+}
+
+function personHasControl() {
+  const control = readJson(CONTROL_FILE);
+  // A hand-over older than half an hour is a panel somebody closed without
+  // giving control back.
+  return Boolean(control && control.by === "person" && Date.now() - Number(control.since || 0) < 30 * 60_000);
+}
+
+async function api(method, suffix) {
+  const response = await fetch(`${API}${suffix}`, { method, headers: { authorization: `Bearer ${TOKEN}` } });
+  const json = await response.json().catch(() => ({}));
+  if (!response.ok) fail(json.error || `the gateway answered ${response.status}`);
+  return json;
+}
+
+// --- CDP over the gateway ----------------------------------------------------
+
+function connect() {
+  return new Promise((resolve, reject) => {
+    const url = `${API.replace(/^http/, "ws")}/session/cdp`;
+    const ws = new WebSocket(url, { headers: { authorization: `Bearer ${TOKEN}` } });
+    let seq = 0;
+    const waiting = new Map();
+    const listeners = new Set();
+    ws.onmessage = (event) => {
+      const message = JSON.parse(typeof event.data === "string" ? event.data : Buffer.from(event.data).toString("utf8"));
+      if (message.id && waiting.has(message.id)) {
+        const { resolve: done, reject: failed } = waiting.get(message.id);
+        waiting.delete(message.id);
+        if (message.error) failed(new Error(message.error.message || "CDP error"));
+        else done(message.result || {});
+      } else if (message.method) {
+        for (const listener of listeners) listener(message);
+      }
+    };
+    ws.onerror = () => reject(new Error("could not reach the browser"));
+    ws.onclose = () => {
+      for (const { reject: failed } of waiting.values()) failed(new Error("the browser closed the connection"));
+      waiting.clear();
+    };
+    ws.onopen = () => resolve({
+      send(method, params = {}, sessionId) {
+        return new Promise((done, failed) => {
+          const id = ++seq;
+          waiting.set(id, { resolve: done, reject: failed });
+          ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
+        });
+      },
+      on(listener) {
+        listeners.add(listener);
+        return () => listeners.delete(listener);
+      },
+      close() {
+        ws.close();
+      },
+    });
+  });
+}
+
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+async function openSession() {
+  if (!API || !TOKEN) fail("there is no browser in this workspace.");
+  return api("POST", "/session");
+}
+
+/** The page to work on: the remembered one if it is still open, else the first tab, else a new one. */
+async function attach(cdp) {
+  const { targetInfos } = await cdp.send("Target.getTargets");
+  const pages = targetInfos.filter((t) => t.type === "page");
+  const state = readJson(STATE_FILE) || {};
+  let target = pages.find((t) => t.targetId === state.targetId) || pages[0];
+  if (!target) {
+    const created = await cdp.send("Target.createTarget", { url: "about:blank" });
+    target = { targetId: created.targetId };
+  }
+  const { sessionId } = await cdp.send("Target.attachToTarget", { targetId: target.targetId, flatten: true });
+  await cdp.send("Page.enable", {}, sessionId);
+  await cdp.send("Runtime.enable", {}, sessionId);
+  // A browser driven over CDP says so to every page; most sites never look,
+  // the ones that refuse automation do.
+  await cdp.send("Page.addScriptToEvaluateOnNewDocument", { source: "Object.defineProperty(navigator, 'webdriver', { get: () => undefined });" }, sessionId);
+  await cdp.send("Target.activateTarget", { targetId: target.targetId }).catch(() => {});
+  writeState({ ...state, targetId: target.targetId, at: Date.now() });
+  return { sessionId, targetId: target.targetId, pages };
+}
+
+async function evaluate(cdp, sessionId, expression) {
+  const result = await cdp.send("Runtime.evaluate", { expression, returnByValue: true, awaitPromise: true }, sessionId);
+  if (result.exceptionDetails) throw new Error(result.exceptionDetails.exception?.description || "the page refused the script");
+  return result.result.value;
+}
+
+async function settle(cdp, sessionId, navigation) {
+  const deadline = Date.now() + NAV_TIMEOUT_MS;
+  if (navigation) {
+    await new Promise((resolve) => {
+      const off = cdp.on((message) => {
+        if (message.sessionId === sessionId && message.method === "Page.loadEventFired") { off(); resolve(); }
+      });
+      setTimeout(() => { off(); resolve(); }, NAV_TIMEOUT_MS);
+    });
+  } else {
+    await sleep(800);
+  }
+  while (Date.now() < deadline) {
+    const ready = await evaluate(cdp, sessionId, "document.readyState").catch(() => "loading");
+    if (ready === "complete" || ready === "interactive") break;
+    await sleep(300);
+  }
+  await sleep(400);
+}
+
+// Numbers what can be clicked or typed into, so a later command can name it.
+// A password field's value is never read back.
+const READ_PAGE = `(() => {
+  const visible = (el) => {
+    const r = el.getBoundingClientRect();
+    if (r.width < 2 || r.height < 2) return false;
+    const s = getComputedStyle(el);
+    return s.visibility !== "hidden" && s.display !== "none" && r.bottom > 0 && r.top < innerHeight * 3;
+  };
+  const roleOf = (el) => {
+    const role = el.getAttribute("role");
+    if (role) return role;
+    const tag = el.tagName.toLowerCase();
+    if (tag === "a") return "link";
+    if (tag === "select") return "select";
+    if (tag === "textarea") return "textbox";
+    if (tag === "summary") return "button";
+    if (tag === "input") {
+      const type = (el.type || "text").toLowerCase();
+      if (type === "checkbox" || type === "radio") return type;
+      if (type === "submit" || type === "button" || type === "reset" || type === "image") return "button";
+      return type === "password" ? "password" : "textbox";
+    }
+    if (el.isContentEditable) return "textbox";
+    return tag;
+  };
+  const clean = (v) => String(v || "").replace(/\\s+/g, " ").trim();
+  document.querySelectorAll("[data-eggent-ref]").forEach((el) => el.removeAttribute("data-eggent-ref"));
+  const selector = 'a[href], button, input:not([type=hidden]), textarea, select, summary, [role=button], [role=link], [role=checkbox], [role=radio], [role=tab], [role=menuitem], [role=option], [role=switch], [role=combobox], [contenteditable="true"], [contenteditable=""]';
+  const items = [];
+  let n = 0;
+  for (const el of document.querySelectorAll(selector)) {
+    if (n >= ${MAX_ITEMS} || !visible(el)) continue;
+    n += 1;
+    el.setAttribute("data-eggent-ref", String(n));
+    const role = roleOf(el);
+    const label = el.labels && el.labels[0] ? el.labels[0].innerText : "";
+    const name = clean(el.getAttribute("aria-label") || label || el.innerText || el.placeholder || el.title || el.alt || el.name || "").slice(0, 80);
+    let extra = "";
+    if (role === "textbox" && el.value) extra = ' value="' + clean(el.value).slice(0, 60) + '"';
+    if (role === "checkbox" || role === "radio") extra = el.checked ? " [checked]" : "";
+    if (role === "select" && el.selectedOptions && el.selectedOptions[0]) extra = ' selected="' + clean(el.selectedOptions[0].text).slice(0, 40) + '"';
+    if (role === "link") extra = " -> " + String(el.getAttribute("href") || "").slice(0, 100);
+    if (el.disabled) extra += " [disabled]";
+    items.push("[" + n + "] " + role + ' "' + name + '"' + extra);
+  }
+  const text = clean(document.body ? document.body.innerText : "").slice(0, 2500);
+  return { title: document.title, url: location.href, items, text, more: document.querySelectorAll(selector).length > n, scrolled: Math.round(scrollY), height: document.documentElement.scrollHeight, view: innerHeight };
+})()`;
+
+async function read(cdp, sessionId) {
+  const page = await evaluate(cdp, sessionId, READ_PAGE);
+  const lines = [`${page.title || "(no title)"}`, page.url, ""];
+  if (page.items.length) lines.push("What you can use:", ...page.items, "");
+  if (page.more) lines.push(`(more items further down: scroll, then read again)`, "");
+  const position = page.height > page.view ? ` (scrolled ${page.scrolled} of ${page.height - page.view}px)` : "";
+  lines.push(`Text${position}:`, page.text || "(no text)");
+  process.stdout.write(`${lines.join("\n")}\n`);
+}
+
+async function pointOf(cdp, sessionId, target) {
+  const byRef = /^\d+$/.test(target);
+  const expression = byRef
+    ? `(() => { const el = document.querySelector('[data-eggent-ref="${target}"]'); if (!el) return null; el.scrollIntoView({ block: "center", inline: "center" }); const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`
+    : `(() => { const want = ${JSON.stringify(String(target).toLowerCase())}; const all = [...document.querySelectorAll('a, button, input, textarea, select, summary, [role], label, [onclick]')]; const el = all.find((e) => (e.innerText || e.value || e.getAttribute("aria-label") || "").toLowerCase().includes(want)); if (!el) return null; el.scrollIntoView({ block: "center", inline: "center" }); const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2 }; })()`;
+  const point = await evaluate(cdp, sessionId, expression);
+  if (!point) fail(byRef ? `there is no item ${target} on the page; run "eggent-browser read" first` : `nothing on the page says "${target}"`);
+  return point;
+}
+
+async function click(cdp, sessionId, x, y) {
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseMoved", x, y }, sessionId);
+  await cdp.send("Input.dispatchMouseEvent", { type: "mousePressed", x, y, button: "left", clickCount: 1 }, sessionId);
+  await cdp.send("Input.dispatchMouseEvent", { type: "mouseReleased", x, y, button: "left", clickCount: 1 }, sessionId);
+}
+
+const KEYS = {
+  Enter: { code: "Enter", keyCode: 13, text: "\r" },
+  Tab: { code: "Tab", keyCode: 9 },
+  Escape: { code: "Escape", keyCode: 27 },
+  Backspace: { code: "Backspace", keyCode: 8 },
+  Delete: { code: "Delete", keyCode: 46 },
+  ArrowDown: { code: "ArrowDown", keyCode: 40 },
+  ArrowUp: { code: "ArrowUp", keyCode: 38 },
+  ArrowLeft: { code: "ArrowLeft", keyCode: 37 },
+  ArrowRight: { code: "ArrowRight", keyCode: 39 },
+  PageDown: { code: "PageDown", keyCode: 34 },
+  PageUp: { code: "PageUp", keyCode: 33 },
+  Home: { code: "Home", keyCode: 36 },
+  End: { code: "End", keyCode: 35 },
+  Space: { code: "Space", keyCode: 32, text: " ", key: " " },
+};
+
+async function press(cdp, sessionId, name) {
+  const key = KEYS[name];
+  if (!key) fail(`unknown key "${name}"; one of ${Object.keys(KEYS).join(", ")}`);
+  const base = { key: key.key || name, code: key.code, windowsVirtualKeyCode: key.keyCode, nativeVirtualKeyCode: key.keyCode };
+  await cdp.send("Input.dispatchKeyEvent", { type: key.text ? "keyDown" : "rawKeyDown", ...base, ...(key.text ? { text: key.text } : {}) }, sessionId);
+  await cdp.send("Input.dispatchKeyEvent", { type: "keyUp", ...base }, sessionId);
+}
+
+function help() {
+  const source = fs.readFileSync(__filename, "utf8");
+  const block = source.slice(source.indexOf("/**") + 3, source.indexOf("*/"));
+  process.stdout.write(`${block.split("\n").map((line) => line.replace(/^ \* ?/, "")).join("\n").trim()}\n`);
+}
+
+async function main() {
+  const [command, ...args] = process.argv.slice(2);
+  if (!command || command === "help" || command === "--help") return help();
+  if (!API || !TOKEN) fail("there is no browser in this workspace.");
+
+  if (command === "status") {
+    const status = await api("GET", "/session");
+    process.stdout.write(`${status.open ? "A browser is open." : "No browser is open."} Minutes this month: ${status.minutes.used} of ${status.minutes.monthly} used, ${status.minutes.left} left.\n`);
+    return;
+  }
+  if (command === "close") {
+    await api("DELETE", "/session");
+    fs.rmSync(STATE_FILE, { force: true });
+    process.stdout.write("The browser is closed.\n");
+    return;
+  }
+  if (command === "forget-logins") {
+    await api("DELETE", "/profile");
+    fs.rmSync(STATE_FILE, { force: true });
+    process.stdout.write("The browser is closed and every sign-in it kept is forgotten.\n");
+    return;
+  }
+  if (personHasControl()) fail("the person has taken control of the browser in the Browser panel. Wait for them to hand it back, or ask them to.", 2);
+
+  const known = ["open", "read", "text", "click", "type", "press", "scroll", "back", "screenshot", "tabs", "tab"];
+  if (!known.includes(command)) fail(`unknown command "${command}"; run "eggent-browser help"`);
+  if (command === "open" && !args[0]) fail("open needs a page address");
+
+  const session = await openSession();
+  const cdp = await connect();
+  try {
+    const { sessionId, pages } = await attach(cdp);
+
+    if (command === "open") {
+      let url = args[0];
+      if (!/^https?:\/\//i.test(url)) url = `https://${url}`;
+      const navigation = cdp.send("Page.navigate", { url }, sessionId);
+      const result = await navigation;
+      if (result.errorText) fail(`the page did not open: ${result.errorText}`);
+      await settle(cdp, sessionId, true);
+      await read(cdp, sessionId);
+    } else if (command === "read") {
+      await read(cdp, sessionId);
+    } else if (command === "text") {
+      const text = await evaluate(cdp, sessionId, "(document.body ? document.body.innerText : '').replace(/\\n{3,}/g, '\\n\\n')");
+      process.stdout.write(`${String(text).slice(0, 20000)}\n`);
+    } else if (command === "click") {
+      if (!args[0]) fail("click needs an item number or a text");
+      const point = await pointOf(cdp, sessionId, args.join(" "));
+      await click(cdp, sessionId, point.x, point.y);
+      await settle(cdp, sessionId, false);
+      await read(cdp, sessionId);
+    } else if (command === "type") {
+      const flags = new Set(args.filter((a) => a === "--enter" || a === "--clear"));
+      const rest = args.filter((a) => !flags.has(a));
+      if (!/^\d+$/.test(rest[0] || "") || rest.length < 2) fail('type needs an item number and the text, e.g. eggent-browser type 3 "hello"');
+      const point = await pointOf(cdp, sessionId, rest[0]);
+      await click(cdp, sessionId, point.x, point.y);
+      if (flags.has("--clear")) {
+        await evaluate(cdp, sessionId, `(() => { const el = document.querySelector('[data-eggent-ref="${rest[0]}"]'); if (el && "value" in el) { el.value = ""; el.dispatchEvent(new Event("input", { bubbles: true })); } return true; })()`);
+      }
+      await cdp.send("Input.insertText", { text: rest.slice(1).join(" ") }, sessionId);
+      if (flags.has("--enter")) {
+        await press(cdp, sessionId, "Enter");
+        await settle(cdp, sessionId, false);
+        await read(cdp, sessionId);
+      } else {
+        process.stdout.write("Typed.\n");
+      }
+    } else if (command === "press") {
+      if (!args[0]) fail("press needs a key");
+      await press(cdp, sessionId, args[0]);
+      await settle(cdp, sessionId, false);
+      await read(cdp, sessionId);
+    } else if (command === "scroll") {
+      const up = args[0] === "up";
+      await evaluate(cdp, sessionId, `window.scrollBy(0, ${up ? "-" : ""}Math.round(innerHeight * 0.8))`);
+      await sleep(500);
+      await read(cdp, sessionId);
+    } else if (command === "back") {
+      await evaluate(cdp, sessionId, "history.back()");
+      await settle(cdp, sessionId, false);
+      await read(cdp, sessionId);
+    } else if (command === "screenshot") {
+      const shot = await cdp.send("Page.captureScreenshot", { format: "png" }, sessionId);
+      const file = path.resolve(args[0] || `browser-${new Date().toISOString().replace(/[:.]/g, "-")}.png`);
+      fs.writeFileSync(file, Buffer.from(shot.data, "base64"));
+      process.stdout.write(`Saved ${file}\n`);
+    } else if (command === "tabs") {
+      const state = readJson(STATE_FILE) || {};
+      pages.forEach((page, index) => process.stdout.write(`${index + 1}${page.targetId === state.targetId ? " *" : ""} ${page.title || "(no title)"} - ${page.url}\n`));
+    } else if (command === "tab") {
+      const page = pages[Number(args[0]) - 1];
+      if (!page) fail("there is no such tab; run eggent-browser tabs");
+      writeState({ ...(readJson(STATE_FILE) || {}), targetId: page.targetId, at: Date.now() });
+      await cdp.send("Target.activateTarget", { targetId: page.targetId });
+      process.stdout.write(`Switched to ${page.title || page.url}\n`);
+    }
+    if (session.minutes && session.minutes.left <= 5) process.stdout.write(`\n(Browser minutes left this month: ${session.minutes.left})\n`);
+  } finally {
+    cdp.close();
+  }
+}
+
+main().catch((error) => fail(error.message || String(error)));

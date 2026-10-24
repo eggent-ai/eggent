@@ -9,6 +9,7 @@ import { startApprovalsWatch } from "@/lib/approvals/watch";
 import { startSharesWatch } from "@/lib/shares/watch";
 import { startBoardDispatcher } from "@/lib/board/dispatcher";
 import { startFileVersionsService } from "@/lib/files/versions/service";
+import { exportBrowserEnvironment } from "@/lib/browser/config";
 
 // A chat written by the sync with a paired workspace or computer shows up on screen as it arrives.
 startChatsWatcher();
@@ -57,6 +58,10 @@ startBoardDispatcher();
 // File history: changes made elsewhere are noticed, old versions are let go of,
 // and the agent's shell gets `eggent-history` (lib/files/versions).
 startFileVersionsService();
+
+// The browser the agent drives, where the deployment offers one: its program
+// and the Browser panel agree on the page through a folder named here (lib/browser).
+exportBrowserEnvironment();
 
 /**
  * Provider catalogs are refreshed here and nowhere else.
