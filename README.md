@@ -7,11 +7,11 @@
 </p>
 
 <p align="center">
-  <strong>Local-first AI workspace for project agents, files, pipelines, Telegram, and external API integrations.</strong><br />
-  <strong>Current version: <a href="https://github.com/eggent-ai/eggent/releases/latest">0.6.0</a></strong>
+  <strong>Local-first AI workspace for project agents, files, a task board, Telegram, and external API integrations.</strong><br />
+  <strong>Current version: <a href="https://github.com/eggent-ai/eggent/releases/latest">0.7.0</a></strong>
 </p>
 
-Eggent is a browser-based AI workspace and orchestration layer. It gives you project-scoped agents, persistent files and memory, chat history, pasted image/file context, pipelines, Telegram integration, and a simple HTTP API for external systems.
+Eggent is a browser-based AI workspace and orchestration layer. It gives you project-scoped agents, persistent files and memory, chat history, pasted image/file context, a task board, Telegram integration, and a simple HTTP API for external systems.
 
 The user-facing product is Eggent. Internally, Eggent uses an agent runtime and extension packages for model execution, tools, skills, MCP, scheduling, and web access.
 
@@ -27,7 +27,7 @@ The user-facing product is Eggent. Internally, Eggent uses an agent runtime and 
 - [Other Useful APIs](#other-useful-apis)
 - [Telegram](#telegram)
 - [Local Voice Transcription](#local-voice-transcription)
-- [Pipelines](#pipelines)
+- [Task Board](#task-board)
 - [Files and Images](#files-and-images)
 - [MCP, Skills, and Models](#mcp-skills-and-models)
 - [Data Layout](#data-layout)
@@ -42,9 +42,11 @@ The user-facing product is Eggent. Internally, Eggent uses an agent runtime and 
 
 - **Project agents** — every project has its own instructions, files, memory, skills, MCP config, and model settings.
 - **Local-first storage** — app data lives under `data/` and can be backed up as normal files.
-- **Modern dashboard** — projects, files, settings, models, MCP, skills, schedules, API token management, Telegram, and pipelines.
+- **Modern dashboard** — projects, files, settings, models, MCP, skills, schedules, API token management, Telegram, and the task board.
 - **Chat with context** — upload files, paste screenshots/images, and keep attachments tied to the chat.
-- **Pipelines** — run multiple project agents in sequence with artifact handoff.
+- **Task board** — hand work to the agent as cards; each runs in a chat of its own, can wait for other cards, and is moved by how its run ended.
+- **File history** — every change to a text file or document in a project is kept as a version you can compare and restore, with who made it.
+- **Pages and code** — an HTML file opens as it looks: pick its blocks for the agent, change its words in place, save it as PDF; code opens in an editor.
 - **External API** — send messages from another service and preserve session/project/chat context between calls.
 - **Telegram bot** — use Eggent from Telegram with formatted responses, voice message transcription, and progress updates during long runs.
 - **Local voice input** — dictate in the Eggent chat UI or send Telegram voice messages; transcription runs locally via whisper.cpp.
@@ -217,13 +219,13 @@ Its files sit next to the project directories, so the orchestrator can coordinat
 
 A chat stores messages, runtime stats, attached files, and the active project context. Uploaded and pasted chat files are exposed to the agent as readable context paths.
 
-### Pipeline
+### Card
 
-A pipeline is a saved sequence of project-agent steps. Steps run top-to-bottom and can use artifacts from previous steps.
+A card on the task board is a chat with a place in a queue. It is carried out by the same runner as every other turn, can wait for other cards and starts with their results, and the host moves it from how its run ended: done, waiting for your review, a question, a failure (retried once), a stall, a stop.
 
 ### Schedule
 
-Schedules are surfaced in Eggent UI and stored in runtime schedule files. Current limitation: scheduled jobs run while the Eggent process is alive; automatic rehydration after restart is not fully implemented yet.
+Schedules are surfaced in Eggent UI and stored in runtime schedule files. They are armed inside the running Eggent process and armed again when it starts; a run that falls due while the process is down is not replayed.
 
 ---
 
@@ -516,41 +518,22 @@ limit bounds a request rather than an upload: the dashboard sends a folder as
 however many requests it takes to stay under it, so a folder larger than the
 limit still uploads.
 
-### Pipelines
+### Task board
 
 ```http
-GET    /api/pipelines
-POST   /api/pipelines
-GET    /api/pipelines/:id
-PUT    /api/pipelines/:id
-DELETE /api/pipelines/:id
-GET    /api/pipeline-runs
-GET    /api/pipeline-runs/:id
-GET    /api/pipeline-runs/:id/artifacts
+GET    /api/board                    # every card and the board's state (?archived=1 for put-away cards)
+POST   /api/board/cards              # { title, body, projectId, after, review, start }
+GET    /api/board/cards/:id
+PATCH  /api/board/cards/:id          # edit it, or { move: { to, position } }
+DELETE /api/board/cards/:id
+POST   /api/board/cards/:id/stop
+POST   /api/board/cards/:id/answer   # { text } answers the question on a card
+POST   /api/board/start-all          # starts the inbox, optionally { projectId }
+POST   /api/board/resume             # after the board paused itself
+GET    /api/board/summary
 ```
 
-Example pipeline payload:
-
-```json
-{
-  "name": "Research then Write",
-  "description": "Collect context in one project, draft in another.",
-  "steps": [
-    {
-      "id": "research",
-      "name": "Research",
-      "projectId": "research-agent",
-      "prompt": "Research the topic and save useful findings as artifacts."
-    },
-    {
-      "id": "draft",
-      "name": "Draft",
-      "projectId": "writing-agent",
-      "prompt": "Use previous artifacts to write the final draft."
-    }
-  ]
-}
-```
+These are dashboard routes: they take the signed-in session, a request from the same site and JSON bodies. Without `start` a new card waits in the inbox; `after` lists the cards it waits for.
 
 ### External token management
 
@@ -641,18 +624,18 @@ For local non-Docker development, install `ffmpeg` and `whisper.cpp`, or set `EG
 
 ---
 
-## Pipelines
+## Task Board
 
-Use pipelines when a task needs several project agents in a fixed order.
+Hand work to the agent as cards (**Board** in the sidebar): inbox, queue, working, waiting for you, done. Each card is carried out in a chat of its own, so it can be watched live, stopped and resumed after a restart, and the host reads how its run ended instead of waiting for the agent to say it is done. The agent can propose cards; only you start them.
 
-Examples:
+A card can wait for others and starts with what they came to, which covers work that needs several projects in order:
 
 - research → writing → review;
 - backend → frontend → QA;
 - support triage → draft response → final check;
 - extraction → analysis → report.
 
-Each step should set `projectId`. Artifacts from earlier steps are available to later steps.
+At most 3 cards run at once and 1 per project, since cards in a project share its folder (`EGGENT_BOARD_MAX_RUNNING`, `EGGENT_BOARD_MAX_PER_PROJECT`); `EGGENT_BOARD=off` stops the board starting anything.
 
 ---
 
@@ -665,7 +648,7 @@ Eggent context can come from:
 - pasted screenshots/images;
 - `context.md`;
 - `memory.md`;
-- pipeline artifacts.
+- the file open beside the chat, and the lines selected in it.
 
 Pasted images are stored as chat files and passed to the agent with file type and absolute path metadata.
 
@@ -725,7 +708,8 @@ data/
   chats/         # chat history
   chat-files/    # uploaded/pasted chat attachments
   memory/        # memory namespaces
-  pipelines/     # pipeline definitions, runs, artifacts
+  board/         # task board cards and state
+  versions/      # file history: versions of project files
   pi-agent/      # embedded runtime config in Docker by default
 ```
 
@@ -785,7 +769,7 @@ src/app/api/             # API routes
 src/components/chat/     # chat UI
 src/components/ui/       # shared UI primitives
 src/lib/pi/              # agent runtime integration
-src/lib/pipelines/       # pipeline store/runner
+src/lib/board/           # task board store and dispatcher
 src/lib/telegram/        # Telegram integration
 src/lib/storage/         # filesystem-backed stores
 ```
