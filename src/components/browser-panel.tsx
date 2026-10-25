@@ -7,16 +7,19 @@
  * program in its shell; this panel shows the page it is on, live, and lets the
  * person take control - to sign in, type a one-time code or get past a
  * captcha - and hand it back. While the person has control the agent's
- * program waits, so the two never act on one page at once.
+ * program waits, so the two never act on one page at once, and the person
+ * gets an address bar with Back, Forward and Reload to go where they need.
  *
  * Shown only where the deployment offers a browser: the button and the panel
  * ask /api/browser/status first and stay away when it says there is none.
  */
 import { useCallback, useEffect, useRef, useState, type FormEvent, type KeyboardEvent, type MouseEvent, type WheelEvent } from "react";
 import { create } from "zustand";
-import { Globe, Hand, Loader2, LogOut, Power, X } from "lucide-react";
+import { ArrowLeft, ArrowRight, Globe, Hand, Loader2, LogOut, Power, RotateCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { useI18n } from "@/i18n/provider";
+import { pageAddress } from "@/lib/browser/address";
 
 interface BrowserStatus {
   available: boolean;
@@ -30,6 +33,22 @@ interface Frame {
   data: string;
   width: number;
   height: number;
+}
+
+interface PageInfo {
+  url: string;
+  title: string;
+  back: boolean;
+  forward: boolean;
+}
+
+/**
+ * What the address bar shows for a page: nothing for the empty one a new
+ * browser starts on, nor for the browser's own error page, whose address
+ * means nothing to anybody.
+ */
+function shownAddress(url: string | undefined): string {
+  return !url || url === "about:blank" || url.startsWith("chrome-error:") ? "" : url;
 }
 
 const OPEN_KEY = "eggent.browserPanelOpen";
@@ -94,9 +113,20 @@ export function BrowserPanel() {
   const status = useBrowserPanel((state) => state.status);
   const setOpen = useBrowserPanel((state) => state.setOpen);
   const [frame, setFrame] = useState<Frame | null>(null);
-  const [page, setPage] = useState<{ url: string; title: string } | null>(null);
+  const [page, setPage] = useState<PageInfo | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [address, setAddress] = useState("");
+  // While the person is typing an address, the page moving on does not
+  // overwrite what they have typed.
+  const editingAddress = useRef(false);
+  // What was last sent from the bar, shown until the page gets there - and
+  // kept when it does not, so a mistyped address can be corrected.
+  const pendingAddress = useRef<string | null>(null);
+  const addressRef = useRef<HTMLInputElement>(null);
+  // Set when the person opened the browser themselves: they did it to go
+  // somewhere, so the address bar is where they start.
+  const wantAddressFocus = useRef(false);
   const pictureRef = useRef<HTMLImageElement>(null);
   // Typing goes through a field of its own rather than key events on the
   // picture: a phone's keyboard, an input method and pasting all arrive as
@@ -137,10 +167,10 @@ export function BrowserPanel() {
     source.onmessage = (message) => {
       const event = JSON.parse(message.data) as
         | { type: "frame"; data: string; width: number; height: number }
-        | { type: "page"; url: string; title: string }
+        | ({ type: "page" } & PageInfo)
         | { type: "closed"; reason: string };
       if (event.type === "frame") setFrame({ data: event.data, width: event.width, height: event.height });
-      else if (event.type === "page") setPage({ url: event.url, title: event.title });
+      else if (event.type === "page") setPage({ url: event.url, title: event.title, back: Boolean(event.back), forward: Boolean(event.forward) });
       else {
         source.close();
         setFrame(null);
@@ -153,14 +183,30 @@ export function BrowserPanel() {
   const control = status?.control ?? "agent";
   const inControl = control === "person";
 
-  const act = useCallback(async (work: () => Promise<Response>, after?: (response: Response) => Promise<void> | void) => {
+  useEffect(() => {
+    if (page?.url?.startsWith("chrome-error:")) return;
+    pendingAddress.current = null;
+    if (!editingAddress.current) setAddress(shownAddress(page?.url));
+  }, [page?.url]);
+
+  useEffect(() => {
+    if (!inControl || !browserOpen || !wantAddressFocus.current) return;
+    wantAddressFocus.current = false;
+    addressRef.current?.focus();
+  }, [inControl, browserOpen]);
+
+  const act = useCallback(async (
+    work: () => Promise<Response>,
+    after?: (response: Response) => Promise<void> | void,
+    explain?: (json: { error?: string; reason?: string }) => string | null,
+  ) => {
     setBusy(true);
     setNotice(null);
     try {
       const response = await work();
       if (!response.ok) {
-        const json = (await response.json().catch(() => ({}))) as { error?: string };
-        setNotice(t("browser.panel.error", { reason: json.error || String(response.status) }));
+        const json = (await response.json().catch(() => ({}))) as { error?: string; reason?: string };
+        setNotice(explain?.(json) || t("browser.panel.error", { reason: json.error || String(response.status) }));
       } else if (after) {
         await after(response);
       }
@@ -215,6 +261,34 @@ export function BrowserPanel() {
     if (text) void post("/api/browser/input", { type: "text", text: text.slice(0, 2000) });
   };
 
+  const go = (body: { type: "navigate"; url: string } | { type: "back" | "forward" | "reload" }) => {
+    void act(() => post("/api/browser/input", body), undefined, (json) =>
+      json.error === "did-not-open" ? t("browser.panel.didNotOpen", { reason: json.reason || "" }) : null);
+  };
+
+  const onAddressSubmit = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const url = pageAddress(address);
+    if (!url) {
+      setNotice(t("browser.panel.notAnAddress"));
+      return;
+    }
+    editingAddress.current = false;
+    pendingAddress.current = url;
+    setAddress(url);
+    addressRef.current?.blur();
+    go({ type: "navigate", url });
+  };
+
+  const onAddressKeyDown = (event: KeyboardEvent<HTMLInputElement>) => {
+    if (event.key !== "Escape") return;
+    event.preventDefault();
+    editingAddress.current = false;
+    pendingAddress.current = null;
+    setAddress(shownAddress(page?.url));
+    event.currentTarget.blur();
+  };
+
   const onCompositionEnd = (event: { currentTarget: HTMLTextAreaElement }) => {
     composing.current = false;
     const field = event.currentTarget;
@@ -252,8 +326,8 @@ export function BrowserPanel() {
             <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium">
               <Globe className="size-4 shrink-0" />
               <span>{t("browser.panel.title")}</span>
-              {page?.title || page?.url ? (
-                <span className="truncate font-normal text-muted-foreground" title={page.url}>· {page.title || page.url}</span>
+              {page?.title || shownAddress(page?.url) ? (
+                <span className="truncate font-normal text-muted-foreground" title={page?.url}>· {page?.title || shownAddress(page?.url)}</span>
               ) : null}
             </span>
             <span className="flex shrink-0 items-center gap-0.5">
@@ -317,6 +391,70 @@ export function BrowserPanel() {
             </div>
           ) : null}
 
+          {browserOpen && inControl ? (
+            <form onSubmit={onAddressSubmit} className="flex items-center gap-1 border-b px-2 py-1.5">
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-8 shrink-0 text-muted-foreground hover:text-foreground"
+                disabled={busy || !page?.back}
+                onClick={() => go({ type: "back" })}
+                aria-label={t("browser.panel.back")}
+                title={t("browser.panel.back")}
+              >
+                <ArrowLeft className="size-4" />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-8 shrink-0 text-muted-foreground hover:text-foreground"
+                disabled={busy || !page?.forward}
+                onClick={() => go({ type: "forward" })}
+                aria-label={t("browser.panel.forward")}
+                title={t("browser.panel.forward")}
+              >
+                <ArrowRight className="size-4" />
+              </Button>
+              <Button
+                type="button"
+                variant="ghost"
+                size="icon"
+                className="size-8 shrink-0 text-muted-foreground hover:text-foreground"
+                disabled={busy || !page?.url || page.url === "about:blank"}
+                onClick={() => go({ type: "reload" })}
+                aria-label={t("browser.panel.reload")}
+                title={t("browser.panel.reload")}
+              >
+                <RotateCw className="size-4" />
+              </Button>
+              <Input
+                ref={addressRef}
+                value={address}
+                onChange={(event) => setAddress(event.target.value)}
+                onFocus={(event) => {
+                  editingAddress.current = true;
+                  event.currentTarget.select();
+                }}
+                onBlur={() => {
+                  editingAddress.current = false;
+                  setAddress(pendingAddress.current ?? shownAddress(page?.url));
+                }}
+                onKeyDown={onAddressKeyDown}
+                aria-label={t("browser.panel.address")}
+                placeholder={t("browser.panel.addressPlaceholder")}
+                inputMode="url"
+                enterKeyHint="go"
+                autoCapitalize="off"
+                autoComplete="off"
+                autoCorrect="off"
+                spellCheck={false}
+                className="h-8 min-w-0 flex-1"
+              />
+            </form>
+          ) : null}
+
           <div className="relative min-h-0 flex-1 overflow-auto bg-muted/20">
             {browserOpen ? (
               frame ? (
@@ -360,7 +498,15 @@ export function BrowserPanel() {
               <div className="flex h-full flex-col items-center justify-center gap-3 px-6 text-center text-sm text-muted-foreground">
                 <Globe className="size-6" aria-hidden />
                 <span>{t("browser.panel.notOpen")}</span>
-                <Button variant="outline" size="sm" disabled={busy} onClick={() => void act(() => post("/api/browser/session", { action: "open" }))}>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  disabled={busy}
+                  onClick={() => {
+                    wantAddressFocus.current = true;
+                    void act(() => post("/api/browser/session", { action: "open" }));
+                  }}
+                >
                   {busy ? <Loader2 className="mr-1 size-3.5 animate-spin" aria-hidden /> : null}
                   {busy ? t("browser.panel.opening") : t("browser.panel.open")}
                 </Button>

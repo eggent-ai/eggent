@@ -1,5 +1,6 @@
 "use client";
 
+import { CloudPromo } from "@/components/cloud-promo";
 import { EnginesPlate } from "@/components/engines/engines-plate";
 import { ProjectModelSettings } from "@/components/project-model-settings";
 import { SettingsScopeSelect, useSettingsScope } from "@/components/settings-scope";
@@ -29,7 +30,11 @@ export default function ModelsPage() {
       {/* Programs found on this computer; nothing at all where there are none. */}
       <EnginesPlate key={scope.scopeId} projectId={scope.isOrchestrator ? null : scope.scopeId} />
       {scope.isOrchestrator ? (
-        <WorkspaceModelSettings />
+        <>
+          <WorkspaceModelSettings />
+          {/* Self-hosted only: the hosted Eggent, in five lines. */}
+          <CloudPromo />
+        </>
       ) : (
         <ProjectModelSettings key={scope.scopeId} projectId={scope.scopeId} />
       )}

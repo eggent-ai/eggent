@@ -11,7 +11,9 @@ export const dynamic = "force-dynamic";
  * POST /api/browser/session { action: "open" | "close" }
  *
  * A person opens the browser themselves to sign in somewhere before the agent
- * needs it, or closes it when they are done. Closing gives control back too.
+ * needs it, or closes it when they are done. Opening it by hand hands them
+ * control, since they opened it to do something themselves; closing gives
+ * control back.
  */
 export async function POST(req: NextRequest) {
   const failure = await checkTerminalRequest(req, { write: true });
@@ -27,5 +29,6 @@ export async function POST(req: NextRequest) {
   if (body.action !== "open") return jsonError("action", 400);
   const opened = await openBrowser();
   if (!opened.ok) return Response.json({ ok: false, error: opened.error }, { status: 409 });
-  return Response.json({ ok: true, ...opened.status });
+  setBrowserControl("person");
+  return Response.json({ ok: true, ...opened.status, control: "person" });
 }

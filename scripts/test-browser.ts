@@ -161,6 +161,8 @@ await check("the page worked on is remembered for the panel", async () => {
 const config = await import("../src/lib/browser/config.ts");
 const viewer = await import("../src/lib/browser/viewer.ts");
 const guidance = await import("../src/lib/browser/guidance.ts");
+const address = await import("../src/lib/browser/address.ts");
+const promo = await import("../src/lib/cloud-promo.ts");
 
 await check("the viewer gets frames of the page", async () => {
   const frames: Array<{ width: number; data: string }> = [];
@@ -206,6 +208,76 @@ await check("with the person in control the agent's program waits, and the panel
   config.setBrowserControl("agent");
   const after = await browser("read");
   assert.match(after.out, /Second page/);
+});
+await check("the address bar takes web pages only, and an address without a scheme as https", async () => {
+  assert.equal(address.pageAddress("shop.example.test"), "https://shop.example.test/");
+  assert.equal(address.pageAddress("  http://shop.example.test/a b?q=1 "), "http://shop.example.test/a%20b?q=1");
+  assert.equal(address.pageAddress("localhost:3000/x"), "https://localhost:3000/x");
+  for (const refused of ["", "   ", "javascript:alert(1)", "javascript://%0Aalert(1)", "file:///etc/passwd", "chrome://version", "data:text/html,<b>x</b>", "about:blank", "view-source:https://shop.example.test", "weather in paris", `https://${"a".repeat(2001)}.example.test`]) {
+    assert.equal(address.pageAddress(refused), null, refused);
+  }
+});
+await check("with the person in control the address bar opens a page, and Back, Forward and Reload move through it", async () => {
+  config.setBrowserControl("person");
+  const pages: Array<{ url: string; back: boolean; forward: boolean }> = [];
+  const stop = await viewer.watchBrowser((event) => { if (event.type === "page") pages.push(event); });
+  const settled = async (test: (page: { url: string; back: boolean; forward: boolean }) => boolean, what: string) => {
+    for (let i = 0; i < 100; i += 1) {
+      const last = pages[pages.length - 1];
+      if (last && test(last)) return;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    throw new Error(`the panel was never told ${what}; last: ${JSON.stringify(pages[pages.length - 1])}`);
+  };
+  try {
+    assert.equal(await viewer.sendBrowserInput({ type: "navigate", url: `${gw}/page` }), "ok");
+    await settled((page) => page.url.endsWith("/page") && page.back && !page.forward, "about the page it opened");
+    assert.equal(await viewer.sendBrowserInput({ type: "back" }), "ok");
+    await settled((page) => page.url.endsWith("/page2") && page.forward, "that it went back");
+    assert.equal(await viewer.sendBrowserInput({ type: "forward" }), "ok");
+    await settled((page) => page.url.endsWith("/page") && !page.forward, "that it went forward");
+    assert.equal(await viewer.sendBrowserInput({ type: "reload" }), "ok");
+    const failed = await viewer.sendBrowserInput({ type: "navigate", url: "http://127.0.0.1:1/" });
+    assert.equal(typeof failed, "object", "a page that cannot open says why");
+    assert.match((failed as { failed: string }).failed, /ERR_/);
+  } finally {
+    stop();
+    config.setBrowserControl("agent");
+  }
+  assert.equal(await viewer.sendBrowserInput({ type: "navigate", url: `${gw}/page2` }), "not-yours");
+});
+await check("a page the agent's program named that this browser no longer has does not take the panel's page away", async () => {
+  // A browser started afresh - by the person in the panel, or for a new
+  // session - has new pages, while state.json still names the old one.
+  const stateFile = path.join(stateDir, "state.json");
+  const saved = fs.readFileSync(stateFile, "utf8");
+  fs.writeFileSync(stateFile, JSON.stringify({ targetId: "A-PAGE-THAT-IS-GONE" }));
+  viewer.stopWatchingBrowser("a fresh look");
+  const frames: number[] = [];
+  const stop = await viewer.watchBrowser((event) => { if (event.type === "frame") frames.push(Date.now()); });
+  try {
+    for (let i = 0; i < 50 && frames.length === 0; i += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.ok(frames.length > 0, "no frame arrived");
+    // Long enough for the panel to have looked for the named page twice.
+    await new Promise((resolve) => setTimeout(resolve, 4500));
+    config.setBrowserControl("person");
+    const asked = Date.now();
+    assert.equal(await viewer.sendBrowserInput({ type: "navigate", url: `${gw}/page2` }), "ok");
+    for (let i = 0; i < 50 && !frames.some((at) => at > asked); i += 1) await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.ok(frames.some((at) => at > asked), "the picture stopped after the panel looked for the page that is gone");
+  } finally {
+    stop();
+    config.setBrowserControl("agent");
+    fs.writeFileSync(stateFile, saved);
+  }
+});
+await check("the card about the hosted Eggent is shown only on an Eggent run by its owner", async () => {
+  assert.equal(promo.cloudPromoShown({}), true);
+  assert.equal(promo.cloudPromoShown({ EGGENT_USAGE_API_URL: "https://usage.example.test" }), false);
+  assert.equal(promo.cloudPromoShown({ EGGENT_DEPLOYMENT_CONTEXT: "a deployment" }), false);
+  assert.equal(promo.cloudPromoShown({ EGGENT_CLOUD_PROMO: "0" }), false);
+  assert.equal(promo.cloudPromoShown({ EGGENT_CLOUD_PROMO: "off", EGGENT_USAGE_API_URL: "" }), false);
+  assert.equal(promo.cloudPromoShown({ EGGENT_CLOUD_PROMO: "1", EGGENT_USAGE_API_URL: "https://usage.example.test" }), true);
 });
 await check("the agent is told about the browser only where there is one", async () => {
   assert.match(guidance.browserGuidance(), /eggent-browser/);

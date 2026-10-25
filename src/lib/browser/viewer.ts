@@ -17,14 +17,22 @@ import { browserCdpUrl } from "@/lib/browser/gateway";
 
 export type ViewerEvent =
   | { type: "frame"; data: string; width: number; height: number }
-  | { type: "page"; url: string; title: string }
+  /** `back` and `forward` say whether the page's history has somewhere to go. */
+  | { type: "page"; url: string; title: string; back: boolean; forward: boolean }
   | { type: "closed"; reason: string };
 
 export type ViewerInput =
   | { type: "click"; x: number; y: number }
   | { type: "wheel"; x: number; y: number; deltaY: number }
   | { type: "key"; key: string }
-  | { type: "text"; text: string };
+  | { type: "text"; text: string }
+  /** An address already checked by `pageAddress`. */
+  | { type: "navigate"; url: string }
+  | { type: "back" }
+  | { type: "forward" }
+  | { type: "reload" };
+
+export type InputOutcome = "ok" | "not-yours" | "not-connected" | { failed: string };
 
 interface Pending {
   resolve: (value: Record<string, unknown>) => void;
@@ -43,6 +51,10 @@ interface ViewerState {
   lastPage: Extract<ViewerEvent, { type: "page" }> | null;
   follow: ReturnType<typeof setInterval> | null;
   idle: ReturnType<typeof setTimeout> | null;
+  /** Counts what is said about the page, so an older answer never lands after a newer one. */
+  pageTurn: number;
+  /** A page the agent's program named that this browser no longer has, so it is not tried again. */
+  missing: string | null;
 }
 
 const KEY = Symbol.for("eggent.browser.viewer");
@@ -55,7 +67,7 @@ function state(): ViewerState {
   if (!holder[KEY]) {
     holder[KEY] = {
       ws: null, connecting: null, sessionId: null, targetId: null, seq: 0, pending: new Map(),
-      listeners: new Set(), lastFrame: null, lastPage: null, follow: null, idle: null,
+      listeners: new Set(), lastFrame: null, lastPage: null, follow: null, idle: null, pageTurn: 0, missing: null,
     };
   }
   return holder[KEY]!;
@@ -71,15 +83,19 @@ function emit(event: ViewerEvent): void {
   }
 }
 
-function send(method: string, params: Record<string, unknown> = {}, withSession = true): Promise<Record<string, unknown>> {
+function sendTo(sessionId: string | null, method: string, params: Record<string, unknown> = {}): Promise<Record<string, unknown>> {
   const current = state();
   const ws = current.ws;
   if (!ws || ws.readyState !== WebSocket.OPEN) return Promise.reject(new Error("The browser is not connected."));
   return new Promise((resolve, reject) => {
     const id = ++current.seq;
     current.pending.set(id, { resolve, reject });
-    ws.send(JSON.stringify({ id, method, params, ...(withSession && current.sessionId ? { sessionId: current.sessionId } : {}) }));
+    ws.send(JSON.stringify({ id, method, params, ...(sessionId ? { sessionId } : {}) }));
   });
+}
+
+function send(method: string, params: Record<string, unknown> = {}, withSession = true): Promise<Record<string, unknown>> {
+  return sendTo(withSession ? state().sessionId : null, method, params);
 }
 
 function disconnect(reason: string): void {
@@ -93,6 +109,7 @@ function disconnect(reason: string): void {
   current.sessionId = null;
   current.targetId = null;
   current.lastFrame = null;
+  current.missing = null;
   for (const { reject } of current.pending.values()) reject(new Error("The browser connection closed."));
   current.pending.clear();
   try {
@@ -103,17 +120,48 @@ function disconnect(reason: string): void {
   emit({ type: "closed", reason });
 }
 
+/**
+ * Tell the panels which page is shown, and whether Back and Forward lead
+ * anywhere - which only the page's own history knows, so it is asked each time.
+ */
+async function announcePage(url: string, title: string): Promise<void> {
+  const current = state();
+  const turn = ++current.pageTurn;
+  let back = false;
+  let forward = false;
+  try {
+    const history = await send("Page.getNavigationHistory");
+    const index = Number(history.currentIndex);
+    const count = Array.isArray(history.entries) ? history.entries.length : 0;
+    back = index > 0;
+    forward = index >= 0 && index < count - 1;
+  } catch {
+    // Between two documents; the next change asks again.
+  }
+  if (turn !== current.pageTurn) return;
+  current.lastPage = { type: "page", url, title, back, forward };
+  emit(current.lastPage);
+}
+
 async function attachTo(targetId: string): Promise<void> {
   const current = state();
-  if (current.sessionId) {
-    await send("Page.stopScreencast").catch(() => undefined);
-    await send("Target.detachFromTarget", { sessionId: current.sessionId }, false).catch(() => undefined);
-  }
+  // The new page first, the old one let go after: a page the agent's program
+  // named may be gone - a tab it closed, or a browser started afresh since -
+  // and then the page already shown stays shown and answers the panel.
   const attached = await send("Target.attachToTarget", { targetId, flatten: true }, false);
+  const previous = current.sessionId;
   current.sessionId = String(attached.sessionId);
   current.targetId = targetId;
+  if (previous && previous !== current.sessionId) {
+    await sendTo(previous, "Page.stopScreencast").catch(() => undefined);
+    await send("Target.detachFromTarget", { sessionId: previous }, false).catch(() => undefined);
+  }
   await send("Page.enable");
   await send("Page.startScreencast", { format: "jpeg", quality: 55, maxWidth: 1280, maxHeight: 800, everyNthFrame: 1 });
+  // A tab the agent's program switched to has a page of its own to name.
+  const info = await send("Target.getTargetInfo", { targetId }, false).catch(() => ({}));
+  const target = ((info as { targetInfo?: { url?: string; title?: string } }).targetInfo) || {};
+  await announcePage(String(target.url || ""), String(target.title || ""));
 }
 
 async function pickTarget(): Promise<string | null> {
@@ -121,7 +169,6 @@ async function pickTarget(): Promise<string | null> {
   const pages = ((targets.targetInfos as Array<{ targetId: string; type: string; url: string; title: string }>) || []).filter((t) => t.type === "page");
   const remembered = rememberedTarget();
   const page = pages.find((t) => t.targetId === remembered) || pages[0];
-  if (page) state().lastPage = { type: "page", url: page.url, title: page.title };
   return page?.targetId ?? null;
 }
 
@@ -161,10 +208,7 @@ async function connect(): Promise<void> {
         emit(frame);
       } else if (message.method === "Target.targetInfoChanged") {
         const info = (message.params?.targetInfo || {}) as { targetId?: string; url?: string; title?: string };
-        if (info.targetId && info.targetId === current.targetId) {
-          current.lastPage = { type: "page", url: String(info.url || ""), title: String(info.title || "") };
-          emit(current.lastPage);
-        }
+        if (info.targetId && info.targetId === current.targetId) void announcePage(String(info.url || ""), String(info.title || ""));
       }
     };
     ws.onclose = () => {
@@ -173,11 +217,13 @@ async function connect(): Promise<void> {
     await send("Target.setDiscoverTargets", { discover: true }, false);
     const target = await pickTarget();
     if (target) await attachTo(target);
-    if (current.lastPage) emit(current.lastPage);
     // The agent's program may switch tabs or open a new one; the panel follows it.
     current.follow = setInterval(() => {
       const remembered = rememberedTarget();
-      if (remembered && remembered !== current.targetId) void attachTo(remembered).catch(() => undefined);
+      if (!remembered || remembered === current.targetId || remembered === current.missing) return;
+      void attachTo(remembered).catch(() => {
+        current.missing = remembered;
+      });
     }, 2000);
     (current.follow as { unref?: () => void }).unref?.();
   })();
@@ -236,11 +282,21 @@ const KEYS: Record<string, { code: string; keyCode: number; text?: string; key?:
  * control: otherwise a stray click on the picture would act on a page the
  * agent is in the middle of.
  */
-export async function sendBrowserInput(input: ViewerInput): Promise<"ok" | "not-yours" | "not-connected"> {
+export async function sendBrowserInput(input: ViewerInput): Promise<InputOutcome> {
   if (browserControl() !== "person") return "not-yours";
   const current = state();
   if (!current.ws || !current.sessionId) return "not-connected";
-  if (input.type === "click") {
+  if (input.type === "navigate") {
+    const result = await send("Page.navigate", { url: input.url });
+    if (result.errorText) return { failed: String(result.errorText) };
+  } else if (input.type === "back" || input.type === "forward") {
+    const history = await send("Page.getNavigationHistory");
+    const entries = (history.entries as Array<{ id: number }>) || [];
+    const entry = entries[Number(history.currentIndex) + (input.type === "back" ? -1 : 1)];
+    if (entry) await send("Page.navigateToHistoryEntry", { entryId: entry.id });
+  } else if (input.type === "reload") {
+    await send("Page.reload");
+  } else if (input.type === "click") {
     for (const type of ["mouseMoved", "mousePressed", "mouseReleased"]) {
       await send("Input.dispatchMouseEvent", { type, x: input.x, y: input.y, button: type === "mouseMoved" ? "none" : "left", clickCount: type === "mouseMoved" ? 0 : 1 });
     }
