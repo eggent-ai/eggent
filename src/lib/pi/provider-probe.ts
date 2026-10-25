@@ -32,6 +32,31 @@ export interface ProviderProbe {
   describesInputs?: boolean;
   /** Ids from the whole list (not only the first 20) that accept pictures. */
   imageModels?: string[];
+  /** Context window by model id, for the models whose entry states one. */
+  contextWindows?: Record<string, number>;
+}
+
+/**
+ * The context window one entry of a model list states, or nothing.
+ *
+ * Aggregating providers put it in `context_length`, beside a
+ * `top_provider.context_length` for the endpoint that actually serves the
+ * model, which can be smaller - the smaller of the two is what a request may
+ * really use. vLLM says `max_model_len`, others `context_window`. A bare
+ * OpenAI-compatible list carries ids only and says nothing here, and then the
+ * runtime's own default stays: a guessed number would be worse than an
+ * acknowledged default, because compaction trusts it.
+ */
+export function entryContextWindow(item: unknown): number | undefined {
+  if (!item || typeof item !== "object") return undefined;
+  const entry = item as Record<string, unknown>;
+  const top = entry.top_provider && typeof entry.top_provider === "object"
+    ? entry.top_provider as Record<string, unknown>
+    : undefined;
+  const stated = [entry.context_length, top?.context_length, entry.context_window, entry.max_context_length, entry.max_model_len]
+    .map((value) => (typeof value === "string" && value.trim() ? Number(value) : value))
+    .filter((value): value is number => typeof value === "number" && Number.isInteger(value) && value >= 1024 && value <= 100_000_000);
+  return stated.length > 0 ? Math.min(...stated) : undefined;
 }
 
 /**
@@ -138,6 +163,7 @@ export async function probeModelProvider(params: {
     let ids: string[] = [];
     let describesInputs = false;
     const imageModels: string[] = [];
+    const contextWindows: Record<string, number> = {};
     try {
       const body = (await response.json()) as { data?: unknown; models?: unknown };
       const list: unknown[] = Array.isArray(body?.data) ? body.data : Array.isArray(body?.models) ? body.models : [];
@@ -148,6 +174,8 @@ export async function probeModelProvider(params: {
         const images = entryAcceptsImages(item);
         if (images !== undefined) describesInputs = true;
         if (images) imageModels.push(id);
+        const contextWindow = entryContextWindow(item);
+        if (contextWindow) contextWindows[id] = contextWindow;
       }
     } catch {
       // A provider that answers 200 with something we cannot parse has still
@@ -155,7 +183,10 @@ export async function probeModelProvider(params: {
       return { ok: true, reason: "ok", status: response.status };
     }
 
-    const inputs = describesInputs ? { describesInputs, imageModels } : {};
+    const inputs = {
+      ...(describesInputs ? { describesInputs, imageModels } : {}),
+      ...(Object.keys(contextWindows).length > 0 ? { contextWindows } : {}),
+    };
     if (params.model && ids.length > 0 && !ids.includes(params.model)) {
       return { ok: false, reason: "model_missing", status: response.status, models: ids.slice(0, 20), ...inputs };
     }

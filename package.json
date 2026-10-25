@@ -20,6 +20,7 @@
     "test:live-runs": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-live-runs.ts",
     "test:dashboard-routes": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-dashboard-routes.ts",
     "test:provider-failure": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-provider-failure.ts",
+    "test:provider-context": "EGGENT_TEST_STUBS=lib/storage/project-store node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-provider-context.ts",
     "test:provider-probe": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/test-provider-probe.ts",
     "test:file-upload": "node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types scripts/test-file-upload.ts",
     "test:managed-provider": "EGGENT_TEST_STUBS=lib/storage/project-store node --disable-warning=MODULE_TYPELESS_PACKAGE_JSON --experimental-strip-types --import ./scripts/alias-loader-register.mjs scripts/test-managed-provider-repair.ts",

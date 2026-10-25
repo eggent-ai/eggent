@@ -494,7 +494,7 @@ export async function createEggentPiTools(options: {
                 imageModels: result.imageModels.length > 30
                   ? `${result.imageModels.length} of them accept pictures`
                   : result.imageModels,
-                check: { ...result.check, imageModels: undefined },
+                check: { ...result.check, imageModels: undefined, contextWindows: undefined },
                 next: next + pictures,
                 settingsHint: "Settings -> Models and login",
               }, null, 2)

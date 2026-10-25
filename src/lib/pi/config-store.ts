@@ -867,6 +867,8 @@ export async function upsertCustomModelProvider(params: {
   imageModels: string[];
   /** Where imageModels came from: what the caller said, the provider's list, or nothing known. */
   imageSource: "given" | "provider" | "unknown";
+  /** How many of the registered models got their context window from the provider's list. */
+  contextKnown: number;
   hasKey: boolean;
   api: string;
   localOnly: boolean;
@@ -938,17 +940,27 @@ export async function upsertCustomModelProvider(params: {
   const providers = parsed.providers && typeof parsed.providers === "object" && !Array.isArray(parsed.providers)
     ? { ...(parsed.providers as Record<string, unknown>) }
     : {};
+  // A model registered by id alone gets the runtime's default window of 128k,
+  // whatever it really holds, and the screen then reports that guess as the
+  // model's size. Where the provider's list states a window it is kept;
+  // where it does not, the default stays.
+  const contextWindows = check.contextWindows ?? {};
   providers[id] = {
     baseUrl,
     api,
-    models: models.map((model) => (withImages.has(model) ? { id: model, input: ["text", "image"] } : { id: model })),
+    models: models.map((model) => ({
+      id: model,
+      ...(withImages.has(model) ? { input: ["text", "image"] } : {}),
+      ...(contextWindows[model] ? { contextWindow: contextWindows[model] } : {}),
+    })),
   };
 
   const filePath = getPiModelsPath();
   await fs.mkdir(path.dirname(filePath), { recursive: true });
   await fs.writeFile(filePath, `${JSON.stringify({ ...parsed, providers }, null, 2)}\n`, "utf-8");
 
-  return { provider: id, models, imageModels, imageSource, hasKey, api, localOnly, check };
+  const contextKnown = models.filter((model) => contextWindows[model]).length;
+  return { provider: id, models, imageModels, imageSource, contextKnown, hasKey, api, localOnly, check };
 }
 
 function resolveImageModels(

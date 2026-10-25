@@ -15,7 +15,7 @@
  */
 import assert from "node:assert/strict";
 import { createServer } from "node:http";
-import { canProbeProviderApi, entryAcceptsImages, isLocalOnlyBaseUrl, probeModelProvider } from "../src/lib/pi/provider-probe.ts";
+import { canProbeProviderApi, entryAcceptsImages, entryContextWindow, isLocalOnlyBaseUrl, probeModelProvider } from "../src/lib/pi/provider-probe.ts";
 
 let failed = 0;
 let ran = 0;
@@ -111,6 +111,22 @@ await check("an id alone says nothing", () => {
   assert.equal(entryAcceptsImages("a"), undefined);
 });
 
+console.log("\nentryContextWindow - what a model list says about the window:");
+await check("context_length", () => assert.equal(entryContextWindow({ id: "a", context_length: 262144 }), 262144));
+await check("the serving endpoint's smaller window wins", () =>
+  assert.equal(entryContextWindow({ id: "a", context_length: 1048576, top_provider: { context_length: 163840 } }), 163840)
+);
+await check("vLLM's max_model_len and a numeric string", () => {
+  assert.equal(entryContextWindow({ id: "a", max_model_len: 32768 }), 32768);
+  assert.equal(entryContextWindow({ id: "a", context_window: "200000" }), 200000);
+});
+await check("nonsense and silence say nothing", () => {
+  assert.equal(entryContextWindow({ id: "a", object: "model" }), undefined);
+  assert.equal(entryContextWindow({ id: "a", context_length: 0 }), undefined);
+  assert.equal(entryContextWindow({ id: "a", context_length: null, top_provider: { context_length: "n/a" } }), undefined);
+  assert.equal(entryContextWindow("a"), undefined);
+});
+
 console.log("\nprobeModelProvider - pictures from a local model list:");
 {
   let body: unknown = {};
@@ -137,6 +153,13 @@ console.log("\nprobeModelProvider - pictures from a local model list:");
       assert.equal(r.ok, true);
       assert.equal(r.describesInputs, undefined);
       assert.equal(r.imageModels, undefined);
+      assert.equal(r.contextWindows, undefined);
+    });
+    body = { data: [...filler.map((item, i) => ({ ...item, context_length: 32_768 + i })), { id: "lab/long-1", context_length: 1_048_576 }] };
+    await check("a list that states windows reports them past the first 20", async () => {
+      const r = await probeModelProvider({ baseUrl, model: "lab/long-1" });
+      assert.equal(r.contextWindows?.["lab/long-1"], 1_048_576);
+      assert.equal(r.contextWindows?.["lab/text-29"], 32_768 + 29);
     });
   } finally {
     server.close();
