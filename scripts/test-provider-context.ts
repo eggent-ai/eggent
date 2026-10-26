@@ -95,10 +95,10 @@ try {
     const result = await upsertCustomModelProvider({
       id: "local",
       baseUrl: "http://127.0.0.1:1/v1",
-      models: ["llama"],
+      models: ["local-model"],
     });
     assert.equal(result.contextKnown, 0);
-    assert.deepEqual(await registered("local"), [{ id: "llama" }]);
+    assert.deepEqual(await registered("local"), [{ id: "local-model" }]);
     // The first two providers are still there beside it.
     assert.equal((await registered("aggregator")).length, 3);
   });
