@@ -1,7 +1,7 @@
 import { createUIMessageStream, createUIMessageStreamResponse, type UIMessage } from "ai";
 import { getServerTranslator } from "@/i18n/server";
 import type { MessageKey, MessageValues } from "@/i18n/messages";
-import { clearActiveRun, getActiveRun, joinActiveRun, registerActiveRun, type AbortableRun } from "@/lib/pi/active-runs";
+import { clearActiveRun, getActiveRun, joinActiveRun, registerActiveRun, type AbortableRun, type SteerRequest } from "@/lib/pi/active-runs";
 import { attachToLiveRun, startLiveRun, type LiveRunChunk } from "@/lib/pi/live-run";
 import { isRemoteHome, localNode, remoteEnabled, settleWaitMs, stopGraceMs } from "@/lib/remote/config";
 import { getChat } from "@/lib/storage/chat-store";
@@ -39,6 +39,8 @@ export interface HandedOverTurn {
   /** A path inside the project. An absolute one names this computer's disk and means nothing over there. */
   currentPath?: string;
   chatTitle?: string;
+  /** What the sender knows besides the words, when the message is for a turn already running. */
+  steer?: Partial<SteerRequest>;
 }
 
 type Translator = (key: MessageKey, values?: MessageValues) => string;
@@ -206,11 +208,14 @@ function handoverHeaders(home: ChatHome, title?: string): Record<string, string>
   };
 }
 
-function forwardBody(turn: HandedOverTurn, message: string, head?: ChatHead): string {
+function forwardBody(turn: HandedOverTurn, message: string, head?: ChatHead, steer?: SteerRequest): string {
   const currentPath = turn.currentPath && !/^([A-Za-z]:)?[\\/]/.test(turn.currentPath) ? turn.currentPath : undefined;
   return JSON.stringify({
     chatId: turn.chatId,
     message,
+    // A message for the turn already running there: its id, so both sides store it as one, and the
+    // files sent with it by name - that side finds them in its own copy of the chat's files.
+    ...(steer ? { steer: { messageId: steer.messageId, ...(steer.files?.length ? { files: steer.files } : {}) } } : {}),
     // Where this side stands with the chat; the other side holds the turn until it has that much too.
     ...(head ? { expectHead: head } : {}),
     projectId: turn.projectId ?? "none",
@@ -260,7 +265,7 @@ function beginHandedOver(input: {
   chatId: string;
   home: ChatHome;
   surface: "web" | "external";
-  steer: (text: string) => Promise<void>;
+  steer: (request: SteerRequest) => Promise<void>;
   /** How long a stop may take before the other side's stream is let go of. */
   stopGraceMs?: number;
 }): Handover {
@@ -268,7 +273,7 @@ function beginHandedOver(input: {
   const runId = crypto.randomUUID();
   const abort = new AbortController();
   const state = { streaming: true, stopRequested: false, opened: false };
-  const kept: Array<{ text: string; resolve: () => void; reject: (error: unknown) => void }> = [];
+  const kept: Array<{ request: SteerRequest; resolve: () => void; reject: (error: unknown) => void }> = [];
 
   // The other side registers its run a moment after it receives the request, so
   // a stop that is asked for straight away can arrive before there is anything
@@ -322,13 +327,16 @@ function beginHandedOver(input: {
     async abort() {
       requestStop();
     },
-    steer: (text) => {
-      if (state.stopRequested) return Promise.reject(new Error("The turn was stopped."));
-      if (state.opened) return input.steer(text);
-      return new Promise<void>((resolve, reject) => kept.push({ text, resolve, reject }));
-    },
+    steer: (text) =>
+      acceptSteer({ messageId: crypto.randomUUID(), text, modelText: text, createdAt: new Date().toISOString() }),
   };
-  registerActiveRun(chatId, { session: run, runId, surface: input.surface, requestStop });
+  // The other side runs the turn, so the other side keeps the record of what was said to it.
+  const acceptSteer = (request: SteerRequest): Promise<void> => {
+    if (state.stopRequested) return Promise.reject(new Error("The turn was stopped."));
+    if (state.opened) return input.steer(request);
+    return new Promise<void>((resolve, reject) => kept.push({ request, resolve, reject }));
+  };
+  registerActiveRun(chatId, { session: run, runId, surface: input.surface, requestStop, acceptSteer });
 
   return {
     runId,
@@ -336,7 +344,7 @@ function beginHandedOver(input: {
     state,
     opened() {
       state.opened = true;
-      for (const entry of kept.splice(0)) input.steer(entry.text).then(entry.resolve, entry.reject);
+      for (const entry of kept.splice(0)) input.steer(entry.request).then(entry.resolve, entry.reject);
     },
     release() {
       state.streaming = false;
@@ -447,8 +455,8 @@ async function openHandedOver(
  * (see `joinActiveRun`) - rather than the other side starting one that nobody
  * is watching and the person being told their message was taken into account.
  */
-function steerer(turn: HandedOverTurn, interactive: boolean): (text: string) => Promise<void> {
-  return async (text: string) => {
+function steerer(turn: HandedOverTurn, interactive: boolean): (request: SteerRequest) => Promise<void> {
+  return async (request: SteerRequest) => {
     const response = await relayRequest(turn.home, {
       method: "POST",
       path: "/api/chat",
@@ -457,7 +465,7 @@ function steerer(turn: HandedOverTurn, interactive: boolean): (text: string) => 
         ...(interactive ? {} : { [REMOTE_HEADERS.interactive]: "0" }),
         [REMOTE_HEADERS.steer]: "1",
       },
-      body: forwardBody(turn, text),
+      body: forwardBody(turn, request.text, undefined, request),
     });
     // The answer is only the receiving side's "got it"; the turn it joined is
     // the one this side is already relaying.
@@ -504,10 +512,13 @@ export async function runHandedOverTurn(turn: HandedOverTurn): Promise<Response>
   // A message that arrives while this chat already has a turn going is for that
   // turn: the same rule as on the side that runs it, and the handed-over run is
   // registered like any other so the rule finds it.
-  const joined = await joinActiveRun(chatId, turn.message);
+  const joined = await joinActiveRun(chatId, turn.message, turn.steer);
   if (joined) {
     const t = await getServerTranslator();
-    return noticeStream(joined === "stopped" ? t("external.run.stopped") : t("external.run.steered"), chatId);
+    return noticeStream(
+      joined === "stopped" ? t("external.run.stopped") : joined === "refused" ? t("external.run.commandWhileRunning") : t("external.run.steered"),
+      chatId
+    );
   }
 
   const handover = beginHandedOver({ chatId, home, surface: "web", steer: steerer(turn, true) });

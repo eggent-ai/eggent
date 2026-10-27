@@ -117,6 +117,23 @@ export interface ChatMessage {
   learned?: LearnedNotice;
   /** The files this turn made, for the row under the answer: see files/produced.ts. */
   files?: ProducedGroup[];
+  /** Said to a turn that was already working, rather than starting one: see lib/pi/steer.ts. */
+  steer?: ChatSteerInfo;
+}
+
+/**
+ * Where a message said in the middle of a turn has got to.
+ *
+ * It is written down the moment it is sent, and moved to where the agent read
+ * it once the agent has: between the part of the answer that came before and
+ * the part that came after. One the turn never got to read stays where it was,
+ * marked, with a way to send it again.
+ */
+export interface ChatSteerInfo {
+  /** The turn it was said to. */
+  runId: string;
+  state: "queued" | "delivered" | "undelivered";
+  deliveredAt?: string;
 }
 
 export interface Attachment {

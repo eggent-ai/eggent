@@ -1,6 +1,7 @@
 import { joinActiveRun, runPiAgentText } from "@/lib/pi/chat-runner";
 import { createChat, getChat, saveChat } from "@/lib/storage/chat-store";
 import { saveChatFile } from "@/lib/storage/chat-files-store";
+import { filesSentWith, steerModelText } from "@/lib/pi/steer";
 import { getAllProjects, getProject } from "@/lib/storage/project-store";
 import { transcribeVoiceNote } from "@/lib/speech/voice-note";
 import {
@@ -69,6 +70,12 @@ export interface HandleExternalMessageInput {
   previousChatId?: string | null;
   /** Told about the answer while it is being written, for a surface that shows it. */
   onProgress?: (event: AgentProgressEvent) => void;
+  /**
+   * The chat's files that came with this message, by name. A turn already working
+   * heard of the chat's files when it began, so a message added to it names these
+   * with the path to read them by (lib/pi/steer.ts).
+   */
+  attachedFiles?: string[];
   /**
    * Only reach a turn that is already working: stop it, reset it, or add to it.
    * Never start one. A caller that queues the person's messages in order - the
@@ -886,13 +893,21 @@ export async function handleExternalMessage(
   // A message sent while this chat is already working belongs to that run, not
   // to a second agent of its own. Over a messenger there is no stop button, so
   // the word is the only way to reach a turn in progress.
-  const joined = await joinActiveRun(resolvedChatId, message);
+  const joinedFiles = await filesSentWith(resolvedChatId, input.attachedFiles);
+  const joined = await joinActiveRun(resolvedChatId, message, {
+    modelText: steerModelText(message, joinedFiles),
+    ...(joinedFiles.length ? { files: joinedFiles.map((file) => file.name) } : {}),
+  });
   if (joined) {
     const t = await getServerTranslator();
     return {
       success: true,
       sessionId: session.id,
-      reply: joined === "stopped" ? t("external.run.stopped") : t("external.run.steered"),
+      reply: joined === "stopped"
+        ? t("external.run.stopped")
+        : joined === "refused"
+          ? t("external.run.commandWhileRunning")
+          : t("external.run.steered"),
       context: {
         activeProjectId: resolvedProjectId || null,
         activeProjectName: null,
@@ -1101,6 +1116,7 @@ export async function handleExternalMediaMessage(
   if (effectiveMessage) {
     return handleExternalMessage({
       ...input,
+      attachedFiles: [saved.name],
       message: isVoice ? effectiveMessage : `${effectiveMessage}\n\n${(await getServerTranslator())("api.external.attachedFile", { name: saved.name })}`,
       projectId: context.resolvedProjectId,
       chatId: context.resolvedChatId,

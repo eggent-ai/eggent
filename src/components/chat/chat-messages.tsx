@@ -18,6 +18,7 @@ import { DEFER_INTERACTION_ANSWER, type PiPendingInteraction } from "@/lib/pi/in
 import { ShellRunView } from "@/components/chat/shell-run";
 import { useShellActions } from "@/components/chat/shell-actions";
 import { useShellRuns, type ShellCard } from "@/store/shell-runs";
+import { splitAtSteers, SteerBubble, steerStateOf, type SteerView } from "@/components/chat/steer-bubble";
 
 export interface QuickSkillAction {
   name: string;
@@ -109,6 +110,10 @@ interface ChatMessagesProps {
   launchingSkill?: string | null;
   /** A conversation is open but its stored messages have not arrived yet. */
   awaitingHistory?: boolean;
+  /** Messages said to the turn that is working, not read by its agent yet: drawn under the answer. */
+  steerQueue?: SteerView[];
+  /** Send again a message a turn ended without reading. */
+  onResendSteer?: (view: SteerView) => void;
 }
 
 function interactionKindLabelKey(kind: PiPendingInteraction["kind"]): MessageKey {
@@ -294,6 +299,15 @@ function InteractionCard({
 
 const NO_CARDS: ShellCard[] = [];
 
+const NO_STEERS: SteerView[] = [];
+
+function textOfMessage(message: UIMessage): string {
+  return message.parts
+    .filter((part): part is { type: "text"; text: string } => part.type === "text")
+    .map((part) => part.text)
+    .join("\n");
+}
+
 /** A command typed behind `!`: it stands in the conversation where it was typed. */
 function ShellCardRow({ card }: { card: ShellCard }) {
   return (
@@ -308,8 +322,15 @@ function ShellCardRow({ card }: { card: ShellCard }) {
   );
 }
 
-export function ChatMessages({ messages, isLoading, errorMessage, errorActions, compactionStatus, actionNotice, pendingInteraction, onRespondToInteraction, quickSkills = [], onLaunchSkill, launchingSkill, awaitingHistory = false }: ChatMessagesProps) {
+export function ChatMessages({ messages, isLoading, errorMessage, errorActions, compactionStatus, actionNotice, pendingInteraction, onRespondToInteraction, quickSkills = [], onLaunchSkill, launchingSkill, awaitingHistory = false, steerQueue = NO_STEERS, onResendSteer }: ChatMessagesProps) {
   const { t } = useI18n();
+  // The answer still being written is cut where its agent read a message said
+  // to it. A stored message still waiting to be read is the turn's to show,
+  // under the answer, while it works.
+  const shown = useMemo(
+    () => splitAtSteers(messages).filter((message) => !(isLoading && steerStateOf(message) === "queued")),
+    [messages, isLoading]
+  );
   const scrollRef = useRef<HTMLDivElement>(null);
   const endRef = useRef<HTMLDivElement>(null);
   const shouldAutoScrollRef = useRef(true);
@@ -471,22 +492,38 @@ export function ChatMessages({ messages, isLoading, errorMessage, errorActions, 
         {(cardsByAnchor.get(null) ?? NO_CARDS).map((card) => (
           <ShellCardRow key={card.key} card={card} />
         ))}
-        {messages.map((message, index) => (
-          <Fragment key={message.id}>
-            <MessageBubble
-              message={message}
-              // A block still being written is not a command yet: the first
-              // lines of a script are a different script. Run appears once the
-              // message is complete.
-              shellScope={chatId && !(isLoading && index === messages.length - 1) ? `${chatId}:${index}` : undefined}
-            />
-            {(cardsByAnchor.get(message.id) ?? NO_CARDS).map((card) => (
-              <ShellCardRow key={card.key} card={card} />
-            ))}
-          </Fragment>
-        ))}
+        {shown.map((message, index) => {
+          const steerState = steerStateOf(message);
+          // Said to a turn that ended without reading it: drawn as not read, with a way to send it again.
+          const unread = steerState === "undelivered" || steerState === "queued";
+          return (
+            <Fragment key={message.id}>
+              {unread ? (
+                <SteerBubble
+                  view={{ messageId: message.id, text: textOfMessage(message), state: "undelivered" }}
+                  onResend={onResendSteer}
+                />
+              ) : (
+                <MessageBubble
+                  message={message}
+                  // A block still being written is not a command yet: the first
+                  // lines of a script are a different script. Run appears once the
+                  // message is complete.
+                  shellScope={chatId && !(isLoading && index === shown.length - 1) ? `${chatId}:${index}` : undefined}
+                />
+              )}
+              {(cardsByAnchor.get(message.id) ?? NO_CARDS).map((card) => (
+                <ShellCardRow key={card.key} card={card} />
+              ))}
+            </Fragment>
+          );
+        })}
         {(cardsByAnchor.get("__end__") ?? NO_CARDS).map((card) => (
           <ShellCardRow key={card.key} card={card} />
+        ))}
+
+        {steerQueue.map((view) => (
+          <SteerBubble key={view.messageId} view={view} />
         ))}
 
 
@@ -544,7 +581,7 @@ export function ChatMessages({ messages, isLoading, errorMessage, errorActions, 
         ) : null}
 
         {isLoading && messages.length > 0 && !compactionStatus && !pendingInteraction ? (
-          <WorkingLine progress={visibleProgress(messages[messages.length - 1])} />
+          <WorkingLine progress={visibleProgress(shown[shown.length - 1])} />
         ) : null}
 
         {errorMessage ? (

@@ -7,7 +7,9 @@ import { getServerTranslator } from "@/i18n/server";
 import { learnFromTurn } from "@/lib/learning/review";
 import { cancelPendingInteractionsForRun, listPendingInteractions } from "@/lib/pi/pending-interactions";
 import { retainPiMcpOAuthSession, retainPiScheduleSession, takeRetainedPiScheduleSession } from "@/lib/pi/schedule-host";
-import { clearActiveRun, joinActiveRun, registerActiveRun } from "@/lib/pi/active-runs";
+import { clearActiveRun, joinActiveRun, registerActiveRun, type SteerRequest } from "@/lib/pi/active-runs";
+import { markSteersUndelivered, storeQueuedSteer, TurnSteers, userMessageText } from "@/lib/pi/steer";
+import { STEER_DELIVERED_PART, STEER_QUEUE_ID, STEER_QUEUE_PART, steerDeliveredPartId } from "@/lib/pi/steer-shape";
 import { createStartingRun, raceAbort, TurnAbortedError, undoFailedSetup, type TurnSetupScope } from "@/lib/pi/turn-control";
 import { noteSessionEvent, startTurnWatchdog, UNANSWERED_QUESTION, watchdogThresholds, watchdogTickMs, type StalledTurn } from "@/lib/pi/turn-watchdog";
 import { attachToLiveRun, startLiveRun, type LiveRunSink } from "@/lib/pi/live-run";
@@ -25,14 +27,15 @@ import { SubagentProgressTracker } from "@/lib/pi/subagent-progress";
 import type { AgentProgressEvent, PiChatRunOptions, PiRuntimeStats, PiToolRecord, SubagentSnapshot } from "@/lib/pi/types";
 import { getChat, saveChat } from "@/lib/storage/chat-store";
 import { clearUsageSnapshotCache } from "@/lib/usage/usage-provider";
-import type { ChatMessage, ChatMessagePart } from "@/lib/types";
+import type { ChatMessagePart } from "@/lib/types";
 import type { ChatHome } from "@/lib/remote/types";
 import { runHandedOverText, storedRemoteHome } from "@/lib/remote/proxy-turn";
 import type { PiPendingInteraction } from "@/lib/pi/interaction-types";
 import {
-  checkpointToolMessageId,
+  buildTurnBlock,
   describeInteractionForTranscript,
   spliceAssistantTurn,
+  type TurnTimelinePart,
 } from "@/lib/pi/turn-checkpoint";
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -365,7 +368,7 @@ function isMcpOAuthCompleteResult(toolName: string, output: unknown): boolean {
   return details?.mode === "auth-complete" && details.authenticated === true;
 }
 
-function appendTimelineText(parts: ChatMessagePart[], delta: string): void {
+function appendTimelineText(parts: TurnTimelinePart[], delta: string): void {
   if (!delta) return;
   const last = parts[parts.length - 1];
   if (last?.type === "text") {
@@ -375,7 +378,7 @@ function appendTimelineText(parts: ChatMessagePart[], delta: string): void {
   parts.push({ type: "text", text: delta });
 }
 
-function upsertTimelineTool(parts: ChatMessagePart[], tool: PiToolRecord): void {
+function upsertTimelineTool(parts: TurnTimelinePart[], tool: PiToolRecord): void {
   const existing = parts.find(
     (part): part is Extract<ChatMessagePart, { type: "tool" }> =>
       part.type === "tool" && part.toolCallId === tool.toolCallId
@@ -398,16 +401,17 @@ function upsertTimelineTool(parts: ChatMessagePart[], tool: PiToolRecord): void 
   }
 }
 
-function completedTimelineParts(parts: ChatMessagePart[]): ChatMessagePart[] {
+function completedTimelineParts(parts: TurnTimelinePart[]): TurnTimelinePart[] {
   return parts
     .map((part) => {
       if (part.type === "text") {
         return part.text ? part : null;
       }
+      if (part.type === "steer") return part;
       if (part.status === "running") return null;
       return part;
     })
-    .filter((part): part is ChatMessagePart => Boolean(part));
+    .filter((part): part is TurnTimelinePart => Boolean(part));
 }
 
 /**
@@ -417,9 +421,9 @@ function completedTimelineParts(parts: ChatMessagePart[]): ChatMessagePart[] {
  * off with it, and is stored as stopped: a stored spinner would spin forever.
  */
 function attachSubagentSnapshots(
-  parts: ChatMessagePart[],
+  parts: TurnTimelinePart[],
   tracker: SubagentProgressTracker
-): ChatMessagePart[] {
+): TurnTimelinePart[] {
   for (const part of parts) {
     if (part.type !== "tool" || !isHelperToolName(part.toolName)) continue;
     const snapshot = tracker.get(part.toolCallId);
@@ -595,6 +599,25 @@ const ANSWER_NUDGE =
   "[Eggent] The turn ended without a reply: the person sees nothing from you. Write the reply now - what came out, " +
   "where any files are, and what is left to do if anything. Do not call tools again unless something essential is missing.";
 
+/**
+ * Everything said to the agent while it works reaches it at its next step,
+ * together. The runtime's default is one message a step, which made the second
+ * of two quick corrections wait a whole model call for its turn.
+ */
+function steerAllAtOnce(session: { agent?: { steeringMode: "all" | "one-at-a-time" } }): void {
+  if (session.agent) session.agent.steeringMode = "all";
+}
+
+/** Run one prompt of the turn, so the person's message it announces is not taken for one said to the turn. */
+async function promptTurn(session: { prompt(text: string): Promise<void> }, steers: TurnSteers, text: string): Promise<void> {
+  steers.expectPrompt();
+  try {
+    await session.prompt(text);
+  } finally {
+    steers.promptSettled();
+  }
+}
+
 function isDefaultChatTitle(title: string): boolean {
   return DEFAULT_CHAT_TITLES.includes(title.trim());
 }
@@ -717,7 +740,11 @@ async function persistUserMessage(options: PiChatRunOptions, userMessageId: stri
   const chat = await getChat(options.chatId);
   if (!chat) return;
 
-  if (chat.messages.some((message) => message.id === userMessageId)) return;
+  const existing = chat.messages.find((message) => message.id === userMessageId);
+  // Sent again after the turn it was said to ended without reading it: this
+  // turn is its own now, and the copy marked as not read makes way for it.
+  if (existing?.steer) chat.messages = chat.messages.filter((message) => message.id !== userMessageId);
+  else if (existing) return;
 
   const now = new Date().toISOString();
   chat.messages.push({
@@ -744,55 +771,36 @@ async function persistAssistantMessage(options: {
   assistantText: string;
   tools: PiToolRecord[];
   runtimeStats?: PiRuntimeStats;
-  parts?: ChatMessagePart[];
+  parts?: TurnTimelinePart[];
   /** A checkpoint of this same turn to replace; see turn-checkpoint.ts. */
   replaceMessageId?: string;
   /** Set when this write is the checkpoint itself. */
   checkpointId?: string;
   /** The files the turn made, for the row under the answer. */
   files?: ProducedGroup[];
+  /** This turn, and the messages said to it that the agent read: the stored turn is cut at each (steer.ts). */
+  runId?: string;
+  steers?: TurnSteers;
 }) {
   const chat = await getChat(options.chatId);
   if (!chat) return;
 
   const now = new Date().toISOString();
-  const completedTools = options.tools.filter((tool) => tool.status !== "running");
-  const written: ChatMessage[] = [];
+  const written = buildTurnBlock({
+    baseId: options.checkpointId ?? crypto.randomUUID(),
+    checkpoint: Boolean(options.checkpointId),
+    now,
+    assistantText: options.assistantText,
+    parts: completedTimelineParts(options.parts ?? []),
+    tools: options.tools,
+    runtimeStats: options.runtimeStats,
+    files: options.files,
+    runId: options.runId,
+    steers: options.steers?.delivered(),
+    describeTool: (tool) => ({ args: normalizeToolInput(tool.input), content: stringifyForDisplay(tool.output) }),
+  });
 
-  if (options.assistantText.trim() || completedTools.length > 0 || options.runtimeStats) {
-    const assistantId = options.checkpointId ?? crypto.randomUUID();
-    written.push({
-      id: assistantId,
-      role: "assistant",
-      content: options.assistantText,
-      createdAt: now,
-      toolCalls: completedTools.map((tool) => ({
-        toolCallId: tool.toolCallId,
-        toolName: tool.toolName,
-        args: normalizeToolInput(tool.input),
-      })),
-      parts: completedTimelineParts(options.parts ?? []),
-      piRuntimeStats: options.runtimeStats,
-      ...(options.files?.length ? { files: options.files } : {}),
-      ...(options.checkpointId ? { inProgress: true } : {}),
-    });
-
-    for (const tool of completedTools) {
-      written.push({
-        id: options.checkpointId
-          ? checkpointToolMessageId(options.checkpointId, tool.toolCallId)
-          : crypto.randomUUID(),
-        role: "tool",
-        content: stringifyForDisplay(tool.output),
-        createdAt: now,
-        toolName: tool.toolName,
-        toolCallId: tool.toolCallId,
-        toolResult: tool.output,
-      });
-    }
-  }
-
-  chat.messages = spliceAssistantTurn(chat.messages, options.replaceMessageId, written);
+  chat.messages = spliceAssistantTurn(chat.messages, options.replaceMessageId, written, options.runId);
   chat.updatedAt = now;
   await saveChat(chat);
 }
@@ -1035,7 +1043,39 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
     });
   };
   const starting = createStartingRun(requestStop);
-  registerActiveRun(options.chatId, { session: starting.run, runId, surface: "external", requestStop });
+  // What was said to this turn while it worked (steer.ts), written through one chain with the turn's own write.
+  const steers = new TurnSteers();
+  let persistChain: Promise<void> = Promise.resolve();
+  const queuePersist = (work: () => Promise<void>) => {
+    persistChain = persistChain.then(work).catch((error) => {
+      console.warn("Failed to save the turn:", error);
+    });
+    return persistChain;
+  };
+  // Declared here, not where it is first used: a message said to the turn before it has a stream is still announced.
+  let live: LiveRunSink | null = null;
+  const emitSteerQueue = () => {
+    live?.push({ type: STEER_QUEUE_PART, id: STEER_QUEUE_ID, data: { items: steers.queue() } });
+  };
+  registerActiveRun(options.chatId, {
+    session: starting.run,
+    runId,
+    surface: "external",
+    requestStop,
+    acceptSteer: async (request: SteerRequest) => {
+      // A turn that is stopping will not read it: the message starts a turn of its own.
+      if (stopped) throw new Error("The turn is stopping.");
+      steers.add(request);
+      try {
+        await starting.run.steer(request.modelText);
+      } catch (error) {
+        steers.drop(request.messageId);
+        throw error;
+      }
+      emitSteerQueue();
+      void queuePersist(() => storeQueuedSteer(options.chatId, runId, request));
+    },
+  });
   // A chat that is a board card: the card follows this turn. The board's own runs it reads itself.
   const cardTurn: CardTurn | null = options.boardRun || options.visit || options.publicShare
     ? null
@@ -1059,13 +1099,14 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
     : null;
 
   // Declared here, not where it is first used: the undo below has to be able to see them.
-  let live: LiveRunSink | null = null;
   const teardown: Array<() => void> = [];
   scope.abandon = async (error) => {
     watchdog?.stop();
     clearActiveRun(options.chatId, runId);
     cancelPendingInteractionsForRun(runId);
     cardTurn?.end({ outcome: "failed", detail: streamErrorText(error) });
+    const unread = steers.takeUndelivered();
+    if (unread.length > 0) await queuePersist(() => markSteersUndelivered(options.chatId, runId, unread));
     if (live) {
       live.push({ type: "error", errorText: streamErrorText(error) });
       live.finish();
@@ -1139,7 +1180,11 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
     // Stopped, or given up on, before it began.
     const t = await getServerTranslator();
     const notice = turn.stalled ? await stallEnding(turn.stalled, turn.question) : t("external.run.stopped");
-    await persistAssistantMessage({ chatId: options.chatId, assistantText: notice, tools: [], parts: [{ type: "text", text: notice }] });
+    const unread = steers.takeUndelivered();
+    await queuePersist(async () => {
+      await persistAssistantMessage({ chatId: options.chatId, assistantText: notice, tools: [], parts: [{ type: "text", text: notice }], runId });
+      await markSteersUndelivered(options.chatId, runId, unread);
+    });
     // Said the way a stop is said later in the turn: somebody stopped it, so the surface that
     // already told them so (the stop word's own reply) does not say it twice. A turn given up
     // on for going quiet still has its notice to deliver.
@@ -1151,6 +1196,7 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
   }
   turn.session = session;
   starting.attach(session);
+  steerAllAtOnce(session);
 
   let assistantText = "";
   let lastTurnUsage: PiRuntimeStats["lastTurn"] | undefined;
@@ -1159,7 +1205,7 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
   let lastCall: LastCall | null = null;
   const baselineUsage = getSessionTokenUsage(session);
   const tools = new Map<string, PiToolRecord>();
-  const timelineParts: ChatMessagePart[] = [];
+  const timelineParts: TurnTimelinePart[] = [];
   let mcpOAuthPending = false;
   // The web can watch a Telegram turn, so it gets each helper's progress too; a
   // messenger only needs to know how many are still working.
@@ -1218,7 +1264,22 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
     }
     subagents.handle(record);
     if (watchdog) noteSessionEvent(watchdog, record);
-    if (record.type === "message_start" && asRecord(record.message)?.role === "assistant") messageText = "";
+    if (record.type === "message_start") {
+      if (asRecord(record.message)?.role === "assistant") messageText = "";
+      // A message said to the turn, put in front of the model now: the stored answer is cut here.
+      const said = userMessageText(record.message);
+      const steer = said === null ? null : steers.noteUserMessage(said);
+      if (steer) {
+        liveCloseText();
+        timelineParts.push({ type: "steer", messageId: steer.messageId });
+        live?.push({
+          type: STEER_DELIVERED_PART,
+          id: steerDeliveredPartId(steer.messageId),
+          data: { messageId: steer.messageId, text: steer.text, createdAt: steer.createdAt, deliveredAt: steer.deliveredAt },
+        });
+        emitSteerQueue();
+      }
+    }
     // Said to the turn while it was still being set up: it can hear it now.
     if (record.type === "agent_start") {
       starting.markStarted();
@@ -1331,6 +1392,8 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
     projectId: options.projectId ?? null,
     surface: "external",
   });
+  // Said while the session was being built: whoever watches from the web sees it waiting.
+  if (steers.hasQueued()) emitSteerQueue();
 
   // From here the finally below cleans up.
   scope.abandon = undefined;
@@ -1343,7 +1406,7 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
     // The person named a project: only now may the tool be used for it.
     if (mention) grantVisits(options.chatId, mention.allowed);
     try {
-      await session.prompt(promptFor.runtime);
+      await promptTurn(session, steers, promptFor.runtime);
     } catch (error) {
       // A turn somebody stopped may end by throwing; what it wrote is kept.
       if (!stopped) throw error;
@@ -1378,7 +1441,7 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
       };
       if (endedWithoutAnswer(lastCall, tools.values(), currentPromptUsage)) {
         try {
-          await session.prompt(ANSWER_NUDGE);
+          await promptTurn(session, steers, ANSWER_NUDGE);
         } catch (error) {
           if (!stopped) throw error;
         }
@@ -1408,14 +1471,17 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
         (tool) => tool.toolName === "telegram_send_file" && tool.status === "completed" && /"success":\s*true/.test(stringifyForDisplay(tool.output))
       );
     }
-    await persistAssistantMessage({
+    const runtimeStats = buildPiRuntimeStats(session, currentPromptUsage, addUsage(baselineUsage, currentPromptUsage));
+    await queuePersist(() => persistAssistantMessage({
       chatId: options.chatId,
       assistantText,
       tools: [...tools.values()],
-      runtimeStats: buildPiRuntimeStats(session, currentPromptUsage, addUsage(baselineUsage, currentPromptUsage)),
+      runtimeStats,
       parts: attachSubagentSnapshots(timelineParts, subagents),
       files: producedFiles,
-    });
+      runId,
+      steers,
+    }));
     // A visit is the project doing what another chat asked: what the person
     // said was said there, and that turn does the learning from it.
     if (!stopped && !options.visit) {
@@ -1469,6 +1535,16 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
     if (mention) revokeVisits(options.chatId);
     takeVisitFiles(options.chatId);
     watchdog?.stop();
+    // Said to the turn and never read: see the web runner.
+    const unread = steers.takeUndelivered();
+    if (unread.length > 0) {
+      try {
+        session.clearQueue();
+      } catch {
+        // nothing queued is nothing to clear
+      }
+      await queuePersist(() => markSteersUndelivered(options.chatId, runId, unread));
+    }
     live?.finish();
     clearActiveRun(options.chatId, runId);
     cancelPendingInteractionsForRun(runId);
@@ -1494,13 +1570,37 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
 
 export function createPiChatUIMessageStream(options: PiChatRunOptions) {
   const turnStartedAt = new Date().toISOString();
-  const userMessageId = crypto.randomUUID();
+  const userMessageId = options.userMessageId ?? crypto.randomUUID();
   const runId = options.runId ?? crypto.randomUUID();
 
   const executeTurn = async (writer: UIMessageStreamWriter<UIMessage>, scope: TurnSetupScope): Promise<void> => {
       // Resolved up front: the runtime's compaction events arrive on a
       // synchronous listener, which cannot await a translator of its own.
       const tCompaction = await getServerTranslator();
+
+      // A message for a turn already working in this chat - a second tab, the
+      // same chat in Telegram, the other side of a pair passing one on - joins
+      // that turn, which writes it down where its agent reads it. Asked before
+      // anything is stored: written down here first, it stood in the chat as a
+      // turn of its own, ahead of the answer it interrupted.
+      const joined = await joinActiveRun(options.chatId, options.userMessage, options.steer);
+      if (joined) {
+        const t = await getServerTranslator();
+        const textId = `pi-text-${crypto.randomUUID()}`;
+        writer.write({ type: "text-start", id: textId });
+        writer.write({
+          type: "text-delta",
+          id: textId,
+          delta: joined === "stopped"
+            ? t("external.run.stopped")
+            : joined === "refused"
+              ? t("external.run.commandWhileRunning")
+              : t("external.run.steered"),
+        });
+        writer.write({ type: "text-end", id: textId });
+        return;
+      }
+
       await persistUserMessage(options, userMessageId);
 
       // The turn is stopped through here and nowhere else. It used to be tied to
@@ -1528,23 +1628,22 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         else writer.write(part);
       };
 
-      // The composer is disabled while this tab's own turn runs, so a message
-      // arriving here during one came from somewhere else - the same chat open
-      // in Telegram, or a second tab. Join that run rather than starting a
-      // rival agent in the same working directory.
-      const joined = await joinActiveRun(options.chatId, options.userMessage);
-      if (joined) {
-        const t = await getServerTranslator();
-        const textId = `pi-text-${crypto.randomUUID()}`;
-        writer.write({ type: "text-start", id: textId });
-        writer.write({
-          type: "text-delta",
-          id: textId,
-          delta: joined === "stopped" ? t("external.run.stopped") : t("external.run.steered"),
+      // Every write of the stored chat this turn makes goes through one chain:
+      // a checkpoint still being saved cannot land after the final message and
+      // undo it, and a message said to the turn cannot be lost between the two.
+      let persistChain: Promise<void> = Promise.resolve();
+      const queuePersist = (work: () => Promise<void>) => {
+        persistChain = persistChain.then(work).catch((error) => {
+          console.warn("Failed to save the turn so far:", error);
         });
-        writer.write({ type: "text-end", id: textId });
-        return;
-      }
+        return persistChain;
+      };
+
+      // What was said to this turn while it worked; see steer.ts.
+      const steers = new TurnSteers();
+      const emitSteerQueue = () => {
+        safeWrite({ type: STEER_QUEUE_PART, id: STEER_QUEUE_ID, data: { items: steers.queue() } });
+      };
 
       // Reachable while the session is still being built, so a stop - the
       // button, a stop word, /reset - finds a turn stuck there.
@@ -1557,6 +1656,19 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         runId,
         surface: "web",
         requestStop: () => runAbort.abort(),
+        acceptSteer: async (request: SteerRequest) => {
+          // A turn that is stopping will not read it: the message starts a turn of its own.
+          if (aborted || runAbort.signal.aborted) throw new Error("The turn is stopping.");
+          steers.add(request);
+          try {
+            await starting.run.steer(request.modelText);
+          } catch (error) {
+            steers.drop(request.messageId);
+            throw error;
+          }
+          emitSteerQueue();
+          void queuePersist(() => storeQueuedSteer(options.chatId, runId, request));
+        },
         ...(options.remote ? { servedForRemote: true } : {}),
       });
       // A chat that is a board card: the card follows this turn too, written by the side that runs it.
@@ -1589,6 +1701,8 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         clearActiveRun(options.chatId, runId);
         cancelPendingInteractionsForRun(runId);
         cardTurn?.end({ outcome: "failed", detail: streamErrorText(error) });
+        const unread = steers.takeUndelivered();
+        if (unread.length > 0) await queuePersist(() => markSteersUndelivered(options.chatId, runId, unread));
         if (live) {
           live.push({ type: "error", errorText: streamErrorText(error) });
           live.finish();
@@ -1661,7 +1775,11 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         // Stopped, or given up on, before it began: say so, and keep it.
         const t = await getServerTranslator();
         const notice = stall.stalled ? await stallEnding(stall.stalled, stall.question) : t("external.run.stopped");
-        await persistAssistantMessage({ chatId: options.chatId, assistantText: notice, tools: [], parts: [{ type: "text", text: notice }] });
+        const unread = steers.takeUndelivered();
+        await queuePersist(async () => {
+          await persistAssistantMessage({ chatId: options.chatId, assistantText: notice, tools: [], parts: [{ type: "text", text: notice }], runId });
+          await markSteersUndelivered(options.chatId, runId, unread);
+        });
         const textId = `pi-text-${crypto.randomUUID()}`;
         writer.write({ type: "text-start", id: textId });
         writer.write({ type: "text-delta", id: textId, delta: notice });
@@ -1670,6 +1788,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
       }
       built = session;
       starting.attach(session);
+      steerAllAtOnce(session);
 
       let assistantText = "";
       // The message being written and the last one finished, for a board card's result:
@@ -1691,7 +1810,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
       let lastCall: LastCall | null = null;
       const baselineUsage = getSessionTokenUsage(session);
       const tools = new Map<string, PiToolRecord>();
-      const timelineParts: ChatMessagePart[] = [];
+      const timelineParts: TurnTimelinePart[] = [];
       let mcpOAuthPending = false;
       const subagents = new SubagentProgressTracker({
         sessionId: session.sessionId,
@@ -1728,19 +1847,11 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         addUsage(baselineUsage, currentPromptUsage)
       );
 
-      // See turn-checkpoint.ts. Writes go through one chain so a checkpoint
-      // still being saved cannot land after the final message and undo it.
+      // See turn-checkpoint.ts. Writes go through the turn's one chain (queuePersist, above).
       let checkpointId: string | undefined;
-      let persistChain: Promise<void> = Promise.resolve();
-      const queuePersist = (work: () => Promise<void>) => {
-        persistChain = persistChain.then(work).catch((error) => {
-          console.warn("Failed to save the turn so far:", error);
-        });
-        return persistChain;
-      };
       const persistTurn = (message: Omit<Parameters<typeof persistAssistantMessage>[0], "chatId">) =>
         queuePersist(() =>
-          persistAssistantMessage({ chatId: options.chatId, replaceMessageId: checkpointId, ...message })
+          persistAssistantMessage({ chatId: options.chatId, replaceMessageId: checkpointId, runId, steers, ...message })
         );
 
       // Progress is written down as the turn goes, not only at a question:
@@ -1783,7 +1894,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         // Helper snapshots are left out on purpose - attaching them marks a
         // helper that is still working as stopped.
         const text = [assistantText, question].filter((part) => part.trim()).join("\n\n");
-        const parts: ChatMessagePart[] = [
+        const parts: TurnTimelinePart[] = [
           ...completedTimelineParts(timelineParts).map((part) => ({ ...part })),
           ...(question ? [{ type: "text" as const, text: question }] : []),
         ];
@@ -1798,6 +1909,8 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
             parts,
             replaceMessageId: id,
             checkpointId: id,
+            runId,
+            steers,
           })
         );
       }
@@ -1905,7 +2018,23 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
           }
         }
 
-        if (record.type === "message_start" && asRecord(record.message)?.role === "assistant") messageText = "";
+        if (record.type === "message_start") {
+          if (asRecord(record.message)?.role === "assistant") messageText = "";
+          // A message said to the turn, put in front of the model now: the answer is cut here.
+          const said = userMessageText(record.message);
+          const steer = said === null ? null : steers.noteUserMessage(said);
+          if (steer) {
+            closeTextPart();
+            timelineParts.push({ type: "steer", messageId: steer.messageId });
+            safeWrite({
+              type: STEER_DELIVERED_PART,
+              id: steerDeliveredPartId(steer.messageId),
+              data: { messageId: steer.messageId, text: steer.text, createdAt: steer.createdAt, deliveredAt: steer.deliveredAt },
+            });
+            emitSteerQueue();
+            checkpointProgress();
+          }
+        }
 
         if (record.type === "message_update") {
           const assistantEvent = asRecord(record.assistantMessageEvent);
@@ -2073,6 +2202,8 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         onChunk: (chunk) => writer.write(chunk),
         onFinish: () => {},
       });
+      // Said while the session was being built: everyone watching the turn sees it waiting.
+      if (steers.hasQueued()) emitSteerQueue();
 
       emitStats(buildPiRuntimeStats(session));
 
@@ -2090,7 +2221,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         // again here.
         // The person named a project: only now may the tool be used for it.
         if (mention) grantVisits(options.chatId, mention.allowed);
-        await session.prompt(promptFor.runtime);
+        await promptTurn(session, steers, promptFor.runtime);
 
         if (aborted) {
           await abortPromise;
@@ -2105,7 +2236,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         }
         // Did the work and wrote no answer: asked once more, out of the person's sight.
         if (endedWithoutAnswer(lastCall, tools.values(), currentPromptUsage)) {
-          await session.prompt(ANSWER_NUDGE);
+          await promptTurn(session, steers, ANSWER_NUDGE);
           if (aborted) {
             await abortPromise;
             await persistPartialAssistant();
@@ -2216,6 +2347,18 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         if (mention) revokeVisits(options.chatId);
         takeVisitFiles(options.chatId);
         watchdog?.stop();
+        // Said to the turn and never read: written down as such before anyone
+        // watching is told the turn is over, so the chat they reload has it. A
+        // session kept for its schedules must not find it waiting either.
+        const unread = steers.takeUndelivered();
+        if (unread.length > 0) {
+          try {
+            session.clearQueue();
+          } catch {
+            // nothing queued is nothing to clear
+          }
+          await queuePersist(() => markSteersUndelivered(options.chatId, runId, unread));
+        }
         live?.finish();
         clearActiveRun(options.chatId, runId);
         runAbort.signal.removeEventListener("abort", handleAbort);

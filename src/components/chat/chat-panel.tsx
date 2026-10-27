@@ -29,6 +29,8 @@ import { useShellRuns } from "@/store/shell-runs";
 import { ShellActionsProvider, type ShellActions } from "@/components/chat/shell-actions";
 import { EngineFallbackProvider, type EngineFallback } from "@/components/chat/engine-fallback";
 import { saveEngineChoice } from "@/lib/engines/client";
+import { readSteerDelivered, readSteerQueue, STEER_DELIVERED_PART, STEER_QUEUE_PART } from "@/lib/pi/steer-shape";
+import { steerRunOf, steerStateOf, type SteerView } from "@/components/chat/steer-bubble";
 
 /** Convert stored ChatMessage to UIMessage (parts format for useChat) */
 function isPiRuntimeStats(value: unknown): value is PiRuntimeStats {
@@ -139,6 +141,42 @@ function getLatestPendingInteraction(messages: UIMessage[]): PiPendingInteractio
   return null;
 }
 
+/**
+ * What the turn still has to read, as it last said: the queue part of the
+ * answer being written. Only the newest answer has one that matters.
+ */
+function getLatestSteerQueue(messages: UIMessage[]): Array<{ messageId: string; text: string }> {
+  const last = messages[messages.length - 1];
+  if (!last || last.role !== "assistant") return [];
+  for (let j = last.parts.length - 1; j >= 0; j -= 1) {
+    const part = last.parts[j] as { type?: string; data?: unknown };
+    if (part.type === STEER_QUEUE_PART) return readSteerQueue(part.data);
+  }
+  return [];
+}
+
+/** The messages the turn has read, by id: drawn where they were read, no longer waiting. */
+function deliveredSteerIds(messages: UIMessage[]): Set<string> {
+  const ids = new Set<string>();
+  for (const message of messages) {
+    if (message.role !== "assistant") continue;
+    for (const part of message.parts) {
+      if (part.type !== STEER_DELIVERED_PART) continue;
+      const said = readSteerDelivered((part as { data?: unknown }).data);
+      if (said) ids.add(said.messageId);
+    }
+  }
+  return ids;
+}
+
+/** A message the screen sent to a working turn, until the turn shows it read or the turn is over. */
+interface SteerDraft {
+  messageId: string;
+  text: string;
+  /** sending: on its way; queued: the turn has it; after-turn: the turn was ending, so it goes as a turn of its own. */
+  state: "sending" | "queued" | "after-turn";
+}
+
 function storedPartToUIPart(part: ChatMessagePart): UIMessage["parts"][number] | null {
   if (part.type === "text") {
     return { type: "text" as const, text: part.text };
@@ -170,7 +208,8 @@ function chatMessagesToUIMessages(chatMessages: ChatMessage[]): UIMessage[] {
       result.push({
         id: m.id,
         role: "user",
-        metadata: { createdAt: m.createdAt },
+        // Said to a turn while it worked: read where it stands, or marked as never read (see steer.ts).
+        metadata: { createdAt: m.createdAt, ...(m.steer ? { steer: m.steer } : {}) },
         parts: [{ type: "text" as const, text: m.content }],
       });
     } else if (m.role === "assistant") {
@@ -534,6 +573,11 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
   const [stopSettling, setStopSettling] = useState(false);
   const stopSettlingRef = useRef(false);
   stopSettlingRef.current = stopSettling;
+  // Messages sent to the turn that is working, until it shows them read (see steer.ts).
+  const [steerDrafts, setSteerDrafts] = useState<SteerDraft[]>([]);
+  // A message a turn ended without reading, sent again as a turn of its own: the
+  // next request says so once, so the chat keeps one copy of it.
+  const resendOfRef = useRef<string | null>(null);
 
   // Internal chatId that stays stable during a message send.
   // Pre-generate a UUID so useChat always has a consistent id.
@@ -604,6 +648,8 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
       setHandoverFailure(null);
       handoverFailureRef.current = null;
       unsentRef.current = null;
+      // Said to the turn of the chat being left: that chat keeps them, this one does not show them.
+      setSteerDrafts([]);
     }
   }, [activeChatId]);
 
@@ -649,7 +695,10 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         body: () => {
           // The file open beside the chat, so "here" means something to the agent.
           const openFile = contextModeRef.current === "plain" ? null : openFileForAgent(useAppStore.getState());
+          const resendOf = resendOfRef.current;
+          resendOfRef.current = null;
           return {
+            ...(resendOf ? { resendOf } : {}),
             chatId: internalChatIdRef.current,
             projectId: activeProjectIdRef.current,
             contextMode: contextModeRef.current,
@@ -797,10 +846,13 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         if (!areUIMessagesEquivalentById(messagesRef.current, shown)) {
           setMessages(shown);
         }
-        historyEndsOnUserRef.current =
-          nextMessages[nextMessages.length - 1]?.role === "user";
-        const lastStored = [...chat.messages].reverse().find((message) => message.role !== "tool");
-        historyCheckpointIdRef.current = lastStored?.inProgress ? lastStored.id : null;
+        // A message a turn ended without reading is not one waiting for an answer.
+        const lastShown = nextMessages[nextMessages.length - 1];
+        historyEndsOnUserRef.current = lastShown?.role === "user" && steerStateOf(lastShown) !== "undelivered";
+        // The turn so far, written down while it works: its first answer is the
+        // one the rest of it (the parts after a message said to it) hangs off.
+        const lastAnswer = [...chat.messages].reverse().find((message) => message.role === "assistant");
+        historyCheckpointIdRef.current = lastAnswer?.inProgress ? lastAnswer.id.split(":seg:")[0] : null;
         setLoadedHistoryChatId(activeChatId);
       })
       .catch(() => {
@@ -870,7 +922,17 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     const checkpointId = historyCheckpointIdRef.current;
     if (activeRunForChat && checkpointId) {
       historyCheckpointIdRef.current = null;
-      setMessages((current) => current.filter((message) => message.id !== checkpointId));
+      // The whole turn so far: every part of its answer, and the messages said to it, which the
+      // replay draws again where they were read.
+      const runId = activeRunForChat.runId;
+      setMessages((current) =>
+        current.filter(
+          (message) =>
+            message.id !== checkpointId &&
+            !message.id.startsWith(`${checkpointId}:`) &&
+            steerRunOf(message) !== runId
+        )
+      );
     }
     void resumeStream();
   }, [
@@ -1070,9 +1132,15 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
   }, []);
 
   // Send one message to the agent: the same steps whoever asks, the person's
-  // composer or a button that sends the message again.
-  const dispatchMessage = useCallback((messageText: string) => {
+  // composer or a button that sends the message again. `resendOf` names a
+  // message a turn ended without reading, which this one takes the place of.
+  const dispatchMessage = useCallback((messageText: string, options: { resendOf?: string } = {}) => {
     setChatError(null);
+    if (options.resendOf) {
+      const old = options.resendOf;
+      resendOfRef.current = old;
+      setMessages((current) => current.filter((message) => message.id !== old));
+    }
     // A message refused earlier and left on the screen is let go of: this one replaces it.
     const refused = unsentRef.current;
     unsentRef.current = null;
@@ -1093,7 +1161,57 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     sendMessage({ text: messageText, metadata: { createdAt: new Date().toISOString() } });
   }, [activeProjectId, registerOutgoingChat, sendMessage, setMessages]);
 
-  const onSubmit = useCallback((messageOverride?: string) => {
+  // A message for the turn that is working: handed to it, drawn under the answer
+  // as waiting until the turn shows where its agent read it. The old way was
+  // Stop, which threw the answer in progress away.
+  const steerMessage = useCallback(async (messageText: string, options: { files?: string[]; messageId?: string } = {}) => {
+    const messageId = options.messageId ?? generateClientId();
+    setChatError(null);
+    setSteerDrafts((drafts) => [...drafts.filter((draft) => draft.messageId !== messageId), { messageId, text: messageText, state: "sending" }]);
+    const settle = (next: SteerDraft["state"] | null) =>
+      setSteerDrafts((drafts) =>
+        next === null
+          ? drafts.filter((draft) => draft.messageId !== messageId)
+          : drafts.map((draft) => (draft.messageId === messageId ? { ...draft, state: next } : draft))
+      );
+    try {
+      const response = await fetch(`/api/chat/${encodeURIComponent(internalChatIdRef.current)}/steer`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: messageText, messageId, ...(options.files?.length ? { files: options.files } : {}) }),
+      });
+      const payload = (await response.json().catch(() => null)) as { status?: string } | null;
+      if (!response.ok || !payload?.status) throw new Error(`steer ${response.status}`);
+      if (payload.status === "steered") {
+        settle("queued");
+      } else if (payload.status === "not-running") {
+        // The turn was ending: the message goes as a turn of its own once it has.
+        settle("after-turn");
+      } else if (payload.status === "refused") {
+        settle(null);
+        setInput((current) => current || messageText);
+        setChatError(t("chat.steer.command"));
+      } else {
+        // A stop word: the turn is stopping, and says so itself.
+        settle(null);
+      }
+    } catch {
+      settle(null);
+      setInput((current) => current || messageText);
+      setChatError(t("chat.steer.failed"));
+    }
+  }, [t]);
+
+  // A message the turn has read is drawn where it was read, not under the answer any more.
+  useEffect(() => {
+    if (steerDrafts.length === 0) return;
+    const read = deliveredSteerIds(messages);
+    if (steerDrafts.some((draft) => read.has(draft.messageId))) {
+      setSteerDrafts((drafts) => drafts.filter((draft) => !read.has(draft.messageId)));
+    }
+  }, [messages, steerDrafts]);
+
+  const onSubmit = useCallback((messageOverride?: string, extras: { files?: string[] } = {}) => {
     const typed = messageOverride ?? input;
     if (pendingInteraction) {
       const trimmed = typed.trim();
@@ -1123,7 +1241,13 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     // `!!hello` is a message that really starts with an exclamation mark.
     const messageText = shellInput?.kind === "literal" ? shellInput.text : typed;
 
-    if (!messageText.trim() || isLoading) return;
+    if (!messageText.trim()) return;
+    if (isLoading) {
+      // The agent is working: the message is added to what it is doing.
+      void steerMessage(messageText, { files: extras.files });
+      setInput("");
+      return;
+    }
     dispatchMessage(messageText);
     setInput("");
   }, [
@@ -1136,7 +1260,34 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     activeProjectId,
     currentPath,
     dispatchMessage,
+    steerMessage,
   ]);
+
+  // The turn is over. What it read is in the stored chat now, where it was read,
+  // and what it did not is there marked; the history reload shows both. A
+  // message that missed the turn by a moment goes now, as a turn of its own.
+  useEffect(() => {
+    if (isLoading || steerDrafts.length === 0) return;
+    const late = steerDrafts.filter((draft) => draft.state === "after-turn");
+    if (steerDrafts.some((draft) => draft.state === "sending")) {
+      // Still on its way: its answer decides.
+      if (late.length === 0) return;
+    }
+    setSteerDrafts((drafts) => drafts.filter((draft) => draft.state === "sending"));
+    if (late.length > 0) dispatchMessage(late.map((draft) => draft.text).join("\n\n"));
+  }, [dispatchMessage, isLoading, steerDrafts]);
+
+  // A message a turn ended without reading, sent again: added to the turn that is
+  // working now, or as a turn of its own. Either way under the id it is stored
+  // under, so the chat keeps one copy.
+  const resendSteer = useCallback((view: SteerView) => {
+    if (isLoading) {
+      setMessages((current) => current.filter((message) => message.id !== view.messageId));
+      void steerMessage(view.text, { messageId: view.messageId });
+      return;
+    }
+    dispatchMessage(view.text, { resendOf: view.messageId });
+  }, [dispatchMessage, isLoading, setMessages, steerMessage]);
 
   // What a command card may ask of the conversation around it.
   const shellActions = useMemo<ShellActions>(
@@ -1342,6 +1493,26 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     return actions;
   }, [handoverFailure, remote.status?.enabled, retryHandedOverMessage, runHereInstead, t]);
 
+  // Under the answer being written: what the turn has to read yet, as it last
+  // said, and what this screen sent that it has not said anything about yet.
+  const steerQueue = useMemo<SteerView[]>(() => {
+    if (!isLoading && steerDrafts.length === 0) return [];
+    const read = deliveredSteerIds(messages);
+    const views: SteerView[] = [];
+    const seen = new Set<string>();
+    for (const item of isLoading ? getLatestSteerQueue(messages) : []) {
+      if (read.has(item.messageId) || seen.has(item.messageId)) continue;
+      seen.add(item.messageId);
+      views.push({ messageId: item.messageId, text: item.text, state: "queued" });
+    }
+    for (const draft of steerDrafts) {
+      if (read.has(draft.messageId) || seen.has(draft.messageId)) continue;
+      seen.add(draft.messageId);
+      views.push({ messageId: draft.messageId, text: draft.text, state: draft.state });
+    }
+    return views;
+  }, [isLoading, messages, steerDrafts]);
+
   const showQuickSkills = !activeProjectId && activeChatId === null && messages.length === 0 ? quickSkills : [];
 
   return (
@@ -1364,6 +1535,8 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         onLaunchSkill={requestSkillLaunch}
         launchingSkill={launchingSkill}
         awaitingHistory={awaitingHistory}
+        steerQueue={steerQueue}
+        onResendSteer={resendSteer}
       />
       <ChatInput
         input={input}

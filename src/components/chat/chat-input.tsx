@@ -186,7 +186,8 @@ function ContextModeControl({
 interface ChatInputProps {
   input: string;
   setInput: (input: string) => void;
-  onSubmit: (messageOverride?: string) => void;
+  /** `files`: the chat's files sent while a turn works, named to it with the message (lib/pi/steer.ts). */
+  onSubmit: (messageOverride?: string, extras?: { files?: string[] }) => void;
   onStop?: () => void;
   isLoading: boolean;
   pendingInteraction?: PiPendingInteraction | null;
@@ -238,6 +239,15 @@ export function ChatInput({
   // Files attached while a question card is open: they are the answer, or part of it,
   // so a card can be sent with nothing typed once one has arrived.
   const [cardFileNames, setCardFileNames] = useState<string[]>([]);
+  // Files sent while a turn works: the turn heard of the chat's files when it began,
+  // so the message that goes with them names them (see lib/pi/steer.ts).
+  const [turnFileNames, setTurnFileNames] = useState<string[]>([]);
+  const isLoadingRef = useRef(isLoading);
+  isLoadingRef.current = isLoading;
+  // A turn that ended took nothing of them: the next turn hears of every file of the chat anyway.
+  useEffect(() => {
+    if (!isLoading) setTurnFileNames([]);
+  }, [isLoading]);
   const pendingInteractionRef = useRef(pendingInteraction);
   pendingInteractionRef.current = pendingInteraction;
   const pendingInteractionId = pendingInteraction?.id;
@@ -465,12 +475,18 @@ export function ChatInput({
   // A message sent while a file is still on its way goes without it: the agent
   // answered the words and never saw the picture they were about.
   const waitingForUpload = uploadingFiles.length > 0 && !shellMode;
+  // While a turn works a message is added to it, and a file alone has to be one
+  // sent during the turn: every earlier file of the chat the turn knows already.
   const canSubmit = !waitingForUpload && (pendingInteraction
     ? Boolean(input.trim()) || pendingInteraction.kind === "confirm" || cardFileNames.length > 0
-    : Boolean(input.trim()) || uploadedFiles.length > 0);
+    : Boolean(input.trim()) || (isLoading ? turnFileNames.length > 0 : uploadedFiles.length > 0));
+  const sendTyped = useCallback((messageOverride?: string) => {
+    const files = isLoading && turnFileNames.length > 0 ? turnFileNames : undefined;
+    if (files) setTurnFileNames([]);
+    onSubmit(messageOverride, files ? { files } : {});
+  }, [isLoading, onSubmit, turnFileNames]);
   const submitCurrentMessage = useCallback(() => {
     if (!canSubmit) return;
-    if (!pendingInteraction && isLoading && !shellMode) return;
     if (pendingInteraction) {
       onSubmit(input.trim() || cardFileNames.length === 0 ? undefined : t("chat.card.attachedOnly"));
       return;
@@ -485,8 +501,8 @@ export function ChatInput({
         return;
       }
     }
-    onSubmit(input.trim() ? undefined : t("chat.attachmentOnlyPrompt"));
-  }, [canSubmit, cardFileNames.length, input, isLoading, onSubmit, pendingInteraction, shellMode, t]);
+    sendTyped(input.trim() ? undefined : t("chat.attachmentOnlyPrompt"));
+  }, [canSubmit, cardFileNames.length, input, onSubmit, pendingInteraction, sendTyped, shellMode, t]);
 
   // Editing the message ends the warning about it.
   useEffect(() => {
@@ -496,8 +512,8 @@ export function ChatInput({
   const sendDespiteSecret = useCallback(() => {
     if (waitingForUpload) return;
     setSecretWarning(null);
-    onSubmit(input.trim() ? undefined : t("chat.attachmentOnlyPrompt"));
-  }, [input, onSubmit, t, waitingForUpload]);
+    sendTyped(input.trim() ? undefined : t("chat.attachmentOnlyPrompt"));
+  }, [input, sendTyped, t, waitingForUpload]);
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
@@ -608,6 +624,7 @@ export function ChatInput({
 
         setUploadedFiles((prev) => mergeUniqueChatFiles(prev, [uploadedFile]));
         if (pendingInteractionRef.current) setCardFileNames((prev) => [...prev, uploadedFile.name]);
+        else if (isLoadingRef.current) setTurnFileNames((prev) => (prev.includes(uploadedFile.name) ? prev : [...prev, uploadedFile.name]));
         onFilesUploaded?.([uploadedFile]);
       } catch (error) {
         console.error("Failed to upload file:", error);
@@ -637,8 +654,8 @@ export function ChatInput({
 
   const handlePaste = useCallback(
     async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
-      // A question card may be asking for exactly this picture.
-      if (disabled || (isLoading && !pendingInteraction) || !chatId) return;
+      // A question card may be asking for exactly this picture, and a turn at work may want it too.
+      if (disabled || !chatId) return;
 
       const clipboardFiles = Array.from(e.clipboardData.files).filter(isImageFile);
       const itemFiles = Array.from(e.clipboardData.items)
@@ -669,7 +686,7 @@ export function ChatInput({
         await uploadFile(upload);
       }
     },
-    [chatId, disabled, isLoading, pendingInteraction, uploadFile]
+    [chatId, disabled, uploadFile]
   );
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
@@ -713,7 +730,7 @@ export function ChatInput({
     });
   }, [setInput]);
 
-  const dictation = useDictation(appendTranscriptToInput, disabled || isLoading);
+  const dictation = useDictation(appendTranscriptToInput, disabled);
 
   const removeUploadedFile = useCallback(
     async (filename: string) => {
@@ -973,7 +990,7 @@ export function ChatInput({
               <Paperclip className="size-4" />
             </Button>
 
-            <DictationButton dictation={dictation} disabled={disabled || Boolean(pendingInteraction) || isLoading} />
+            <DictationButton dictation={dictation} disabled={disabled || Boolean(pendingInteraction)} />
 
             <div className="relative flex-1">
             <textarea
@@ -984,7 +1001,7 @@ export function ChatInput({
               onPaste={handlePaste}
               placeholder={pendingInteraction
                 ? pendingInteraction.placeholder || (pendingInteraction.kind === "confirm" ? t("chat.confirmPlaceholder") : t("chat.waitingToolPlaceholder"))
-                : isDragging ? t("chat.dropFilesPlaceholder") : t("chat.placeholder")}
+                : isDragging ? t("chat.dropFilesPlaceholder") : isLoading ? t("chat.placeholderWhileRunning") : t("chat.placeholder")}
               disabled={disabled}
               rows={1}
               className={`min-h-[30px] max-h-[200px] w-full translate-y-px resize-none border-0 bg-transparent px-1 pt-2.5 pb-1.5 text-sm leading-5 placeholder:text-muted-foreground focus:outline-none disabled:opacity-50 ${shellMode ? "font-mono" : ""}`}
@@ -992,12 +1009,16 @@ export function ChatInput({
           </div>
 
             {/* The model sits in the row it applies to, not in the note under
-                it: this is the thing you glance at before pressing send. */}
-            <ModelPicker
-              projectId={projectId ?? null}
-              compact
-              triggerClassName="inline-flex max-w-[9rem] shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
-            />
+                it: this is the thing you glance at before pressing send. While a
+                turn works there is nothing to choose it for, and on a phone the
+                field needs the room for what is said to the turn. */}
+            <div className={isLoading ? "contents max-sm:hidden" : "contents"}>
+              <ModelPicker
+                projectId={projectId ?? null}
+                compact
+                triggerClassName="inline-flex max-w-[9rem] shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+              />
+            </div>
 
             {/* A turn waiting on a question is still a running turn, and the
                 question card was its only way out: everything typed here goes
@@ -1014,6 +1035,21 @@ export function ChatInput({
                 className="h-10 w-10 shrink-0 rounded-xl text-destructive hover:text-destructive"
               >
                 <Square className="size-4" />
+              </Button>
+            ) : null}
+            {/* While the agent works the message is added to what it is doing; Stop
+                keeps its place on the right and the send button comes in beside it
+                once there is something to send, so neither moves under the pointer. */}
+            {isLoading && !pendingInteraction && canSubmit ? (
+              <Button
+                size="icon"
+                onClick={submitCurrentMessage}
+                disabled={disabled}
+                aria-label={t("chat.steer.send")}
+                title={t("chat.steer.send")}
+                className="h-10 w-10 shrink-0 rounded-xl"
+              >
+                <Send className="size-4" />
               </Button>
             ) : null}
             {isLoading && !pendingInteraction ? (

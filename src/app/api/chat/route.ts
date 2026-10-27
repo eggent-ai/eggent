@@ -10,6 +10,9 @@ import { cleanHead, parseHome, REMOTE_HEADERS, type ChatHome } from "@/lib/remot
 import { getServerTranslator } from "@/i18n/server";
 import { describeOpenFile, parseOpenFile } from "@/lib/files/open-file-context";
 import type { MessageKey } from "@/i18n/messages";
+import { filesSentWith, steerModelText } from "@/lib/pi/steer";
+import { isStoredMessageId } from "@/lib/pi/steer-shape";
+import type { SteerRequest } from "@/lib/pi/active-runs";
 
 export const maxDuration = 300; // 5 min max for long agent runs
 
@@ -119,6 +122,30 @@ export async function POST(req: NextRequest) {
 
     const resolvedCurrentPath = typeof currentPath === "string" ? currentPath : undefined;
 
+    // A message for a turn already working, passed on from the other side of a
+    // pair: the id it is stored under on both sides, and the files sent with it,
+    // which this side finds by name in its own copy of the chat's files.
+    let steer: Partial<SteerRequest> | undefined;
+    const steerMeta = body.steer && typeof body.steer === "object" ? (body.steer as Record<string, unknown>) : null;
+    if (steerMeta) {
+      const files = await filesSentWith(resolvedChatId, steerMeta.files);
+      steer = {
+        ...(isStoredMessageId(steerMeta.messageId) ? { messageId: steerMeta.messageId } : {}),
+        text: message,
+        modelText: steerModelText(message, files),
+        ...(files.length ? { files: files.map((file) => file.name) } : {}),
+      };
+    }
+
+    // Sent again after the turn it was said to ended without reading it: this
+    // turn takes it as its own, under the id it is stored under, so the chat
+    // keeps one copy. Only a message that is marked so: any other id is ignored.
+    let resendOf: string | undefined;
+    if (isStoredMessageId(body.resendOf) && existing) {
+      const stored = existing.messages.find((entry) => entry.id === body.resendOf);
+      if (stored?.role === "user" && stored.steer && stored.steer.state !== "delivered") resendOf = stored.id;
+    }
+
     if (handOverTo) {
       return await runHandedOverTurn({
         chatId: resolvedChatId,
@@ -128,6 +155,7 @@ export async function POST(req: NextRequest) {
         contextMode,
         currentPath: resolvedCurrentPath,
         chatTitle,
+        ...(steer ? { steer } : {}),
       });
     }
 
@@ -148,6 +176,8 @@ export async function POST(req: NextRequest) {
         chatContextMode: contextMode,
         cwd: resolvedCurrentPath,
         ...(openFileNote ? { openFileNote } : {}),
+        ...(steer ? { steer } : {}),
+        ...(resendOf ? { userMessageId: resendOf } : {}),
         ...(relayedFrom ? { remote: { servedFor: relayedFrom } } : {}),
         // A messenger's turn that was handed over has nobody to answer a question card.
         ...(relayedFrom && req.headers.get(REMOTE_HEADERS.interactive) === "0" ? { interactive: false } : {}),

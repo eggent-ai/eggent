@@ -21,6 +21,22 @@ export interface AbortableRun {
   readonly isStreaming: boolean;
 }
 
+/** A message said to a turn that is already working. */
+export interface SteerRequest {
+  /** What it is stored under. The screen that sent it made the id up, so its own bubble and the turn's agree. */
+  messageId: string;
+  /** As the person wrote it: what the chat shows. */
+  text: string;
+  /** What the agent reads: the same words, with any files sent beside them named. */
+  modelText: string;
+  createdAt: string;
+  /** The chat's files sent with it, by name: a turn on the other side of a pair finds them in its own copy. */
+  files?: string[];
+}
+
+/** What became of a message sent to a chat that may have a turn working in it. */
+export type JoinOutcome = "stopped" | "steered" | "refused";
+
 interface ActiveRun {
   session: AbortableRun;
   runId: string;
@@ -37,6 +53,14 @@ interface ActiveRun {
    * pending questions cancelled, nothing diagnosed that did not happen.
    */
   requestStop?: () => void;
+  /**
+   * How the run takes a message said to it while it works, when it keeps track
+   * of them itself: written down as waiting, moved to where the agent read it,
+   * marked when the turn ended before the agent could. A turn relayed to the
+   * other side of a pair passes it on, id and files and all, to the side that
+   * keeps the record. A run without it is handed the bare words.
+   */
+  acceptSteer?: (request: SteerRequest) => Promise<void>;
   /**
    * This run was handed over from the other side of a workspace and computer
    * pair. Only a request that came over that road may answer its questions, and
@@ -74,6 +98,7 @@ export function registerActiveRun(
     runId: string;
     surface: ActiveRun["surface"];
     requestStop?: () => void;
+    acceptSteer?: ActiveRun["acceptSteer"];
     servedForRemote?: boolean;
   }
 ): void {
@@ -178,13 +203,21 @@ export async function stopActiveRun(chatId: string): Promise<boolean> {
  *   tool calls and before the next model call, which is where a correction is
  *   still worth something. Queuing it until the end (followUp) would let the
  *   agent finish doing the thing the user was trying to redirect.
+ * - A slash command is refused. The runtime cannot steer an extension command,
+ *   and starting a run of its own for it put a second agent in a chat that
+ *   already had one working - the very thing this registry is here to prevent.
+ *   The caller says it can be sent once the turn is over.
+ *
+ * `steer` carries what the caller knows besides the words: the id the person's
+ * screen gave the message, the words with the files sent beside them named.
  *
  * Returns null when there was no run to join, so the caller starts one normally.
  */
 export async function joinActiveRun(
   chatId: string,
-  message: string
-): Promise<"stopped" | "steered" | null> {
+  message: string,
+  steer: Partial<SteerRequest> = {}
+): Promise<JoinOutcome | null> {
   const active = getActiveRun(chatId);
   if (!active) return null;
 
@@ -196,14 +229,22 @@ export async function joinActiveRun(
     return "stopped";
   }
 
-  // Extension commands cannot be steered - the runtime refuses them - and a
-  // slash command is a new instruction anyway, so let it start its own run.
-  if (message.trimStart().startsWith("/")) return null;
+  if (message.trimStart().startsWith("/")) return "refused";
 
+  const request: SteerRequest = {
+    messageId: steer.messageId || crypto.randomUUID(),
+    text: steer.text ?? message,
+    modelText: steer.modelText ?? message,
+    createdAt: steer.createdAt ?? new Date().toISOString(),
+    ...(steer.files?.length ? { files: steer.files } : {}),
+  };
   try {
-    await active.session.steer(message);
+    if (active.acceptSteer) await active.acceptSteer(request);
+    else await active.session.steer(request.modelText);
     return "steered";
   } catch (error) {
+    // A turn that is stopping, or that ended a moment ago: the message is for a
+    // turn of its own.
     console.warn("Failed to steer the running turn, starting a new one:", error);
     return null;
   }

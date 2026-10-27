@@ -66,6 +66,14 @@ export interface PiChatRunOptions extends PiSessionOptions {
   projectId?: string;
   /** The file open beside the chat, told to the model after the message for this turn (lib/files/open-file-context). */
   openFileNote?: string;
+  /**
+   * The id the person's message is stored under, when it has one already: a
+   * message said to a turn that ended before reading it, now sent as a turn of
+   * its own (lib/pi/steer.ts).
+   */
+  userMessageId?: string;
+  /** What the sender knows besides the words, for a message that turns out to be for a turn already working. */
+  steer?: { messageId?: string; text?: string; modelText?: string };
 }
 
 /**
