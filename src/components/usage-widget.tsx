@@ -34,6 +34,7 @@ interface UsageSnapshot {
 }
 
 const POLL_INTERVAL_MS = 60_000;
+const FRESH_MIN_GAP_MS = 10_000;
 
 function formatAmount(meter: UsageMeter, value: number): string {
   if (meter.unit === "currency") {
@@ -89,9 +90,15 @@ export function UsageWidget() {
       }
     };
 
-    const load = async () => {
+    // A page opened or a tab come back to may follow a change made elsewhere a
+    // moment ago, so those ask past the server's minute of cache; the timer does not.
+    let lastFresh = 0;
+    const load = async (fresh = false) => {
+      const now = Date.now();
+      const refresh = fresh && now - lastFresh > FRESH_MIN_GAP_MS;
+      if (refresh) lastFresh = now;
       try {
-        const response = await fetch("/api/usage");
+        const response = await fetch(refresh ? "/api/usage?refresh=1" : "/api/usage");
         if (response.status === 404) {
           // No usage provider is configured and none will appear while this
           // page is open, so there is nothing left to ask for.
@@ -120,11 +127,18 @@ export function UsageWidget() {
       }
     };
 
-    void load();
-    timer = setInterval(load, POLL_INTERVAL_MS);
+    const onVisible = () => {
+      if (document.visibilityState === "visible" && timer !== null) void load(true);
+    };
+    void load(true);
+    timer = setInterval(() => void load(), POLL_INTERVAL_MS);
+    document.addEventListener("visibilitychange", onVisible);
+    window.addEventListener("focus", onVisible);
     return () => {
       cancelled = true;
       stopPolling();
+      document.removeEventListener("visibilitychange", onVisible);
+      window.removeEventListener("focus", onVisible);
     };
   }, []);
 
