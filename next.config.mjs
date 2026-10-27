@@ -10,6 +10,12 @@ const nextConfig = {
     config.resolve.alias.canvas = false;
     return config;
   },
+  // Nothing here uses next/image, so its optimizer is off: /_next/image then
+  // converts nothing, and a hole in the image library behind it
+  // (GHSA-2464-fhr4-w9xw was one) has nothing to reach.
+  images: {
+    unoptimized: true,
+  },
   serverExternalPackages: [
     "child_process",
     "pdfjs-dist",
