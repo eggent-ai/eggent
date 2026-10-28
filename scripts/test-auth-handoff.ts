@@ -73,7 +73,10 @@ function sessionCookieFrom(response: Response): string | null {
 console.log("the token itself:");
 await check("a minted token works once", () => {
   const { token } = mintHandoffToken(USERNAME);
-  assert.deepEqual(redeemHandoffToken(token), { username: USERNAME });
+  const redeemed = redeemHandoffToken(token);
+  assert.equal(redeemed?.username, USERNAME);
+  // When it was minted, in seconds: a link minted before a new password ends with the sessions.
+  assert.ok(Math.abs((redeemed?.issuedAt ?? 0) - Date.now() / 1000) < 5);
   assert.equal(redeemHandoffToken(token), null);
 });
 await check("a token is dead after ten minutes", () => {

@@ -22,6 +22,8 @@ const MAX_OUTSTANDING = 50;
 interface OutstandingHandoff {
   username: string;
   expiresAt: number;
+  /** Seconds, like a session's `iat`: a link minted before sessions were ended ends with them. */
+  issuedAt: number;
 }
 
 // On globalThis rather than in module scope: the route that mints and the
@@ -57,14 +59,14 @@ export function mintHandoffToken(username: string, now = Date.now()): { token: s
   }
   const token = randomBytes(32).toString("base64url");
   const expiresAt = now + HANDOFF_TTL_MS;
-  entries.set(hashToken(token), { username, expiresAt });
+  entries.set(hashToken(token), { username, expiresAt, issuedAt: Math.floor(now / 1000) });
   return { token, expiresAt };
 }
 
 /**
  * Spends a token. Whatever the outcome, the same token never works twice.
  */
-export function redeemHandoffToken(token: unknown, now = Date.now()): { username: string } | null {
+export function redeemHandoffToken(token: unknown, now = Date.now()): { username: string; issuedAt: number } | null {
   if (typeof token !== "string") return null;
   const trimmed = token.trim();
   // A minted token is 43 characters; anything far off that was never one.
@@ -75,5 +77,5 @@ export function redeemHandoffToken(token: unknown, now = Date.now()): { username
   if (!entry) return null;
   entries.delete(key);
   if (entry.expiresAt <= now) return null;
-  return { username: entry.username };
+  return { username: entry.username, issuedAt: entry.issuedAt };
 }

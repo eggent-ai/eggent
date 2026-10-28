@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server";
-import { AUTH_COOKIE_NAME, verifySessionToken } from "@/lib/auth/session";
+import { AUTH_COOKIE_NAME } from "@/lib/auth/session";
+import { verifyActiveSession } from "@/lib/auth/session-floor";
 import { mintHandoffToken } from "@/lib/auth/handoff";
 
 /**
@@ -12,7 +13,7 @@ import { mintHandoffToken } from "@/lib/auth/handoff";
  */
 export async function POST(req: NextRequest) {
   const cookie = req.cookies.get(AUTH_COOKIE_NAME)?.value || "";
-  const session = cookie ? await verifySessionToken(cookie) : null;
+  const session = cookie ? await verifyActiveSession(cookie) : null;
   if (!session) {
     return Response.json({ error: "Unauthorized" }, { status: 401 });
   }

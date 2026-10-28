@@ -11,6 +11,11 @@ export async function GET() {
 export async function PUT(req: NextRequest) {
   try {
     const body = (await req.json()) as Partial<AppSettings>;
+    // The login, its password and the moment sessions were last ended are
+    // changed by /api/auth/credentials, which also ends the other sessions.
+    // Taken from here, a page holding a session could put back a password, or
+    // bring back the sessions a new one had ended.
+    delete (body as { auth?: unknown }).auth;
     const current = await getSettings();
     const sanitized = restoreMaskedKeys(body, current);
     const updated = await saveSettings(sanitized);
@@ -75,13 +80,6 @@ function restoreMaskedKeys(
       apiKey: current.search.apiKey,
     };
   }
-  if (isMaskedKey(next.auth?.passwordHash)) {
-    next.auth = {
-      ...(next.auth || {}),
-      passwordHash: current.auth.passwordHash,
-    };
-  }
-
   return next;
 }
 

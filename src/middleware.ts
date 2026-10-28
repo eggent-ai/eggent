@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
-import { AUTH_COOKIE_NAME, verifySessionToken } from "@/lib/auth/session";
+import { AUTH_COOKIE_NAME } from "@/lib/auth/session";
+import { verifyActiveSession } from "@/lib/auth/session-floor";
 
 function isPublicPage(pathname: string): boolean {
   return pathname === "/login";
@@ -25,7 +26,11 @@ function isPublicApi(req: NextRequest, pathname: string): boolean {
 }
 
 function shouldBypass(pathname: string): boolean {
-  if (/\.[^/]+$/.test(pathname)) {
+  // A file at the top of the site: the icons and robots.txt. Anything deeper
+  // is one of the app's own routes whatever its last segment looks like - a
+  // dot there used to let a request past the sign-in check, a session ended by
+  // a new password included, to every API route that leans on this check.
+  if (/^\/[^/]+\.[^/]+$/.test(pathname)) {
     return true;
   }
   if (
@@ -67,7 +72,7 @@ export async function middleware(req: NextRequest) {
   }
 
   const token = req.cookies.get(AUTH_COOKIE_NAME)?.value || "";
-  const session = token ? await verifySessionToken(token) : null;
+  const session = token ? await verifyActiveSession(token) : null;
 
   if (isPublicPage(pathname)) {
     if (session) {
@@ -99,6 +104,9 @@ export async function middleware(req: NextRequest) {
   return NextResponse.next();
 }
 
+// On Node rather than the edge: a session issued before the last change of
+// password is refused here, and only the settings file says when that was.
 export const config = {
+  runtime: "nodejs",
   matcher: ["/:path*"],
 };
