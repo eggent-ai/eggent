@@ -1,7 +1,7 @@
 /**
- * The two headers a file download gets wrong without anyone noticing.
+ * The headers a file download gets wrong without anyone noticing.
  *
- * Both failures were silent. A Content-Disposition carrying a Cyrillic file
+ * The first two failures were silent. A Content-Disposition carrying a Cyrillic file
  * name made the Response constructor throw - a header value is a byte string -
  * and the route's catch answered 404, so every file named in Russian was "not
  * found" while it sat in the project. And a server that ignores Range cannot be
@@ -9,7 +9,19 @@
  * 200, while every other browser plays but cannot seek.
  */
 
+import { ICS_CONTENT_TYPE, isCalendarFile } from "@/lib/calendar/ics";
+
 export type ByteRange = { start: number; end: number };
+
+/**
+ * The type a file saved to disk is sent as. An unnamed binary for everything
+ * but a calendar file: a phone saves a binary into Downloads and stops there,
+ * while text/calendar makes it offer to add the event, which is the whole
+ * point of the file.
+ */
+export function attachmentContentType(fileName: string): string {
+  return isCalendarFile(fileName) ? ICS_CONTENT_TYPE : "application/octet-stream";
+}
 
 /**
  * The single byte range a request asks for, "unsatisfiable" when it asks for

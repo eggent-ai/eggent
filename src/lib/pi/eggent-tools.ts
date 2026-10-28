@@ -40,6 +40,9 @@ import { createSharesTool } from "@/lib/shares/tool";
 import { sharesEnabled } from "@/lib/shares/config";
 import { isScheduledRunSessionId } from "@/lib/pi/scheduled-run-state";
 import { createBoardTool } from "@/lib/board/tool";
+import { createCalendarFileTool } from "@/lib/calendar/tool";
+import { googleEnabled } from "@/lib/google/config";
+import { createGoogleTool } from "@/lib/google/tool";
 import { putQuestionOnCard } from "@/lib/board/runs";
 import { boardRunsHere } from "@/lib/board/place";
 import {
@@ -1298,6 +1301,13 @@ export async function createEggentPiTools(options: {
   // The task board: read it, and write down work for the person to start. Not
   // inside a visit, which is a project doing one piece of work for another chat.
   if (!options.visit) tools.push(createBoardTool({ chatId: options.chatId, projectId: options.projectId }));
+
+  // An event for the person's own calendar, as a file: needs no account anywhere.
+  tools.push(createCalendarFileTool({ cwd: options.cwd }));
+
+  // Google Sheets and Calendar through the deployment's connection
+  // (EGGENT_GOOGLE_API_URL). Not inside a visit: the connection is the person's.
+  if (googleEnabled() && !options.visit) tools.push(createGoogleTool({ cwd: options.cwd }));
 
   // Messages with the other people of this workspace's company, when the
   // deployment keeps them (EGGENT_MAIL_API_URL). Not inside a visit: a project
