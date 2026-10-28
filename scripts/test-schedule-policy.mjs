@@ -54,6 +54,22 @@ assert.ok(guided[1].content.endsWith(SCHEDULED_REPORT_GUIDANCE));
 assert.equal(withScheduledReportGuidance(guided), guided, "the guidance is added once");
 const arrayNote = { role: "custom", customType: "subagent-notification", content: [{ type: "text", text: "r" }] };
 assert.equal(withScheduledReportGuidance([arrayNote])[0].content.at(-1).text, SCHEDULED_REPORT_GUIDANCE);
+// A run whose result is the quiet word is sent from its notification on: the
+// setup conversation and the runs before it cost tokens and change nothing.
+const setup = [{ role: "user", content: "watch the flats" }, { role: "assistant", content: "page dump ".repeat(100) }];
+const quietNote = { role: "custom", customType: "subagent-notification", content: "<task-notification>\n<result>NO_UPDATE</result>\n</task-notification>" };
+const quietSent = withScheduledReportGuidance([...setup, quietNote]);
+assert.equal(quietSent.length, 1, "only the notification is sent");
+assert.ok(quietSent[0].content.endsWith(SCHEDULED_REPORT_GUIDANCE));
+// The preview pi-subagents attaches counts too, and so does markdown around the word.
+const previewNote = { role: "custom", customType: "subagent-notification", content: "<result>`NO_UPDATE`</result>", details: { resultPreview: "`NO_UPDATE`" } };
+assert.equal(withScheduledReportGuidance([...setup, previewNote]).length, 1);
+// What the run did inside this turn is kept: a tool call after the notification.
+const afterwards = { role: "assistant", content: "checking" };
+assert.deepEqual(withScheduledReportGuidance([...setup, quietNote, afterwards]).slice(1), [afterwards]);
+// Anything else is sent with everything before it, as always.
+const newsNote = { role: "custom", customType: "subagent-notification", content: "<result>NO_UPDATE for one; new: flat on Abay 12</result>" };
+assert.equal(withScheduledReportGuidance([...setup, newsNote]).length, 3);
 // pi's terminal-only pointer is replaced by where Eggent keeps tasks.
 const scheduled = [{ type: "text", text: 'Scheduled "x" (id: A1, type: cron). Next run: soon. Manage via /agents → Scheduled jobs.' }];
 const pointed = withEggentScheduleManagement(scheduled);

@@ -164,9 +164,31 @@ export const SCHEDULED_REPORT_GUIDANCE = [
   "Only if the run produced nothing usable, say in one or two plain sentences what did not work.",
 ].join("\n");
 
-type ContextMessage = { role?: unknown; customType?: unknown; content?: unknown };
+type ContextMessage = { role?: unknown; customType?: unknown; content?: unknown; details?: unknown };
 
-/** The messages of a report turn with the guidance after the run's notification. */
+/** The run's result as its notification carries it: the preview pi-subagents attaches, or the <result> it wrote. */
+function notificationResult(message: ContextMessage): string | null {
+  const preview = (message.details as { resultPreview?: unknown } | undefined)?.resultPreview;
+  if (typeof preview === "string") return preview;
+  const text = typeof message.content === "string"
+    ? message.content
+    : Array.isArray(message.content)
+      ? message.content.map((part) => String((part as { text?: unknown })?.text ?? "")).join("")
+      : "";
+  const result = text.match(/<result>([\s\S]*?)<\/result>/)?.[1];
+  return result === undefined ? null : result.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+}
+
+/**
+ * The messages of a report turn with the guidance after the run's notification.
+ *
+ * A run whose result is the quiet word is sent from its notification on and
+ * nothing before it. The report turn otherwise carries the whole conversation
+ * the task was set up in, and every run before it - for a check every half
+ * hour, tens of thousands of tokens forty-eight times a day to say one word
+ * that is never sent. Its only right answer is that word whatever came before,
+ * so what came before is not read.
+ */
 export function withScheduledReportGuidance<T>(messages: T[]): T[] {
   let at = -1;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -178,20 +200,21 @@ export function withScheduledReportGuidance<T>(messages: T[]): T[] {
   }
   if (at < 0) return messages;
   const message = messages[at] as ContextMessage;
+  const quiet = isQuietRunReply(notificationResult(message) ?? "");
   const content = message.content;
-  let next: unknown;
+  let guided = messages;
   if (typeof content === "string") {
-    if (content.includes(SCHEDULED_REPORT_GUIDANCE)) return messages;
-    next = `${content}\n\n${SCHEDULED_REPORT_GUIDANCE}`;
+    if (!content.includes(SCHEDULED_REPORT_GUIDANCE)) {
+      guided = [...messages];
+      guided[at] = { ...(message as object), content: `${content}\n\n${SCHEDULED_REPORT_GUIDANCE}` } as T;
+    }
   } else if (Array.isArray(content)) {
-    if (content.some((part) => (part as { text?: unknown })?.text === SCHEDULED_REPORT_GUIDANCE)) return messages;
-    next = [...content, { type: "text", text: SCHEDULED_REPORT_GUIDANCE }];
-  } else {
-    return messages;
+    if (!content.some((part) => (part as { text?: unknown })?.text === SCHEDULED_REPORT_GUIDANCE)) {
+      guided = [...messages];
+      guided[at] = { ...(message as object), content: [...content, { type: "text", text: SCHEDULED_REPORT_GUIDANCE }] } as T;
+    }
   }
-  const copy = [...messages];
-  copy[at] = { ...(message as object), content: next } as T;
-  return copy;
+  return quiet && at > 0 ? guided.slice(at) : guided;
 }
 
 export function isScheduleStorePath(rawPath: string, cwd: string): boolean {

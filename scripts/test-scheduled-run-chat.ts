@@ -56,7 +56,7 @@ function chunk(delta: Record<string, unknown>, finish: string | null = null, id 
  */
 function reportFor(notification: string): string {
   if (notification.includes("NOTHING-NEW-WRAPPED")) return "**`NO_UPDATE`.**";
-  if (notification.includes("NOTHING-NEW")) return "NO_UPDATE";
+  if (notification.includes("NOTHING-NEW") || notification.includes("<result>NO_UPDATE</result>")) return "NO_UPDATE";
   if (notification.includes("NOT-QUITE")) return "NO_UPDATE for the old search; the new one found: flat on Abay 12, 38 000 000.";
   return REPORT;
 }
@@ -260,12 +260,12 @@ await check("the registry is shared by every copy of the module", async () => {
 
 async function fireRun(
   marker = "",
-  options: { sends?: boolean; details?: Record<string, unknown> } = {}
+  options: { sends?: boolean; details?: Record<string, unknown>; result?: string } = {}
 ): Promise<void> {
   const before = relayed.length;
   await session.sendCustomMessage({
     customType: "subagent-notification",
-    content: `<task-notification>\n<summary>Agent "morning review" completed</summary>\n<result>todo: finish the platform ${marker}</result>\n</task-notification>`,
+    content: `<task-notification>\n<summary>Agent "morning review" completed</summary>\n<result>${options.result ?? `todo: finish the platform ${marker}`}</result>\n</task-notification>`,
     display: true,
     details: { description: "morning review", ...options.details },
   }, { triggerTurn: true, deliverAs: "followUp" });
@@ -460,6 +460,23 @@ await fireRun("NOTHING-NEW-WRAPPED", { sends: false });
 
 await check("the word wrapped in markdown is still the word", () => {
   assert.equal(relayed.length, beforeQuiet, relayed.slice(beforeQuiet).map((entry) => String(entry.body.text)).join(" | "));
+});
+
+await check("a run whose result is the word is reported from its notification alone", async () => {
+  const requestsBefore = reportRequests.length;
+  await fireRun("", { sends: false, result: "NO_UPDATE", details: { resultPreview: "NO_UPDATE" } });
+  const sent = reportRequests.slice(requestsBefore);
+  assert.ok(sent.length > 0, "no report turn reached the model");
+  assert.ok(sent.every((request) => !request.includes(SETUP)), "the setup conversation was sent to say one word");
+  assert.ok(sent.every((request) => !request.includes("finish the platform")), "earlier runs were sent too");
+  assert.equal(relayed.length, beforeQuiet, "and nothing was delivered");
+  const texts = (await getChat(runChatItem.id))!.messages.filter((message) => message.role === "assistant").map((message) => message.content);
+  assert.equal(texts[texts.length - 1], "Checked: nothing new this time.");
+});
+
+await check("a run with news is still reported with the whole conversation behind it", () => {
+  const withNews = reportRequests.filter((request) => request.includes("todo: finish the platform"));
+  assert.ok(withNews.length > 0 && withNews.every((request) => request.includes(SETUP)));
 });
 
 await check("a report that says the word and something else is delivered", async () => {
