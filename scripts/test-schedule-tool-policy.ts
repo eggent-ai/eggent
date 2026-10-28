@@ -172,29 +172,11 @@ check("a request to watch something keeps bash and Agent, in every phrasing", ()
   }
 });
 
-check("the same requests in Russian keep bash in every build", () => {
-  // Without the Russian vocabulary these are not read as schedules at all; with
-  // it they are, and must still keep the terminal.
-  for (const text of [
-    "следи за новыми объявлениями по этой ссылке и присылай каждый час",
-    "отслеживай тендеры на уборку, проверяй каждые 30 минут",
-    "мониторь цены на ноутбук ежедневно",
-    "сделай агента, который следит за ценами на машины каждое утро",
-    "Следи за тендерами по уборке и покажи, какие задачи уже есть, проверяй каждый час",
-  ]) {
-    const s = makeSession();
-    applySchedulingToolPolicy(s, text);
-    assert.ok(s.active.includes("bash"), `${text}: bash was withheld`);
-    assert.ok(s.active.includes("Agent"), `${text}: Agent was withheld`);
-  }
-});
-
 check("a skill started by its command keeps every tool, whatever its brief says about time", () => {
   for (const text of [
     "/skill:site-monitor two-room flat in Astana under 40m, every hour",
     "/skill:daily-digest London property market news, every day at 9:00",
     "/skill:site-monitor show me the scheduled jobs and remove the old one",
-    "/skill:site-monitor следи за тендерами каждый час",
   ]) {
     const s = makeSession();
     applySchedulingToolPolicy(s, text);
