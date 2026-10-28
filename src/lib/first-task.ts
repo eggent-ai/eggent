@@ -19,9 +19,10 @@ export interface FirstTask {
 
 const STORAGE_KEY = "eggent-first-task";
 const SKILL_NAME = /^[a-z0-9][a-z0-9-]{0,63}$/;
-// Long enough for a sentence about what to make, short enough that a link
-// cannot carry a whole prompt.
-export const FIRST_TASK_BRIEF_MAX = 500;
+// Long enough for a sentence about what to make and the search link it is
+// about (a filtered listings search alone runs past 500 characters), short
+// enough that a link cannot carry a whole prompt.
+export const FIRST_TASK_BRIEF_MAX = 2000;
 // A task that was never picked up - a sign-in that went to the onboarding
 // screen, a tab closed mid-redirect - must not start itself hours later.
 const MAX_AGE_MS = 10 * 60 * 1000;

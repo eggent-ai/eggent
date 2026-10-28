@@ -5,15 +5,32 @@ import {
   AUTH_COOKIE_NAME,
   getClearedSessionCookieOptions,
   isRequestSecure,
-  verifySessionToken,
 } from "@/lib/auth/session";
+import { verifyActiveSession } from "@/lib/auth/session-floor";
+
+/**
+ * Where a lost password is reset, when somebody set one up for this workspace
+ * (a hosted deployment sends a letter; a self-hosted one has none, and the
+ * sign-in page then says how a password is changed there). Public, like the
+ * rest of this answer: the sign-in page asks before anybody is signed in.
+ */
+function passwordResetUrl(): string | null {
+  const raw = process.env.EGGENT_PASSWORD_RESET_URL?.trim();
+  if (!raw) return null;
+  try {
+    const url = new URL(raw);
+    return url.protocol === "https:" || url.protocol === "http:" ? url.toString() : null;
+  } catch {
+    return null;
+  }
+}
 
 export async function GET(req: NextRequest) {
   const token = req.cookies.get(AUTH_COOKIE_NAME)?.value || "";
-  const session = token ? await verifySessionToken(token) : null;
+  const session = token ? await verifyActiveSession(token) : null;
   if (!session) {
     const response = NextResponse.json(
-      { authenticated: false, username: null, mustChangeCredentials: false },
+      { authenticated: false, username: null, mustChangeCredentials: false, passwordResetUrl: passwordResetUrl() },
       { status: 401 }
     );
     if (token) {
@@ -34,5 +51,6 @@ export async function GET(req: NextRequest) {
     authenticated: true,
     username: session.username,
     mustChangeCredentials,
+    passwordResetUrl: passwordResetUrl(),
   });
 }

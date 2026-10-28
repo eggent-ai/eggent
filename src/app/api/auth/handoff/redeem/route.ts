@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { getSettings } from "@/lib/storage/settings-store";
 import { isDefaultAuthCredentials } from "@/lib/auth/password";
 import { redeemHandoffToken } from "@/lib/auth/handoff";
+import { sessionsValidAfter } from "@/lib/auth/session-floor";
 import {
   AUTH_COOKIE_NAME,
   createSessionToken,
@@ -31,6 +32,11 @@ export async function POST(req: NextRequest) {
     return Response.json({ error: t("api.error.authDisabled") }, { status: 403 });
   }
   if (settings.auth.username !== redeemed.username) {
+    return Response.json({ error: t("api.error.handoffInvalid") }, { status: 401 });
+  }
+  // Minted by a session that has since been ended, by a new password: the
+  // link goes with the sessions.
+  if (redeemed.issuedAt < (await sessionsValidAfter())) {
     return Response.json({ error: t("api.error.handoffInvalid") }, { status: 401 });
   }
 

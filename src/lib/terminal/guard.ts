@@ -18,7 +18,8 @@
  * elsewhere.
  */
 import type { NextRequest } from "next/server";
-import { AUTH_COOKIE_NAME, verifySessionToken } from "@/lib/auth/session";
+import { AUTH_COOKIE_NAME } from "@/lib/auth/session";
+import { verifyActiveSession } from "@/lib/auth/session-floor";
 import { TERMINAL_JOB_ID_PATTERN } from "@/lib/terminal/protocol";
 import { getTerminalRegistry, type TerminalRegistry } from "@/lib/terminal/registry";
 
@@ -60,7 +61,7 @@ export async function checkTerminalRequest(
   options: { write: boolean; body?: "json" | "multipart" }
 ): Promise<GuardFailure | null> {
   const cookie = req.cookies.get(AUTH_COOKIE_NAME)?.value || "";
-  const session = cookie ? await verifySessionToken(cookie) : null;
+  const session = cookie ? await verifyActiveSession(cookie) : null;
   if (!session) return "unauthorized";
   // Until the default login is replaced the workspace is not yet anybody's.
   if (session.mustChangeCredentials) return "unauthorized";

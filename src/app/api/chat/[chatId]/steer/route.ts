@@ -2,7 +2,8 @@ import { NextRequest } from "next/server";
 import { joinActiveRun } from "@/lib/pi/active-runs";
 import { filesSentWith, steerModelText } from "@/lib/pi/steer";
 import { isStoredMessageId } from "@/lib/pi/steer-shape";
-import { AUTH_COOKIE_NAME, verifySessionToken } from "@/lib/auth/session";
+import { AUTH_COOKIE_NAME } from "@/lib/auth/session";
+import { verifyActiveSession } from "@/lib/auth/session-floor";
 import { requestComesFromThisSite } from "@/lib/terminal/guard";
 
 export const runtime = "nodejs";
@@ -39,7 +40,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ cha
   // sibling workspace is the same site, so a cookie alone is not enough: the request has to come from
   // this one, and carry JSON, which a foreign page cannot send without a preflight nobody answers.
   const cookie = req.cookies.get(AUTH_COOKIE_NAME)?.value || "";
-  if (!cookie || !(await verifySessionToken(cookie))) return answer({ error: "unauthorized" }, 401);
+  if (!cookie || !(await verifyActiveSession(cookie))) return answer({ error: "unauthorized" }, 401);
   if (!requestComesFromThisSite(req)) return answer({ error: "origin" }, 403);
   if (!/^application\/json\b/i.test(req.headers.get("content-type") || "")) return answer({ error: "json" }, 415);
 

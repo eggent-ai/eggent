@@ -1,6 +1,6 @@
 "use client";
 
-import { FormEvent, Suspense, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { FormEvent, Suspense, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Loader2, LockKeyhole } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -46,6 +46,10 @@ function LoginPageClient() {
   const [revealed, setRevealed] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Where a lost password is reset, if this workspace has such a place.
+  // Undefined until asked, so neither the link nor the sentence about having
+  // none flashes before the answer.
+  const [resetUrl, setResetUrl] = useState<string | null | undefined>(undefined);
 
   const nextParam = searchParams.get("next");
   const nextPath = useMemo(() => normalizeNextPath(nextParam), [nextParam]);
@@ -88,6 +92,23 @@ function LoginPageClient() {
       }
     })();
   }, [nextPath, router]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/auth/status", { cache: "no-store", headers: { accept: "application/json" } })
+      .then((response) => response.json().catch(() => null))
+      .then((body: { passwordResetUrl?: unknown } | null) => {
+        if (cancelled) return;
+        const url = typeof body?.passwordResetUrl === "string" ? body.passwordResetUrl : "";
+        setResetUrl(/^https?:\/\//.test(url) ? url : null);
+      })
+      .catch(() => {
+        if (!cancelled) setResetUrl(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -208,7 +229,15 @@ function LoginPageClient() {
             </Button>
           </form>
 
-          <p className="mt-6 text-xs leading-relaxed text-muted-foreground">{t("login.noReset")}</p>
+          {resetUrl ? (
+            <p className="mt-6 text-sm">
+              <a href={resetUrl} className="font-medium text-primary underline-offset-4 hover:underline">
+                {t("login.forgotPassword")}
+              </a>
+            </p>
+          ) : resetUrl === null ? (
+            <p className="mt-6 text-xs leading-relaxed text-muted-foreground">{t("login.noReset")}</p>
+          ) : null}
         </section>
       </div>
     </main>

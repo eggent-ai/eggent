@@ -74,6 +74,8 @@ export interface AppSettings {
     username: string;
     passwordHash: string;
     mustChangeCredentials: boolean;
+    /** Seconds: a session issued earlier is refused (see lib/auth/session-floor.ts). */
+    sessionsValidAfter?: number;
   };
 }
 

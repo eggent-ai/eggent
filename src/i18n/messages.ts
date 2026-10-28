@@ -17,6 +17,7 @@ const enMessages = {
   "login.showPassword": "Show",
   "login.hidePassword": "Hide",
   "login.noReset": "There is no password reset here. On a self-hosted workspace it is changed on the server; on a hosted one, support can help.",
+  "login.forgotPassword": "Forgot your password?",
 
   "schedules.emptyAction": "Ask for one in chat",
   "schedules.emptyPrompt": "Set up a recurring task for me: what should run, and when.",
@@ -1084,6 +1085,7 @@ const enMessages = {
   "api.error.usernameMin": "Username must be at least 3 characters.",
   "api.error.usernameMax": "Username must be at most 64 characters.",
   "api.error.usernameInvalid": "Username may contain only letters, numbers, dots, underscores, and hyphens.",
+  "api.error.usernameEmailInvalid": "A login with @ has to be an email address, like name@example.com.",
   "api.error.passwordMin": "Password must be at least 8 characters.",
   "api.error.passwordMax": "Password must be at most 128 characters.",
   "api.error.updateCredentials": "Failed to update credentials.",
