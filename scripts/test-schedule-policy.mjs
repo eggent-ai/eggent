@@ -4,8 +4,10 @@ import {
   createSchedulePolicyExtension,
   detectSchedule,
   eggentSchedulePolicyExtension,
+  isQuietRunReply,
   isScheduleStorePath,
   MIN_SCHEDULED_TURNS,
+  QUIET_RUN_REPLY,
   SCHEDULE_EXECUTION_MARKER,
   SCHEDULED_REPORT_GUIDANCE,
   withEggentScheduleManagement,
@@ -144,5 +146,50 @@ assert.ok(madeByAPerson.input.prompt.startsWith(SCHEDULE_EXECUTION_MARKER));
 assert.equal(runHandler({ toolName: "Agent", input: { prompt: "look something up" } }, inRun), undefined);
 // A context without a session manager (the plain test above) is not a run.
 assert.equal(runHandler({ toolName: "Agent", input: { schedule: "5m", prompt: originalPrompt } }, { cwd: "/workspace" }), undefined);
+
+// A deployment's limit on new tasks: asked only about a new schedule, and its answer blocks it.
+const asked = [];
+let limitedHandler;
+createSchedulePolicyExtension(
+  (sessionId) => sessionId === "session-in-a-run",
+  "no person is here",
+  async (schedule) => {
+    asked.push(schedule);
+    return schedule === "1m" ? "Limited here. Options: https://account.example.test/limits" : null;
+  }
+).factory({
+  on(event, handler) {
+    if (event === "tool_call") limitedHandler = handler;
+  },
+});
+const tooOften = await limitedHandler({ toolName: "Agent", input: { schedule: "1m", prompt: originalPrompt } }, person);
+assert.equal(tooOften?.block, true);
+assert.match(tooOften.reason, /^Limited here\. Options: https:\/\/account\.example\.test\/limits\nNothing was scheduled\./);
+assert.equal(await limitedHandler({ toolName: "Agent", input: { schedule: "1h", prompt: originalPrompt } }, person), undefined);
+// A helper started now is not a schedule and is answered at once, unasked.
+assert.equal(limitedHandler({ toolName: "Agent", input: { prompt: "look something up" } }, person), undefined);
+// A run's report is refused for being a run, before any limit is asked.
+assert.equal((await limitedHandler({ toolName: "Agent", input: { schedule: "1m", prompt: originalPrompt } }, inRun))?.reason, "no person is here");
+assert.deepEqual(asked, ["1m", "1h"]);
+// A limit that cannot be read is no limit.
+let brokenHandler;
+createSchedulePolicyExtension(() => false, "", async () => {
+  throw new Error("provider down");
+}).factory({
+  on(event, handler) {
+    if (event === "tool_call") brokenHandler = handler;
+  },
+});
+assert.equal(await brokenHandler({ toolName: "Agent", input: { schedule: "1m", prompt: originalPrompt } }, person), undefined);
+
+// A run with nothing new answers one word, and only that word keeps it quiet.
+assert.equal(QUIET_RUN_REPLY, "NO_UPDATE");
+for (const reply of ["NO_UPDATE", "  NO_UPDATE\n", "`NO_UPDATE`", "**NO_UPDATE**", "\"NO_UPDATE\"", "NO_UPDATE.", "```\nNO_UPDATE\n```", "**`NO_UPDATE`.**"]) {
+  assert.equal(isQuietRunReply(reply), true, JSON.stringify(reply));
+}
+for (const reply of ["", "no_update", "NO_UPDATE: one new listing", "Nothing new. NO_UPDATE", "NO UPDATE", "*NO_UPDATE", "NO_UPDATE_YET"]) {
+  assert.equal(isQuietRunReply(reply), false, JSON.stringify(reply));
+}
+assert.match(SCHEDULED_REPORT_GUIDANCE, /exactly NO_UPDATE/);
 
 console.log("schedule policy tests passed");

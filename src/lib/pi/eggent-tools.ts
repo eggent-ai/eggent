@@ -15,7 +15,8 @@ import {
   switchToModelProvider,
   upsertCustomModelProvider,
 } from "@/lib/pi/config-store";
-import { managePiSchedules, noteScheduledRunReachedTelegram, scheduledRunChatFor } from "@/lib/pi/schedule-host";
+import { managePiSchedules, noteScheduledRunReachedTelegram, scheduledRunChatFor, workspaceScheduleJobs } from "@/lib/pi/schedule-host";
+import { isRecurringJob } from "@/lib/pi/schedule-limits";
 import { formatUsageMeter, getUsageSnapshot, isUsageProviderConfigured } from "@/lib/usage/usage-provider";
 import { createPendingInteraction } from "@/lib/pi/pending-interactions";
 import { UNANSWERED_QUESTION } from "@/lib/pi/turn-watchdog";
@@ -991,6 +992,16 @@ export async function createEggentPiTools(options: {
           }
           for (const meter of snapshot.meters) {
             lines.push(formatUsageMeter(meter));
+          }
+          // What a new scheduled task has to fit within, so the agent can offer
+          // a timing that will be accepted rather than one that is refused.
+          if (snapshot.limits?.schedules !== undefined) {
+            const inUse = (await workspaceScheduleJobs().catch(() => []))
+              .filter((job) => job.enabled !== false && isRecurringJob(job)).length;
+            lines.push(`Recurring scheduled tasks: ${inUse} of ${snapshot.limits.schedules} switched on; one-time reminders are not counted.`);
+          }
+          if (snapshot.limits?.scheduleMinMinutes !== undefined) {
+            lines.push(`A recurring scheduled task can run at most once every ${snapshot.limits.scheduleMinMinutes} minutes.`);
           }
           if (snapshot.agentNote) {
             lines.push(`Important context: ${snapshot.agentNote}`);

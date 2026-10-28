@@ -122,6 +122,29 @@ export const SCHEDULE_CREATION_PHRASES: readonly string[] = [
 ];
 
 /**
+ * Words that mean a request has work to build before anything can run on a
+ * timer: watching a page or a search for what is new, which takes a script
+ * that reads it and remembers what it has seen.
+ *
+ * A miss here is the costly side: the turn loses the terminal it needs to write
+ * and try that script. A false match only leaves the terminal in a turn that
+ * also schedules something, where the directive still says not to schedule
+ * with it.
+ */
+export const SCRIPT_FIRST_PHRASES: readonly string[] = [
+  "watch(?:es|ing)?",
+  "monitor(?:s|ing)?",
+  "track(?:s|ing)?",
+  "keep\\s+(?:an\\s+eye|track)",
+  "scrap(?:e|es|ing)",
+  "pars(?:e|es|ing)",
+  "scripts?",
+  "listings?",
+  "tenders?",
+  "price\\s+(?:drops?|changes?)",
+];
+
+/**
  * Whole regex fragments for "in N minutes", where the unit inflects and a word
  * list will not do. Empty when the build's language needs no fragment beyond
  * the English one the matcher always carries.

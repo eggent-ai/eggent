@@ -120,6 +120,35 @@ export function raiseScheduledTurns(input: Record<string, unknown>): void {
 }
 
 /**
+ * The whole reply of a scheduled run that has nothing to say this time.
+ *
+ * A task that checks something every half hour - new listings, a price, a
+ * tender search - finds nothing most of the time, and a report of "nothing
+ * new" sent each time is noise that teaches the person to mute the chat. A run
+ * whose task says so answers with this word alone; the host then sends nothing
+ * and leaves one line in the run's chat.
+ */
+export const QUIET_RUN_REPLY = "NO_UPDATE";
+
+/**
+ * Whether a run's reply is the quiet word and nothing else. Markdown a model
+ * wraps around a bare word - backticks, bold, quotes, a closing full stop - is
+ * not something it said; any other word is, and such a reply is delivered.
+ */
+export function isQuietRunReply(text: string): boolean {
+  let reply = text.trim();
+  for (;;) {
+    const unwrapped = reply
+      .replace(/^(`{1,3}|\*\*|\*|__|"|')([\s\S]*)\1$/, "$2")
+      .replace(/\.$/, "")
+      .trim();
+    if (unwrapped === reply) break;
+    reply = unwrapped;
+  }
+  return reply === QUIET_RUN_REPLY;
+}
+
+/**
  * What the report of a scheduled run is told about its reply.
  *
  * The report turn is the owner session answering the helper's notification,
@@ -131,6 +160,7 @@ export const SCHEDULED_REPORT_GUIDANCE = [
   "[Eggent: this turn reports a scheduled run]",
   "Nobody is in this turn. Your reply is sent to the person as this run's message, for example in Telegram.",
   "If the run produced what the task asked for (a brief, a summary, a list, a draft), your reply is that result itself, complete and unchanged; fetch it with get_subagent_result first if it is not shown in full. Do not describe the run, and do not comment on how many items it found.",
+  `If the run's result is exactly ${QUIET_RUN_REPLY}, there is nothing new this time: reply with ${QUIET_RUN_REPLY} alone, and nothing is sent to the person.`,
   "Only if the run produced nothing usable, say in one or two plain sentences what did not work.",
 ].join("\n");
 
@@ -181,11 +211,14 @@ export function bashReferencesScheduleStore(command: string): boolean {
  *
  * `inScheduledRun` says whether a session is writing the report of a scheduled
  * run. It is given rather than imported because this file is also loaded by a
- * test that runs without the application's path aliases.
+ * test that runs without the application's path aliases. So is
+ * `checkNewSchedule`, which answers why a task with this timing may not be
+ * made - a limit the deployment sets - or null when it may.
  */
 export function createSchedulePolicyExtension(
   inScheduledRun: (sessionId: string | undefined) => boolean,
-  refusal: string
+  refusal: string,
+  checkNewSchedule?: (schedule: string) => Promise<string | null>
 ): InlineExtension {
   return {
     name: "eggent-schedule-policy",
@@ -208,6 +241,13 @@ export function createSchedulePolicyExtension(
         return content === event.content ? undefined : { content };
       });
 
+      const scheduleRefusal = (reason: string) => ({
+        block: true,
+        reason: `${reason}\nNothing was scheduled. Tell the person this in their language, and offer what fits within it.`,
+      });
+
+      // Answers synchronously unless a new schedule has a limit to be checked
+      // against, so every other tool call goes through exactly as before.
       pi.on("tool_call", (event, ctx) => {
         const toolName = event.toolName.toLowerCase();
         const input = event.input as Record<string, unknown>;
@@ -224,6 +264,14 @@ export function createSchedulePolicyExtension(
             input.prompt = withScheduleExecutionDirective(prompt);
           }
           if (schedule) raiseScheduledTurns(input);
+          if (schedule && checkNewSchedule) {
+            return checkNewSchedule(schedule).then(
+              (limited) => (limited ? scheduleRefusal(limited) : undefined),
+              // A limit that cannot be read is no limit: the waker on the host
+              // still holds the line, and a person's task is not refused over it.
+              () => undefined
+            );
+          }
           return undefined;
         }
 

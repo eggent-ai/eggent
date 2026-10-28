@@ -39,9 +39,29 @@ export interface UsageNotice {
   actionUrl?: string;
 }
 
+/**
+ * Limits the provider sets on what the workspace may add, as opposed to the
+ * meters, which count what it has used. Every field is optional and a missing
+ * one is no limit at all.
+ */
+export interface UsageLimits {
+  /** Most recurring scheduled tasks that may be switched on at once. */
+  schedules?: number;
+  /** Shortest time between two runs of a recurring scheduled task, in minutes. */
+  scheduleMinMinutes?: number;
+  /**
+   * The provider's sentence for a refusal of each limit, already localized.
+   * Core says nothing about why a limit is what it is.
+   */
+  notes?: { schedules?: string; scheduleMinMinutes?: string };
+  /** Where to go about the limits; the snapshot's own `manage` when absent. */
+  manage?: { url: string; label?: string };
+}
+
 export interface UsageSnapshot {
   plan?: { label: string; endsAt?: string };
   meters: UsageMeter[];
+  limits?: UsageLimits;
   /**
    * Where this plan is managed. When present the sidebar renders the whole card
    * as a link to it; core does not know or care what is on the other side.
@@ -161,6 +181,42 @@ function parseNotice(raw: unknown): UsageNotice | undefined {
   };
 }
 
+const MAX_LIMIT_NOTE_CHARS = 300;
+
+function parseLimitNote(raw: unknown): string | undefined {
+  if (typeof raw !== "string") return undefined;
+  const note = raw.replace(/\s+/g, " ").trim();
+  return note ? note.slice(0, MAX_LIMIT_NOTE_CHARS) : undefined;
+}
+
+/**
+ * Read field by field, like everything else here: a field this parser does not
+ * know is dropped, and a limit that is not a sane number is no limit rather than
+ * a wall.
+ */
+function parseLimits(raw: unknown, fallbackManage: UsageSnapshot["manage"]): UsageLimits | undefined {
+  if (!raw || typeof raw !== "object") return undefined;
+  const record = raw as Record<string, unknown>;
+  const count = asFiniteNumber(record.schedules);
+  const minutes = asFiniteNumber(record.scheduleMinMinutes);
+  const limits: UsageLimits = {};
+  if (count !== null && count >= 0) limits.schedules = Math.floor(count);
+  if (minutes !== null && minutes > 0) limits.scheduleMinMinutes = minutes;
+  if (limits.schedules === undefined && limits.scheduleMinMinutes === undefined) return undefined;
+
+  const notesRecord = record.notes && typeof record.notes === "object" ? record.notes as Record<string, unknown> : {};
+  const notes = {
+    schedules: parseLimitNote(notesRecord.schedules),
+    scheduleMinMinutes: parseLimitNote(notesRecord.scheduleMinMinutes),
+  };
+  if (notes.schedules || notes.scheduleMinMinutes) {
+    limits.notes = Object.fromEntries(Object.entries(notes).filter(([, note]) => note)) as UsageLimits["notes"];
+  }
+  const manage = parseManage(record.manage) ?? fallbackManage;
+  if (manage) limits.manage = manage;
+  return limits;
+}
+
 export function parseUsageSnapshot(raw: unknown): UsageSnapshot | null {
   if (!raw || typeof raw !== "object") return null;
   const record = raw as Record<string, unknown>;
@@ -181,11 +237,13 @@ export function parseUsageSnapshot(raw: unknown): UsageSnapshot | null {
   const manage = parseManage(record.manage);
   const notice = parseNotice(record.notice);
   const agentNote = typeof record.agentNote === "string" ? record.agentNote.trim() || undefined : undefined;
-  if (!meters.length && !plan && !notice && !agentNote) return null;
+  const limits = parseLimits(record.limits, manage);
+  if (!meters.length && !plan && !notice && !agentNote && !limits) return null;
 
   return {
     plan,
     meters,
+    ...(limits ? { limits } : {}),
     manage,
     notice,
     agentNote,

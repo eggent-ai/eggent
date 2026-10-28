@@ -50,6 +50,18 @@ function chunk(delta: Record<string, unknown>, finish: string | null = null, id 
 }
 
 /**
+ * The report a run's notification is answered with. A task that found nothing
+ * new answers with the quiet word, alone or wrapped the way models wrap a bare
+ * word; NOT-QUITE says the word and then something else.
+ */
+function reportFor(notification: string): string {
+  if (notification.includes("NOTHING-NEW-WRAPPED")) return "**`NO_UPDATE`.**";
+  if (notification.includes("NOTHING-NEW")) return "NO_UPDATE";
+  if (notification.includes("NOT-QUITE")) return "NO_UPDATE for the old search; the new one found: flat on Abay 12, 38 000 000.";
+  return REPORT;
+}
+
+/**
  * Answers the setup with a line, and a finished job's notification with the
  * report. A notification marked SEND-ITSELF is answered the way the morning job
  * on a real workspace does it: the agent sends the reminder with the Telegram
@@ -104,7 +116,7 @@ const provider = http.createServer((req, res) => {
       }));
       res.write(chunk({}, "tool_calls"));
     } else {
-      res.write(chunk({ content: toolAnswered ? "The reminder is sent." : lastText.includes("task-notification") ? REPORT : "Done, it is scheduled." }));
+      res.write(chunk({ content: toolAnswered ? "The reminder is sent." : lastText.includes("task-notification") ? reportFor(lastText) : "Done, it is scheduled." }));
       res.write(chunk({}, "stop"));
     }
     res.write("data: [DONE]\n\n");
@@ -412,6 +424,49 @@ await check("the next run, whose helper sent nothing, is delivered as usual", as
   const before = relayed.length;
   await fireRun("PLAIN-AFTER-HELPER");
   assert.equal(relayed.length, before + 1);
+});
+
+console.log("\nA run that found nothing new\n");
+
+await check("the report turn is told what the quiet word means", () => {
+  assert.ok(
+    reportRequests.every((request) => request.includes("exactly NO_UPDATE")),
+    "the report turn was not told to pass the quiet word on alone"
+  );
+});
+
+const beforeQuiet = relayed.length;
+const quietMessagesBefore = (await getChat(runChatItem.id))!.messages.length;
+await fireRun("NOTHING-NEW", { sends: false });
+
+await check("nothing is sent to the person", () => {
+  assert.equal(relayed.length, beforeQuiet, relayed.slice(beforeQuiet).map((entry) => String(entry.body.text)).join(" | "));
+});
+
+await check("the run's chat keeps one line saying nothing was new", async () => {
+  const runChat = (await getChat(runChatItem.id))!;
+  const added = runChat.messages.slice(quietMessagesBefore);
+  assert.deepEqual(added.map((message) => [message.role, message.content]), [["assistant", "Checked: nothing new this time."]]);
+});
+
+await check("a quiet run is a good run: the task's record is clean", () => {
+  // No file at all is a clean record too: nothing has gone wrong yet to write down.
+  const file = path.join(root, "data", "schedules", "health.json");
+  const stored = fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, "utf-8")) : { jobs: {} };
+  assert.equal(stored.jobs[`${session.sessionId}:job-morning`], undefined);
+});
+
+await fireRun("NOTHING-NEW-WRAPPED", { sends: false });
+
+await check("the word wrapped in markdown is still the word", () => {
+  assert.equal(relayed.length, beforeQuiet, relayed.slice(beforeQuiet).map((entry) => String(entry.body.text)).join(" | "));
+});
+
+await check("a report that says the word and something else is delivered", async () => {
+  await fireRun("NOT-QUITE");
+  const sent = relayed.slice(beforeQuiet).filter((entry) => entry.path.endsWith("/message"));
+  assert.equal(sent.length, 1, `sent ${sent.length}`);
+  assert.ok(String(sent[0].body.text).includes("flat on Abay 12"), String(sent[0].body.text));
 });
 
 console.log("\nA task that meets the wall every time\n");
