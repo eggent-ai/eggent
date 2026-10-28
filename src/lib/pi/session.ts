@@ -36,6 +36,8 @@ import { approvalsEnabled } from "@/lib/approvals/config";
 import { sharesEnabled } from "@/lib/shares/config";
 import { formatMailReplyContext } from "@/lib/mail/reply-context";
 import { createMailToolGuardExtension, type MessagesRunner } from "@/lib/mail/tool-guard";
+import { emailEnabled, emailPromptLine } from "@/lib/email/config";
+import { createEmailToolGuardExtension } from "@/lib/email/tool-guard";
 import type { MailReplyInfo } from "@/lib/mail/types";
 import type { ChatContextMode, ChatFile, ProjectSkillMetadata } from "@/lib/types";
 import {
@@ -247,6 +249,8 @@ function buildEggentProjectContext(options: {
   approvalsAvailable?: boolean;
   /** This workspace shares files with its company's people: see eggent_shares. */
   sharesAvailable?: boolean;
+  /** The agent's own email, as lib/email/config.ts says it (empty when there is none). */
+  emailLine?: string;
   /** This chat is a card on the task board: see lib/board. */
   boardCard?: { title: string };
 }): string {
@@ -443,6 +447,9 @@ function buildEggentProjectContext(options: {
     options.approvalsAvailable
       ? "Approvals: eggent_approvals is one of your own tools - call it directly, never through mcp. When your person asks to send a file for approval (to agree, sign off, get it approved by someone in the company), send it with eggent_approvals to the people they name, in their order. Any change to a file on approval voids it: say so when you change such a file, and offer to send the new version. Approving or returning a version is your person's alone - you cannot do it and never say you did; point them to Approvals in the sidebar."
       : "",
+    // Only where the agent has email, for the same reason as the company's
+    // tools above: the shared prefix stays the same for everybody else.
+    options.emailLine || "",
     options.sharesAvailable
       ? "Shared files: eggent_shares is one of your own tools - call it directly, never through mcp. When your person asks to share a file with someone in the company (show it, give access, let them comment or change it), share it with eggent_shares in the role they say - view when they do not. It also lists and reads what colleagues shared with your person and their comments, and comments in your person's name when asked. Changing a colleague's file is your person's alone: you never do it; point them to Shared in the sidebar."
       : "",
@@ -801,6 +808,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     mailAvailable: !options.visit && mailEnabled(),
     approvalsAvailable: !options.visit && approvalsEnabled(),
     sharesAvailable: !options.visit && sharesEnabled(),
+    emailLine: options.visit ? "" : emailPromptLine(),
     ...(boardCard ? { boardCard: { title: boardCard.title } } : {}),
   });
   const explicitContextFiles = bare || publicShare ? [] : loadEggentContextFiles(cwd, agentDir);
@@ -837,6 +845,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
         ...(options.visit ? { maxParallel: VISIT_MAX_PARALLEL_SUBAGENTS } : {}),
       }),
       ...(!options.visit && mailEnabled() ? [createMailToolGuardExtension(() => messagesRunner)] : []),
+      ...(!options.visit && emailEnabled() ? [createEmailToolGuardExtension()] : []),
       // What the agent writes into a file is kept as a version of it (lib/files/versions).
       createFileVersionsExtension({ chatId: options.chatId, runOf: () => turn.runId }),
     ],

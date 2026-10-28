@@ -19,6 +19,8 @@ import path from "node:path";
 import type { ToolDefinition } from "@earendil-works/pi-coding-agent";
 import { mailEnabled } from "@/lib/mail/config";
 import { createMessagesTool } from "@/lib/mail/tool";
+import { emailEnabled } from "@/lib/email/config";
+import { createEmailTool } from "@/lib/email/tool";
 import { createTelegramTools } from "@/lib/telegram/tools";
 import { resolveTelegramDestination } from "@/lib/telegram/outbound";
 import { afterTelegramDelivery } from "@/lib/telegram/conversation";
@@ -44,6 +46,9 @@ function helperTools(): ToolDefinition[] {
   const tools: ToolDefinition[] = [];
   // A helper reads for nobody: what it reads stays unread for the person.
   if (mailEnabled()) tools.push(createMessagesTool({ marksRead: () => false }) as unknown as ToolDefinition);
+  // A helper writes to the person, and nobody is there to say yes to a letter
+  // to anybody else: on a server of one's own those are refused here.
+  if (emailEnabled()) tools.push(createEmailTool({ marksRead: () => false }) as unknown as ToolDefinition);
   tools.push(...createTelegramTools({
     // A helper answers no Telegram message of its own: the person's chat is the
     // one the workspace remembers, a channel needs the workspace's own bot.
