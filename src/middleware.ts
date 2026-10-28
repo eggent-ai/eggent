@@ -26,7 +26,11 @@ function isPublicApi(req: NextRequest, pathname: string): boolean {
 }
 
 function shouldBypass(pathname: string): boolean {
-  if (/\.[^/]+$/.test(pathname)) {
+  // A file at the top of the site: the icons and robots.txt. Anything deeper
+  // is one of the app's own routes whatever its last segment looks like - a
+  // dot there used to let a request past the sign-in check, a session ended by
+  // a new password included, to every API route that leans on this check.
+  if (/^\/[^/]+\.[^/]+$/.test(pathname)) {
     return true;
   }
   if (

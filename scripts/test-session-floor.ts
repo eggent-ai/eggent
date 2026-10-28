@@ -118,6 +118,23 @@ await check("the middleware sends the old session to the sign-in page and refuse
   assert.equal(ok.headers.get("location"), null, "a fresh session was redirected");
 });
 
+await check("a dot in the last segment of a path is no way past the check", async () => {
+  // Only files at the top of the site skip it.
+  for (const pathname of ["/api/projects/shop.x", "/api/chat/123.json", "/api/mail/attachments/7.pdf"]) {
+    assert.equal((await middlewareModule.middleware(request(pathname, { cookie: old }))).status, 401, pathname);
+    assert.equal((await middlewareModule.middleware(request(pathname))).status, 401, `${pathname} without a cookie`);
+  }
+  for (const pathname of ["/dashboard/abc.def", "/print.x/y.md"]) {
+    const page = await middlewareModule.middleware(request(pathname, { cookie: old }));
+    assert.match(page.headers.get("location") || "", /\/login/, pathname);
+  }
+  for (const pathname of ["/icon.svg", "/apple-icon.png", "/robots.txt"]) {
+    assert.equal((await middlewareModule.middleware(request(pathname))).headers.get("x-middleware-next"), "1", pathname);
+  }
+  // The pages served to a sandboxed frame carry no cookie and stay open.
+  assert.equal((await middlewareModule.middleware(request("/api/files/page/tok/site/index.html"))).headers.get("x-middleware-next"), "1");
+});
+
 await check("the status route says signed out for the old session and clears its cookie", async () => {
   const answer = await status.GET(request("/api/auth/status", { cookie: old }));
   assert.equal(answer.status, 401);
