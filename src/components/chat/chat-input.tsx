@@ -24,6 +24,7 @@ import { firstSecret, type SecretKind } from "@/lib/secrets/shapes";
 import { SPOKEN_CREDENTIAL } from "@/lib/secrets/spoken";
 import { SecretNotice } from "@/components/chat/secret-notice";
 import { RunPlaceControl, type RunPlaceProps } from "@/components/chat/run-place";
+import { choiceFor } from "@/lib/remote/client";
 import { useAppStore } from "@/store/app-store";
 
 function formatTokenCount(value?: number | null) {
@@ -228,6 +229,20 @@ export function ChatInput({
   runPlace,
 }: ChatInputProps) {
   const { t } = useI18n();
+  // A chat that runs on the other side of the pair answers with the model chosen there:
+  // this side's model, its context window and its tokens say nothing about it.
+  const elsewhere = (() => {
+    const status = runPlace?.status;
+    if (!status?.enabled || !status.node) return null;
+    const choice = choiceFor(status, runPlace?.home);
+    if (!choice || choice.here) return null;
+    return choice.label === "cloud"
+      ? { text: t("chat.runPlace.modelInCloud"), hint: t("chat.runPlace.modelInCloudHint") }
+      : {
+          text: t("chat.runPlace.modelOnDevice", { place: choice.name || t("chat.runPlace.yourComputer") }),
+          hint: t("chat.runPlace.modelOnDeviceHint", { place: choice.name || t("chat.runPlace.yourComputer") }),
+        };
+  })();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const slashMenuRef = useRef<HTMLDivElement>(null);
@@ -1013,11 +1028,21 @@ export function ChatInput({
                 turn works there is nothing to choose it for, and on a phone the
                 field needs the room for what is said to the turn. */}
             <div className={isLoading ? "contents max-sm:hidden" : "contents"}>
-              <ModelPicker
-                projectId={projectId ?? null}
-                compact
-                triggerClassName="inline-flex max-w-[9rem] shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
-              />
+              {elsewhere ? (
+                <span
+                  className="inline-flex max-w-[11rem] shrink-0 cursor-default items-center truncate px-2 py-1 text-xs text-muted-foreground"
+                  title={elsewhere.hint}
+                  data-testid="model-elsewhere"
+                >
+                  {elsewhere.text}
+                </span>
+              ) : (
+                <ModelPicker
+                  projectId={projectId ?? null}
+                  compact
+                  triggerClassName="inline-flex max-w-[9rem] shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+                />
+              )}
             </div>
 
             {/* A turn waiting on a question is still a running turn, and the
@@ -1081,14 +1106,14 @@ export function ChatInput({
         <div className="mt-2 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
           {runPlace ? <RunPlaceControl {...runPlace} /> : null}
           {/* A program does the work with its own tools: Eggent's light modes have nothing to switch. */}
-          {engineLabel || runtimeStats?.engine ? null : (
+          {elsewhere || engineLabel || runtimeStats?.engine ? null : (
             <ContextModeControl
               mode={contextMode}
               locked={contextModeLocked}
               onChange={onContextModeChange}
             />
           )}
-          {engineLabel ? (
+          {elsewhere ? null : engineLabel ? (
             <span className="max-w-xl text-center">{t("engines.chatNotice", { engine: engineLabel })}</span>
           ) : runtimeStats?.engine ? null : (
             <>

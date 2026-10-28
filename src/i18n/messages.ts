@@ -1357,6 +1357,10 @@ const enMessages = {
   "chat.runPlace.switchFailed": "Couldn't switch: {reason}",
   "chat.runPlace.runHere": "Run it here instead",
   "chat.runPlace.tryAgain": "Try again",
+  "chat.runPlace.modelOnDevice": "Model on {place}",
+  "chat.runPlace.modelOnDeviceHint": "This chat runs on {place}: it answers with the model or program chosen there, in the Eggent app.",
+  "chat.runPlace.modelInCloud": "Cloud model",
+  "chat.runPlace.modelInCloudHint": "This chat runs in the cloud: it answers with the model chosen there.",
   "nav.homeCloud": "Runs in the cloud",
   "nav.homeDevice": "Runs on {name}",
 
