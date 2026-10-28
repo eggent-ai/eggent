@@ -714,7 +714,7 @@ export async function createEggentPiTools(options: {
                   success: true,
                   linked: false,
                   url: payload.url || null,
-                  note: "Give the user this link as a link: opening it and pressing Start in Telegram links their account to this workspace. Then call link_shared again to confirm before sending anything.",
+                  note: "The person has not seen this link yet and cannot go on without it. Put the url itself in what they read next: a sentence with it as a markdown link, and, if you ask them to confirm with eggent_ask_user, the url inside that question too - a card that says 'open the link' without it leaves them with nothing to open. Opening it and pressing Start in Telegram links their account to this workspace. Then call link_shared again to confirm before sending anything.",
                 },
                 null,
                 2

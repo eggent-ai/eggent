@@ -14,6 +14,7 @@ import { SkeletonList } from "@/components/ui/skeleton-list";
 import { useI18n } from "@/i18n/provider";
 import type { MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/utils";
+import { questionPieces } from "@/lib/question-links";
 import { DEFER_INTERACTION_ANSWER, type PiPendingInteraction } from "@/lib/pi/interaction-types";
 import { ShellRunView } from "@/components/chat/shell-run";
 import { useShellActions } from "@/components/chat/shell-actions";
@@ -193,7 +194,23 @@ function InteractionCard({
         {heading ? <span className="text-sm text-muted-foreground">{heading}</span> : null}
       </div>
 
-      <p className="whitespace-pre-wrap text-base font-medium leading-6">{question}</p>
+      <p className="whitespace-pre-wrap break-words text-base font-medium leading-6">
+        {questionPieces(question).map((piece, index) =>
+          piece.kind === "link" ? (
+            <a
+              key={index}
+              href={piece.href}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-primary underline underline-offset-4"
+            >
+              {piece.text}
+            </a>
+          ) : (
+            <Fragment key={index}>{piece.text}</Fragment>
+          )
+        )}
+      </p>
 
       {interaction.options?.length ? (
         <div className={longOptions ? "flex flex-col items-stretch gap-2" : "flex flex-wrap gap-2"}>
