@@ -6,7 +6,8 @@ import { Readable } from "stream";
 import { getWorkDir } from "@/lib/storage/project-store";
 import { getServerTranslator } from "@/i18n/server";
 import { audioContentType } from "@/lib/files/openable";
-import { contentDisposition, parseByteRange } from "@/lib/files/download-headers";
+import { attachmentContentType, contentDisposition, parseByteRange } from "@/lib/files/download-headers";
+import { ICS_CONTENT_TYPE } from "@/lib/calendar/ics";
 
 /**
  * Content types worth opening in a browser rather than saving to disk.
@@ -31,6 +32,8 @@ const INLINE_CONTENT_TYPES: Record<string, string> = {
   ".txt": "text/plain; charset=utf-8",
   ".md": "text/plain; charset=utf-8",
   ".csv": "text/plain; charset=utf-8",
+  // Nothing a browser draws: it hands the file to the calendar.
+  ".ics": ICS_CONTENT_TYPE,
 };
 
 function inlineContentType(fileName: string): string {
@@ -97,7 +100,7 @@ export async function GET(req: NextRequest) {
         }
       : {
           "Content-Disposition": contentDisposition("attachment", fileName),
-          "Content-Type": "application/octet-stream",
+          "Content-Type": attachmentContentType(fileName),
         };
   headers["Accept-Ranges"] = "bytes";
 

@@ -9,8 +9,12 @@
  * a page.
  */
 
-/** Types the browser renders itself. Anything else is a download. */
-const OPENABLE = /\.(html?|pdf|svg|png|jpe?g|gif|webp)$/i;
+/**
+ * Types the browser renders itself, and calendar files, which it hands to the
+ * calendar: opened on a phone, an .ics offers to add its events, where a
+ * download would only leave a file in Downloads. Anything else is a download.
+ */
+const OPENABLE = /\.(html?|pdf|svg|png|jpe?g|gif|webp|ics)$/i;
 
 /**
  * Extensions worth turning into a link when they appear in a chat message.
@@ -20,7 +24,7 @@ const OPENABLE = /\.(html?|pdf|svg|png|jpe?g|gif|webp)$/i;
  * package name, a CSS value - is not mistaken for a file.
  */
 const MENTIONABLE =
-  /\.(html?|pdf|svg|png|jpe?g|gif|webp|md|txt|csv|tsv|json|ya?ml|js|mjs|ts|tsx|jsx|css|py|sh|sql|xlsx?|docx?|pptx?|zip|mp3|wav|ogg|oga|opus|m4a|aac|flac)$/i;
+  /\.(html?|pdf|svg|png|jpe?g|gif|webp|md|txt|csv|tsv|json|ya?ml|js|mjs|ts|tsx|jsx|css|py|sh|sql|xlsx?|docx?|pptx?|zip|mp3|wav|ogg|oga|opus|m4a|aac|flac|ics)$/i;
 
 /**
  * Images an answer can embed: the types the download route serves as images

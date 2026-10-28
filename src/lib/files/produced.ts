@@ -107,6 +107,25 @@ function imagePathsOf(output: unknown): string[] {
   return paths;
 }
 
+/** The calendar file the calendar tool wrote, from its result. */
+function calendarPathOf(output: unknown): string | null {
+  const record = asRecord(output);
+  const file = asRecord(asRecord(record?.details)?.file);
+  if (typeof file?.path === "string") return file.path;
+  // A stored result keeps only its text.
+  const text = typeof record?.text === "string" ? record.text : typeof output === "string" ? output : null;
+  const content = Array.isArray(record?.content) ? record.content : [];
+  const first = asRecord(content[0]);
+  const body = text ?? (typeof first?.text === "string" ? first.text : null);
+  if (!body) return null;
+  try {
+    const parsed = asRecord(JSON.parse(body));
+    return parsed?.success === true && typeof parsed.file === "string" ? parsed.file : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Whether a path is the agent's own housekeeping. In the orchestrator's folder the
  * first segment is usually a project, and that project has housekeeping of its own
@@ -174,6 +193,9 @@ export async function collectProducedFiles(input: CollectInput): Promise<Produce
       if (typeof target === "string" && named.has(path.resolve(cwd, target))) add(path.resolve(cwd, target), "tool");
     } else if (name === "eggent_generate_image") {
       for (const imagePath of imagePathsOf(tool.output)) add(path.resolve(cwd, imagePath), "tool");
+    } else if (name === "eggent_calendar_file") {
+      const written = calendarPathOf(tool.output);
+      if (written) add(path.resolve(cwd, written), "tool");
     }
   }
 

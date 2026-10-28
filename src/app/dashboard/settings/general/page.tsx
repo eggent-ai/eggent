@@ -15,6 +15,7 @@ import { useEffect, useRef, useState } from "react";
 import { Check, Loader2, Moon, ShieldCheck, Sun } from "lucide-react";
 import { SettingsPageHeader, SettingsShell } from "@/components/settings-shell";
 import { FileHistorySettings } from "@/components/file-history-settings";
+import { GoogleConnectCard } from "@/components/google-connect-card";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -207,6 +208,9 @@ export default function GeneralSettingsPage() {
             enabled={settings.fileHistory?.enabled !== false}
             onToggle={(enabled) => change("fileHistory.enabled", enabled)}
           />
+
+          {/* Only where the deployment offers Google; nothing is drawn otherwise. */}
+          <GoogleConnectCard variant="settings" />
 
           <section className="space-y-4 rounded-xl border bg-card p-5">
             <div className="flex items-center gap-2">
