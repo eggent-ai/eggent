@@ -3,15 +3,15 @@
 /**
  * Connecting the person's Google account, where the deployment offers it.
  *
- * Shown in two places: under an answer whose agent asked for the connection,
- * and in Settings. Connecting happens in the browser, on the workspace's own
+ * Shown in two places: under an answer whose agent asked for the connection
+ * or offered the person their Drive's file picker, and in Settings. Connecting happens in the browser, on the workspace's own
  * address - the deployment checks the person is signed in, sends them to
  * Google and brings them back to the page they left with `?google=connected`
  * - so the button is a plain link, never something the agent can press.
  * Nothing is drawn where the deployment has no Google (`enabled: false`).
  */
 import { useEffect, useState } from "react";
-import { CheckCircle2, FileSpreadsheet, Loader2 } from "lucide-react";
+import { CheckCircle2, FileSpreadsheet, FolderOpen, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n/provider";
 import { connectHref } from "@/lib/google/connect-link";
@@ -23,11 +23,13 @@ interface StatusAnswer {
   sheets?: boolean;
   calendar?: "on" | "consent" | "off";
   connectUrl?: string;
+  pickUrl?: string;
 }
 
-type ReturnNotice = "connected" | "cancelled" | "failed" | null;
+type ReturnNotice = "connected" | "cancelled" | "failed" | "picked" | null;
 
 let returnNotice: ReturnNotice | undefined;
+let pickedCount = 0;
 
 /**
  * What the way back from Google said, read once per page load: every card on
@@ -40,9 +42,11 @@ function takeReturnNotice(): ReturnNotice {
   try {
     const url = new URL(window.location.href);
     const value = url.searchParams.get("google");
-    if (value === "connected" || value === "cancelled" || value === "failed") returnNotice = value;
+    if (value === "connected" || value === "cancelled" || value === "failed" || value === "picked") returnNotice = value;
+    pickedCount = Math.max(0, Math.min(99, Number(url.searchParams.get("n")) || 0));
     if (value !== null) {
       url.searchParams.delete("google");
+      url.searchParams.delete("n");
       window.history.replaceState(window.history.state, "", `${url.pathname}${url.search}${url.hash}`);
     }
   } catch {
@@ -51,13 +55,14 @@ function takeReturnNotice(): ReturnNotice {
   return returnNotice;
 }
 
-export function GoogleConnectCard({ variant, connectUrl }: { variant: "chat" | "settings"; connectUrl?: string }) {
+export function GoogleConnectCard({ variant, connectUrl, pickUrl }: { variant: "chat" | "settings"; connectUrl?: string; pickUrl?: string }) {
   const { t } = useI18n();
   const [status, setStatus] = useState<StatusAnswer | null>(null);
   const [notice, setNotice] = useState<ReturnNotice>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [href, setHref] = useState<string | null>(null);
+  const [pickHref, setPickHref] = useState<string | null>(null);
 
   useEffect(() => {
     setNotice(takeReturnNotice());
@@ -78,7 +83,9 @@ export function GoogleConnectCard({ variant, connectUrl }: { variant: "chat" | "
   useEffect(() => {
     if (!status?.enabled) return;
     setHref(connectHref(status.connectUrl || connectUrl, window.location));
-  }, [status, connectUrl]);
+    // The picker is offered where the agent offered it, and only on the deployment's own address.
+    setPickHref(pickUrl ? connectHref(status.pickUrl || pickUrl, window.location) : null);
+  }, [status, connectUrl, pickUrl]);
 
   if (!status?.enabled) return null;
 
@@ -130,11 +137,22 @@ export function GoogleConnectCard({ variant, connectUrl }: { variant: "chat" | "
         </p>
       ) : null}
       {notice === "cancelled" && !status.connected ? <p role="status" className="text-muted-foreground">{t("google.card.cancelled")}</p> : null}
+      {notice === "picked" && variant === "chat" ? (
+        <p role="status" className="text-emerald-700 dark:text-emerald-400">{t("google.card.pickedNow", { count: String(pickedCount || 1) })}</p>
+      ) : null}
       {notice === "failed" ? <p role="alert" className="text-destructive">{t("google.card.returnFailed")}</p> : null}
       {status.connected && status.calendar === "consent" ? <p className="text-muted-foreground">{t("google.card.calendarConsent")}</p> : null}
       {error ? <p role="alert" className="text-destructive">{error}</p> : null}
       <div className="flex flex-wrap items-center gap-2">
         {!status.connected || status.calendar === "consent" ? connectButton : null}
+        {status.connected && pickHref && variant === "chat" ? (
+          <Button asChild size="sm" variant={notice === "picked" ? "outline" : "default"}>
+            <a href={pickHref}>
+              <FolderOpen className="size-4" aria-hidden="true" />
+              {notice === "picked" ? t("google.card.pickMore") : t("google.card.pick")}
+            </a>
+          </Button>
+        ) : null}
         {status.connected && variant === "settings" ? (
           <Button type="button" variant="outline" size="sm" onClick={() => void disconnect()} disabled={busy}>
             {busy ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : null}

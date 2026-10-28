@@ -288,6 +288,7 @@ await check("no EGGENT_GOOGLE_API_URL: not enabled, and the card's route says so
 
 const TOKEN = "eggs_test_services_token";
 const CONNECT = "https://acme.cloud.example.test/__eggent/google";
+const PICK = "https://acme.cloud.example.test/__eggent/google/pick";
 const service = {
   calls: [] as Array<{ method: string; path: string; auth: string; body: Record<string, unknown> | null }>,
   connected: false,
@@ -313,7 +314,7 @@ const gateway = http.createServer((req, res) => {
     }
     if (route === "/status") {
       return reply(200, service.connected
-        ? { connected: true, email: "alice@example.test", sheets: true, calendar: service.calendar, connectUrl: CONNECT }
+        ? { connected: true, email: "alice@example.test", sheets: true, files: true, calendar: service.calendar, connectUrl: CONNECT, pickUrl: PICK }
         : { connected: false, sheets: false, calendar: service.calendar, connectUrl: CONNECT });
     }
     if (route === "/disconnect") {
@@ -322,6 +323,20 @@ const gateway = http.createServer((req, res) => {
     }
     if (!service.connected) return reply(409, { error: "Google is not connected.", code: "notConnected", connectUrl: CONNECT });
     if (route === "/sheet_create") return reply(200, { spreadsheetId: "1abcdefghijklmnop", title: body?.title, url: "https://sheets.example.test/1abc", tabs: body?.tabs ?? ["Sheet1"] });
+    if (route === "/doc_create") return reply(200, { documentId: "1docdocdocdocdoc", fileId: "1docdocdocdocdoc", title: body?.title, kind: "document", url: "https://docs.example.test/1doc" });
+    if (route === "/drive_upload") return reply(200, { fileId: "1upupupupupupup", title: body?.name, kind: "file", url: "https://drive.example.test/1up", converted: Boolean(body?.convert) });
+    if (route === "/drive_export") {
+      return reply(200, {
+        file: { fileId: body?.fileId, title: "Q3 plan", kind: "document", url: "https://docs.example.test/q3", origin: "picked" },
+        export: { name: "Q3 plan.pdf", mimeType: "application/pdf", size: 9, data: Buffer.from("%PDF-1.4\n").toString("base64") },
+      });
+    }
+    if (route === "/share_link") {
+      return reply(202, {
+        pending: { id: "8a7e0c52-1111-4222-8333-944455556666", action: "share_link", file: "Q3 plan", status: "pending", waitsIn: "telegram" },
+        note: "This needs the owner's yes. They were asked in Telegram.",
+      });
+    }
     if (route === "/sheet_read") return reply(200, { spreadsheetId: body?.spreadsheetId, range: "Sheet1", rows: 700, values: Array.from({ length: 700 }, (_, index) => [`row ${index}`]) });
     return reply(200, { ok: true });
   });
@@ -439,13 +454,124 @@ await check("connect, already connected, says so; the calendar's missing permiss
   service.calendar = "on";
 });
 
+
+console.log("\nDocs, Drive and the picker\n");
+
+await check("pick hands the person the Choose from Drive button; the chat finds it, on this workspace's address only", async () => {
+  const answer = await runGoogle({ action: "pick" });
+  assert.equal(answer.success, true);
+  assert.deepEqual(answer.pick, { url: PICK });
+  assert.equal(link.pickUrlFromToolOutput(JSON.stringify(answer)), PICK);
+  assert.equal(link.connectUrlFromToolOutput(JSON.stringify(answer)), null, "a pick answer is no connect answer");
+  const here = { origin: "https://acme.cloud.example.test", pathname: "/dashboard/chat-1", search: "?google=picked&n=2&tab=x" };
+  assert.equal(link.connectHref(PICK, here), "/__eggent/google/pick?return=%2Fdashboard%2Fchat-1%3Ftab%3Dx");
+  assert.equal(link.connectHref("https://evil.example.test/__eggent/google/pick", here), null);
+});
+
+await check("doc_create takes Markdown, or the text of a file of this workspace", async () => {
+  fs.writeFileSync(path.join(shopDir, "plan.md"), "# Plan\n- one\n");
+  const answer = await runGoogle({ action: "doc_create", title: "Plan", contentPath: "plan.md" });
+  assert.equal(answer.success, true, JSON.stringify(answer));
+  assert.equal(answer.url, "https://docs.example.test/1doc");
+  assert.deepEqual(service.calls.at(-1)?.body, { title: "Plan", content: "# Plan\n- one\n" });
+  const both = await runGoogle({ action: "doc_append", documentId: "1docdocdocdocdoc", content: "x", contentPath: "plan.md" });
+  assert.equal(both.success, false);
+  const none = await runGoogle({ action: "doc_append", documentId: "1docdocdocdocdoc" });
+  assert.equal(none.success, false);
+});
+
+await check("drive_upload sends the workspace file's bytes, with its own name and extension", async () => {
+  fs.writeFileSync(path.join(shopDir, "price list.xlsx"), Buffer.from([0x50, 0x4b, 0x03, 0x04, 0xff]));
+  const answer = await runGoogle({ action: "drive_upload", path: "price list.xlsx", convert: true, name: "Prices" });
+  assert.equal(answer.success, true, JSON.stringify(answer));
+  const body = service.calls.at(-1)?.body as Record<string, unknown>;
+  assert.equal(body.name, "Prices.xlsx", "a name without an extension keeps the file's own");
+  assert.equal(body.convert, true);
+  assert.deepEqual(Buffer.from(String(body.data), "base64"), Buffer.from([0x50, 0x4b, 0x03, 0x04, 0xff]));
+});
+
+await check("drive_upload reads no file outside the projects, none with credentials, none too large - before sending", async () => {
+  const before = service.calls.length;
+  fs.writeFileSync(path.join(root, "outside.txt"), "x");
+  fs.writeFileSync(path.join(shopDir, ".env"), "SECRET=1");
+  fs.writeFileSync(path.join(shopDir, "huge.bin"), Buffer.alloc(1024 * 1024 + 1));
+  for (const target of [path.join(root, "outside.txt"), "../../outside.txt", ".env", "huge.bin", "missing.pdf"]) {
+    const answer = await runGoogle({ action: "drive_upload", path: target });
+    assert.equal(answer.success, false, target);
+  }
+  assert.equal(service.calls.length, before);
+});
+
+await check("drive_export lands in the project folder under a name the chat can link, never over a file, and in the files card", async () => {
+  const startedAt = Date.now();
+  const first = await runGoogle({ action: "drive_export", fileId: "1q3q3q3q3q3q3q3", format: "pdf" });
+  assert.equal(first.success, true, JSON.stringify(first));
+  assert.equal(first.saved, "Q3-plan.pdf");
+  assert.equal(fs.readFileSync(path.join(shopDir, "Q3-plan.pdf"), "utf-8"), "%PDF-1.4\n");
+  const second = (await googleTool.execute("g", { action: "drive_export", fileId: "1q3q3q3q3q3q3q3", format: "pdf" })) as ToolResult & { details: Record<string, unknown> };
+  assert.equal(answerOf(second).saved, "Q3-plan-2.pdf");
+  assert.equal(fs.readFileSync(path.join(shopDir, "Q3-plan.pdf"), "utf-8"), "%PDF-1.4\n");
+  const group = await collectProducedFiles({
+    tools: [{ toolName: "eggent_google", input: {}, output: second, status: "completed" }],
+    startedAt: startedAt - 2000,
+    cwd: shopDir,
+    projectId: "shop",
+    assistantText: "",
+  });
+  assert.deepEqual(group?.items.map((item) => item.path), ["Q3-plan-2.pdf"]);
+});
+
+await check("a change waiting for the owner comes back as pending, with what to tell the person", async () => {
+  const answer = await runGoogle({ action: "share_link", fileId: "1q3q3q3q3q3q3q3", role: "writer" });
+  assert.equal(answer.success, false);
+  assert.equal((answer.pending as Record<string, unknown>).status, "pending");
+  assert.match(String(answer.note), /owner/);
+  assert.deepEqual(service.calls.at(-1)?.body, { fileId: "1q3q3q3q3q3q3q3", role: "writer" });
+});
+
+await check("exportTarget keeps a name inside the folder whatever Drive called the file", async () => {
+  const { exportTarget } = await import("../src/lib/google/tool.ts");
+  for (const name of ["../../etc/passwd", "..\\evil.pdf", ".hidden.pdf", "a/b/c.pdf"]) {
+    const target = await exportTarget(shopDir, name);
+    assert.ok(target.absolute.startsWith(shopDir + path.sep), `${name} -> ${target.absolute}`);
+    assert.ok(!target.relative.includes("/") && !target.relative.startsWith("."), target.relative);
+  }
+});
+
+console.log("\nCards that need the deployment\n");
+
+await check("a bundled skill that names requires_env is offered and installed only where that variable is set", async () => {
+  const skillsRoot = path.join(root, "app");
+  const skillDir = path.join(skillsRoot, "bundled-skills", "your-files");
+  fs.mkdirSync(skillDir, { recursive: true });
+  fs.writeFileSync(path.join(skillDir, "SKILL.md"), "---\nname: your-files\ndescription: Needs the files service.\ncard_order: -2\nrequires_env: EGGENT_TEST_FILES_URL\n---\n# x\n");
+  fs.mkdirSync(path.join(skillsRoot, "bundled-skills", "plain"), { recursive: true });
+  fs.writeFileSync(path.join(skillsRoot, "bundled-skills", "plain", "SKILL.md"), "---\nname: plain\ndescription: Always.\ncard_order: 1\n---\n# y\n");
+  const cwd = process.cwd();
+  process.chdir(skillsRoot);
+  try {
+    // A fresh copy of the module, so it reads its skills folder from here.
+    const fresh = "../src/lib/storage/bundled-skills-store.ts?requires-env";
+    const store = (await import(fresh)) as typeof import("../src/lib/storage/bundled-skills-store.ts");
+    delete process.env.EGGENT_TEST_FILES_URL;
+    assert.deepEqual((await store.listBundledSkills("en")).map((skill) => skill.name), ["plain"]);
+    const refused = await store.installBundledSkill("none", "your-files");
+    assert.equal(refused.success, false);
+    process.env.EGGENT_TEST_FILES_URL = "http://service";
+    assert.deepEqual((await store.listBundledSkills("en")).map((skill) => skill.name), ["your-files", "plain"], "a negative card_order leads the row");
+  } finally {
+    process.chdir(cwd);
+    delete process.env.EGGENT_TEST_FILES_URL;
+  }
+});
+
 console.log("\nThe card's routes\n");
 
 await check("the status route needs a session and says who is connected", async () => {
   const anonymous = await statusRoute.GET(request("/api/google/status", { cookie: false }));
   assert.equal(anonymous.status, 401);
   const answer = (await (await statusRoute.GET(request("/api/google/status"))).json()) as Record<string, unknown>;
-  assert.deepEqual(answer, { enabled: true, connected: true, email: "alice@example.test", sheets: true, calendar: "on", connectUrl: CONNECT });
+  assert.deepEqual(answer, { enabled: true, connected: true, email: "alice@example.test", sheets: true, files: true, calendar: "on", connectUrl: CONNECT, pickUrl: PICK });
 });
 
 await check("disconnecting needs a session, JSON and this site; then it asks the service", async () => {

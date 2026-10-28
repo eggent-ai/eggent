@@ -15,7 +15,7 @@ import { StickyCopyButton, UserMessageFooter } from "./user-message-footer";
 import { LearnedNote } from "./learned-note";
 import { FilesProduced } from "./files-produced";
 import { GoogleConnectCard } from "@/components/google-connect-card";
-import { connectUrlFromToolOutput } from "@/lib/google/connect-link";
+import { connectUrlFromToolOutput, pickUrlFromToolOutput } from "@/lib/google/connect-link";
 import { SendToContact, useMailReply } from "@/components/mail/mail-reply";
 import { cleanProducedGroups, type ProducedGroup } from "@/lib/files/produced-shape";
 import type { LearnedNotice } from "@/lib/learning/types";
@@ -310,7 +310,8 @@ export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
   if (!renderedParts.some(Boolean)) return null;
   const learned = learnedNoticeOf(message.parts);
   const producedFiles = producedFilesOf(message.parts);
-  const googleConnect = googleConnectOf(message.parts);
+  const googleConnect = googleLinkOf(message.parts, connectUrlFromToolOutput);
+  const googlePick = googleLinkOf(message.parts, pickUrlFromToolOutput);
 
   return (
     <div className="flex items-start gap-3 py-2" data-message-role="assistant">
@@ -325,7 +326,7 @@ export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
         {renderedParts}
         {producedFiles.length > 0 ? <FilesProduced groups={producedFiles} /> : null}
         {learned ? <LearnedNote notice={learned} /> : null}
-        {googleConnect ? <GoogleConnectCard variant="chat" connectUrl={googleConnect} /> : null}
+        {googleConnect || googlePick ? <GoogleConnectCard variant="chat" connectUrl={googleConnect ?? undefined} pickUrl={googlePick ?? undefined} /> : null}
         {/* A program that could not finish: carry on with a model instead. Only under a complete answer. */}
         {shellScope && [...helperProgress.values()].some((snapshot) => snapshot.kind === "engine" && snapshot.engineError) ? (
           <EngineFallbackButton messageId={message.id} />
@@ -387,12 +388,12 @@ function producedFilesOf(parts: UIMessage["parts"]): ProducedGroup[] {
 }
 
 /** Where the agent asked the person to connect Google in this answer, the last time it did. */
-function googleConnectOf(parts: UIMessage["parts"]): string | null {
+function googleLinkOf(parts: UIMessage["parts"], read: (output: unknown) => string | null): string | null {
   let found: string | null = null;
   for (const part of parts) {
     const tool = toolPartInfo(part);
     if (!tool || tool.toolName !== "eggent_google" || tool.state !== "output-available") continue;
-    found = connectUrlFromToolOutput(tool.output) ?? found;
+    found = read(tool.output) ?? found;
   }
   return found;
 }

@@ -9,6 +9,10 @@ export interface GoogleStatus {
   calendar: "on" | "consent" | "off";
   /** Where the person goes to connect: the workspace's own address. */
   connectUrl: string;
+  /** Whether documents, spreadsheets, presentations and Drive files can be worked with. */
+  files?: boolean;
+  /** Where the person picks files of their own for the agent, when the deployment offers it. */
+  pickUrl?: string;
 }
 
 export type SheetCell = string | number | boolean | null;
