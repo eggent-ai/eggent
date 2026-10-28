@@ -32,6 +32,8 @@ import { listChatSummaries, readChatConversation, searchChats } from "@/lib/stor
 import { chatPath } from "@/lib/dashboard-routes";
 import { mailEnabled } from "@/lib/mail/config";
 import { createMessagesTool } from "@/lib/mail/tool";
+import { emailEnabled } from "@/lib/email/config";
+import { createEmailTool } from "@/lib/email/tool";
 import { approvalsEnabled } from "@/lib/approvals/config";
 import { createApprovalsTool } from "@/lib/approvals/tool";
 import { createSharesTool } from "@/lib/shares/tool";
@@ -1306,6 +1308,32 @@ export async function createEggentPiTools(options: {
       cwd: options.cwd,
       // Read to the person who asked, it is read. A scheduled run reads for nobody.
       marksRead: () => !isScheduledRunSessionId(options.chatId),
+    }));
+  }
+
+  // The agent's own email (lib/email): a mailbox a deployment keeps for the
+  // workspace, or the workspace's own mail server. Not inside a visit, which
+  // writes to nobody.
+  if (emailEnabled() && !options.visit) {
+    tools.push(createEmailTool({
+      chatId: options.chatId,
+      cwd: options.cwd,
+      // Read to the person who asked, it is read. A scheduled run reads for nobody.
+      marksRead: () => !isScheduledRunSessionId(options.chatId),
+      // Asked when the letter is sent, not when the tool is built: a session
+      // kept for its schedules serves turns with and without somebody there.
+      confirm: async (title, message) => {
+        if (!options.interactive) return null;
+        const answer = await createPendingInteraction({
+          runId: options.runId ?? crypto.randomUUID(),
+          kind: "confirm",
+          title,
+          message,
+          signal: options.abortSignal,
+          onUpdate: options.onPiInteraction,
+        });
+        return answer === true;
+      },
     }));
   }
 

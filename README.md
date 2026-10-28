@@ -26,6 +26,7 @@ The user-facing product is Eggent. Internally, Eggent uses an agent runtime and 
 - [External API](#external-api)
 - [Other Useful APIs](#other-useful-apis)
 - [Telegram](#telegram)
+- [Email](#email)
 - [Local Voice Transcription](#local-voice-transcription)
 - [Task Board](#task-board)
 - [Files and Images](#files-and-images)
@@ -585,6 +586,25 @@ APP_BASE_URL=https://your-domain.example
 
 ---
 
+## Email
+
+The agent can send email with the `eggent_email` tool when the deployment gives it a way to. On a server of your own that is your mail server:
+
+```env
+EGGENT_SMTP_URL=smtps://login:password@smtp.example.test:465
+EGGENT_EMAIL_FROM="Assistant <assistant@example.test>"
+EGGENT_EMAIL_OWNER=you@example.test
+```
+
+- `send_email` without a recipient writes to `EGGENT_EMAIL_OWNER` at once.
+- A letter to anybody else needs your yes in the chat first. Where nobody can answer - Telegram, the external API, a schedule - such a letter is refused.
+- **That yes is advice, not a lock.** The agent runs with a shell in this same environment and can read `EGGENT_SMTP_URL`, login included, so a determined or misled agent can send mail without the tool. Use a mailbox made for the agent, with sending limits of its own, rather than your personal one.
+- There is no inbox on a server of your own: letters are only sent, and listed in `data/email/sent.jsonl`.
+
+A hosted deployment can give each workspace a mailbox of its own instead (`EGGENT_EMAIL_API_URL`, `EGGENT_EMAIL_ADDRESS`, with the workspace's services token). There, letters to other people wait for the owner outside the workspace, letters that come in are kept by the service, and the workspace keeps its own list of them in `data/email/`. Whatever a letter says reaches the agent as information, never as instructions, and no letter starts a turn by itself.
+
+---
+
 ## Local Voice Transcription
 
 Eggent supports voice without external speech APIs.
@@ -710,6 +730,7 @@ data/
   memory/        # memory namespaces
   board/         # task board cards and state
   versions/      # file history: versions of project files
+  email/         # the agent's letters: their list, the files they brought, what was sent
   pi-agent/      # embedded runtime config in Docker by default
 ```
 
@@ -731,6 +752,9 @@ See `.env.example` for the full list.
 | `TELEGRAM_BOT_TOKEN` | unset | Telegram bot token. |
 | `TELEGRAM_WEBHOOK_SECRET` | unset | Optional Telegram webhook secret. |
 | `TELEGRAM_DEFAULT_PROJECT_ID` | unset | Default project for Telegram. |
+| `EGGENT_SMTP_URL` | unset | The agent's email through your own mail server (`smtp://` or `smtps://`, login inside). See [Email](#email). |
+| `EGGENT_EMAIL_FROM` | unset | The address the agent's letters come from. |
+| `EGGENT_EMAIL_OWNER` | unset | Your own address: where `send_email` writes without a recipient. |
 | `EGGENT_STT_ENABLED` | `1` | Enable local speech transcription. |
 | `EGGENT_STT_MODEL` | `base` | whisper.cpp ggml model name: `tiny`, `base`, `small`, `medium`. |
 | `EGGENT_STT_AUTO_DOWNLOAD_MODEL` | `1` | Download missing ggml model on first use. |

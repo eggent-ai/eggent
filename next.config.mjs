@@ -21,6 +21,7 @@ const nextConfig = {
     "pdfjs-dist",
     "@earendil-works/pi-coding-agent",
     "typebox",
+    "nodemailer",
   ],
   experimental: {
     serverActions: {

@@ -5,6 +5,7 @@ import { restorePiSchedules } from "@/lib/pi/schedule-host";
 import { sweepStoredChats } from "@/lib/secrets/sweep";
 import { startChatsWatcher } from "@/lib/storage/chats-watcher";
 import { startMailSync } from "@/lib/mail/sync";
+import { startEmailSync } from "@/lib/email/sync";
 import { startApprovalsWatch } from "@/lib/approvals/watch";
 import { startSharesWatch } from "@/lib/shares/watch";
 import { startBoardDispatcher } from "@/lib/board/dispatcher";
@@ -39,6 +40,9 @@ sweepChats(true);
 
 // Files sent with messages are copied here while the workspace is up (lib/mail).
 startMailSync();
+
+// The list of the agent's letters is kept here while the workspace is up (lib/email).
+startEmailSync();
 
 // A file sent for approval and changed here voids that round: the files on
 // approval are watched while the workspace is up (lib/approvals).
