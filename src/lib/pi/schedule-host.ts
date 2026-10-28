@@ -9,11 +9,12 @@ import type { Chat, ChatMessage } from "@/lib/types";
 import { afterTelegramDelivery, deliverChatToTelegram } from "@/lib/telegram/conversation";
 import { takeHelperDeliveries, type HelperDelivery } from "@/lib/pi/helper-deliveries";
 import { getActiveRun } from "@/lib/pi/active-runs";
-import { detectSchedule, raiseScheduledTurns, withScheduleExecutionDirective } from "@/lib/pi/schedule-policy";
+import { detectSchedule, isQuietRunReply, raiseScheduledTurns, withScheduleExecutionDirective } from "@/lib/pi/schedule-policy";
 import { piScheduleStorePath } from "@/lib/pi/session-lifecycle";
 import { subagentMonitorFor } from "@/lib/pi/subagents";
 import { describeProviderFailure, redactSecrets } from "@/lib/pi/provider-failure";
 import { forgetJobHealth, healthKey, recordRunOutcome, type RunDelivery, type RunOutcome } from "@/lib/pi/schedule-health";
+import { currentScheduleLimits, judgeScheduleChange, scheduleLimitRefusal } from "@/lib/pi/schedule-limits";
 import {
   isScheduledRunSessionId,
   markScheduledRunSession,
@@ -545,7 +546,10 @@ async function finishScheduledRun(
     return;
   }
 
-  const text = review.notice ?? assistantText;
+  // A run that found nothing new says so with one word: its chat keeps a line,
+  // and the person is sent nothing.
+  const quiet = !review.notice && isQuietRunReply(assistantText);
+  const text = review.notice ?? (quiet ? (await translator())("schedules.run.nothingNew") : assistantText);
   const reported = review.notice ? [] : completedTools;
 
   const runChat = await ensureRunChat(session, run);
@@ -593,8 +597,8 @@ async function finishScheduledRun(
 
   // The same thing happening again is kept in the run's chat and not sent: the
   // person has been told, and sending it every time is what a task meeting a
-  // wall used to do.
-  if (review.delivery === "silent") return;
+  // wall used to do. Nothing new is not news either.
+  if (review.delivery === "silent" || quiet) return;
 
   // The delivery deliberately does not depend on the agent calling a tool. A
   // scheduled job runs as a subagent with its own tool list, which is why every
@@ -973,6 +977,39 @@ async function readScheduleStores(cwd: string) {
   return stores;
 }
 
+/** Every stored task in the workspace, whichever chat or project holds it, with its store. */
+async function workspaceScheduleEntries(): Promise<Array<{ filePath: string; job: ScheduleJobRecord }>> {
+  const entries: Array<{ filePath: string; job: ScheduleJobRecord }> = [];
+  for (const context of await scheduleContexts({ scope: "all" })) {
+    for (const store of await readScheduleStores(context.cwd)) {
+      for (const job of store.data.jobs ?? []) entries.push({ filePath: path.resolve(store.filePath), job });
+    }
+  }
+  return entries;
+}
+
+export async function workspaceScheduleJobs(): Promise<ScheduleJobRecord[]> {
+  return (await workspaceScheduleEntries()).map((entry) => entry.job);
+}
+
+/**
+ * Why a new task with this timing may not be made, in the provider's words, or
+ * null when it may. A timing that cannot be read is let through: the scheduler
+ * refuses it in terms of its own.
+ */
+export async function checkNewScheduleLimits(schedule: string): Promise<string | null> {
+  const limits = await currentScheduleLimits();
+  if (!limits) return null;
+  let after: ReturnType<typeof detectSchedule>;
+  try {
+    after = detectSchedule(schedule);
+  } catch {
+    return null;
+  }
+  const breach = judgeScheduleChange({ limits, others: await workspaceScheduleJobs(), after, timingChanged: true });
+  return breach ? scheduleLimitRefusal(breach, limits) : null;
+}
+
 function isScheduleSession(session: AgentSession, cwd: string, sessionId: string): boolean {
   return session.sessionId === sessionId
     && path.resolve(session.sessionManager.getCwd()) === path.resolve(cwd);
@@ -1200,6 +1237,40 @@ export async function managePiSchedules(options: {
     // schedule again would turn a relative one-shot such as "+10m" into ten
     // minutes from *now* on every text edit.
     const detected = nextSchedule ? detectSchedule(nextSchedule) : null;
+
+    // A task switched on, or given a new timing, is held to the deployment's
+    // limits like a new one. One that is already on keeps running whatever
+    // they say now, and its wording can always be changed.
+    const limits = await currentScheduleLimits();
+    if (limits) {
+      // Counted across the workspace, whatever scope the request named.
+      const targetFile = path.resolve(target.store.filePath);
+      const others = (await workspaceScheduleEntries())
+        .filter((entry) => !(entry.filePath === targetFile && entry.job.id === jobId))
+        .map((entry) => entry.job);
+      const breach = judgeScheduleChange({
+        limits,
+        others,
+        before: target.job,
+        after: {
+          ...target.job,
+          ...(detected ? { schedule: detected.schedule, scheduleType: detected.scheduleType, intervalMs: detected.intervalMs } : {}),
+          enabled: nextEnabled ?? target.job.enabled,
+        },
+        timingChanged: Boolean(detected),
+      });
+      if (breach) {
+        return {
+          action: options.action,
+          scope: options.scope ?? "current",
+          updated: false,
+          rearmed: false,
+          limited: breach,
+          error: scheduleLimitRefusal(breach, limits),
+        };
+      }
+    }
+
     const updatedJob = await mutateScheduleStore(target.store.filePath, (data) => {
       const job = (data.jobs ?? []).find((candidate) => candidate.id === jobId);
       if (!job) throw new Error(`Scheduled job ${jobId} disappeared while it was being updated`);

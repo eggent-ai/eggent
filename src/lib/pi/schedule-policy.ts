@@ -120,6 +120,35 @@ export function raiseScheduledTurns(input: Record<string, unknown>): void {
 }
 
 /**
+ * The whole reply of a scheduled run that has nothing to say this time.
+ *
+ * A task that checks something every half hour - new listings, a price, a
+ * tender search - finds nothing most of the time, and a report of "nothing
+ * new" sent each time is noise that teaches the person to mute the chat. A run
+ * whose task says so answers with this word alone; the host then sends nothing
+ * and leaves one line in the run's chat.
+ */
+export const QUIET_RUN_REPLY = "NO_UPDATE";
+
+/**
+ * Whether a run's reply is the quiet word and nothing else. Markdown a model
+ * wraps around a bare word - backticks, bold, quotes, a closing full stop - is
+ * not something it said; any other word is, and such a reply is delivered.
+ */
+export function isQuietRunReply(text: string): boolean {
+  let reply = text.trim();
+  for (;;) {
+    const unwrapped = reply
+      .replace(/^(`{1,3}|\*\*|\*|__|"|')([\s\S]*)\1$/, "$2")
+      .replace(/\.$/, "")
+      .trim();
+    if (unwrapped === reply) break;
+    reply = unwrapped;
+  }
+  return reply === QUIET_RUN_REPLY;
+}
+
+/**
  * What the report of a scheduled run is told about its reply.
  *
  * The report turn is the owner session answering the helper's notification,
@@ -131,12 +160,35 @@ export const SCHEDULED_REPORT_GUIDANCE = [
   "[Eggent: this turn reports a scheduled run]",
   "Nobody is in this turn. Your reply is sent to the person as this run's message, for example in Telegram.",
   "If the run produced what the task asked for (a brief, a summary, a list, a draft), your reply is that result itself, complete and unchanged; fetch it with get_subagent_result first if it is not shown in full. Do not describe the run, and do not comment on how many items it found.",
+  `If the run's result is exactly ${QUIET_RUN_REPLY}, there is nothing new this time: reply with ${QUIET_RUN_REPLY} alone, and nothing is sent to the person.`,
   "Only if the run produced nothing usable, say in one or two plain sentences what did not work.",
 ].join("\n");
 
-type ContextMessage = { role?: unknown; customType?: unknown; content?: unknown };
+type ContextMessage = { role?: unknown; customType?: unknown; content?: unknown; details?: unknown };
 
-/** The messages of a report turn with the guidance after the run's notification. */
+/** The run's result as its notification carries it: the preview pi-subagents attaches, or the <result> it wrote. */
+function notificationResult(message: ContextMessage): string | null {
+  const preview = (message.details as { resultPreview?: unknown } | undefined)?.resultPreview;
+  if (typeof preview === "string") return preview;
+  const text = typeof message.content === "string"
+    ? message.content
+    : Array.isArray(message.content)
+      ? message.content.map((part) => String((part as { text?: unknown })?.text ?? "")).join("")
+      : "";
+  const result = text.match(/<result>([\s\S]*?)<\/result>/)?.[1];
+  return result === undefined ? null : result.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&");
+}
+
+/**
+ * The messages of a report turn with the guidance after the run's notification.
+ *
+ * A run whose result is the quiet word is sent from its notification on and
+ * nothing before it. The report turn otherwise carries the whole conversation
+ * the task was set up in, and every run before it - for a check every half
+ * hour, tens of thousands of tokens forty-eight times a day to say one word
+ * that is never sent. Its only right answer is that word whatever came before,
+ * so what came before is not read.
+ */
 export function withScheduledReportGuidance<T>(messages: T[]): T[] {
   let at = -1;
   for (let index = messages.length - 1; index >= 0; index -= 1) {
@@ -148,20 +200,21 @@ export function withScheduledReportGuidance<T>(messages: T[]): T[] {
   }
   if (at < 0) return messages;
   const message = messages[at] as ContextMessage;
+  const quiet = isQuietRunReply(notificationResult(message) ?? "");
   const content = message.content;
-  let next: unknown;
+  let guided = messages;
   if (typeof content === "string") {
-    if (content.includes(SCHEDULED_REPORT_GUIDANCE)) return messages;
-    next = `${content}\n\n${SCHEDULED_REPORT_GUIDANCE}`;
+    if (!content.includes(SCHEDULED_REPORT_GUIDANCE)) {
+      guided = [...messages];
+      guided[at] = { ...(message as object), content: `${content}\n\n${SCHEDULED_REPORT_GUIDANCE}` } as T;
+    }
   } else if (Array.isArray(content)) {
-    if (content.some((part) => (part as { text?: unknown })?.text === SCHEDULED_REPORT_GUIDANCE)) return messages;
-    next = [...content, { type: "text", text: SCHEDULED_REPORT_GUIDANCE }];
-  } else {
-    return messages;
+    if (!content.some((part) => (part as { text?: unknown })?.text === SCHEDULED_REPORT_GUIDANCE)) {
+      guided = [...messages];
+      guided[at] = { ...(message as object), content: [...content, { type: "text", text: SCHEDULED_REPORT_GUIDANCE }] } as T;
+    }
   }
-  const copy = [...messages];
-  copy[at] = { ...(message as object), content: next } as T;
-  return copy;
+  return quiet && at > 0 ? guided.slice(at) : guided;
 }
 
 export function isScheduleStorePath(rawPath: string, cwd: string): boolean {
@@ -181,11 +234,14 @@ export function bashReferencesScheduleStore(command: string): boolean {
  *
  * `inScheduledRun` says whether a session is writing the report of a scheduled
  * run. It is given rather than imported because this file is also loaded by a
- * test that runs without the application's path aliases.
+ * test that runs without the application's path aliases. So is
+ * `checkNewSchedule`, which answers why a task with this timing may not be
+ * made - a limit the deployment sets - or null when it may.
  */
 export function createSchedulePolicyExtension(
   inScheduledRun: (sessionId: string | undefined) => boolean,
-  refusal: string
+  refusal: string,
+  checkNewSchedule?: (schedule: string) => Promise<string | null>
 ): InlineExtension {
   return {
     name: "eggent-schedule-policy",
@@ -208,6 +264,13 @@ export function createSchedulePolicyExtension(
         return content === event.content ? undefined : { content };
       });
 
+      const scheduleRefusal = (reason: string) => ({
+        block: true,
+        reason: `${reason}\nNothing was scheduled. Tell the person this in their language, and offer what fits within it.`,
+      });
+
+      // Answers synchronously unless a new schedule has a limit to be checked
+      // against, so every other tool call goes through exactly as before.
       pi.on("tool_call", (event, ctx) => {
         const toolName = event.toolName.toLowerCase();
         const input = event.input as Record<string, unknown>;
@@ -224,6 +287,14 @@ export function createSchedulePolicyExtension(
             input.prompt = withScheduleExecutionDirective(prompt);
           }
           if (schedule) raiseScheduledTurns(input);
+          if (schedule && checkNewSchedule) {
+            return checkNewSchedule(schedule).then(
+              (limited) => (limited ? scheduleRefusal(limited) : undefined),
+              // A limit that cannot be read is no limit: the waker on the host
+              // still holds the line, and a person's task is not refused over it.
+              () => undefined
+            );
+          }
           return undefined;
         }
 

@@ -89,6 +89,12 @@ export default function PiSchedulesPage() {
       if (!response.ok) throw new Error(t("schedules.changeFailed"));
       const result = await response.json().catch(() => null);
       await load();
+      // A task the deployment's limits do not allow comes back with the
+      // deployment's own sentence, which says what to do instead.
+      if (result && typeof result.limited === "string" && typeof result.error === "string") {
+        window.alert(result.error);
+        return;
+      }
       // A resume that switched the task on but could not start its scheduler
       // answers 200 with the reason; the person should see it.
       if (action === "resume" && result && typeof result.error === "string") window.alert(t("schedules.resumeFailed"));

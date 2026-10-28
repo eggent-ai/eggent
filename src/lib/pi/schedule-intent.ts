@@ -13,6 +13,7 @@ import {
   SCHEDULE_MANAGEMENT_VERBS,
   SCHEDULE_NOUNS,
   SCHEDULE_RETIME_VERBS,
+  SCRIPT_FIRST_PHRASES,
 } from "@/i18n/vocabulary";
 
 const SCHEDULE_NOUN_RE = wordMatcher(SCHEDULE_NOUNS);
@@ -66,6 +67,27 @@ export function hasScheduleIntent(text: string): boolean {
   return RELATIVE_DELAY_RE.test(text) || CREATION_PHRASE_RE.test(text) || CLOCK_AT_RE.test(text);
 }
 
+const SCRIPT_FIRST_RE = wordMatcher(SCRIPT_FIRST_PHRASES);
+const LINK_RE = /\bhttps?:\/\/\S/i;
+const SKILL_COMMAND_RE = /^\s*\/skill:/i;
+
+/**
+ * Whether the turn has something to build and try before a schedule can run it.
+ *
+ * "Watch this search and send me new listings every hour" asks for a schedule,
+ * but the run has nothing to do until a script that reads the page and
+ * remembers what it has seen exists and has worked once - and that script is
+ * written and tried with `bash`. Withholding it left the agent scheduling work
+ * nobody had prepared. A link is work on that page now, whatever else the
+ * message asks. A skill started by its command follows its own instructions,
+ * which say when to schedule; its brief is not read for timing words.
+ */
+export function needsScriptFirst(text: string): boolean {
+  if (SKILL_COMMAND_RE.test(text)) return true;
+  if (!readableForIntent(text)) return false;
+  return LINK_RE.test(text) || SCRIPT_FIRST_RE.test(text);
+}
+
 /**
  * Which tools this turn may use, decided from scratch every turn.
  *
@@ -84,6 +106,10 @@ export function hasScheduleIntent(text: string): boolean {
  *
  * So the set is computed from the session's full tool list each time. Anything
  * withheld for one turn comes back on the next.
+ *
+ * A turn that has to build something first - a skill's own run, a request to
+ * watch a page - keeps every tool: the store itself is guarded by the schedule
+ * policy whatever this decides, and without `bash` the work cannot be prepared.
  */
 export function applySchedulingToolPolicy(
   session: {
@@ -98,11 +124,13 @@ export function applySchedulingToolPolicy(
   const activeTools = session.getActiveToolNames();
   // The full set is the baseline; without it we can only ever take away.
   const allTools = session.getAllTools?.().map((tool) => tool.name) ?? activeTools;
-  const withheld = hasScheduleManagementIntent(text)
-    ? new Set(["Agent", "bash"])
-    : hasScheduleIntent(text)
-      ? new Set(["bash"])
-      : new Set<string>();
+  const withheld = needsScriptFirst(text)
+    ? new Set<string>()
+    : hasScheduleManagementIntent(text)
+      ? new Set(["Agent", "bash"])
+      : hasScheduleIntent(text)
+        ? new Set(["bash"])
+        : new Set<string>();
   // The runtime offers `powershell` on every platform and it answers only
   // "available on Windows" elsewhere. A model that finds `bash` withheld
   // reaches for it, gets that sentence, and tells the person there is no

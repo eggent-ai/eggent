@@ -1214,6 +1214,8 @@ const enMessages = {
   "schedules.paused.refused": "Scheduled task \"{job}\" is paused: its last {count} runs were turned away before they could start.",
   "schedules.paused.failed": "Scheduled task \"{job}\" is paused: its last {count} runs ended with an error.",
   "schedules.paused.resume": "Once that is dealt with, resume it in Settings → Schedules, or ask me to resume it.",
+  // A run whose task found nothing this time: kept in its chat, never sent.
+  "schedules.run.nothingNew": "Checked: nothing new this time.",
   "date.monthsShort": "Jan,Feb,Mar,Apr,May,Jun,Jul,Aug,Sep,Oct,Nov,Dec",
 
   // Code blocks in an answer.

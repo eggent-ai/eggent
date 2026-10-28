@@ -15,7 +15,7 @@ import { createEggentPiTools } from "@/lib/pi/eggent-tools";
 import { createEggentPiExtensionUIContext } from "@/lib/pi/interaction-ui-context";
 import { createEggentInteractiveBashTool } from "@/lib/pi/interactive-bash-tool";
 import { buildPublicSharePrompt, createPublicShareTools, PUBLIC_SHARE_TOOL_NAMES } from "@/lib/pi/public-share";
-import { normalizePiScheduleStore } from "@/lib/pi/schedule-host";
+import { checkNewScheduleLimits, normalizePiScheduleStore } from "@/lib/pi/schedule-host";
 import { openChatSessionManager } from "@/lib/pi/session-files";
 import { logExtensionError, ownsScheduleStore, shutdownSessionExtensions } from "@/lib/pi/session-lifecycle";
 import { createSchedulePolicyExtension } from "@/lib/pi/schedule-policy";
@@ -831,7 +831,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     cwd,
     agentDir,
     extensionFactories: [
-      createSchedulePolicyExtension(isScheduledRunSessionId, SCHEDULED_RUN_REFUSAL),
+      createSchedulePolicyExtension(isScheduledRunSessionId, SCHEDULED_RUN_REFUSAL, checkNewScheduleLimits),
       createSubagentPolicyExtension({
         monitor: subagentMonitor,
         ...(options.visit ? { maxParallel: VISIT_MAX_PARALLEL_SUBAGENTS } : {}),

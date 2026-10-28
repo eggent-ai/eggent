@@ -13,7 +13,7 @@ import { STEER_DELIVERED_PART, STEER_QUEUE_ID, STEER_QUEUE_PART, steerDeliveredP
 import { createStartingRun, raceAbort, TurnAbortedError, undoFailedSetup, type TurnSetupScope } from "@/lib/pi/turn-control";
 import { noteSessionEvent, startTurnWatchdog, UNANSWERED_QUESTION, watchdogThresholds, watchdogTickMs, type StalledTurn } from "@/lib/pi/turn-watchdog";
 import { attachToLiveRun, startLiveRun, type LiveRunSink } from "@/lib/pi/live-run";
-import { applySchedulingToolPolicy, hasScheduleIntent, hasScheduleManagementIntent } from "@/lib/pi/schedule-intent";
+import { applySchedulingToolPolicy, hasScheduleIntent, hasScheduleManagementIntent, needsScriptFirst } from "@/lib/pi/schedule-intent";
 import { describeProviderFailure, type ProviderFailure } from "@/lib/pi/provider-failure";
 import { isGatewayRefusal } from "@/lib/pi/gateway-refusal";
 import { trackCardTurn, type CardTurn } from "@/lib/board/runs";
@@ -677,6 +677,9 @@ function preparePromptForRuntime(text: string): string {
     "- Do not emulate scheduling with bash, sleep, shell loops, at, or OS cron.",
     "- Use pi-subagents by calling the Agent tool with its schedule parameter (for example schedule=\"+30s\" or a 6-field cron expression).",
     "- The scheduled Agent prompt should contain only the actual work to perform at fire time, not instructions to create or modify a schedule.",
+    ...(needsScriptFirst(text)
+      ? ["- If the work needs something built first - a script that reads a page and remembers what it has already seen - write it and run it once now, then schedule a run of that script."]
+      : []),
     "",
     "User request:",
     text,

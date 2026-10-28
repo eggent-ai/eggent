@@ -12,7 +12,7 @@
  * the model reported the scheduling tool was unavailable.
  */
 import assert from "node:assert/strict";
-import { applySchedulingToolPolicy, hasScheduleIntent, hasScheduleManagementIntent } from "../src/lib/pi/schedule-intent.ts";
+import { applySchedulingToolPolicy, hasScheduleIntent, hasScheduleManagementIntent, needsScriptFirst } from "../src/lib/pi/schedule-intent.ts";
 import { SUPPORTED_LOCALES } from "../src/i18n/locales.ts";
 
 /** The vocabulary a build ships decides which phrasings it can recognise. */
@@ -147,6 +147,82 @@ check("powershell is withheld off Windows and kept on it", () => {
   const windows = mk();
   applySchedulingToolPolicy(windows, "what is two plus two", "win32");
   assert.ok(windows.active.includes("powershell"));
+});
+
+// A request to watch something on a schedule cannot be scheduled until a script
+// that reads the page and remembers what it saw has been written and run once,
+// and that takes bash. These turns used to lose it to the word "every".
+const WATCHING = [
+  "watch this search and send me new listings every hour: https://listings.example.test/search?city=astana&rooms=2",
+  "monitor tender announcements for road repair every 30 minutes",
+  "keep an eye on the price of this laptop and tell me daily if it drops",
+  "track new listings for 2-bedroom flats under 40m, check every hour",
+  "check https://tenders.example.test/search?q=cleaning every hour and send me what is new",
+  "make an agent that watches used car prices every morning",
+  "every 30 minutes scrape the job board and send me new vacancies",
+  "write a script that checks this page daily and tell me when it changes",
+];
+
+check("a request to watch something keeps bash and Agent, in every phrasing", () => {
+  for (const text of WATCHING) {
+    const s = makeSession();
+    applySchedulingToolPolicy(s, text);
+    assert.ok(s.active.includes("bash"), `${text}: bash was withheld`);
+    assert.ok(s.active.includes("Agent"), `${text}: Agent was withheld`);
+  }
+});
+
+check("the same requests in Russian keep bash in every build", () => {
+  // Without the Russian vocabulary these are not read as schedules at all; with
+  // it they are, and must still keep the terminal.
+  for (const text of [
+    "следи за новыми объявлениями по этой ссылке и присылай каждый час",
+    "отслеживай тендеры на уборку, проверяй каждые 30 минут",
+    "мониторь цены на ноутбук ежедневно",
+    "сделай агента, который следит за ценами на машины каждое утро",
+    "Следи за тендерами по уборке и покажи, какие задачи уже есть, проверяй каждый час",
+  ]) {
+    const s = makeSession();
+    applySchedulingToolPolicy(s, text);
+    assert.ok(s.active.includes("bash"), `${text}: bash was withheld`);
+    assert.ok(s.active.includes("Agent"), `${text}: Agent was withheld`);
+  }
+});
+
+check("a skill started by its command keeps every tool, whatever its brief says about time", () => {
+  for (const text of [
+    "/skill:site-monitor two-room flat in Astana under 40m, every hour",
+    "/skill:daily-digest London property market news, every day at 9:00",
+    "/skill:site-monitor show me the scheduled jobs and remove the old one",
+    "/skill:site-monitor следи за тендерами каждый час",
+  ]) {
+    const s = makeSession();
+    applySchedulingToolPolicy(s, text);
+    assert.deepEqual([...s.active].sort(), [...ALL].sort(), text);
+  }
+});
+
+check("a plain reminder still withholds bash", () => {
+  for (const text of [
+    "remind me tomorrow at 9 to call Ann",
+    "every evening at 21:40 remind me about the task",
+    "send me a summary of the news every morning",
+  ]) {
+    assert.ok(!needsScriptFirst(text), `${text}: read as script work`);
+    const s = makeSession();
+    applySchedulingToolPolicy(s, text);
+    assert.ok(!s.active.includes("bash"), `${text}: bash was left in`);
+    assert.ok(s.active.includes("Agent"), `${text}: Agent was withheld`);
+  }
+});
+
+check("asking to see or cancel schedules still withholds Agent and bash", () => {
+  for (const text of ["show me my scheduled jobs", "cancel the morning reminder"]) {
+    const s = makeSession();
+    applySchedulingToolPolicy(s, text);
+    assert.ok(!s.active.includes("Agent"), text);
+    assert.ok(!s.active.includes("bash"), text);
+  }
 });
 
 check("a session that never had a tool does not gain one", () => {
