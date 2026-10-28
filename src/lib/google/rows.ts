@@ -83,31 +83,41 @@ const READ_FAILURES: Record<string, string> = {
   outside: "is not a file of this workspace's projects folder.",
   missing: "is not there.",
   sensitive: "holds credentials and is never sent.",
-  tooLarge: `is larger than ${Math.floor(MAX_ROWS_BYTES / 1024)} KB; send it in parts.`,
+  tooLarge: "is larger than {limit} KB; send it in parts.",
   notFile: "is not a plain file.",
 };
 
-/** The rows of a CSV file of this workspace, read through a handle that follows no link. */
-export async function rowsFromCsvFile(cwd: string, rawPath: string): Promise<string[][]> {
+/**
+ * A file of this workspace's projects, read through a handle that follows no
+ * link: never one outside them, never one that holds credentials.
+ */
+export async function readWorkspaceFile(cwd: string, rawPath: string, maxBytes: number): Promise<{ absolute: string; data: Buffer }> {
   const value = rawPath.trim();
   const absolute = path.isAbsolute(value) ? path.resolve(value) : path.resolve(cwd, value);
-  const fail = (reason: keyof typeof READ_FAILURES) => new RowsError(`${value} ${READ_FAILURES[reason]}`);
+  const fail = (reason: keyof typeof READ_FAILURES) =>
+    new RowsError(`${value} ${READ_FAILURES[reason].replace("{limit}", String(Math.floor(maxBytes / 1024)))}`);
   const key = await keyOfFile(absolute);
   if (!key) throw fail("outside");
   if (pathIsSensitive(key)) throw fail("sensitive");
   const stat = await fs.lstat(absolute).catch(() => null);
   if (!stat) throw fail("missing");
   if (!stat.isFile()) throw fail("notFile");
-  if (stat.size > MAX_ROWS_BYTES) throw fail("tooLarge");
+  if (stat.size > maxBytes) throw fail("tooLarge");
   const handle = await openPlainFile(absolute, { root: await projectsRootReal() });
   if (!handle) throw fail("notFile");
   try {
     const data = await handle.readFile();
-    if (data.length > MAX_ROWS_BYTES) throw fail("tooLarge");
-    return parseCsv(data.toString("utf-8"), absolute);
+    if (data.length > maxBytes) throw fail("tooLarge");
+    return { absolute, data };
   } finally {
     await handle.close().catch(() => undefined);
   }
+}
+
+/** The rows of a CSV file of this workspace. */
+export async function rowsFromCsvFile(cwd: string, rawPath: string): Promise<string[][]> {
+  const { absolute, data } = await readWorkspaceFile(cwd, rawPath, MAX_ROWS_BYTES);
+  return parseCsv(data.toString("utf-8"), absolute);
 }
 
 /** Throws when rows would not fit in one request. */

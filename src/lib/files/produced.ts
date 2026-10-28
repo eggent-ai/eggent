@@ -108,6 +108,24 @@ function imagePathsOf(output: unknown): string[] {
 }
 
 /** The calendar file the calendar tool wrote, from its result. */
+/** A file a tool wrote and named in its answer: in its details, or in the JSON text a stored result keeps (`field`). */
+function writtenPathOf(output: unknown, field: string): string | null {
+  const record = asRecord(output);
+  const file = asRecord(asRecord(record?.details)?.file);
+  if (typeof file?.path === "string") return file.path;
+  const text = typeof record?.text === "string" ? record.text : typeof output === "string" ? output : null;
+  const content = Array.isArray(record?.content) ? record.content : [];
+  const first = asRecord(content[0]);
+  const body = text ?? (typeof first?.text === "string" ? first.text : null);
+  if (!body) return null;
+  try {
+    const parsed = asRecord(JSON.parse(body));
+    return parsed?.success === true && typeof parsed[field] === "string" ? (parsed[field] as string) : null;
+  } catch {
+    return null;
+  }
+}
+
 function calendarPathOf(output: unknown): string | null {
   const record = asRecord(output);
   const file = asRecord(asRecord(record?.details)?.file);
@@ -195,6 +213,10 @@ export async function collectProducedFiles(input: CollectInput): Promise<Produce
       for (const imagePath of imagePathsOf(tool.output)) add(path.resolve(cwd, imagePath), "tool");
     } else if (name === "eggent_calendar_file") {
       const written = calendarPathOf(tool.output);
+      if (written) add(path.resolve(cwd, written), "tool");
+    } else if (name === "eggent_google") {
+      // drive_export brings a Drive file into the project folder.
+      const written = writtenPathOf(tool.output, "saved");
       if (written) add(path.resolve(cwd, written), "tool");
     }
   }

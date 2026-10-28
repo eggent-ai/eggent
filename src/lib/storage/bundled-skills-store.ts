@@ -264,6 +264,16 @@ function parseFrontmatter(raw: string): {
   return { frontmatter };
 }
 
+/**
+ * A skill that only works where the deployment set something up names the
+ * variable in `requires_env` (several with commas); without it the skill is
+ * neither offered nor installed, so no card leads to a dead end.
+ */
+function requiredEnvPresent(value: string | undefined): boolean {
+  const names = (value ?? "").split(",").map((name) => name.trim()).filter(Boolean);
+  return names.every((name) => /^[A-Z][A-Z0-9_]*$/.test(name) && Boolean(process.env[name]?.trim()));
+}
+
 async function dirExists(dirPath: string): Promise<boolean> {
   try {
     const stat = await fs.stat(dirPath);
@@ -295,6 +305,8 @@ async function readBundledSkillFromDir(
   if (validationError) return null;
   if (!description) return null;
   if (name !== fallbackName.toLowerCase()) return null;
+
+  if (!requiredEnvPresent(frontmatter.requires_env)) return null;
 
   const parsedOrder = Number.parseInt(frontmatter.card_order ?? "", 10);
 
@@ -363,7 +375,10 @@ export async function installBundledSkill(
 
   const sourceSkillFilePath = path.join(sourceDir, SKILL_FILE_NAME);
   try {
-    await fs.access(sourceSkillFilePath);
+    const { frontmatter } = parseFrontmatter(await fs.readFile(sourceSkillFilePath, "utf-8"));
+    if (!requiredEnvPresent(frontmatter.requires_env)) {
+      return { success: false, error: "This skill is not available in this workspace", code: 404 };
+    }
   } catch {
     return {
       success: false,

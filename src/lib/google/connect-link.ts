@@ -10,6 +10,15 @@
 
 /** The connect address an `eggent_google` answer carries when it asks the person to connect. */
 export function connectUrlFromToolOutput(output: unknown): string | null {
+  return linkFromToolOutput(output, "connect");
+}
+
+/** The address of the file picker an `eggent_google` answer carries when it offers the person their Drive. */
+export function pickUrlFromToolOutput(output: unknown): string | null {
+  return linkFromToolOutput(output, "pick");
+}
+
+function linkFromToolOutput(output: unknown, key: "connect" | "pick"): string | null {
   let value: unknown = output;
   if (typeof value === "string") {
     try {
@@ -19,8 +28,8 @@ export function connectUrlFromToolOutput(output: unknown): string | null {
     }
   }
   if (!value || typeof value !== "object" || Array.isArray(value)) return null;
-  const connect = (value as { connect?: unknown }).connect;
-  const url = connect && typeof connect === "object" ? (connect as { url?: unknown }).url : null;
+  const holder = (value as Record<string, unknown>)[key];
+  const url = holder && typeof holder === "object" ? (holder as { url?: unknown }).url : null;
   return typeof url === "string" && url ? url : null;
 }
 
@@ -36,6 +45,7 @@ export function connectHref(connectUrl: string | undefined, here: { origin: stri
   if (target.origin !== here.origin) return null;
   const back = new URLSearchParams(here.search);
   back.delete("google");
+  back.delete("n");
   const query = back.toString();
   target.searchParams.set("return", `${here.pathname}${query ? `?${query}` : ""}`);
   return `${target.pathname}${target.search}`;
