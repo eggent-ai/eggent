@@ -9,6 +9,7 @@ said `0.2.4`, which is why the number there now links to the releases page.
 
 | Version | Name | Date | Notes |
 | --- | --- | --- | --- |
+| `0.8.0` | Agent Email and Google | 2026-10-28 | [Full snapshot](./0.8.0-agent-email-and-google.md), [GitHub body](./github-v0.8.0.md) |
 | `0.7.1` | Security Update | 2026-10-27 | [Full snapshot](./0.7.1-security-update.md), [GitHub body](./github-v0.7.1.md) |
 | `0.7.0` | File History and Pages | 2026-10-25 | [Full snapshot](./0.7.0-file-history-and-pages.md), [GitHub body](./github-v0.7.0.md) |
 | `0.6.0` | Task Board and Side-by-Side Files | 2026-10-20 | [Full snapshot](./0.6.0-task-board-and-side-by-side-files.md), [GitHub body](./github-v0.6.0.md) |
