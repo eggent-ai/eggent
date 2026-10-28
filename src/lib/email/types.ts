@@ -54,7 +54,8 @@ export interface EmailRequestView {
 export interface EmailStatus {
   enabled: boolean;
   address?: string;
-  owner?: { confirmed: boolean; address: string | null };
+  /** `note` is the service's word to the agent when the address is not confirmed yet. */
+  owner?: { confirmed: boolean; address: string | null; note?: string };
   limits?: {
     month: { used: number; limit: number };
     others: { allowed: boolean; monthUsed: number; monthLimit: number; dayUsed: number; dayLimit: number };

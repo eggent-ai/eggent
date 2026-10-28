@@ -112,7 +112,12 @@ async function serviceStatus() {
     address: status.address,
     person: status.owner?.confirmed
       ? { address: status.owner.address, note: "send_email without to writes here." }
-      : { address: null, note: "Your person has not confirmed their email address yet, so there is nowhere to write. They confirm it from the letter they got when the workspace was made." },
+      : {
+          address: null,
+          note: typeof status.owner?.note === "string" && status.owner.note.trim()
+            ? status.owner.note.trim().slice(0, 800)
+            : "Your person has not confirmed their email address yet, so there is nowhere to write. They confirm it from the letter they got when the workspace was made.",
+        },
     letters: status.limits
       ? {
           thisMonth: `${status.limits.month.used} of ${status.limits.month.limit}`,
