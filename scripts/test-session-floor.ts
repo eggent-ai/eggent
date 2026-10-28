@@ -42,6 +42,7 @@ const credentials = await import("../src/app/api/auth/credentials/route.ts");
 const redeem = await import("../src/app/api/auth/handoff/redeem/route.ts");
 const settingsRoute = await import("../src/app/api/settings/route.ts");
 const { checkTerminalRequest } = await import("../src/lib/terminal/guard.ts");
+const { saveSettings } = await import("../src/lib/storage/settings-store.ts");
 const { NextRequest } = await import("next/server.js");
 
 let failed = 0;
@@ -177,6 +178,55 @@ await check("a malformed address is refused with a sentence about addresses", as
   assert.match(String((await bad.json()).error), /email/i);
   const plain = await credentials.PUT(request("/api/auth/credentials", { method: "PUT", cookie: await sessionIssuedAgo(0), body: { username: "has space", password: "a new long password" } }));
   assert.equal(plain.status, 400);
+});
+
+console.log("\nWrites that race a reset\n");
+
+const lockDir = path.join(path.dirname(settingsFile), ".lock");
+/** What a hosted workspace's reset does inside the container, while it holds the lock. */
+function resetFromOutside(hash: string, floor: number): void {
+  const settings = JSON.parse(fs.readFileSync(settingsFile, "utf-8"));
+  settings.auth = { ...settings.auth, passwordHash: hash, sessionsValidAfter: floor };
+  fs.writeFileSync(settingsFile, JSON.stringify(settings));
+}
+
+await check("a write that started before a reset cannot put the old password back", async () => {
+  writeSettings({});
+  fs.mkdirSync(lockDir);
+  const pending = saveSettings({ general: { darkMode: true, language: "en" } });
+  await new Promise((resolve) => setTimeout(resolve, 60));
+  resetFromOutside("scrypt$new$hash", 1_950_000_000);
+  fs.rmdirSync(lockDir);
+  await pending;
+  const saved = JSON.parse(fs.readFileSync(settingsFile, "utf-8"));
+  assert.equal(saved.auth.passwordHash, "scrypt$new$hash", "the old password came back");
+  assert.equal(saved.auth.sessionsValidAfter, 1_950_000_000, "the ended sessions came back");
+  assert.equal(saved.general.darkMode, true);
+});
+
+await check("a password change by a session that a reset ended meanwhile is refused", async () => {
+  writeSettings({});
+  const mine = await sessionIssuedAgo(5);
+  fs.mkdirSync(lockDir);
+  const pending = credentials.PUT(request("/api/auth/credentials", { method: "PUT", cookie: mine, body: { username: USERNAME, password: "the intruder's choice" } }));
+  await new Promise((resolve) => setTimeout(resolve, 250));
+  resetFromOutside("scrypt$owner$reset", Math.floor(Date.now() / 1000));
+  fs.rmdirSync(lockDir);
+  const answer = await pending;
+  assert.equal(answer.status, 401);
+  assert.equal(readAuth().passwordHash, "scrypt$owner$reset");
+});
+
+await check("the moment sessions were ended only moves forward", async () => {
+  writeSettings({ sessionsValidAfter: 1_950_000_000 });
+  await saveSettings({ auth: { ...readAuth(), sessionsValidAfter: 5 } as never });
+  assert.equal(readAuth().sessionsValidAfter, 1_950_000_000);
+});
+
+await check("writes leave no half-written or temporary files behind", async () => {
+  for (let i = 0; i < 5; i += 1) await saveSettings({ general: { darkMode: i % 2 === 0, language: "en" } });
+  const left = fs.readdirSync(path.dirname(settingsFile)).filter((name) => name !== "settings.json");
+  assert.deepEqual(left, []);
 });
 
 console.log("\nThe settings form and the sign-in page\n");

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getSettings, saveSettings } from "@/lib/storage/settings-store";
+import { getSettings, saveSettings, SessionEndedError } from "@/lib/storage/settings-store";
 import { hashPassword } from "@/lib/auth/password";
 import {
   AUTH_COOKIE_NAME,
@@ -82,16 +82,25 @@ export async function PUT(req: NextRequest) {
     // A new password ends every other session: whoever else knew the old one,
     // or held a browser signed in with it, is out. This browser gets a session
     // of its own below, issued after the moment written here.
+    // Checked again inside the write: a session ended by a reset that lands
+    // while this one waits does not get to choose the password after it.
     const current = await getSettings();
-    await saveSettings({
-      auth: {
-        ...current.auth,
-        username,
-        passwordHash: hashPassword(password),
-        mustChangeCredentials: false,
-        sessionsValidAfter: sessionFloorNow(),
-      },
-    });
+    try {
+      await saveSettings({
+        auth: {
+          ...current.auth,
+          username,
+          passwordHash: hashPassword(password),
+          mustChangeCredentials: false,
+          sessionsValidAfter: sessionFloorNow(),
+        },
+      }, { sessionIssuedAt: session.issuedAt });
+    } catch (error) {
+      if (error instanceof SessionEndedError) {
+        return Response.json({ error: t("api.error.unauthorized") }, { status: 401 });
+      }
+      throw error;
+    }
     forgetSessionFloorCache();
 
     const nextToken = await createSessionToken(username, false);
