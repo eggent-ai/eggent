@@ -237,7 +237,7 @@ export function createEmailTool(options: EmailToolOptions) {
         const paths = Array.isArray(params.files) ? params.files : [];
         if (!text && !paths.length) return textResult({ success: false, error: "send_email needs text or files." });
         const wanted = recipientsOf(params.to);
-        const sendKey = `${options.chatId || ""}|${wanted.join(",")}|${params.subject || ""}|${text}|${paths.join("|")}|${params.reply_to || ""}`;
+        const sendKey = `${options.chatId || ""}|${wanted.join(",")}|${params.subject || ""}|${text}|${paths.join("|")}|${params.reply_to && params.reply_to > 0 ? params.reply_to : ""}`;
         const already = recentSends().get(sendKey);
         if (already && Date.now() - already.at < RECENT_SEND_MS) {
           return textResult({ ...already.result, note: "This exact letter was sent or asked for a moment ago; it was not done twice." });
@@ -251,7 +251,7 @@ export function createEmailTool(options: EmailToolOptions) {
             subject: params.subject,
             text,
             attachments: read.files,
-            replyTo: typeof params.reply_to === "number" ? params.reply_to : null,
+            replyTo: typeof params.reply_to === "number" && params.reply_to > 0 ? Math.floor(params.reply_to) : null,
           });
           result = answer.status === "sent"
             ? {
