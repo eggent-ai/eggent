@@ -51,6 +51,8 @@ export interface Dictation {
   /** The live microphone while recording, for the rings. */
   stream: MediaStream | null;
   toggle: () => void;
+  /** Throw away what is being recorded or transcribed; nothing reaches the field. */
+  cancel: () => void;
 }
 
 export function useDictation(onTranscript: (text: string) => void, blocked = false): Dictation {
@@ -60,6 +62,9 @@ export function useDictation(onTranscript: (text: string) => void, blocked = fal
   const streamRef = useRef<MediaStream | null>(null);
   // Gone from the screen: a recording still in flight must not land anywhere.
   const discardRef = useRef(false);
+  // This recording was cancelled (Escape): its audio is never sent.
+  const cancelledRef = useRef(false);
+  const abortRef = useRef<AbortController | null>(null);
   const onTranscriptRef = useRef(onTranscript);
   useEffect(() => {
     onTranscriptRef.current = onTranscript;
@@ -78,22 +83,25 @@ export function useDictation(onTranscript: (text: string) => void, blocked = fal
   const transcribe = useCallback(async (blob: Blob) => {
     setIsTranscribing(true);
     setError(null);
+    const controller = new AbortController();
+    abortRef.current = controller;
     try {
       const ext = blob.type.includes("ogg") ? "ogg" : blob.type.includes("webm") ? "webm" : "audio";
       const file = new File([blob], `dictation-${Date.now()}.${ext}`, { type: blob.type || "audio/webm" });
       const formData = new FormData();
       formData.append("file", file);
       formData.append("language", "auto");
-      const response = await fetch("/api/speech/transcribe", { method: "POST", body: formData });
+      const response = await fetch("/api/speech/transcribe", { method: "POST", body: formData, signal: controller.signal });
       const data = await response.json().catch(() => null) as { transcript?: string; error?: string } | null;
       if (!response.ok || !data?.transcript) {
         throw new Error(data?.error || "Failed to transcribe audio");
       }
-      if (!discardRef.current) onTranscriptRef.current(data.transcript);
+      if (!discardRef.current && !controller.signal.aborted) onTranscriptRef.current(data.transcript);
     } catch (err) {
-      if (!discardRef.current) setError(err instanceof Error ? err.message : "Failed to transcribe audio");
+      if (!discardRef.current && !controller.signal.aborted) setError(err instanceof Error ? err.message : "Failed to transcribe audio");
     } finally {
-      if (!discardRef.current) setIsTranscribing(false);
+      if (abortRef.current === controller) abortRef.current = null;
+      if (!discardRef.current && !controller.signal.aborted) setIsTranscribing(false);
     }
   }, []);
 
@@ -115,6 +123,7 @@ export function useDictation(onTranscript: (text: string) => void, blocked = fal
     streamRef.current = media;
     setStream(media);
     chunksRef.current = [];
+    cancelledRef.current = false;
     const mimeType = MediaRecorder.isTypeSupported("audio/webm;codecs=opus")
       ? "audio/webm;codecs=opus"
       : MediaRecorder.isTypeSupported("audio/ogg;codecs=opus")
@@ -129,7 +138,7 @@ export function useDictation(onTranscript: (text: string) => void, blocked = fal
       const blob = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
       chunksRef.current = [];
       stopTracks();
-      if (blob.size > 0 && !discardRef.current) void transcribe(blob);
+      if (blob.size > 0 && !discardRef.current && !cancelledRef.current) void transcribe(blob);
     };
     recorder.start();
     setIsRecording(true);
@@ -154,16 +163,49 @@ export function useDictation(onTranscript: (text: string) => void, blocked = fal
     });
   }, [isRecording, start, stop, stopTracks, t]);
 
+  const cancel = useCallback(() => {
+    const recorder = recorderRef.current;
+    if (recorder && recorder.state !== "inactive") {
+      cancelledRef.current = true;
+      chunksRef.current = [];
+      recorder.stop();
+    } else {
+      stopTracks();
+    }
+    abortRef.current?.abort();
+    abortRef.current = null;
+    setIsRecording(false);
+    setIsTranscribing(false);
+    setError(null);
+  }, [stopTracks]);
+
+  // Escape cancels, from anywhere on the page: the pointer is usually still on
+  // the button and the caret in the field. Taken in the capture phase so the
+  // same press does not also close a panel or clear what is typed.
+  const busy = isRecording || isTranscribing;
+  useEffect(() => {
+    if (!busy) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== "Escape" || event.isComposing) return;
+      event.preventDefault();
+      event.stopPropagation();
+      cancel();
+    };
+    window.addEventListener("keydown", onKey, true);
+    return () => window.removeEventListener("keydown", onKey, true);
+  }, [busy, cancel]);
+
   useEffect(() => {
     discardRef.current = false;
     return () => {
       discardRef.current = true;
       if (recorderRef.current && recorderRef.current.state !== "inactive") recorderRef.current.stop();
+      abortRef.current?.abort();
       stopTracks();
     };
   }, [stopTracks]);
 
-  return { isRecording, isTranscribing, error, stream, toggle };
+  return { isRecording, isTranscribing, error, stream, toggle, cancel };
 }
 
 /** The microphone button, with the rings that show it is hearing. */
@@ -210,7 +252,7 @@ export function DictationStatus({ dictation, className = "" }: { dictation: Dict
   if (!isRecording && !isTranscribing && !error) return null;
   return (
     <div className={`text-xs ${error ? "text-destructive" : "text-muted-foreground"} ${className}`}>
-      {error || (isRecording ? t("chat.recording") : t("chat.transcribing"))}
+      {error || (isRecording ? t("chat.recording") : t("chat.transcribingCancel"))}
     </div>
   );
 }
