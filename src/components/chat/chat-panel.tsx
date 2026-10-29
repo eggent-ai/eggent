@@ -8,6 +8,8 @@ import { ChatMessages, type QuickSkillAction } from "./chat-messages";
 import { MailReplyBanner, MailReplyProvider } from "@/components/mail/mail-reply";
 import { CardChatBanner } from "@/components/board/card-chat-banner";
 import type { MailReplyInfo } from "@/lib/mail/types";
+import type { EmailLetterInfo } from "@/lib/email/types";
+import { EmailLetterBanner } from "@/components/email/email-chat-notes";
 import { ChatInput } from "./chat-input";
 import { openFileForAgent, useAppStore } from "@/store/app-store";
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
@@ -278,6 +280,15 @@ function chatMessagesToUIMessages(chatMessages: ChatMessage[]): UIMessage[] {
         } as UIMessage["parts"][number]);
       }
 
+      // Replies that came to letters the agent sent from this chat.
+      if (m.emailReplies?.length) {
+        parts.push({
+          type: "data-eggentEmailReplies",
+          id: `email-replies-${m.id}`,
+          data: m.emailReplies,
+        } as UIMessage["parts"][number]);
+      }
+
       // Only add message if it has content
       if (parts.length > 0) {
         result.push({
@@ -524,6 +535,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
   const [contextMode, setContextMode] = useState<ChatContextMode>("full");
   // A chat opened to answer a colleague's message: which message, from the stored chat.
   const [mailReply, setMailReply] = useState<MailReplyInfo | null>(null);
+  const [emailLetter, setEmailLetter] = useState<EmailLetterInfo | null>(null);
   // The chat is a card on the task board.
   const [boardCard, setBoardCard] = useState(false);
   const [chatError, setChatError] = useState<string | null>(null);
@@ -792,6 +804,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
   // Another chat's message must not be shown over this one while its own loads.
   useEffect(() => {
     setMailReply(null);
+    setEmailLetter(null);
     setBoardCard(false);
   }, [activeChatId]);
 
@@ -816,7 +829,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
           return null;
         }
         if (!r.ok) throw new Error("Failed to load chat");
-        return r.json() as Promise<{ messages?: ChatMessage[]; contextMode?: ChatContextMode; home?: string; mailReply?: MailReplyInfo; boardCard?: boolean }>;
+        return r.json() as Promise<{ messages?: ChatMessage[]; contextMode?: ChatContextMode; home?: string; mailReply?: MailReplyInfo; emailLetter?: EmailLetterInfo; boardCard?: boolean }>;
       })
       .then((chat) => {
         if (cancelled) return;
@@ -831,6 +844,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
         // the choice made on this screen is all there is.
         if (chat?.messages) setChatHome(parseHome(chat.home) ?? null);
         setMailReply(chat?.mailReply ?? null);
+        setEmailLetter(chat?.emailLetter ?? null);
         setBoardCard(chat?.boardCard === true);
 
         if (!chat?.messages) {
@@ -1521,6 +1535,7 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     <MailReplyProvider value={activeChatId && mailReply ? mailReply : null}>
     <div className="flex h-full min-h-0 flex-col overflow-hidden">
       {activeChatId && mailReply ? <MailReplyBanner info={mailReply} /> : null}
+      {activeChatId && emailLetter ? <EmailLetterBanner info={emailLetter} /> : null}
       {activeChatId && boardCard ? <CardChatBanner chatId={activeChatId} /> : null}
       <ChatMessages
         messages={messages}

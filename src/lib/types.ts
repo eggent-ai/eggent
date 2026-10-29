@@ -7,6 +7,7 @@ import type { ProducedGroup } from "@/lib/files/produced";
 import type { PiRuntimeStats, SubagentSnapshot } from "@/lib/pi/types";
 import type { ChatHome } from "@/lib/remote/types";
 import type { MailReplyInfo } from "@/lib/mail/types";
+import type { EmailLetterInfo, EmailReplyNotice } from "@/lib/email/types";
 
 // --- Settings ---
 
@@ -121,6 +122,8 @@ export interface ChatMessage {
   files?: ProducedGroup[];
   /** Said to a turn that was already working, rather than starting one: see lib/pi/steer.ts. */
   steer?: ChatSteerInfo;
+  /** Replies that came to letters the agent sent from this chat: see lib/email/notice.ts. */
+  emailReplies?: EmailReplyNotice[];
 }
 
 /**
@@ -176,6 +179,8 @@ export interface Chat {
   home?: ChatHome;
   /** Set on a chat opened to answer a colleague's message: see lib/mail. */
   mailReply?: MailReplyInfo;
+  /** This chat deals with one letter from outside: see lib/email/letter-context.ts. */
+  emailLetter?: EmailLetterInfo;
   /** This chat is a card on the task board, whose id it shares: see lib/board. */
   boardCard?: boolean;
   messages: ChatMessage[];

@@ -1,5 +1,6 @@
 import { fetchEmailList } from "@/lib/email/client";
 import { getEmailConfig } from "@/lib/email/config";
+import { noteEmailReplies } from "@/lib/email/notice";
 import { rememberLetters, syncCursor } from "@/lib/email/store";
 
 /**
@@ -9,7 +10,8 @@ import { rememberLetters, syncCursor } from "@/lib/email/store";
  * the service keeps its letters and the workspace catches up when it wakes.
  *
  * Nothing here starts the agent: a letter that comes in is told to the person
- * by the service, and the agent reads it when the person asks.
+ * by the service, a reply to the agent's own letter also under the chat it
+ * left from (notice.ts), and the agent reads it when the person asks.
  */
 
 const PAGE = 50;
@@ -32,6 +34,9 @@ export async function syncEmail(): Promise<{ added: number }> {
       cursor = last;
       if (letters.length < PAGE) break;
     }
+    // Replies to the agent's letters are told in the chats they left from, also
+    // ones a busy chat could not take on the last look.
+    await noteEmailReplies().catch((error) => console.warn(`[email] replies not told: ${error instanceof Error ? error.message : error}`));
     return { added };
   })();
   holder[RUN_KEY] = run;

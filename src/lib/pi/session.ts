@@ -35,6 +35,8 @@ import { mailEnabled } from "@/lib/mail/config";
 import { approvalsEnabled } from "@/lib/approvals/config";
 import { sharesEnabled } from "@/lib/shares/config";
 import { formatMailReplyContext } from "@/lib/mail/reply-context";
+import { formatEmailLetterContext } from "@/lib/email/letter-context";
+import type { EmailLetterInfo } from "@/lib/email/types";
 import { createMailToolGuardExtension, type MessagesRunner } from "@/lib/mail/tool-guard";
 import { emailEnabled, emailPromptLine } from "@/lib/email/config";
 import { createEmailToolGuardExtension } from "@/lib/email/tool-guard";
@@ -243,6 +245,8 @@ function buildEggentProjectContext(options: {
   remote?: { servedFor: ChatHome };
   /** This chat answers a colleague's message: see eggent_messages. */
   mailReply?: MailReplyInfo;
+  /** This chat deals with one letter that came to the agent's mailbox: see eggent_email. */
+  emailLetter?: EmailLetterInfo;
   /** The workspace has messages with its company's people (EGGENT_MAIL_API_URL). */
   mailAvailable?: boolean;
   /** This workspace can send files for approval to its company's people: see eggent_approvals. */
@@ -485,6 +489,7 @@ function buildEggentProjectContext(options: {
       : "- No uploaded chat files are currently attached to this chat.",
     // Last: it is this one chat's, and changes nothing before it.
     ...(options.mailReply ? formatMailReplyContext(options.mailReply, path.join(process.cwd(), "data", "projects")) : []),
+    ...(options.emailLetter ? formatEmailLetterContext(options.emailLetter) : []),
   ];
 
   return [...shared, ...thisWorkspace].filter(Boolean).join("\n");
@@ -754,9 +759,11 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
   // servers as its own.
   const mcpServerIds = bare || publicShare ? [] : loadConfiguredMcpServerIds(getWorkDir(scopeId));
   const chatFiles = !bare && !publicShare && options.chatId ? await getChatFiles(options.chatId) : [];
-  const mailReply = !bare && !publicShare && options.chatId && mailEnabled()
-    ? (await getChat(options.chatId))?.mailReply
-    : undefined;
+  const handedChat = !bare && !publicShare && options.chatId && (mailEnabled() || emailEnabled())
+    ? await getChat(options.chatId)
+    : null;
+  const mailReply = mailEnabled() ? handedChat?.mailReply : undefined;
+  const emailLetter = !options.visit && emailEnabled() ? handedChat?.emailLetter : undefined;
   // A card's chat shares the card's id, so this is one file looked for, and found only for a card.
   // A turn handed to a computer may arrive before the board's own folder has: the chat it waited
   // for says it is a card's, and that is enough to know what to do with a question.
@@ -805,6 +812,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     visit: options.visit,
     remote: options.remote,
     mailReply,
+    emailLetter,
     mailAvailable: !options.visit && mailEnabled(),
     approvalsAvailable: !options.visit && approvalsEnabled(),
     sharesAvailable: !options.visit && sharesEnabled(),

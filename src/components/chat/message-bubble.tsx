@@ -13,6 +13,8 @@ import type { SubagentSnapshot } from "@/lib/pi/types";
 import { FileMention } from "./file-mention";
 import { StickyCopyButton, UserMessageFooter } from "./user-message-footer";
 import { LearnedNote } from "./learned-note";
+import { EmailReplyNote } from "@/components/email/email-chat-notes";
+import type { EmailReplyNotice } from "@/lib/email/types";
 import { FilesProduced } from "./files-produced";
 import { GoogleConnectCard } from "@/components/google-connect-card";
 import { connectUrlFromToolOutput, pickUrlFromToolOutput } from "@/lib/google/connect-link";
@@ -309,6 +311,7 @@ export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
 
   if (!renderedParts.some(Boolean)) return null;
   const learned = learnedNoticeOf(message.parts);
+  const emailReplies = emailRepliesOf(message.parts);
   const producedFiles = producedFilesOf(message.parts);
   const googleConnect = googleLinkOf(message.parts, connectUrlFromToolOutput);
   const googlePick = googleLinkOf(message.parts, pickUrlFromToolOutput);
@@ -326,6 +329,7 @@ export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
         {renderedParts}
         {producedFiles.length > 0 ? <FilesProduced groups={producedFiles} /> : null}
         {learned ? <LearnedNote notice={learned} /> : null}
+        {emailReplies.length ? <EmailReplyNote replies={emailReplies} /> : null}
         {googleConnect || googlePick ? <GoogleConnectCard variant="chat" connectUrl={googleConnect ?? undefined} pickUrl={googlePick ?? undefined} /> : null}
         {/* A program that could not finish: carry on with a model instead. Only under a complete answer. */}
         {shellScope && [...helperProgress.values()].some((snapshot) => snapshot.kind === "engine" && snapshot.engineError) ? (
@@ -407,6 +411,16 @@ function learnedNoticeOf(parts: UIMessage["parts"]): LearnedNotice | null {
     if (data && typeof data === "object" && Array.isArray(data.items) && data.items.length > 0) return data;
   }
   return null;
+}
+
+/** Replies that came to letters the agent sent from this chat, when any did. */
+function emailRepliesOf(parts: UIMessage["parts"]): EmailReplyNotice[] {
+  for (const part of parts) {
+    const candidate = part as { type?: string; data?: unknown };
+    if (candidate.type !== "data-eggentEmailReplies" || !Array.isArray(candidate.data)) continue;
+    return (candidate.data as EmailReplyNotice[]).filter((entry) => entry && Number.isInteger(entry.letterId));
+  }
+  return [];
 }
 
 /** The latest progress each helper reported, by the Agent call it belongs to. */

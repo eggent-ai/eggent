@@ -151,3 +151,104 @@ export async function sentLetters(limit = 30): Promise<Array<{ to: string[]; sub
     }
   });
 }
+
+/**
+ * Which chat each of the agent's letters left from, so a reply to it can be
+ * told there. A letter that went at once is known by its id; one that waited
+ * for the person's yes is known by its request until it goes. Kept small: the
+ * newest few hundred of each.
+ */
+interface OriginsFile {
+  version: 1;
+  letters: Record<string, string>;
+  requests: Record<string, string>;
+  /** Replies already told, so a reply is told once. */
+  noted: number[];
+}
+
+const ORIGINS_KEEP = 400;
+const CHAT_ID = /^[A-Za-z0-9_-]{1,80}$/;
+const REQUEST_ID = /^[A-Za-z0-9-]{1,80}$/;
+
+async function readOrigins(): Promise<OriginsFile> {
+  try {
+    const file = path.join(emailStoreRoot(), "origins.json");
+    const stat = await fs.lstat(file);
+    if (!stat.isFile()) throw new Error("not a file");
+    const parsed = JSON.parse(await fs.readFile(file, "utf8")) as Partial<OriginsFile>;
+    const clean = (value: unknown, key: RegExp) =>
+      Object.fromEntries(Object.entries(value && typeof value === "object" ? value : {}).filter(([k, v]) => key.test(k) && typeof v === "string" && CHAT_ID.test(v))) as Record<string, string>;
+    return {
+      version: 1,
+      letters: clean(parsed.letters, ID),
+      requests: clean(parsed.requests, REQUEST_ID),
+      noted: Array.isArray(parsed.noted) ? parsed.noted.filter((id) => Number.isInteger(id)) : [],
+    };
+  } catch {
+    return { version: 1, letters: {}, requests: {}, noted: [] };
+  }
+}
+
+function newest(record: Record<string, string>): Record<string, string> {
+  const entries = Object.entries(record);
+  return entries.length > ORIGINS_KEEP ? Object.fromEntries(entries.slice(entries.length - ORIGINS_KEEP)) : record;
+}
+
+async function writeOrigins(origins: OriginsFile): Promise<void> {
+  const folder = await folderInside([]);
+  const temp = path.join(folder, `origins.json.${process.pid}.${Date.now()}.tmp`);
+  const trimmed: OriginsFile = {
+    version: 1,
+    letters: newest(origins.letters),
+    requests: newest(origins.requests),
+    noted: origins.noted.slice(-ORIGINS_KEEP),
+  };
+  await writeNoFollow(temp, `${JSON.stringify(trimmed)}\n`, fsConstants.O_CREAT | fsConstants.O_EXCL);
+  await fs.rename(temp, path.join(folder, "origins.json"));
+}
+
+const ORIGINS_CHAIN = "__EGGENT_EMAIL_ORIGINS_CHAIN__";
+
+/**
+ * One change to the origins file at a time, read inside, so two sends cannot
+ * drop each other. On globalThis: every route is its own compiled module.
+ */
+function changeOrigins<T>(change: (origins: OriginsFile) => T): Promise<T> {
+  const holder = globalThis as typeof globalThis & { [ORIGINS_CHAIN]?: Promise<unknown> };
+  const run = (holder[ORIGINS_CHAIN] ?? Promise.resolve()).then(async () => {
+    const origins = await readOrigins();
+    const result = change(origins);
+    await writeOrigins(origins);
+    return result;
+  });
+  holder[ORIGINS_CHAIN] = run.catch(() => undefined);
+  return run;
+}
+
+/** Remembers the chat a letter left from: by its ids if it went, by its request if it waits. */
+export async function rememberLetterOrigin(input: { chatId: string; ids?: number[]; requestId?: string | null }): Promise<void> {
+  if (!CHAT_ID.test(input.chatId)) return;
+  const ids = (input.ids || []).filter((id) => Number.isInteger(id) && id > 0);
+  const requestId = input.requestId && REQUEST_ID.test(input.requestId) ? input.requestId : null;
+  if (!ids.length && !requestId) return;
+  await changeOrigins((origins) => {
+    for (const id of ids) origins.letters[String(id)] = input.chatId;
+    if (requestId) origins.requests[requestId] = input.chatId;
+  });
+}
+
+/** The chat a letter of the agent's left from, by its id or the request it was sent under. */
+export async function originChatOf(letter: Pick<EmailSummary, "id" | "requestId">): Promise<string | null> {
+  const origins = await readOrigins();
+  return origins.letters[String(letter.id)] || (letter.requestId ? origins.requests[letter.requestId] : undefined) || null;
+}
+
+export async function replyNoted(id: number): Promise<boolean> {
+  return (await readOrigins()).noted.includes(id);
+}
+
+export async function markReplyNoted(id: number): Promise<void> {
+  await changeOrigins((origins) => {
+    if (!origins.noted.includes(id)) origins.noted.push(id);
+  });
+}

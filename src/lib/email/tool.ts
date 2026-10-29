@@ -25,7 +25,8 @@ import {
 } from "@/lib/email/client";
 import { getEmailConfig, normalizeEmailAddress, type EmailConfig } from "@/lib/email/config";
 import { sendThroughSmtp, smtpServerLabel } from "@/lib/email/smtp";
-import { logSentLetter, rememberLetters, saveLetterFile, sentLetters } from "@/lib/email/store";
+import { senderOf as sender, trustOf } from "@/lib/email/describe";
+import { logSentLetter, rememberLetterOrigin, rememberLetters, saveLetterFile, sentLetters } from "@/lib/email/store";
 import type { EmailSummary } from "@/lib/email/types";
 import { readFilesForMail } from "@/lib/mail/outgoing";
 
@@ -68,22 +69,6 @@ function textResult(value: Record<string, unknown>) {
 function recipientsOf(value: unknown): string[] {
   const list = Array.isArray(value) ? value : typeof value === "string" ? value.split(/[,;]/) : [];
   return [...new Set(list.map((entry) => (typeof entry === "string" ? entry.trim() : "")).filter(Boolean))];
-}
-
-function sender(letter: EmailSummary): string {
-  const address = letter.from.address || "unknown";
-  return letter.from.name ? `${letter.from.name} <${address}>` : address;
-}
-
-/** Who a letter is from, as far as anybody could check, in words. */
-function trustOf(letter: EmailSummary): string {
-  if (letter.direction === "out") return "sent by you";
-  if (letter.folder === "bounce") return "a delivery report about a letter you sent";
-  if (letter.fromOwner) return "from your person's own address, and the sender's mail server vouched for it";
-  if (letter.suspicious) return `doubtful: ${letter.suspicious}`;
-  if (letter.threadReply) return "a reply to a letter you sent; the sender is not checked further";
-  if (letter.authenticated) return "the sender's mail server vouched for this address; who they are is not known";
-  return "the sender could not be checked: anybody could have written this From line";
 }
 
 function listed(letter: EmailSummary) {
@@ -258,6 +243,12 @@ export function createEmailTool(options: EmailToolOptions) {
             attachments: read.files,
             replyTo: typeof params.reply_to === "number" && params.reply_to > 0 ? Math.floor(params.reply_to) : null,
           });
+          // So a reply to it can be told in this chat (notice.ts). A helper has no chat to tell.
+          if (options.chatId) {
+            await rememberLetterOrigin(
+              answer.status === "sent" ? { chatId: options.chatId, ids: answer.ids } : { chatId: options.chatId, requestId: answer.request.id }
+            ).catch((error) => console.warn(`[email] could not remember where a letter left from: ${error instanceof Error ? error.message : error}`));
+          }
           result = answer.status === "sent"
             ? {
                 success: true,
