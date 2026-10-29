@@ -3,6 +3,7 @@ WORKDIR /app
 ENV NEXT_TELEMETRY_DISABLED=1
 
 COPY package*.json ./
+COPY scripts/patch-next.mjs ./scripts/
 RUN npm ci
 
 FROM deps AS builder
@@ -118,6 +119,7 @@ RUN echo "node ALL=(root) NOPASSWD: ALL" > /etc/sudoers.d/eggent-node \
   && chmod 440 /etc/sudoers.d/eggent-node
 
 COPY package*.json ./
+COPY scripts/patch-next.mjs ./scripts/
 RUN npm ci --omit=dev
 
 # The runtime knows each provider's models from a catalog shipped inside the
