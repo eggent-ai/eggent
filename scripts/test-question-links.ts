@@ -7,9 +7,9 @@ let n = 0;
 const check = (name: string, fn: () => void) => { fn(); n++; console.log("ok", name); };
 
 check("bare address becomes a link", () => {
-  const l = links("Open https://t.me/eggentai_bot?start=link_ABC_12-x and press Start.");
+  const l = links("Open https://t.me/example_bot?start=link_ABC_12-x and press Start.");
   assert.equal(l.length, 1);
-  assert.equal(l[0].kind === "link" && l[0].href, "https://t.me/eggentai_bot?start=link_ABC_12-x");
+  assert.equal(l[0].kind === "link" && l[0].href, "https://t.me/example_bot?start=link_ABC_12-x");
 });
 check("trailing punctuation stays text", () => {
   assert.equal(text("See https://example.test/a). Next"), "See https://example.test/a). Next");
@@ -26,7 +26,7 @@ check("other schemes are not links", () => {
   assert.equal(links("javascript:alert(1) and [x](javascript:alert(1)) and file:///etc").length, 0);
 });
 check("no address leaves the text whole", () => {
-  assert.deepEqual(questionPieces("Нажали Start в Telegram?"), [{ kind: "text", text: "Нажали Start в Telegram?" }]);
+  assert.deepEqual(questionPieces("Pressed Start in Telegram?"), [{ kind: "text", text: "Pressed Start in Telegram?" }]);
 });
 check("text around links is kept exactly", () => {
   const q = "a https://x.test/1, b [c](https://x.test/2) d";
