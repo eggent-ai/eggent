@@ -168,8 +168,12 @@ const publicTools = toolSets[2] ?? [];
 const publicPrompt = systemPrompts[2] ?? "";
 const ownPrompt = systemPrompts[0] ?? "";
 
-await check("a public link is offered read, ls and search, and nothing else", () => {
-  assert.deepEqual([...publicTools].sort(), ["ls", "read", "search"]);
+await check("a public link is offered kb_search, read, ls and search, and nothing else", () => {
+  assert.deepEqual([...publicTools].sort(), ["kb_search", "ls", "read", "search"]);
+});
+await check("a public link is told to search first and answer only from what it found", () => {
+  assert.match(publicPrompt, /call kb_search first/);
+  assert.match(publicPrompt, /name the file/);
 });
 await check("no shell, no writing, no web reaches a public link", () => {
   for (const name of ["bash", "edit", "write", "grep", "find", "Agent", "mcp", "web_search", "fetch_content"]) {
@@ -247,6 +251,19 @@ await check("search finds lines in the project's own files only", async () => {
   for (const leak of ["ENV-SECRET", "MCP-SECRET", "CRED-SECRET", "private note", "internal", "hidden hello", "OUTSIDE-SECRET"]) {
     assert.ok(!found.includes(leak), `search printed ${leak}`);
   }
+});
+await check("kb_search finds passages in the project's own files only", async () => {
+  const found = await call("kb_search", { query: "hello-marker colour" });
+  assert.match(found, /prices\.md/);
+  for (const leak of ["ENV-SECRET", "MCP-SECRET", "CRED-SECRET", "private note", "internal", "hidden hello", "OUTSIDE-SECRET"]) {
+    assert.ok(!found.includes(leak), `kb_search printed ${leak}`);
+  }
+});
+await check("kb_search's index is not something read, ls or search can open", async () => {
+  assert.ok(fs.existsSync(path.join(projectDir, ".kb", "chunks.json")), "kb_search built no index");
+  assert.ok(await refused("read", { path: ".kb/chunks.json" }));
+  assert.ok(await refused("ls", { path: ".kb" }));
+  assert.ok(!(await call("ls", {})).includes(".kb"));
 });
 await check("search refuses to start outside the project", async () => {
   assert.ok(await refused("search", { query: "SECRET", path: outside }));

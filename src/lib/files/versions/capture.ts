@@ -50,6 +50,8 @@ const SKIPPED_SEGMENTS = new Set([
   // company's files, not this workspace's: a history of them here would fill this
   // workspace's disk and outlive a grant taken back.
   ".shared",
+  // A project's search index (src/lib/kb), rewritten whole by every change to its files.
+  ".kb",
 ]);
 const SNIFF_MAX_BYTES = 1024 * 1024;
 // What a command line names is held in memory until the command has run.

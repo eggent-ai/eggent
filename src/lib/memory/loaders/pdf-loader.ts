@@ -1,6 +1,6 @@
 
 import fs from "fs/promises";
-import { LoadedDocument } from "./index";
+import type { LoadedDocument } from "./index";
 
 // Define strict types for the local variables to avoid "any"
 
