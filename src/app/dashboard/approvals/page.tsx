@@ -17,8 +17,8 @@ export default function ApprovalsPage() {
           <AppSidebar />
           <SidebarInset>
             <div className="mx-auto flex w-full max-w-3xl flex-1 flex-col gap-4 p-4 md:p-6">
-              <div className="space-y-1">
-                <h2 className="text-2xl font-semibold">{t("approvals.heading")}</h2>
+              <div className="space-y-1.5">
+                <h2 className="text-2xl/8 font-semibold tracking-tight">{t("approvals.heading")}</h2>
                 <p className="text-sm text-muted-foreground">{t("approvals.description")}</p>
               </div>
               <ApprovalsInbox />

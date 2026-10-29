@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { AppSidebar } from "@/components/app-sidebar";
 import { SiteHeader } from "@/components/site-header";
-import { SettingsNavigation } from "@/components/settings-navigation";
+import { SettingsContent, SettingsPageHeader } from "@/components/settings-shell";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { SidePanels } from "@/components/side-panels";
 import { Badge } from "@/components/ui/badge";
@@ -18,13 +18,13 @@ import {
 } from "lucide-react";
 import { CreateProjectForm } from "@/components/create-project-form";
 import { OrchestratorFilesNavigation } from "@/components/orchestrator-files-navigation";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
+import Link from "next/link";
 import { useAppStore } from "@/store/app-store";
 import { useI18n } from "@/i18n/provider";
 
 function ProjectsPageClient() {
   const { t } = useI18n();
-  const router = useRouter();
   const searchParams = useSearchParams();
   const { projects, setProjects, setActiveProjectId } = useAppStore();
 
@@ -76,17 +76,12 @@ function ProjectsPageClient() {
         <div className="flex flex-1">
           <AppSidebar />
           <SidebarInset>
-            <div className="flex flex-1 flex-col gap-4 p-4 md:p-6 max-w-5xl mx-auto w-full">
-              <SettingsNavigation />
+            <SettingsContent>
 
-              <div className="flex items-center justify-between">
-                <div>
-                  <h2 className="text-2xl font-semibold">{t("projects.title")}</h2>
-                  <p className="text-sm text-muted-foreground">
-                    {t("projects.description")}
-                  </p>
-                </div>
-                <Button onClick={() => setShowCreate(!showCreate)} className="gap-2">
+              <SettingsPageHeader
+                title={t("projects.title")}
+                description={t("projects.description")}
+                actions={<Button onClick={() => setShowCreate(!showCreate)} className="gap-2">
                   {showCreate ? (
                     <>
                       <X className="size-4" />
@@ -98,8 +93,8 @@ function ProjectsPageClient() {
                       {t("projects.new")}
                     </>
                   )}
-                </Button>
-              </div>
+                </Button>}
+              />
 
               {isCreateOpen && (
                 <div className="border rounded-lg p-4 bg-card space-y-4">
@@ -141,20 +136,21 @@ function ProjectsPageClient() {
                 {projects.map((project) => (
                   <div
                     key={project.id}
-                    className="border rounded-lg p-4 bg-card hover:shadow-sm transition-shadow cursor-pointer"
-                    onClick={() => router.push(`/dashboard/projects/${project.id}`)}
+                    className="relative rounded-xl border bg-card transition-shadow hover:shadow-sm focus-within:ring-2 focus-within:ring-ring"
                   >
-                    <div className="flex items-start justify-between">
-                      <div className="space-y-1 flex-1">
+                    <div className="flex items-start justify-between gap-3 p-4 sm:p-5">
+                      <div className="min-w-0 space-y-1 flex-1">
+                        <Link href={`/dashboard/projects/${project.id}`} className="block pr-10 outline-none after:absolute after:inset-0 after:rounded-xl">
                         <div className="flex items-center gap-2">
-                          <FolderOpen className="size-5 text-primary" />
-                          <h3 className="font-semibold">{project.name}</h3>
+                          <FolderOpen className="size-5 shrink-0 text-primary" />
+                          <h3 className="min-w-0 break-words font-semibold">{project.name}</h3>
                         </div>
                         {project.description && (
                           <p className="text-sm text-muted-foreground">
                             {project.description}
                           </p>
                         )}
+                        </Link>
                         <div className="mt-3 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
                           {["context.md", "memory.md", "skills/", ".mcp.json", "model.json"].map((file) => (
                             <Badge key={file} variant="outline" className="font-mono">{file}</Badge>
@@ -171,7 +167,8 @@ function ProjectsPageClient() {
                           e.stopPropagation();
                           void handleDelete(project.id);
                         }}
-                        className="text-muted-foreground hover:text-destructive"
+                        className="relative z-10 text-muted-foreground hover:text-destructive"
+                        aria-label={`${t("nav.deleteProject")}: ${project.name}`}
                       >
                         <Trash2 className="size-4" />
                       </Button>
@@ -179,7 +176,7 @@ function ProjectsPageClient() {
                   </div>
                 ))}
               </div>
-            </div>
+            </SettingsContent>
           </SidebarInset>
           <SidePanels />
         </div>

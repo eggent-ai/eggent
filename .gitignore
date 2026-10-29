@@ -12,8 +12,10 @@ CLAUDE.md
 
 # local agent context and skills
 /.claude/
+/.agents/
 /.pi/
 /.impeccable/
+/design-preview/
 
 # local scratch that has no business in the repo
 /Group 195.svg

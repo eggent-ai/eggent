@@ -1,7 +1,7 @@
 "use client";
 
 import { useRef, useCallback, useState, useEffect, useMemo } from "react";
-import { Send, Square, Paperclip, X, FileIcon, FileText, ImageIcon, Sparkles, Check, Gauge, SquareTerminal, FolderOpen } from "lucide-react";
+import { CornerDownLeft, Square, Plus, X, FileIcon, FileText, ImageIcon, Sparkles, Check, Gauge, SquareTerminal, FolderOpen } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -132,9 +132,9 @@ function ContextModeControl({
     return (
       <Tooltip>
         <TooltipTrigger asChild>
-          <span className="flex cursor-default items-center gap-1 font-mono">
-            <Gauge className="size-3" aria-hidden />
-            {label}
+          <span className="flex min-w-0 max-w-full cursor-default items-center gap-1">
+            <Gauge className="size-3 shrink-0" aria-hidden />
+            <span className="min-w-0 truncate">{label}</span>
           </span>
         </TooltipTrigger>
         <TooltipContent side="top" className="max-w-72 text-xs leading-relaxed">
@@ -152,10 +152,10 @@ function ContextModeControl({
             <button
               type="button"
               aria-label={t("chat.contextMode.trigger")}
-              className="flex items-center gap-1 rounded-sm font-mono underline-offset-2 transition-colors hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+              className="flex min-w-0 max-w-full items-center gap-1 rounded-sm underline-offset-2 transition-colors hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
             >
-              <Gauge className="size-3" aria-hidden />
-              {label}
+              <Gauge className="size-3 shrink-0" aria-hidden />
+              <span className="min-w-0 truncate">{label}</span>
             </button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
@@ -495,6 +495,9 @@ export function ChatInput({
   const canSubmit = !waitingForUpload && (pendingInteraction
     ? Boolean(input.trim()) || pendingInteraction.kind === "confirm" || cardFileNames.length > 0
     : Boolean(input.trim()) || (isLoading ? turnFileNames.length > 0 : uploadedFiles.length > 0));
+  // Empty composers show only voice input. Attachments and tool confirmations
+  // retain the same submit path even when there are no typed words.
+  const showSubmit = canSubmit || Boolean(input.trim());
   const sendTyped = useCallback((messageOverride?: string) => {
     const files = isLoading && turnFileNames.length > 0 ? turnFileNames : undefined;
     if (files) setTurnFileNames([]);
@@ -765,14 +768,25 @@ export function ChatInput({
   );
 
   useEffect(() => {
-    if (input.length > 0) return;
-
     const textarea = textareaRef.current;
     if (!textarea) return;
 
-    // Reset textarea height back to a single-row composer after submit/clear.
-    textarea.style.height = "auto";
-  }, [input]);
+    // A localized placeholder can wrap too. Measure it along with the message,
+    // and repeat when the available width changes (including a docked panel).
+    const resize = () => {
+      textarea.style.height = "auto";
+      textarea.style.height = `${Math.min(textarea.scrollHeight, 200)}px`;
+    };
+    resize();
+    let previousWidth = -1;
+    const observer = new ResizeObserver(([entry]) => {
+      if (!entry || entry.contentRect.width === previousWidth) return;
+      previousWidth = entry.contentRect.width;
+      resize();
+    });
+    observer.observe(textarea);
+    return () => observer.disconnect();
+  }, [input, pendingInteraction, isDragging, isLoading, t]);
 
   useEffect(() => {
     if (!focusSignal) return;
@@ -783,7 +797,7 @@ export function ChatInput({
 
   return (
     <div
-      className={`sticky bottom-0 z-20 shrink-0 border-t bg-background/95 p-4 backdrop-blur supports-[backdrop-filter]:bg-background/80 transition-colors ${isDragging ? "bg-primary/5 border-primary" : ""}`}
+      className={`sticky bottom-0 z-20 shrink-0 bg-background/95 p-4 pb-[max(1rem,env(safe-area-inset-bottom))] backdrop-blur supports-[backdrop-filter]:bg-background/80 transition-colors ${isDragging ? "bg-primary/5" : ""}`}
       onDragOver={handleDragOver}
       onDragLeave={handleDragLeave}
       onDrop={handleDrop}
@@ -988,140 +1002,120 @@ export function ChatInput({
             </div>
           ) : null}
           <div
-            className={`flex items-center gap-2 rounded-2xl border bg-background px-2 py-1.5 shadow-sm transition-colors focus-within:ring-4 focus-within:ring-primary/10 ${
+            data-slot="chat-composer"
+            className={`flex min-w-0 items-end gap-1 rounded-3xl border bg-card p-2 shadow-sm transition-colors focus-within:border-ring focus-within:ring-2 focus-within:ring-ring/20 sm:gap-2 ${
               shellMode
-                ? "border-primary/50 focus-within:border-primary/60"
-                : "border-border/80 focus-within:border-primary/40"
+                ? "border-primary/50"
+                : "border-border/80"
             }`}
           >
             <Button
               variant="ghost"
               size="icon"
+              data-composer-action="attach"
               onClick={() => fileInputRef.current?.click()}
               disabled={disabled || !chatId}
-              className="h-10 w-10 shrink-0 rounded-xl text-muted-foreground hover:text-foreground"
+              className="size-11 shrink-0 rounded-full text-foreground"
               title={chatId ? t("chat.attachFiles") : t("chat.attachFilesDisabled")}
+              aria-label={chatId ? t("chat.attachFiles") : t("chat.attachFilesDisabled")}
             >
-              <Paperclip className="size-4" />
+              <Plus className="size-5" strokeWidth={1.75} />
             </Button>
 
-            <DictationButton dictation={dictation} disabled={disabled || Boolean(pendingInteraction)} />
-
-            <div className="relative flex-1">
-            <textarea
-              ref={textareaRef}
-              value={input}
-              onChange={handleInput}
-              onKeyDown={handleKeyDown}
-              onPaste={handlePaste}
-              placeholder={pendingInteraction
-                ? pendingInteraction.placeholder || (pendingInteraction.kind === "confirm" ? t("chat.confirmPlaceholder") : t("chat.waitingToolPlaceholder"))
-                : isDragging ? t("chat.dropFilesPlaceholder") : isLoading ? t("chat.placeholderWhileRunning") : t("chat.placeholder")}
-              disabled={disabled}
-              rows={1}
-              className={`min-h-[30px] max-h-[200px] w-full translate-y-px resize-none border-0 bg-transparent px-1 pt-2.5 pb-1.5 text-sm leading-5 placeholder:text-muted-foreground focus:outline-none disabled:opacity-50 ${shellMode ? "font-mono" : ""}`}
-            />
-          </div>
-
-            {/* The model sits in the row it applies to, not in the note under
-                it: this is the thing you glance at before pressing send. While a
-                turn works there is nothing to choose it for, and on a phone the
-                field needs the room for what is said to the turn. */}
-            <div className={isLoading ? "contents max-sm:hidden" : "contents"}>
-              {elsewhere ? (
-                <span
-                  className="inline-flex max-w-[11rem] shrink-0 cursor-default items-center truncate px-2 py-1 text-xs text-muted-foreground"
-                  title={elsewhere.hint}
-                  data-testid="model-elsewhere"
-                >
-                  {elsewhere.text}
-                </span>
-              ) : (
-                <ModelPicker
-                  projectId={projectId ?? null}
-                  compact
-                  triggerClassName="inline-flex max-w-[9rem] shrink-0 items-center gap-1 rounded-lg px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-accent hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
-                />
-              )}
+            <div className="relative min-w-0 flex-1">
+              <textarea
+                ref={textareaRef}
+                value={input}
+                onChange={handleInput}
+                onKeyDown={handleKeyDown}
+                onPaste={handlePaste}
+                placeholder={pendingInteraction
+                  ? pendingInteraction.placeholder || (pendingInteraction.kind === "confirm" ? t("chat.confirmPlaceholder") : t("chat.waitingToolPlaceholder"))
+                  : isDragging ? t("chat.dropFilesPlaceholder") : isLoading ? t("chat.placeholderWhileRunning") : t("chat.placeholder")}
+                disabled={disabled}
+                rows={1}
+                className={`block min-h-11 max-h-[200px] w-full resize-none border-0 bg-transparent px-1 py-2.5 text-base leading-6 placeholder:text-muted-foreground focus:outline-none disabled:opacity-50 sm:text-[15px] ${shellMode ? "font-mono" : ""}`}
+              />
             </div>
 
-            {/* A turn waiting on a question is still a running turn, and the
-                question card was its only way out: everything typed here goes
-                to the card as an answer, so "stop" was read as one. Stop sits
-                beside the answer button; stopping cancels the question and
-                keeps what the turn did. */}
-            {isLoading && pendingInteraction ? (
+            {showSubmit ? (
               <Button
-                variant="outline"
+                variant="ghost"
                 size="icon"
-                onClick={onStop}
-                aria-label={t("chat.stopTurn")}
-                title={t("chat.stopTurn")}
-                className="h-10 w-10 shrink-0 rounded-xl text-destructive hover:text-destructive"
-              >
-                <Square className="size-4" />
-              </Button>
-            ) : null}
-            {/* While the agent works the message is added to what it is doing; Stop
-                keeps its place on the right and the send button comes in beside it
-                once there is something to send, so neither moves under the pointer. */}
-            {isLoading && !pendingInteraction && canSubmit ? (
-              <Button
-                size="icon"
-                onClick={submitCurrentMessage}
-                disabled={disabled}
-                aria-label={t("chat.steer.send")}
-                title={t("chat.steer.send")}
-                className="h-10 w-10 shrink-0 rounded-xl"
-              >
-                <Send className="size-4" />
-              </Button>
-            ) : null}
-            {isLoading && !pendingInteraction ? (
-              <Button
-                variant="destructive"
-                size="icon"
-                onClick={onStop}
-                aria-label={t("chat.stopTurn")}
-                title={t("chat.stopTurn")}
-                className="h-10 w-10 shrink-0 rounded-xl"
-              >
-                <Square className="size-4" />
-              </Button>
-            ) : (
-              <Button
-                size="icon"
+                data-composer-action="send"
                 onClick={submitCurrentMessage}
                 disabled={!canSubmit || disabled}
-                aria-label={waitingForUpload ? t("chat.waitForUpload") : undefined}
-                title={waitingForUpload ? t("chat.waitForUpload") : undefined}
-                className="h-10 w-10 shrink-0 rounded-xl"
+                aria-label={t(waitingForUpload ? "chat.waitForUpload" : pendingInteraction ? "chat.interaction.send" : isLoading ? "chat.steer.send" : "chat.sendMessage")}
+                title={t(waitingForUpload ? "chat.waitForUpload" : pendingInteraction ? "chat.interaction.send" : isLoading ? "chat.steer.send" : "chat.sendMessage")}
+                className="size-11 shrink-0 rounded-full text-foreground"
               >
-                <Send className="size-4" />
+                <CornerDownLeft className="size-5" strokeWidth={1.75} />
               </Button>
-            )}
+            ) : null}
+
+            <DictationButton
+              dictation={dictation}
+              disabled={disabled || Boolean(pendingInteraction)}
+              className="size-11 rounded-full"
+            />
+
+            {/* Stop stays available with an empty draft and while a tool waits. */}
+            {isLoading ? (
+              <Button
+                variant="ghost"
+                size="icon"
+                data-composer-action="stop"
+                onClick={onStop}
+                aria-label={t("chat.stopTurn")}
+                title={t("chat.stopTurn")}
+                className="size-11 shrink-0 rounded-full text-destructive hover:bg-destructive/10 hover:text-destructive"
+              >
+                <Square className="size-4 fill-current" />
+              </Button>
+            ) : null}
           </div>
         </div>
-        <DictationStatus dictation={dictation} className="mt-2 text-center" />
-        <div className="mt-2 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 text-[11px] text-muted-foreground">
-          {runPlace ? <RunPlaceControl {...runPlace} /> : null}
-          {/* A program does the work with its own tools: Eggent's light modes have nothing to switch. */}
-          {elsewhere || engineLabel || runtimeStats?.engine ? null : (
-            <ContextModeControl
-              mode={contextMode}
-              locked={contextModeLocked}
-              onChange={onContextModeChange}
-            />
-          )}
-          {elsewhere ? null : engineLabel ? (
-            <span className="max-w-xl text-center">{t("engines.chatNotice", { engine: engineLabel })}</span>
-          ) : runtimeStats?.engine ? null : (
-            <>
-              <span className="font-mono">in {formatTokenCount(runtimeStats?.session?.input ?? runtimeStats?.lastTurn?.input)}</span>
-              <span className="font-mono">out {formatTokenCount(runtimeStats?.session?.output ?? runtimeStats?.lastTurn?.output)}</span>
-              <span className="font-mono">{formatContextUsage(runtimeStats)}</span>
-            </>
-          )}
+        <DictationStatus dictation={dictation} className="mt-2 text-left" />
+        <div data-slot="chat-composer-footer" className="mt-2 grid min-w-0 grid-cols-[minmax(0,1fr)_fit-content(50%)] items-baseline gap-x-3 gap-y-1 px-2 text-xs/5 text-muted-foreground">
+          <div data-slot="chat-composer-context" className="flex min-h-8 min-w-0 flex-wrap items-center gap-x-3 gap-y-1 font-sans tabular-nums [@media(pointer:coarse)]:min-h-11">
+            {runPlace ? <RunPlaceControl {...runPlace} /> : null}
+            {/* A program does the work with its own tools: Eggent's light modes have nothing to switch. */}
+            {elsewhere || engineLabel || runtimeStats?.engine ? null : (
+              <ContextModeControl
+                mode={contextMode}
+                locked={contextModeLocked}
+                onChange={onContextModeChange}
+              />
+            )}
+            {elsewhere || engineLabel || runtimeStats?.engine ? null : (
+              <>
+                <span className="whitespace-nowrap">in {formatTokenCount(runtimeStats?.session?.input ?? runtimeStats?.lastTurn?.input)}</span>
+                <span className="whitespace-nowrap">out {formatTokenCount(runtimeStats?.session?.output ?? runtimeStats?.lastTurn?.output)}</span>
+                <span className="min-w-0 break-words">{formatContextUsage(runtimeStats)}</span>
+              </>
+            )}
+          </div>
+          <div data-slot="chat-composer-model" className="flex min-h-8 min-w-0 max-w-full items-center justify-self-end [@media(pointer:coarse)]:min-h-11">
+            {elsewhere ? (
+              <span
+                className="inline-flex min-h-8 min-w-0 max-w-full cursor-default items-center px-2 text-xs/5"
+                title={elsewhere.hint}
+                data-testid="model-elsewhere"
+              >
+                <span className="min-w-0 truncate">{elsewhere.text}</span>
+              </span>
+            ) : (
+              <ModelPicker
+                projectId={projectId ?? null}
+                triggerClassName="inline-flex min-h-8 min-w-0 max-w-[min(100%,20rem)] items-center justify-end gap-1.5 rounded-lg px-2 text-xs/5 text-foreground transition-colors hover:bg-accent focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none"
+              />
+            )}
+          </div>
+          {!elsewhere && engineLabel ? (
+            <span data-slot="chat-composer-engine-note" className="col-span-2 min-w-0 max-w-full [overflow-wrap:anywhere]">
+              {t("engines.chatNotice", { engine: engineLabel })}
+            </span>
+          ) : null}
         </div>
       </div>
     </div>

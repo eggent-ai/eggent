@@ -1,12 +1,14 @@
 "use client";
 
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
-import { usePathname, useSearchParams } from "next/navigation";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
 import {
   Brain,
   Cable,
   CalendarClock,
+  ChevronLeft,
+  ChevronRight,
   Cpu,
   FileText,
   FolderOpen,
@@ -20,10 +22,10 @@ import { useI18n } from "@/i18n/provider";
 import type { MessageKey } from "@/i18n/messages";
 import { SCOPE_PARAM, projectIdFromPath, settingsScopeHref } from "@/lib/orchestrator-scope";
 import { cn } from "@/lib/utils";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 
 const SETTINGS_SECTIONS: Array<{ href: string; labelKey: MessageKey; icon: LucideIcon; exact?: boolean }> = [
-  // The address every link to Settings already uses, first run included, so
-  // it keeps meaning the model. Matched exactly because General lives under it.
+  // Existing addresses and matching rules also serve deep project/skill pages.
   { href: "/dashboard/settings", labelKey: "settings.nav.models", icon: Cpu, exact: true },
   { href: "/dashboard/projects", labelKey: "settings.nav.projects", icon: FolderOpen },
   { href: "/dashboard/context", labelKey: "settings.nav.context", icon: FileText },
@@ -39,58 +41,105 @@ const SETTINGS_SECTIONS: Array<{ href: string; labelKey: MessageKey; icon: Lucid
 export function SettingsNavigation() {
   const pathname = usePathname();
   const searchParams = useSearchParams();
+  const router = useRouter();
   const { t } = useI18n();
-  // The project being looked at travels with the tabs, so moving from Context
-  // to Memory shows the same project's memory. Being on a project's own page
-  // counts as looking at it.
   const scopeId = searchParams.get(SCOPE_PARAM) || projectIdFromPath(pathname);
-
-  // The strip scrolls sideways when it does not fit, which with the files panel
-  // open is most of the time, and every tab is a page of its own that arrives
-  // scrolled to the start: the tab you are on could be past the edge. Kept in
-  // view, again whenever the strip changes width. Only the strip moves - a
-  // scrollIntoView would move the page as well.
+  const activeHref = SETTINGS_SECTIONS.find(({ href, exact }) => exact
+    ? pathname === href
+    : pathname === href || pathname.startsWith(`${href}/`))?.href;
+  const navRef = useRef<HTMLElement>(null);
   const stripRef = useRef<HTMLDivElement>(null);
+  const switcherRef = useRef<HTMLButtonElement>(null);
+  const [switcherOpen, setSwitcherOpen] = useState(false);
+  const [edges, setEdges] = useState({ left: false, right: false });
+
   useEffect(() => {
     const strip = stripRef.current;
-    if (!strip) return;
+    const nav = navRef.current;
+    if (!strip || !nav) return;
+    const updateEdges = () => {
+      const left = strip.scrollLeft > 1;
+      const right = strip.scrollLeft + strip.clientWidth < strip.scrollWidth - 1;
+      setEdges((previous) => previous.left === left && previous.right === right ? previous : { left, right });
+    };
     const reveal = () => {
-      const active = strip.querySelector<HTMLElement>('[aria-current="page"]');
-      if (!active) return;
-      const tab = active.getBoundingClientRect();
-      const visible = strip.getBoundingClientRect();
-      if (tab.left < visible.left) strip.scrollLeft -= visible.left - tab.left;
-      else if (tab.right > visible.right) strip.scrollLeft += tab.right - visible.right;
+      // CSS chooses the layout from the settings container's available width.
+      // Only the mobile strip scrolls; revealing a link never moves the page.
+      if (strip.clientWidth && getComputedStyle(strip).flexDirection === "row") {
+        const active = strip.querySelector<HTMLElement>('[aria-current="page"]');
+        if (active) {
+          const tab = active.getBoundingClientRect();
+          const visible = strip.getBoundingClientRect();
+          if (tab.left < visible.left + 44 || tab.right > visible.right - 44) {
+            strip.scrollLeft += tab.left - visible.left - (visible.width - tab.width) / 2;
+          }
+        }
+      }
+      if (!switcherRef.current?.getClientRects().length) setSwitcherOpen(false);
+      updateEdges();
     };
     const observer = new ResizeObserver(reveal);
     observer.observe(strip);
-    return () => observer.disconnect();
+    observer.observe(nav);
+    strip.addEventListener("scroll", updateEdges, { passive: true });
+    reveal();
+    return () => {
+      observer.disconnect();
+      strip.removeEventListener("scroll", updateEdges);
+    };
   }, [pathname]);
 
+  const scroll = (direction: number) => {
+    const strip = stripRef.current;
+    if (!strip) return;
+    strip.scrollBy({
+      left: direction * strip.clientWidth * 0.7,
+      behavior: window.matchMedia("(prefers-reduced-motion: reduce)").matches ? "auto" : "smooth",
+    });
+  };
+
   return (
-    <nav aria-label="Settings sections" className="rounded-xl border bg-card/80 p-1.5 shadow-sm backdrop-blur">
-      <div ref={stripRef} className="flex items-center gap-1 overflow-x-auto">
-        {SETTINGS_SECTIONS.map(({ href, labelKey, icon: Icon, exact }) => {
-          const active = exact
-            ? pathname === href
-            : pathname === href || pathname.startsWith(`${href}/`);
-          return (
-            <Link
-              key={href}
-              href={settingsScopeHref(href, scopeId)}
-              aria-current={active ? "page" : undefined}
-              className={cn(
-                "inline-flex shrink-0 items-center gap-2 rounded-lg px-3 py-2 text-sm font-medium transition-colors",
-                active
-                  ? "bg-primary text-primary-foreground shadow-sm"
-                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
-              )}
-            >
-              <Icon className="size-4" />
+    <nav ref={navRef} aria-label={t("nav.settings")} data-slot="settings-navigation">
+      <p className="settings-nav-caption">{t("nav.settings")}</p>
+      <div className="settings-nav-switcher">
+        <Select value={activeHref} open={switcherOpen} onOpenChange={setSwitcherOpen}
+          onValueChange={(href) => router.push(settingsScopeHref(href, scopeId))}>
+          <SelectTrigger ref={switcherRef} aria-label={t("nav.settings")} className="w-full bg-card">
+            <SelectValue />
+          </SelectTrigger>
+          <SelectContent position="popper" align="start" className="max-h-80 w-[var(--radix-select-trigger-width)]">
+            {SETTINGS_SECTIONS.map(({ href, labelKey, icon: Icon }) => (
+              <SelectItem key={href} value={href} textValue={t(labelKey)} className="min-h-10">
+                <Icon className="size-4" aria-hidden="true" />
+                {t(labelKey)}
+              </SelectItem>
+            ))}
+          </SelectContent>
+        </Select>
+      </div>
+      <div className="settings-nav-links">
+        <div ref={stripRef} className="settings-nav-strip">
+          {SETTINGS_SECTIONS.map(({ href, labelKey, icon: Icon }) => (
+            <Link key={href} href={settingsScopeHref(href, scopeId)}
+              aria-current={activeHref === href ? "page" : undefined}
+              className={cn("settings-nav-link", activeHref === href && "settings-nav-link-active")}>
+              <Icon className="size-4 shrink-0" aria-hidden="true" />
               <span>{t(labelKey)}</span>
             </Link>
-          );
-        })}
+          ))}
+        </div>
+        {edges.left ? (
+          <div className="settings-nav-edge settings-nav-edge-left">
+            <button type="button" onClick={() => scroll(-1)} aria-label={t("settings.nav.previous")}
+              className="settings-nav-scroll"><ChevronLeft className="size-4" aria-hidden="true" /></button>
+          </div>
+        ) : null}
+        {edges.right ? (
+          <div className="settings-nav-edge settings-nav-edge-right">
+            <button type="button" onClick={() => scroll(1)} aria-label={t("settings.nav.next")}
+              className="settings-nav-scroll"><ChevronRight className="size-4" aria-hidden="true" /></button>
+          </div>
+        ) : null}
       </div>
     </nav>
   );

@@ -2,7 +2,7 @@
 
 import { AppSidebar } from "@/components/app-sidebar";
 import { SiteHeader } from "@/components/site-header";
-import { SettingsNavigation } from "@/components/settings-navigation";
+import { SettingsContent } from "@/components/settings-shell";
 import { TelegramIntegrationManager } from "@/components/telegram-integration-manager";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { SidePanels } from "@/components/side-panels";
@@ -18,11 +18,10 @@ export default function MessengersPage() {
         <div className="flex flex-1">
           <AppSidebar />
           <SidebarInset>
-            <div className="flex flex-1 flex-col gap-6 p-4 md:p-6 max-w-5xl mx-auto w-full">
-              <SettingsNavigation />
+            <SettingsContent>
 
-              <div className="space-y-2">
-                <h2 className="text-2xl font-semibold">{t("messengers.heading")}</h2>
+              <div className="space-y-1.5">
+                <h2 className="text-2xl/8 font-semibold tracking-tight">{t("messengers.heading")}</h2>
                 <p className="text-sm text-muted-foreground">
                   {t("messengers.description")}
                 </p>
@@ -59,7 +58,7 @@ export default function MessengersPage() {
               </section>
 
               <TelegramIntegrationManager />
-            </div>
+            </SettingsContent>
           </SidebarInset>
           <SidePanels />
         </div>

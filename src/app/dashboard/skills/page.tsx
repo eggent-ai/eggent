@@ -209,24 +209,24 @@ export default function SkillsPage() {
       <SettingsPageHeader
         title={t("skills.title")}
         description={t("skills.description", { path: "skills/" })}
-        actions={
-          <Button asChild variant="outline" className="gap-2">
-            <Link href={settingsScopeHref("/dashboard/skills/upload", scopeId)}>
-              <Upload className="size-4" />
-              {t("skills.upload.button")}
-            </Link>
-          </Button>
-        }
         scope={<SettingsScopeSelect scope={scope} />}
       />
 
-      <Input
-        value={search}
-        onChange={(event) => setSearch(event.target.value)}
-        placeholder={t("skills.searchPlaceholder")}
-        aria-label={t("skills.searchPlaceholder")}
-        className="sm:max-w-sm"
-      />
+      <div data-slot="skills-toolbar" className="flex min-w-0 flex-wrap items-center justify-between gap-3">
+        <Input
+          value={search}
+          onChange={(event) => setSearch(event.target.value)}
+          placeholder={t("skills.searchPlaceholder")}
+          aria-label={t("skills.searchPlaceholder")}
+          className="min-w-[min(100%,12rem)] flex-1 sm:max-w-sm"
+        />
+        <Button asChild variant="outline" className="ml-auto shrink-0 gap-2">
+          <Link href={settingsScopeHref("/dashboard/skills/upload", scopeId)}>
+            <Upload className="size-4" />
+            {t("skills.upload.button")}
+          </Link>
+        </Button>
+      </div>
 
       {statusMessage ? (
         <Alert>

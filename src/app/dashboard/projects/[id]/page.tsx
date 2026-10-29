@@ -5,7 +5,7 @@ import Link from "next/link";
 import { useParams, useRouter } from "next/navigation";
 import { AppSidebar } from "@/components/app-sidebar";
 import { SiteHeader } from "@/components/site-header";
-import { SettingsNavigation } from "@/components/settings-navigation";
+import { SettingsContent } from "@/components/settings-shell";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
 import { SidePanels } from "@/components/side-panels";
 import { Badge } from "@/components/ui/badge";
@@ -125,20 +125,19 @@ export default function ProjectDetailsPage() {
         <div className="flex flex-1">
           <AppSidebar />
           <SidebarInset>
-            <div className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 p-4 md:p-8">
-              <SettingsNavigation />
+            <SettingsContent>
 
               <div className="flex flex-wrap items-start justify-between gap-4">
                 <div>
-                  <div className="mb-2 flex items-center gap-2">
+                  <div className="mb-2 flex min-w-0 flex-wrap items-center gap-2">
                     <Button variant="ghost" size="icon" className="-ml-2 h-8 w-8" onClick={() => router.push("/dashboard/projects")}>
                       <ArrowLeft className="size-4" />
                     </Button>
-                    <h1 className="text-2xl font-semibold tracking-tight">{project.name}</h1>
+                    <h1 className="min-w-0 break-words text-2xl/8 font-semibold tracking-tight">{project.name}</h1>
                     <Badge variant="secondary">{t("projectDetail.directoryBacked")}</Badge>
                   </div>
                   <p className="text-muted-foreground">{project.description || t("projectDetail.noDescription")}</p>
-                  <p className="mt-2 max-w-3xl text-sm text-muted-foreground">
+                  <p className="mt-1.5 max-w-3xl text-sm text-muted-foreground">
                     {t("projectDetail.description")}
                   </p>
                 </div>
@@ -200,7 +199,7 @@ export default function ProjectDetailsPage() {
   -> data/projects/${project.id}/model.json
   -> Eggent agent runtime`}</pre>
               </section>
-            </div>
+            </SettingsContent>
           </SidebarInset>
           <SidePanels />
         </div>

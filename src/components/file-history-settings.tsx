@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { History, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { useI18n } from "@/i18n/provider";
 import type { VersionUsageView } from "@/lib/files/versions/shape";
 
@@ -90,7 +90,7 @@ export function FileHistorySettings({ enabled, onToggle }: { enabled: boolean; o
         <History className="size-5 text-primary" />
         <h3 className="text-lg font-semibold">{t("settings.fileHistory.title")}</h3>
       </div>
-      <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
+      <div className="flex items-center justify-between gap-4">
         <div>
           <p className="text-sm font-medium">{t("settings.fileHistory.switch")}</p>
           <p className="text-sm text-muted-foreground">
@@ -99,17 +99,16 @@ export function FileHistorySettings({ enabled, onToggle }: { enabled: boolean; o
               : t("settings.fileHistory.description")}
           </p>
         </div>
-        <Label htmlFor="file-history-enabled" className="flex cursor-pointer items-center gap-2">
-          <input
+        <div className="flex min-h-11 shrink-0 items-center">
+          <Switch
             id="file-history-enabled"
-            type="checkbox"
             checked={enabled}
-            onChange={(event) => onToggle(event.target.checked)}
-            className="rounded"
+            onCheckedChange={onToggle}
+            aria-label={t("settings.fileHistory.switch")}
           />
-        </Label>
+        </div>
       </div>
-      <div className="space-y-3 rounded-lg border p-3">
+      <div className="space-y-3 border-t pt-4">
         <p className="text-sm">
           {failed
             ? t("settings.fileHistory.usageFailed")

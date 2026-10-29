@@ -281,6 +281,8 @@ const enMessages = {
   "settings.auth.updateCredentials": "Update credentials",
 
   "settings.nav.general": "General",
+  "settings.nav.previous": "Previous sections",
+  "settings.nav.next": "More sections",
 
   "settings.nav.models": "Models",
   "settings.nav.projects": "Projects",
@@ -316,7 +318,7 @@ const enMessages = {
   "chat.steer.resend": "Send",
   "chat.steer.command": "A command can be sent once the agent has finished.",
   "chat.steer.failed": "The message could not be added to the turn. It is back in the field.",
-  "chat.placeholder": "Send a message or paste an image...",
+  "chat.placeholder": "Send a message…",
   "chat.dropFiles": "Drop files here",
   "chat.dropFilesPlaceholder": "Drop files here...",
   "chat.confirmPlaceholder": "Answer yes/no…",
@@ -339,6 +341,7 @@ const enMessages = {
   "chat.recordingFailed": "Failed to start recording",
   "chat.attachmentOnlyPrompt": "Look at the attached image.",
   "chat.waitForUpload": "Wait until the file has uploaded",
+  "chat.sendMessage": "Send message",
   "chat.card.attachedOnly": "Attached the file.",
   "chat.emptyTitle": "What should we start with?",
   "chat.emptyDescription": "Write in the box below — a question, a file, a link. Or take one of the ready paths: Eggent asks what it needs and sets it up itself.",

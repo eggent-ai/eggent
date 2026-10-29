@@ -124,7 +124,7 @@ function renderMarkdownBlock(content: string, key: string, scope?: string) {
   return (
     <div
       key={key}
-      className="prose prose-sm dark:prose-invert max-w-none text-inherit [&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
+      className="message-content min-w-0 max-w-none text-inherit [&>*:first-child]:mt-0 [&>*:last-child]:mb-0"
     >
       <MarkdownContent content={visible} scope={scope} />
     </div>
@@ -161,7 +161,7 @@ export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
       // full width on the left, so who said what reads at a glance.
       <div className="group/user flex flex-col items-end py-2" data-message-role="user">
         <div
-          className={`max-w-[85%] min-w-0 rounded-2xl bg-muted py-2 pl-4 text-sm leading-7 [overflow-wrap:anywhere] ${
+          className={`max-w-[90%] min-w-0 rounded-2xl bg-muted py-2 pl-4 text-[15px]/[26px] [overflow-wrap:anywhere] ${
             longMessage ? "pr-10" : "pr-4"
           }`}
         >
@@ -325,7 +325,7 @@ export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
       >
         <Bot className="size-4" />
       </div>
-      <div className="flex min-w-0 flex-1 flex-col gap-3 pt-0.5 text-sm leading-7">
+      <div className="flex min-w-0 flex-1 flex-col gap-3 pt-0.5 text-[15px]/[26px]">
         {renderedParts}
         {producedFiles.length > 0 ? <FilesProduced groups={producedFiles} /> : null}
         {learned ? <LearnedNote notice={learned} /> : null}
@@ -447,6 +447,27 @@ function MarkdownContent({ content, scope }: { content: string; scope?: string }
   // re-rendered, and the window regaining focus was enough. A link flashed back
   // to plain code; a recording stopped mid-play.
   const components = useMemo<Components>(() => ({
+    h1({ children }) {
+      return <h1 className="mt-7 mb-3 text-[22px]/[30px] font-semibold tracking-tight">{children}</h1>;
+    },
+    h2({ children }) {
+      return <h2 className="mt-6 mb-2 text-xl/7 font-semibold tracking-tight">{children}</h2>;
+    },
+    h3({ children }) {
+      return <h3 className="mt-5 mb-2 text-lg/6 font-semibold tracking-tight">{children}</h3>;
+    },
+    h4({ children }) {
+      return <h4 className="mt-4 mb-2 text-base/6 font-semibold">{children}</h4>;
+    },
+    p({ children }) {
+      return <p className="my-3">{children}</p>;
+    },
+    blockquote({ children }) {
+      return <blockquote className="my-4 border-l border-input pl-4 text-muted-foreground">{children}</blockquote>;
+    },
+    hr() {
+      return <hr className="my-6 border-border" />;
+    },
     code({ className, children, ...props }) {
       const match = /language-(\w+)/.exec(className || "");
       const isInline = !match;
@@ -566,7 +587,7 @@ function MarkdownContent({ content, scope }: { content: string; scope?: string }
     },
     table({ children, ...props }) {
       return (
-        <div className="my-3 overflow-x-auto rounded-lg border border-border">
+        <div className="my-4 max-w-full overflow-x-auto overscroll-x-contain rounded-lg border border-border">
           <table className="w-full min-w-[520px] border-collapse text-sm" {...props}>
             {children}
           </table>

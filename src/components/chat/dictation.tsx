@@ -229,29 +229,34 @@ export function DictationButton({
         size="icon"
         onClick={toggle}
         disabled={(disabled && !isRecording) || isTranscribing}
-        className={`relative shrink-0 disabled:opacity-50 ${className} ${isRecording ? "" : "text-muted-foreground hover:text-foreground"}`}
-        title={isRecording ? t("chat.stopDictation") : t("chat.dictate")}
+        className={`relative shrink-0 disabled:opacity-50 ${className} ${isRecording ? "" : "text-foreground"}`}
+        title={isTranscribing ? t("chat.transcribing") : isRecording ? t("chat.stopDictation") : t("chat.dictate")}
+        aria-label={isTranscribing ? t("chat.transcribing") : isRecording ? t("chat.stopDictation") : t("chat.dictate")}
         aria-pressed={isRecording}
+        aria-busy={isTranscribing || undefined}
       >
         {isTranscribing ? (
-          <Loader2 className="size-4 animate-spin" />
+          <Loader2 className="size-5 animate-spin" />
         ) : isRecording ? (
-          <MicOff className="size-4" />
+          <MicOff className="size-5" />
         ) : (
-          <Mic className="size-4" />
+          <Mic className="size-5" />
         )}
       </Button>
     </span>
   );
 }
 
-/** One quiet line under a field: recording, transcribing, or what went wrong. */
+/** Announce voice states without moving the field; only errors need a visible line. */
 export function DictationStatus({ dictation, className = "" }: { dictation: Dictation; className?: string }) {
   const { t } = useI18n();
   const { isRecording, isTranscribing, error } = dictation;
   if (!isRecording && !isTranscribing && !error) return null;
   return (
-    <div className={`text-xs ${error ? "text-destructive" : "text-muted-foreground"} ${className}`}>
+    <div
+      role={error ? "alert" : "status"}
+      className={error ? `text-xs text-destructive ${className}` : "sr-only"}
+    >
       {error || (isRecording ? t("chat.recording") : t("chat.transcribingCancel"))}
     </div>
   );

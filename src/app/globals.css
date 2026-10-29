@@ -28,8 +28,10 @@
 @theme inline {
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --font-sans: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --text-sm--line-height: 1.375rem;
+  --text-xs--line-height: 1.125rem;
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -73,8 +75,9 @@
 }
 
 :root {
-  --radius: 0.625rem;
-  --background: oklch(1 0 0);
+  color-scheme: light;
+  --radius: 0.75rem;
+  --background: oklch(0.984 0.002 250);
   --foreground: oklch(0.145 0 0);
   --card: oklch(1 0 0);
   --card-foreground: oklch(0.145 0 0);
@@ -89,14 +92,10 @@
   --accent: oklch(0.97 0 0);
   --accent-foreground: oklch(0.205 0 0);
   --destructive: oklch(0.577 0.245 27.325);
-  /* Solved against white rather than eyeballed. The control boundary and the
-     focus ring answer to WCAG 2.2 SC 1.4.11 and measure 3.01:1; the card
-     border is decorative, so it only has to stop being invisible and sits at
-     1.89:1 instead of the 1.26:1 it was. The trace of chroma at h=70 is what
-     separates a neutral that was chosen from one that was inherited. */
-  --border: oklch(0.795 0.005 70);
-  --input: oklch(0.664 0.006 70);
-  --ring: oklch(0.664 0.006 70);
+  /* Decorative dividers stay quiet; controls keep a distinct boundary. */
+  --border: oklch(0.895 0.003 250);
+  --input: oklch(0.650 0.006 70);
+  --ring: oklch(0.650 0.006 70);
   /* The palette had exactly one chromatic token and it meant failure, so the
      product could say "this broke" and had no way to say "this worked". Both
      measure above 4.5:1 as text on white. */
@@ -123,7 +122,7 @@
   --chart-3: oklch(0.398 0.07 227.392);
   --chart-4: oklch(0.828 0.189 84.429);
   --chart-5: oklch(0.769 0.188 70.08);
-  --sidebar: oklch(0.985 0 0);
+  --sidebar: oklch(0.984 0.002 250);
   --sidebar-foreground: oklch(0.145 0 0);
   --sidebar-primary: oklch(0.205 0 0);
   --sidebar-primary-foreground: oklch(0.985 0 0);
@@ -134,6 +133,7 @@
 }
 
 .dark {
+  color-scheme: dark;
   --background: oklch(0.145 0 0);
   --foreground: oklch(0.985 0 0);
   --card: oklch(0.205 0 0);
@@ -149,10 +149,8 @@
   --accent: oklch(0.269 0 0);
   --accent-foreground: oklch(0.985 0 0);
   --destructive: oklch(0.704 0.191 22.216);
-  /* Solid rather than alpha-on-white: these have to hold a known ratio against
-     the card, and a translucent border changes value with whatever is behind
-     it. Control and ring 3.10:1, card border 1.88:1. */
-  --border: oklch(0.394 0.005 70);
+  /* Dark surfaces separate through tone, with explicit control boundaries. */
+  --border: oklch(0.34 0.004 250);
   --input: oklch(0.510 0.006 70);
   --ring: oklch(0.510 0.006 70);
   --success: oklch(0.76 0.15 158);
@@ -190,6 +188,25 @@
   }
   body {
     @apply bg-background text-foreground;
+    font-family: var(--font-sans);
+    font-size: 0.875rem;
+    line-height: 1.57143;
+    -webkit-text-size-adjust: 100%;
+    text-rendering: optimizeLegibility;
+  }
+  h1, h2, h3, h4 {
+    text-wrap: balance;
+    overflow-wrap: break-word;
+  }
+  p {
+    text-wrap: pretty;
+  }
+  ::selection {
+    background: color-mix(in oklab, var(--info) 20%, transparent);
+    color: var(--foreground);
+  }
+  input, textarea {
+    caret-color: var(--foreground);
   }
 }
 
@@ -217,7 +234,6 @@
      links, and the dark-mode control, because it is a bare checkbox measuring
      13x13. Both are things a finger has to hit. */
   nav a,
-  a[href],
   input[type="checkbox"],
   input[type="radio"],
   select {
@@ -362,38 +378,7 @@
   font-size: 0.75rem;
 }
 
-/* ---------------------------------------------------------------------------
-   Light motion, for a surface people work in.
-   Four jobs: say a page arrived, say a message landed, answer a press, and say
-   a chat is still working. Nothing blocks, nothing exceeds 380ms, and the three
-   authored moments are already switched off above under prefers-reduced-motion.
-   The fourth loops, because it reports a state rather than an event and has to
-   keep reporting it for as long as the state lasts - the same reason the
-   spinner loops. It is calmed there rather than stopped, for the same reason.
-   --------------------------------------------------------------------------- */
-
-@keyframes eggent-page-in {
-  from { opacity: 0; transform: translateY(6px); }
-  to   { opacity: 1; transform: none; }
-}
-
-/* The page's own root, which React remounts on every route change. Short
-   enough that it reads as the page settling rather than as a transition the
-   reader has to sit through. */
-[data-slot="sidebar-inset"] > div {
-  animation: eggent-page-in 260ms var(--ease-out) both;
-}
-
-@keyframes eggent-message-in {
-  from { opacity: 0; transform: translateY(10px); }
-  to   { opacity: 1; transform: none; }
-}
-
-/* A turn arriving. The agent's answer is the thing this product exists to
-   deliver, and until now it appeared the way a table row appears. */
-[data-message-role] {
-  animation: eggent-message-in 300ms var(--ease-out) both;
-}
+/* Frequent navigation and transcript mounts stay static. Only new row arrivals move. */
 
 @keyframes eggent-live-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }
@@ -412,22 +397,22 @@
 /* Something arriving in the sidebar: a new chat, a new person to write to, a
    new project. Only arrivals - never the first load or a list swapped for
    another (useArrivals decides) - so it reads as "this just appeared". The
-   blur keeps a 4px move from looking like a jolt in a column this narrow. */
+   short move marks the new item without disturbing the rest of the list. */
 @keyframes eggent-row-in {
-  from { opacity: 0; transform: translateY(-4px); filter: blur(2px); }
-  to   { opacity: 1; transform: none; filter: none; }
+  from { opacity: 0; transform: translateY(-3px); }
+  to   { opacity: 1; transform: none; }
 }
 .eggent-row-in {
-  animation: eggent-row-in 240ms var(--ease-out) both;
+  animation: eggent-row-in 160ms var(--ease-out) both;
 }
 
 /* A count changing beside a row: the new number settles in place. */
 @keyframes eggent-count-in {
-  from { opacity: 0; transform: scale(0.6); }
+  from { opacity: 0; transform: scale(0.96); }
   to   { opacity: 1; transform: none; }
 }
 .eggent-count-in {
-  animation: eggent-count-in 220ms var(--ease-out) both;
+  animation: eggent-count-in 140ms var(--ease-out) both;
 }
 
 /* Dictation: rings around the microphone that follow the voice.
@@ -469,10 +454,8 @@ a[data-slot="button"] {
   transition: background-color 120ms ease, border-color 120ms ease, color 120ms ease,
               box-shadow 120ms ease, transform 120ms var(--ease-out);
 }
-button:active:not(:disabled),
-[role="button"]:active,
-a[data-slot="button"]:active {
-  transform: scale(0.975);
+[data-slot="button"]:active:not(:disabled) {
+  transform: scale(0.98);
 }
 
 /* Rows in the sidebar and lists: the surface answers the pointer without
@@ -496,9 +479,69 @@ a[data-slot="button"]:active {
   --tw-ease: var(--ease-out);
 }
 
-/* A sheet slides in from an edge, which is the one case with a curve of its
-   own: the iOS drawer easing, at the 500ms the component already asks for. */
+/* Occasional overlays share one short, origin-aware response. */
 [data-slot="sheet-content"],
 [data-slot="sheet-overlay"] {
   --tw-ease: var(--ease-drawer);
+}
+
+/* A panel reserves desktop space immediately; only its mobile overlay moves. */
+[data-slot="side-panel"] {
+  --tw-ease: var(--ease-drawer);
+  transition-property: transform;
+  transition-duration: 220ms;
+  transition-timing-function: var(--ease-drawer);
+}
+@media (min-width: 1280px) {
+  [data-slot="side-panel"] { transition: none; }
+}
+
+[data-slot="sidebar-inset"] { overflow-wrap: break-word; }
+[data-slot="site-header"] { padding-top: env(safe-area-inset-top); }
+/* Navigation follows the room left by the main sidebar and any docked tools. */
+.settings-surface { container: settings / inline-size; }
+.settings-layout { display: flex; min-width: 0; flex-direction: column; gap: 1.5rem; }
+[data-slot="settings-navigation"] { min-width: 0; }
+.settings-nav-caption { display: none; margin: 0 0 .625rem; color: var(--muted-foreground); font-size: .75rem; line-height: 1.125rem; font-weight: 500; }
+.settings-nav-switcher { display: none; max-width: 24rem; }
+.settings-nav-links { position: relative; border-radius: .875rem; background: color-mix(in oklab, var(--muted) 70%, transparent); padding: .25rem; }
+.settings-nav-strip { display: flex; flex-direction: row; align-items: center; gap: .25rem; overflow-x: auto; overscroll-behavior-x: contain; scrollbar-width: none; }
+.settings-nav-strip::-webkit-scrollbar { display: none; }
+.settings-nav-link { display: inline-flex; min-height: 44px; flex-shrink: 0; align-items: center; gap: .5rem; border-radius: .5rem; padding: .5rem .75rem; color: var(--muted-foreground); font-size: .8125rem; line-height: 1.25rem; font-weight: 500; white-space: nowrap; transition: color 120ms ease, background-color 120ms ease; }
+.settings-nav-link:hover { background: var(--muted); color: var(--foreground); }
+.settings-nav-link-active { background: var(--card); color: var(--foreground); box-shadow: 0 1px 2px color-mix(in oklab, var(--foreground) 5%, transparent); }
+.settings-nav-link:focus-visible, .settings-nav-scroll:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
+.settings-nav-edge { position: absolute; inset-block: 0; display: flex; align-items: center; width: 44px; pointer-events: none; }
+.settings-nav-edge-left { left: 0; border-radius: .875rem 0 0 .875rem; background: linear-gradient(to right, var(--background) 70%, transparent); }
+.settings-nav-edge-right { right: 0; border-radius: 0 .875rem .875rem 0; background: linear-gradient(to left, var(--background) 70%, transparent); }
+.settings-nav-scroll { display: grid; width: 44px; height: 44px; place-items: center; border-radius: .5rem; color: var(--foreground); cursor: pointer; pointer-events: auto; }
+.settings-nav-scroll:hover { color: var(--primary); }
+@media (min-width: 768px) {
+  .settings-nav-links { display: none; }
+  .settings-nav-caption, .settings-nav-switcher { display: block; }
+}
+@container settings (min-width: 640px) {
+  .settings-nav-links { display: none; }
+  .settings-nav-caption, .settings-nav-switcher { display: block; }
+}
+@container settings (min-width: 960px) {
+  .settings-layout { display: grid; grid-template-columns: 208px minmax(0, 1fr); align-items: start; gap: 2rem; }
+  [data-slot="settings-navigation"] { position: sticky; top: calc(var(--header-height, 3.5rem) + 2rem); align-self: start; max-height: calc(100dvh - var(--header-height, 3.5rem) - 3rem); overflow-y: auto; overscroll-behavior-y: contain; scrollbar-width: thin; }
+  .settings-nav-caption { padding-inline: .75rem; margin-bottom: .75rem; }
+  .settings-nav-switcher { display: none; }
+  .settings-nav-links { display: block; padding: 0; background: none; }
+  .settings-nav-strip { flex-direction: column; align-items: stretch; overflow: visible; }
+  .settings-nav-link { min-height: 40px; font-size: .875rem; white-space: normal; }
+  .settings-nav-link-active { background: var(--muted); box-shadow: none; }
+  .settings-nav-edge { display: none; }
+}
+[data-slot="site-header"] [aria-pressed="true"] { background: var(--accent); color: var(--foreground); }
+[data-slot="switch"] { min-height: 1.5rem; min-width: 2.5rem; }
+
+@media (pointer: coarse) {
+  [data-sidebar="menu-button"] { min-height: 44px; }
+  [data-sidebar="menu-item"]:has([data-sidebar="menu-action"]) [data-sidebar="menu-button"] { padding-right: 3rem; }
+  [data-sidebar="menu-action"] { top: 0; right: 0; width: 44px; height: 44px; }
+  [data-slot="sheet-content"] { padding-bottom: env(safe-area-inset-bottom); }
+  [data-slot="input"], [data-slot="textarea"], [data-slot="select-trigger"] { font-size: 1rem; }
 }

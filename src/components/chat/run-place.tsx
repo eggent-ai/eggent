@@ -32,9 +32,9 @@ const REASON_KEYS: Record<"offline" | "not-ready" | "cloud-unreachable", Message
 
 function PlaceIcon({ choice }: { choice: PlaceChoice | null }) {
   return choice?.label === "cloud" ? (
-    <Cloud className="size-3" aria-hidden />
+    <Cloud className="size-3 shrink-0" aria-hidden />
   ) : (
-    <Laptop className="size-3" aria-hidden />
+    <Laptop className="size-3 shrink-0" aria-hidden />
   );
 }
 
@@ -68,9 +68,9 @@ export function RunPlaceControl({ status, home, busy, onSelect, onOpen }: RunPla
     return (
       <Tooltip>
         <TooltipTrigger asChild>
-          <span className="flex cursor-default items-center gap-1 font-mono" data-testid="run-place">
+          <span className="flex min-w-0 max-w-full cursor-default items-center gap-1" data-testid="run-place">
             <PlaceIcon choice={current} />
-            {label}
+            <span className="min-w-0 truncate" title={label}>{label}</span>
           </span>
         </TooltipTrigger>
         <TooltipContent side="top" className="max-w-72 text-xs leading-relaxed">
@@ -89,10 +89,10 @@ export function RunPlaceControl({ status, home, busy, onSelect, onOpen }: RunPla
               type="button"
               aria-label={t("chat.runPlace.trigger")}
               data-testid="run-place"
-              className="flex items-center gap-1 rounded-sm font-mono underline-offset-2 transition-colors hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+              className="flex min-w-0 max-w-full items-center gap-1 rounded-sm underline-offset-2 transition-colors hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
             >
               <PlaceIcon choice={current} />
-              {label}
+              <span className="min-w-0 truncate" title={label}>{label}</span>
             </button>
           </DropdownMenuTrigger>
         </TooltipTrigger>
@@ -100,7 +100,7 @@ export function RunPlaceControl({ status, home, busy, onSelect, onOpen }: RunPla
           {t("chat.runPlace.hint")}
         </TooltipContent>
       </Tooltip>
-      <DropdownMenuContent align="start" side="top" className="max-w-80">
+      <DropdownMenuContent align="start" side="top" className="max-w-[min(20rem,calc(100vw-2rem))]">
         {choices.map((choice) => (
           <DropdownMenuItem
             key={choice.node}
@@ -109,10 +109,10 @@ export function RunPlaceControl({ status, home, busy, onSelect, onOpen }: RunPla
             className="flex-col items-start gap-0.5 py-2"
             data-testid={`run-place-${choice.node}`}
           >
-            <span className="flex w-full items-center gap-2 font-medium">
+            <span className="flex min-w-0 w-full items-center gap-2 font-medium">
               <PlaceIcon choice={choice} />
-              {nameOf(choice)}
-              {choice.node === current?.node && <Check className="size-3.5" aria-hidden />}
+              <span className="min-w-0 [overflow-wrap:anywhere]">{nameOf(choice)}</span>
+              {choice.node === current?.node && <Check className="size-3.5 shrink-0" aria-hidden />}
             </span>
             {!choice.available ? (
               <span className="text-xs leading-snug text-muted-foreground">

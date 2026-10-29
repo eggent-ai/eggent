@@ -320,7 +320,13 @@ export function ModelPicker({ projectId, triggerClassName, compact }: ModelPicke
 
   if (!options.some((option) => !option.locked)) {
     // Nothing to choose between - a workspace with one model, or none loaded.
-    return <span className={triggerClassName ?? "font-mono"}>{currentLabel || t("chat.modelPicker.none")}</span>;
+    return (
+      <span className={triggerClassName ?? "font-mono"}>
+        <span className="block min-w-0 truncate" title={currentLabel || t("chat.modelPicker.none")}>
+          {currentLabel || t("chat.modelPicker.none")}
+        </span>
+      </span>
+    );
   }
 
   return (

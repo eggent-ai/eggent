@@ -2,7 +2,7 @@ import type { ReactNode } from "react";
 import { AppSidebar } from "@/components/app-sidebar";
 import { ExternalApiTokenManager } from "@/components/external-api-token-manager";
 import { SiteHeader } from "@/components/site-header";
-import { SettingsNavigation } from "@/components/settings-navigation";
+import { SettingsContent } from "@/components/settings-shell";
 import { Badge } from "@/components/ui/badge";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { SidebarInset, SidebarProvider } from "@/components/ui/sidebar";
@@ -46,11 +46,10 @@ export default async function ApiPage() {
         <div className="flex flex-1">
           <AppSidebar />
           <SidebarInset>
-            <div className="flex flex-1 flex-col gap-6 p-4 md:p-6 max-w-5xl mx-auto w-full">
-              <SettingsNavigation />
+            <SettingsContent>
 
-              <div className="space-y-2">
-                <h2 className="text-2xl font-semibold">{t("apiDocs.heading")}</h2>
+              <div className="space-y-1.5">
+                <h2 className="text-2xl/8 font-semibold tracking-tight">{t("apiDocs.heading")}</h2>
                 <p className="text-sm text-muted-foreground">{t("apiDocs.description")}</p>
               </div>
 
@@ -212,7 +211,7 @@ console.log(data.reply);`}
 }`}
                 />
               </InfoCard>
-            </div>
+            </SettingsContent>
           </SidebarInset>
           <SidePanels />
         </div>

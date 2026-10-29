@@ -15,9 +15,10 @@
  * take a running program with it.
  */
 import "@xterm/xterm/css/xterm.css";
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent, type PointerEvent } from "react";
+import { useCallback, useEffect, useState, type KeyboardEvent, type PointerEvent } from "react";
 import { Loader2, RotateCw, SquareTerminal, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SidePanelFrame } from "@/components/side-panel-frame";
 import { useI18n } from "@/i18n/provider";
 import type { MessageKey } from "@/i18n/messages";
 import {
@@ -71,7 +72,7 @@ export function TerminalPanel() {
   const scope = activeProjectId ?? "none";
   const info = usePanelSessions((state) => state.info[scope]);
   const status = info?.status ?? "idle";
-  const containerRef = useRef<HTMLDivElement>(null);
+  const [container, setContainer] = useState<HTMLDivElement | null>(null);
   const [resizing, setResizing] = useState(false);
 
   const projectName = activeProjectId
@@ -89,7 +90,6 @@ export function TerminalPanel() {
   // never want one, and each is a process in a container with a memory limit.
   useEffect(() => {
     if (!open) return;
-    const container = containerRef.current;
     if (!container) return;
     let cancelled = false;
     void showTerminal(scope, activeProjectId, container).then(() => {
@@ -101,7 +101,7 @@ export function TerminalPanel() {
       // panel by mistake or moving to another page is not the end of it.
       hideTerminal(scope);
     };
-  }, [open, scope, activeProjectId]);
+  }, [open, scope, activeProjectId, container]);
 
   const startResize = useCallback(
     (event: PointerEvent<HTMLDivElement>) => {
@@ -135,15 +135,11 @@ export function TerminalPanel() {
 
   return (
     <>
-      {open ? (
-        <button
-          type="button"
-          aria-label={t("terminal.panel.close")}
-          onClick={() => setOpen(false)}
-          className="fixed inset-0 z-40 bg-black/40 md:hidden"
-        />
-      ) : null}
-      <aside
+      <SidePanelFrame
+        open={open}
+        onOpenChange={setOpen}
+        label={t("terminal.panel.title")}
+        data-slot="side-panel"
         data-state={open ? "open" : "closed"}
         data-resizing={resizing ? "true" : "false"}
         aria-label={t("terminal.panel.title")}
@@ -159,16 +155,16 @@ export function TerminalPanel() {
         }}
         className={[
           "sticky top-[var(--header-height,3.5rem)] h-[calc(100svh-var(--header-height,3.5rem))] shrink-0 overflow-hidden border-l bg-background",
-          "transition-[width,transform] duration-200 ease-out motion-reduce:transition-none data-[resizing=true]:transition-none",
-          "max-md:fixed max-md:inset-y-0 max-md:right-0 max-md:z-50 max-md:h-auto max-md:w-[min(100vw,32rem)]",
-          "max-md:data-[state=closed]:translate-x-full max-md:data-[state=open]:translate-x-0",
-          "md:data-[state=closed]:w-0 md:data-[state=open]:w-(--terminal-width) md:data-[state=open]:max-w-(--terminal-max) md:data-[state=open]:min-w-80",
+          "transition-transform duration-200 ease-out motion-reduce:transition-none data-[resizing=true]:transition-none",
+          "max-xl:fixed max-xl:inset-y-0 max-xl:right-0 max-xl:z-50 max-xl:h-auto max-xl:w-[min(100vw,32rem)]",
+          "max-xl:data-[state=closed]:translate-x-full max-xl:data-[state=open]:translate-x-0",
+          "xl:data-[state=closed]:w-0 xl:data-[state=open]:w-(--terminal-width) xl:data-[state=open]:max-w-(--terminal-max) xl:data-[state=open]:min-w-80",
         ].join(" ")}
       >
         {/* Its own width, not the panel's: the terminal inside does not reflow
             while the panel opens, and a closed panel does not shrink it to a
             sliver that the program then draws for. */}
-        <div className="relative flex h-full w-[min(100vw,32rem)] flex-col md:w-full md:min-w-80">
+        <div className="relative flex h-full w-[min(100vw,32rem)] flex-col xl:w-full xl:min-w-80">
           <div
             role="separator"
             aria-orientation="vertical"
@@ -177,7 +173,7 @@ export function TerminalPanel() {
             tabIndex={0}
             onPointerDown={startResize}
             onKeyDown={resizeWithKeys}
-            className="absolute inset-y-0 left-0 z-10 hidden w-1.5 cursor-col-resize touch-none transition-colors hover:bg-primary/30 focus-visible:bg-primary/40 focus-visible:outline-none md:block"
+            className="absolute inset-y-0 left-0 z-10 hidden w-1.5 cursor-col-resize touch-none transition-colors hover:bg-primary/30 focus-visible:bg-primary/40 focus-visible:outline-none xl:block"
           />
 
           <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
@@ -219,7 +215,7 @@ export function TerminalPanel() {
 
           <div className="relative min-h-0 flex-1">
             <div
-              ref={containerRef}
+              ref={setContainer}
               className="absolute inset-0 overflow-hidden px-2 py-1.5 data-[resizing=true]:pointer-events-none"
               data-resizing={resizing ? "true" : "false"}
             />
@@ -255,7 +251,7 @@ export function TerminalPanel() {
             </div>
           ) : null}
         </div>
-      </aside>
+      </SidePanelFrame>
     </>
   );
 }

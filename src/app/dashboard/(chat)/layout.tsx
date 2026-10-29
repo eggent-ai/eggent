@@ -33,7 +33,7 @@ export default async function ChatLayout({
   const title = await getServerMessage("dashboard.chatTitle")
 
   return (
-    <div className="[--header-height:calc(--spacing(14))] h-svh overflow-hidden">
+    <div className="[--header-height:calc(--spacing(14))] h-dvh overflow-hidden">
       <SidebarProvider className="flex h-full flex-col">
         <SiteHeader title={title} />
         <div className="flex min-h-0 flex-1">

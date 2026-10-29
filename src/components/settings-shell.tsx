@@ -23,14 +23,23 @@ export function SettingsShell({ title, children }: { title: string; children: Re
         <div className="flex flex-1">
           <AppSidebar />
           <SidebarInset>
-            <div className="mx-auto flex w-full max-w-5xl flex-1 flex-col gap-5 p-4 md:p-6">
-              <SettingsNavigation />
-              {children}
-            </div>
+            <SettingsContent>{children}</SettingsContent>
           </SidebarInset>
           <SidePanels />
         </div>
       </SidebarProvider>
+    </div>
+  );
+}
+
+/** One responsive navigation/content layout, including standalone settings pages. */
+export function SettingsContent({ children }: { children: ReactNode }) {
+  return (
+    <div className="settings-surface mx-auto w-full min-w-0 max-w-[1280px] flex-1 p-4 md:p-8">
+      <div className="settings-layout">
+        <SettingsNavigation />
+        <div className="settings-body flex min-w-0 flex-col gap-6">{children}</div>
+      </div>
     </div>
   );
 }
@@ -53,13 +62,13 @@ export function SettingsPageHeader({
   scope?: ReactNode;
 }) {
   return (
-    <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-      <div className="min-w-0 space-y-1">
-        <h2 className="text-2xl font-semibold">{title}</h2>
+    <div className="settings-page-header flex min-w-0 flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+      <div className="min-w-0 space-y-1.5">
+        <h2 className="text-2xl leading-8 font-semibold tracking-tight">{title}</h2>
         {description ? <p className="max-w-2xl text-sm text-muted-foreground">{description}</p> : null}
       </div>
       {actions || scope ? (
-        <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">
+        <div className="flex min-w-0 flex-wrap items-center gap-2 lg:max-w-[45%] lg:justify-end">
           {actions}
           {scope}
         </div>

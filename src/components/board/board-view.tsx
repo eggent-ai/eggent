@@ -338,8 +338,8 @@ export function BoardView() {
     <div className="flex min-w-0 flex-1 flex-col gap-4 p-4 md:p-6">
       <div className="flex flex-wrap items-start gap-3">
         {/* A basis wide enough that the controls wrap below the text on a phone, instead of squeezing it to a word a line. */}
-        <div className="min-w-0 flex-[1_1_18rem] space-y-1">
-          <h2 className="text-2xl font-semibold">{t("board.heading")}</h2>
+        <div className="min-w-0 flex-[1_1_18rem] space-y-1.5">
+          <h2 className="text-2xl/8 font-semibold tracking-tight">{t("board.heading")}</h2>
           <p className="max-w-2xl text-sm text-muted-foreground">{t("board.description")}</p>
         </div>
         <div className="flex w-full flex-wrap items-center gap-2 sm:w-auto">

@@ -26,6 +26,7 @@ import { useApprovalsSummary } from "@/components/approvals/use-approvals-summar
 import { FileShare, FileShareNotice, useFileShare } from "@/components/shares/file-share";
 import { useSharesSummary } from "@/components/shares/use-shares-summary";
 import { Button } from "@/components/ui/button";
+import { SidePanelFrame } from "@/components/side-panel-frame";
 import {
   clampFilePreviewWidth,
   readFilePreviewWidth,
@@ -93,15 +94,11 @@ export function FilesPanel() {
           over the conversation instead. Hiding it below `md` was the first
           cut and it took the file tree away from phones entirely, which is
           worse than the crowding it avoided. */}
-      {open ? (
-        <button
-          type="button"
-          aria-label={t("files.panel.close")}
-          onClick={() => setOpen(false)}
-          className="fixed inset-0 z-40 bg-black/40 md:hidden"
-        />
-      ) : null}
-      <aside
+      <SidePanelFrame
+        open={open}
+        onOpenChange={setOpen}
+        label={t("files.panel.toggle")}
+        data-slot="side-panel"
         data-state={open ? "open" : "closed"}
         data-preview={previewing ? "true" : "false"}
         data-resizing={resizing ? "true" : "false"}
@@ -123,11 +120,11 @@ export function FilesPanel() {
           // under the header, which is sticky too: stuck at the top instead,
           // the panel slid beneath it and hid its own title and close button.
           "sticky top-[var(--header-height,3.5rem)] h-[calc(100svh-var(--header-height,3.5rem))] shrink-0 overflow-hidden border-l bg-sidebar",
-          "transition-[width,transform] duration-200 ease-out motion-reduce:transition-none data-[resizing=true]:transition-none",
-          "max-md:fixed max-md:inset-y-0 max-md:right-0 max-md:z-50 max-md:h-auto max-md:w-80 max-md:data-[preview=true]:w-[min(100vw,36rem)]",
-          "max-md:data-[state=closed]:translate-x-full max-md:data-[state=open]:translate-x-0",
-          "md:data-[state=closed]:w-0 md:data-[state=open]:w-(--files-width)",
-          "md:data-[preview=true]:max-w-(--files-max) md:data-[preview=true]:min-w-80",
+          "transition-transform duration-200 ease-out motion-reduce:transition-none data-[resizing=true]:transition-none",
+          "max-xl:fixed max-xl:inset-y-0 max-xl:right-0 max-xl:z-50 max-xl:h-auto max-xl:w-[min(100vw,20rem)] max-xl:data-[preview=true]:w-[min(100vw,36rem)]",
+          "max-xl:data-[state=closed]:translate-x-full max-xl:data-[state=open]:translate-x-0",
+          "xl:data-[state=closed]:w-0 xl:data-[state=open]:w-(--files-width)",
+          "xl:data-[preview=true]:max-w-(--files-max) xl:data-[preview=true]:min-w-80",
         ].join(" ")}
         aria-hidden={!open}
         inert={!open}
@@ -142,7 +139,7 @@ export function FilesPanel() {
             tabIndex={0}
             onPointerDown={startResize}
             onKeyDown={resizeWithKeys}
-            className="absolute inset-y-0 left-0 z-10 hidden w-1.5 cursor-col-resize touch-none transition-colors hover:bg-primary/30 focus-visible:bg-primary/40 focus-visible:outline-none md:block"
+            className="absolute inset-y-0 left-0 z-10 hidden w-1.5 cursor-col-resize touch-none transition-colors hover:bg-primary/30 focus-visible:bg-primary/40 focus-visible:outline-none xl:block"
           />
         ) : null}
         {previewing && preview ? (
@@ -177,7 +174,7 @@ export function FilesPanel() {
           </div>
         </div>
       </div>
-      </aside>
+      </SidePanelFrame>
     </>
   );
 }

@@ -9,7 +9,7 @@
  * a phone - then lists the rest in a line each, and links to the site in the
  * reader's language. Every line names something the hosted Eggent does today.
  * Whether the card is shown at all is the deployment's word (`cloudPromo` on
- * /api/deployment); a person can hide it, and it stays hidden in that browser.
+ * /api/deployment).
  */
 import { useEffect, useState } from "react";
 import {
@@ -26,27 +26,15 @@ import {
   Sparkles,
   Users,
   WandSparkles,
-  X,
 } from "lucide-react";
-import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n/provider";
-
-const HIDDEN_KEY = "eggent.cloudPromoHidden";
 
 export function CloudPromo() {
   const { t } = useI18n();
   const [shown, setShown] = useState(false);
 
-  // After mount: the server renders this page too, and the choice to hide the
-  // card lives in the browser.
+  // Let the deployment decide whether to show the card.
   useEffect(() => {
-    let hidden = false;
-    try {
-      hidden = window.localStorage.getItem(HIDDEN_KEY) === "1";
-    } catch {
-      hidden = false;
-    }
-    if (hidden) return;
     let cancelled = false;
     fetch("/api/deployment", { cache: "no-store" })
       .then((response) => (response.ok ? response.json() : null))
@@ -60,15 +48,6 @@ export function CloudPromo() {
   }, []);
 
   if (!shown) return null;
-
-  const hide = () => {
-    try {
-      window.localStorage.setItem(HIDDEN_KEY, "1");
-    } catch {
-      // Hidden for this page only.
-    }
-    setShown(false);
-  };
 
   const highlights = [
     { icon: Sparkles, title: t("cloudPromo.keysTitle"), text: t("cloudPromo.keysText") },
@@ -87,18 +66,8 @@ export function CloudPromo() {
   ];
 
   return (
-    <section aria-labelledby="cloud-promo-title" className="relative rounded-xl border bg-card p-5">
-      <Button
-        variant="ghost"
-        size="icon"
-        className="absolute right-2 top-2 size-8 text-muted-foreground hover:text-foreground"
-        onClick={hide}
-        aria-label={t("cloudPromo.hide")}
-        title={t("cloudPromo.hide")}
-      >
-        <X className="size-4" />
-      </Button>
-      <div className="flex items-start gap-3 pr-8">
+    <section aria-labelledby="cloud-promo-title" className="rounded-xl border bg-card p-5">
+      <div className="flex items-start gap-3">
         <span className="flex size-9 shrink-0 items-center justify-center rounded-lg bg-muted" aria-hidden>
           <Cloud className="size-4" />
         </span>

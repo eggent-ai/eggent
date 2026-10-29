@@ -21,6 +21,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { Switch } from "@/components/ui/switch";
 import { Select, SelectContent, SelectGroup, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { SkeletonBlock } from "@/components/ui/skeleton-list";
 import { LOCALE_OPTIONS, normalizeLocalePreference, type LocalePreference } from "@/i18n/locales";
@@ -167,30 +168,29 @@ export default function GeneralSettingsPage() {
                 <span role="alert" className="text-xs text-destructive">{t("settings.errors.saveSettings")}</span>
               ) : null}
             </div>
-            <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
+            <div className="flex items-center justify-between gap-4 border-b pb-4">
               <div>
                 <p className="text-sm font-medium">{t("settings.darkMode.title")}</p>
                 <p className="text-sm text-muted-foreground">{t("settings.darkMode.description")}</p>
               </div>
-              <Label htmlFor="dark-mode-enabled" className="flex cursor-pointer items-center gap-2">
+              <Label htmlFor="dark-mode-enabled" className="flex min-h-11 shrink-0 cursor-pointer items-center gap-2">
                 <Sun className="size-4 text-muted-foreground" />
-                <input
+                <Switch
                   id="dark-mode-enabled"
-                  type="checkbox"
                   checked={settings.general.darkMode}
-                  onChange={(event) => changeDarkMode(event.target.checked)}
-                  className="rounded"
+                  onCheckedChange={changeDarkMode}
+                  aria-label={t("settings.darkMode.title")}
                 />
                 <Moon className="size-4 text-muted-foreground" />
               </Label>
             </div>
-            <div className="flex items-center justify-between gap-4 rounded-lg border p-3">
-              <div>
+            <div className="flex flex-col items-start justify-between gap-3 sm:flex-row sm:items-center sm:gap-6">
+              <div className="min-w-0">
                 <p className="text-sm font-medium">{t("settings.language.title")}</p>
                 <p className="text-sm text-muted-foreground">{t("settings.language.description")}</p>
               </div>
               <Select value={normalizeLocalePreference(settings.general.language)} onValueChange={(value) => changeLanguage(value as LocalePreference)}>
-                <SelectTrigger className="w-[180px]" aria-label={t("settings.language.title")}>
+                <SelectTrigger className="w-full sm:w-[180px] sm:shrink-0" aria-label={t("settings.language.title")}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>

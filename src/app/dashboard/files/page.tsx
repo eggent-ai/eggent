@@ -58,9 +58,9 @@ export default function GenericFileEditorPage() {
         <div className="flex flex-1">
           <AppSidebar />
           <SidebarInset>
-            <div className="flex flex-1 flex-col gap-4 p-4 md:p-6 max-w-5xl mx-auto w-full">
-              <div className="space-y-1">
-                <h2 className="text-2xl font-semibold">{title}</h2>
+            <div className="flex flex-1 flex-col gap-6 p-4 md:p-8 max-w-5xl mx-auto w-full min-w-0">
+              <div className="space-y-1.5">
+                <h2 className="text-2xl/8 font-semibold tracking-tight">{title}</h2>
                 <p className="break-all text-sm text-muted-foreground">
                   {projectId === "none" ? t("common.orchestrator") : t("common.projectWithId", { id: projectId })} / {filePath}
                 </p>

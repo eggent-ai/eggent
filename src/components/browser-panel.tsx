@@ -17,6 +17,7 @@ import { useCallback, useEffect, useRef, useState, type FormEvent, type Keyboard
 import { create } from "zustand";
 import { ArrowLeft, ArrowRight, Globe, Hand, Loader2, LogOut, Power, RotateCw, X } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { SidePanelFrame } from "@/components/side-panel-frame";
 import { Input } from "@/components/ui/input";
 import { useI18n } from "@/i18n/provider";
 import { pageAddress } from "@/lib/browser/address";
@@ -301,27 +302,23 @@ export function BrowserPanel() {
 
   return (
     <>
-      {open ? (
-        <button
-          type="button"
-          aria-label={t("browser.panel.close")}
-          onClick={() => setOpen(false)}
-          className="fixed inset-0 z-40 bg-black/40 md:hidden"
-        />
-      ) : null}
-      <aside
+      <SidePanelFrame
+        open={open}
+        onOpenChange={setOpen}
+        label={t("browser.panel.title")}
+        data-slot="side-panel"
         data-state={open ? "open" : "closed"}
         aria-label={t("browser.panel.title")}
         inert={!open}
         className={[
           "sticky top-[var(--header-height,3.5rem)] h-[calc(100svh-var(--header-height,3.5rem))] shrink-0 overflow-hidden border-l bg-background",
-          "transition-[width,transform] duration-200 ease-out motion-reduce:transition-none",
-          "max-md:fixed max-md:inset-y-0 max-md:right-0 max-md:z-50 max-md:h-auto max-md:w-[min(100vw,40rem)]",
-          "max-md:data-[state=closed]:translate-x-full max-md:data-[state=open]:translate-x-0",
-          "md:data-[state=closed]:w-0 md:data-[state=open]:w-[min(44rem,46vw)]",
+          "transition-transform duration-200 ease-out motion-reduce:transition-none",
+          "max-xl:fixed max-xl:inset-y-0 max-xl:right-0 max-xl:z-50 max-xl:h-auto max-xl:w-[min(100vw,40rem)]",
+          "max-xl:data-[state=closed]:translate-x-full max-xl:data-[state=open]:translate-x-0",
+          "xl:data-[state=closed]:w-0 xl:data-[state=open]:w-[min(44rem,46vw)]",
         ].join(" ")}
       >
-        <div className="flex h-full w-[min(100vw,40rem)] flex-col md:w-[min(44rem,46vw)]">
+        <div className="flex h-full w-[min(100vw,40rem)] flex-col xl:w-[min(44rem,46vw)]">
           <div className="flex items-center justify-between gap-2 border-b px-3 py-2">
             <span className="flex min-w-0 items-center gap-1.5 text-sm font-medium">
               <Globe className="size-4 shrink-0" />
@@ -523,7 +520,7 @@ export function BrowserPanel() {
             </div>
           ) : null}
         </div>
-      </aside>
+      </SidePanelFrame>
     </>
   );
 }
