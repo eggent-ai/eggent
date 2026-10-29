@@ -13,7 +13,10 @@ export async function loadPdf(filePath: string): Promise<LoadedDocument> {
     // Dynamic import to avoid build issues with canvas
     // Use legacy build for better Node.js support without canvas
     // @ts-ignore
-    const pdfjs = await import("pdfjs-dist/legacy/build/pdf.js");
+    const loaded = await import("pdfjs-dist/legacy/build/pdf.js");
+    // The build is CommonJS: the bundler hands over its exports by name, while
+    // Node's own loader may offer them only as the default export (Node 22 does).
+    const pdfjs = (loaded.GlobalWorkerOptions ? loaded : loaded.default) as typeof loaded;
 
     // Set up a fake worker to avoid worker file loading issues in Node
     if (!pdfjs.GlobalWorkerOptions.workerSrc) {
