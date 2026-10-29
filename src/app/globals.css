@@ -409,6 +409,27 @@
   animation: eggent-live-pulse 1.8s var(--ease-in-out) infinite;
 }
 
+/* Something arriving in the sidebar: a new chat, a new person to write to, a
+   new project. Only arrivals - never the first load or a list swapped for
+   another (useArrivals decides) - so it reads as "this just appeared". The
+   blur keeps a 4px move from looking like a jolt in a column this narrow. */
+@keyframes eggent-row-in {
+  from { opacity: 0; transform: translateY(-4px); filter: blur(2px); }
+  to   { opacity: 1; transform: none; filter: none; }
+}
+.eggent-row-in {
+  animation: eggent-row-in 240ms var(--ease-out) both;
+}
+
+/* A count changing beside a row: the new number settles in place. */
+@keyframes eggent-count-in {
+  from { opacity: 0; transform: scale(0.6); }
+  to   { opacity: 1; transform: none; }
+}
+.eggent-count-in {
+  animation: eggent-count-in 220ms var(--ease-out) both;
+}
+
 /* Dictation: rings around the microphone that follow the voice.
    --mic-level (0..1) is written every frame by MicLevelRings, so these carry
    no transition; `scale` follows the voice while the first ring's own

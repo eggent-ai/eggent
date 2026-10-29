@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { AtSign, Mail } from "lucide-react";
+import { AtSign } from "lucide-react";
 import {
   SidebarGroup,
   SidebarGroupLabel,
@@ -15,13 +15,11 @@ import { useI18n } from "@/i18n/provider";
 import { useMailContacts } from "./use-mail-contacts";
 import { useEmailStatus } from "@/components/email/use-email-status";
 import { EMAIL_ROOT_PATH } from "@/components/email/paths";
+import { SidebarCount } from "@/components/sidebar-count";
+import { useArrivals } from "@/hooks/use-arrivals";
 
-/**
- * The count beside a row. The sidebar recolours a badge's text on an active
- * row (peer-data-[active=true]), which put dark digits on the dark badge - so
- * this says the colour again for that case.
- */
-const UNREAD_BADGE = "bg-primary text-primary-foreground peer-data-[active=true]/menu-button:text-primary-foreground peer-hover/menu-button:text-primary-foreground rounded-full px-1.5";
+/** The wrapper the sidebar positions; the count draws itself (SidebarCount). */
+const BADGE_SLOT = "px-0 min-w-0 top-1.5";
 
 /** How many people the sidebar lists before it says "all messages". */
 const SHOWN = 5;
@@ -42,30 +40,28 @@ export function MailNav() {
   const email = useEmailStatus();
   const contacts = answer && answer.enabled ? answer.contacts : [];
   const hasEmail = Boolean(email && email.enabled);
-  if (!hasEmail && contacts.length === 0) return null;
   const shown = contacts.slice(0, SHOWN);
+  const arrived = useArrivals(shown.map((contact) => contact.id));
+  if (!hasEmail && contacts.length === 0) return null;
   const hidden = contacts.slice(SHOWN);
   const hiddenUnread = hidden.reduce((sum, contact) => sum + contact.unread, 0);
   const emailUnread = email && email.enabled ? email.unread.inbox : 0;
 
   return (
     <SidebarGroup>
-      <SidebarGroupLabel>
-        <Mail className="size-3.5 mr-1" aria-hidden />
-        {t("nav.messages")}
-      </SidebarGroupLabel>
+      <SidebarGroupLabel>{t("nav.messages")}</SidebarGroupLabel>
       <SidebarMenu>
         {hasEmail ? (
           <SidebarMenuItem>
             <SidebarMenuButton asChild isActive={pathname === EMAIL_ROOT_PATH || pathname.startsWith(`${EMAIL_ROOT_PATH}/`)} title={email && email.enabled ? email.address || undefined : undefined}>
               <Link href={EMAIL_ROOT_PATH}>
-                <AtSign className="size-3.5" aria-hidden />
+                <AtSign className="size-4" aria-hidden />
                 <span className={emailUnread > 0 ? "truncate font-medium" : "truncate"}>{t("nav.mail")}</span>
               </Link>
             </SidebarMenuButton>
             {emailUnread > 0 ? (
-              <SidebarMenuBadge aria-label={t("nav.messagesUnread", { count: emailUnread })} className={UNREAD_BADGE}>
-                {emailUnread > 99 ? "99+" : emailUnread}
+              <SidebarMenuBadge className={BADGE_SLOT}>
+                <SidebarCount count={emailUnread} label={t("nav.messagesUnread", { count: emailUnread })} />
               </SidebarMenuBadge>
             ) : null}
           </SidebarMenuItem>
@@ -73,16 +69,16 @@ export function MailNav() {
         {shown.map((contact) => {
           const href = mailThreadPath(contact.id);
           return (
-            <SidebarMenuItem key={contact.id}>
+            <SidebarMenuItem key={contact.id} className={arrived(contact.id) ? "eggent-row-in" : undefined}>
               <SidebarMenuButton asChild isActive={pathname === href} title={contact.about || undefined}>
                 <Link href={href}>
                   <span className={contact.unread > 0 ? "truncate font-medium" : "truncate"}>{contact.name}</span>
                 </Link>
               </SidebarMenuButton>
               {contact.unread > 0 ? (
-                <SidebarMenuBadge aria-label={t("nav.messagesUnread", { count: contact.unread })} className={UNREAD_BADGE}>
-                  {contact.unread > 99 ? "99+" : contact.unread}
-                </SidebarMenuBadge>
+                <SidebarMenuBadge className={BADGE_SLOT}>
+                <SidebarCount count={contact.unread} label={t("nav.messagesUnread", { count: contact.unread })} />
+              </SidebarMenuBadge>
               ) : null}
             </SidebarMenuItem>
           );
@@ -95,8 +91,8 @@ export function MailNav() {
               </Link>
             </SidebarMenuButton>
             {hiddenUnread > 0 ? (
-              <SidebarMenuBadge aria-label={t("nav.messagesUnread", { count: hiddenUnread })} className={UNREAD_BADGE}>
-                {hiddenUnread > 99 ? "99+" : hiddenUnread}
+              <SidebarMenuBadge className={BADGE_SLOT}>
+                <SidebarCount count={hiddenUnread} label={t("nav.messagesUnread", { count: hiddenUnread })} />
               </SidebarMenuBadge>
             ) : null}
           </SidebarMenuItem>

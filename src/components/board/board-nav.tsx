@@ -9,6 +9,7 @@ import { useI18n } from "@/i18n/provider";
 import { fetchBoardSummary } from "@/lib/board/client";
 import type { BoardSummary } from "@/lib/board/types";
 import { cn } from "@/lib/utils";
+import { SidebarCount } from "@/components/sidebar-count";
 
 /**
  * The board's place in the sidebar, under New Chat: the one thing on it that
@@ -42,7 +43,7 @@ export function BoardNav() {
       href="/dashboard/board"
       aria-current={active ? "page" : undefined}
       className={cn(
-        "flex h-9 w-full items-center gap-2 rounded-md px-3 text-sm font-medium transition-colors",
+        "flex h-8 w-full items-center gap-2 rounded-md px-2 text-sm transition-colors",
         "outline-none focus-visible:ring-[3px] focus-visible:ring-sidebar-ring",
         active ? "bg-sidebar-accent text-sidebar-accent-foreground" : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
       )}
@@ -52,15 +53,7 @@ export function BoardNav() {
       {summary && summary.running > 0 ? (
         <span data-eggent-live role="status" aria-label={t("nav.boardWorking")} className="size-2 rounded-full bg-primary" />
       ) : null}
-      {waiting > 0 ? (
-        <span
-          className="min-w-5 rounded-full border border-warning px-1.5 text-center text-xs/4 tabular-nums text-foreground"
-          aria-label={t("nav.boardWaiting", { count: waiting })}
-          title={t("nav.boardWaiting", { count: waiting })}
-        >
-          {waiting}
-        </span>
-      ) : null}
+      <SidebarCount count={waiting} tone="attention" label={t("nav.boardWaiting", { count: waiting })} />
     </Link>
   );
 }

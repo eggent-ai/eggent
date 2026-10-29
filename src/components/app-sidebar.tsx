@@ -15,7 +15,6 @@ import {
   LifeBuoy,
   LogOut,
   MessageSquarePlus,
-  MessagesSquare,
   Plus,
   Settings,
   SquareKanban,
@@ -27,6 +26,7 @@ import { useBackgroundSync } from "@/hooks/use-background-sync";
 import { useActiveRuns } from "@/hooks/use-active-runs";
 import { useRemoteStatus } from "@/hooks/use-remote-status";
 import { useI18n } from "@/i18n/provider";
+import { useArrivals } from "@/hooks/use-arrivals";
 
 import {
   Sidebar,
@@ -78,6 +78,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const remote = useRemoteStatus(chatsTick);
   // Whether a chat's home is the other side of the pair, from where this list is read.
   const isOtherSide = (home: string | undefined) => Boolean(home && remote.status?.enabled && home !== remote.status.node);
+  // Only what just appeared animates in; a load or a project switch does not.
+  const chatArrived = useArrivals(chats.map((chat) => chat.id));
+  const projectArrived = useArrivals(projects.map((project) => project.id));
 
   /**
    * Open a conversation, in the store and in the address bar.
@@ -257,17 +260,19 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           </SidebarMenuItem>
         </SidebarMenu>
         {/* New Chat button */}
-        <div className="px-3 pt-2">
+        {/* Everything up here starts on the same 16px line as the rows below,
+            so icons read as one column down the whole sidebar. */}
+        <div className="pt-1">
           <Button
             variant="outline"
-            className="w-full justify-start gap-2"
+            className="w-full justify-start gap-2 px-[7px] has-[>svg]:px-[7px]"
             onClick={handleNewChat}
           >
             <MessageSquarePlus className="size-4" />
             {t("nav.newChat")}
           </Button>
         </div>
-        <div className="px-3">
+        <div>
           <BoardNav />
           <ApprovalsNav />
           <SharesNav />
@@ -324,7 +329,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               </SidebarMenuItem>
             )}
             {projects.map((project) => (
-              <SidebarMenuItem key={project.id}>
+              <SidebarMenuItem key={project.id} className={projectArrived(project.id) ? "eggent-row-in" : undefined}>
                 <SidebarMenuButton
                   isActive={activeProjectId === project.id}
                   onClick={() => handleProjectClick(project.id)}
@@ -340,10 +345,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         {/* File tree */}
         {/* Chat history */}
         <SidebarGroup>
-          <SidebarGroupLabel>
-            <MessagesSquare className="size-3.5 mr-1" />
-            {t("nav.chats")}
-          </SidebarGroupLabel>
+          <SidebarGroupLabel>{t("nav.chats")}</SidebarGroupLabel>
           <SidebarMenu>
             {chats.length === 0 && (
               <SidebarMenuItem>
@@ -355,7 +357,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               </SidebarMenuItem>
             )}
             {chats.map((chat) => (
-              <SidebarMenuItem key={chat.id}>
+              <SidebarMenuItem key={chat.id} className={chatArrived(chat.id) ? "eggent-row-in" : undefined}>
                 <SidebarMenuButton
                   isActive={activeChatId === chat.id}
                   onClick={() => handleChatClick(chat.id)}
@@ -425,7 +427,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
 
       <SidebarFooter>
         <UsageWidget />
-        <SidebarGroup>
+        {/* The footer already pads; a second group padding put these icons 8px
+            right of every other row. */}
+        <SidebarGroup className="p-0">
           <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton
