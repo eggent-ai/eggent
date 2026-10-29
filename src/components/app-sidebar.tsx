@@ -50,6 +50,8 @@ import { BoardNav } from "@/components/board/board-nav";
 import { ApprovalsNav } from "@/components/approvals/approvals-nav";
 import { SharesNav } from "@/components/shares/shares-nav";
 import { CreateProjectForm } from "@/components/create-project-form";
+import { CompanyProjectsNav } from "@/components/company-projects/company-projects-nav";
+import { useCompanyProjects } from "@/components/company-projects/use-company-projects";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
@@ -57,6 +59,11 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const router = useRouter();
   const pathname = usePathname();
   const { isMobile } = useSidebar();
+  const companyProjects = useCompanyProjects();
+  const hasCompanyProjects = Boolean(companyProjects?.enabled && companyProjects.projects.length > 0);
+  // A company's project has a page of its own; while it is open, none of the
+  // workspace's own projects is the one being looked at.
+  const onCompanyProject = pathname.startsWith("/dashboard/company/");
   const {
     chats,
     setChats,
@@ -312,14 +319,14 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           <SidebarMenu>
             <SidebarMenuItem>
               <SidebarMenuButton
-                isActive={activeProjectId === null}
+                isActive={activeProjectId === null && !onCompanyProject}
                 onClick={handleOrchestratorClick}
               >
                 <Bot className="size-4" />
                 <span className="truncate">{t("nav.orchestrator")}</span>
               </SidebarMenuButton>
             </SidebarMenuItem>
-            {projects.length === 0 && (
+            {projects.length === 0 && !hasCompanyProjects && (
               <SidebarMenuItem>
                 <SidebarMenuButton disabled>
                   <span className="text-muted-foreground text-xs">
@@ -331,7 +338,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             {projects.map((project) => (
               <SidebarMenuItem key={project.id} className={projectArrived(project.id) ? "eggent-row-in" : undefined}>
                 <SidebarMenuButton
-                  isActive={activeProjectId === project.id}
+                  isActive={activeProjectId === project.id && !onCompanyProject}
                   onClick={() => handleProjectClick(project.id)}
                 >
                   <FolderOpen className="size-4" />
@@ -339,6 +346,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 </SidebarMenuButton>
               </SidebarMenuItem>
             ))}
+            {/* Projects the company opened to this person, when it has any. */}
+            <CompanyProjectsNav />
           </SidebarMenu>
         </SidebarGroup>
 

@@ -27,6 +27,7 @@ export const RESERVED_DASHBOARD_SEGMENTS: readonly string[] = [
   "api",
   "approvals",
   "board",
+  "company",
   "context",
   "email",
   "files",
