@@ -16,7 +16,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronDown, ExternalLink, Loader2, Lock, Search, Sparkles } from "lucide-react";
+import { Check, ChevronDown, CircleAlert, ExternalLink, Loader2, Lock, Search, Sparkles } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { EngineConsentSheet } from "@/components/engines/engine-consent-sheet";
 import { useBackgroundSync } from "@/hooks/use-background-sync";
@@ -45,6 +45,7 @@ interface PickerState {
     available?: boolean;
     note?: string;
     manage?: { url: string; label: string };
+    caution?: { note: string; manage?: { url: string; label: string } };
   }>;
   settings?: { defaultProvider?: string; defaultModel?: string; defaultThinkingLevel?: string };
 }
@@ -69,6 +70,8 @@ interface ModelOption {
   engine?: { id: string; modelId: string };
   /** Why a locked row is locked, when it is not the deployment's own sentence. */
   note?: string;
+  /** The deployment asks the person to think before moving to this one. */
+  caution?: { note: string; manage?: { url: string; label: string } };
 }
 
 /** The provider id the rows of programs carry here; it never reaches a file. */
@@ -84,6 +87,8 @@ export function ModelPicker({ projectId, triggerClassName, compact }: ModelPicke
   const [saving, setSaving] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const searchRef = useRef<HTMLInputElement>(null);
+  // A model the deployment warns about, waiting for the person to say yes.
+  const [confirming, setConfirming] = useState<ModelOption | null>(null);
   const { state: engines, refresh: refreshEngines } = useEngines(projectId ?? null);
   // A program put down or taken up elsewhere (the chat's own "carry on with a model" button, the
   // Models tab, another window) is announced as a change to the project: the label follows it.
@@ -147,6 +152,7 @@ export function ModelPicker({ projectId, triggerClassName, compact }: ModelPicke
         // providers the provider is the heading, because that is the thing you
         // connected.
         group: managed ? managedGroup(catalog?.family) : providerNames.get(model.provider) || model.provider,
+        caution: managed ? catalog?.caution : undefined,
       };
     });
     // The included models this workspace cannot use right now are still shown,
@@ -264,12 +270,18 @@ export function ModelPicker({ projectId, triggerClassName, compact }: ModelPicke
     await refreshEngines();
   }
 
-  async function choose(option: ModelOption) {
+  async function choose(option: ModelOption, confirmed = false) {
     if (saving || option.locked) return;
     if (option.engine) {
       await chooseProgram(option);
       return;
     }
+    // Asked once, at the moment of moving; staying on it is not asked again.
+    if (option.caution && !confirmed && chosen?.model !== option.id) {
+      setConfirming(option);
+      return;
+    }
+    setConfirming(null);
     setSaving(option.id);
     setError(null);
     const previous = chosen;
@@ -335,7 +347,7 @@ export function ModelPicker({ projectId, triggerClassName, compact }: ModelPicke
       open={open}
       onOpenChange={(next) => {
         setOpen(next);
-        if (!next) { setQuery(""); setError(null); return; }
+        if (!next) { setQuery(""); setError(null); setConfirming(null); return; }
         // Re-read on open rather than polling: the agent can switch the project
         // mid-conversation, and this line would otherwise name the old model
         // until the page was reloaded.
@@ -367,6 +379,51 @@ export function ModelPicker({ projectId, triggerClassName, compact }: ModelPicke
         </button>
       </PopoverTrigger>
       <PopoverContent align="center" className="w-80 p-0" sideOffset={6}>
+        {confirming?.caution ? (
+          <div className="space-y-3 p-3" role="alertdialog" aria-labelledby="model-picker-caution">
+            <p id="model-picker-caution" className="flex items-start gap-2 text-sm">
+              <CircleAlert className="mt-0.5 size-4 shrink-0 text-warning" aria-hidden="true" />
+              <span>
+                <span className="font-medium">{confirming.label}</span>
+                {" - "}
+                {confirming.caution.note}
+                {confirming.caution.manage ? (
+                  <>
+                    {" "}
+                    <a
+                      href={confirming.caution.manage.url}
+                      target="_blank"
+                      rel="noreferrer"
+                      className="inline-flex items-center gap-0.5 font-medium underline-offset-2 hover:underline"
+                    >
+                      {confirming.caution.manage.label}
+                      <ExternalLink className="size-3" aria-hidden="true" />
+                    </a>
+                  </>
+                ) : null}
+              </span>
+            </p>
+            <div className="flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => void choose(confirming, true)}
+                className="rounded-md px-2.5 py-1.5 text-xs text-muted-foreground hover:bg-accent hover:text-accent-foreground"
+              >
+                {saving === confirming.id ? <Loader2 className="size-3.5 animate-spin" /> : t("chat.modelPicker.caution.switch")}
+              </button>
+              <button
+                type="button"
+                autoFocus
+                onClick={() => setConfirming(null)}
+                className="rounded-md bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-foreground hover:bg-primary/90"
+              >
+                {currentLabel ? t("chat.modelPicker.caution.stay", { model: currentLabel }) : t("chat.modelPicker.caution.back")}
+              </button>
+            </div>
+            {error ? <p className="text-xs text-destructive">{error}</p> : null}
+          </div>
+        ) : (
+        <>
         <div className="flex items-center gap-2 border-b px-3 py-2">
           <Search className="size-3.5 shrink-0 text-muted-foreground" />
           <input
@@ -455,6 +512,8 @@ export function ModelPicker({ projectId, triggerClassName, compact }: ModelPicke
           <p className="border-t px-3 py-2 text-[11px] text-muted-foreground">
             {projectId ? t("chat.modelPicker.scopeProject") : t("chat.modelPicker.scopeWorkspace")}
           </p>
+        )}
+        </>
         )}
       </PopoverContent>
     </Popover>

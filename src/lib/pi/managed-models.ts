@@ -52,6 +52,12 @@ export interface ManagedCatalogModel {
   note?: string;
   /** Where to go about it. */
   manage?: ManagedCatalogLink;
+  /**
+   * Open to this workspace, but the deployment asks the person to think before
+   * moving to it: its sentence, in the workspace's language, and where to go.
+   * The picker asks before switching; nothing else changes.
+   */
+  caution?: { note: string; manage?: ManagedCatalogLink };
 }
 
 export interface ManagedCatalogLink {
@@ -183,9 +189,15 @@ export function parseManagedCatalogPayload(payload: unknown): ManagedCatalogMode
         ? extra.note.trim().slice(0, 300)
         : undefined,
       manage: extra.available === false ? parseLink(extra.manage) : undefined,
+      caution: extra.available !== false ? parseCaution(extra.caution) : undefined,
     });
   }
   return models;
+}
+
+function parseCaution(value: unknown): ManagedCatalogModel["caution"] {
+  if (!isRecord(value) || typeof value.note !== "string" || !value.note.trim()) return undefined;
+  return { note: value.note.trim().slice(0, 300), manage: parseLink(value.manage) };
 }
 
 export async function readManagedCatalog(): Promise<ManagedCatalogModel[]> {

@@ -103,6 +103,20 @@ check("cache prices fall back to the input price rather than to zero", () => {
   assert.equal(model.price?.cacheRead, 0.4);
   assert.equal(model.price?.cacheWrite, 0.4);
 });
+check("a warning before a dear model is carried, with its link; a broken one is dropped", () => {
+  const models = parseManagedCatalogPayload({ data: [
+    { id: "dear", eggent: { caution: { note: " 40x the default. ", manage: { url: "https://b.example.test/plans", label: "Plans" } } } },
+    { id: "bad-link", eggent: { caution: { note: "Dear.", manage: { url: "javascript:alert(1)", label: "x" } } } },
+    { id: "empty", eggent: { caution: { note: "  " } } },
+    { id: "locked", eggent: { available: false, caution: { note: "Dear." } } },
+  ] });
+  const by = new Map(models.map((model) => [model.id, model]));
+  assert.deepEqual(by.get("dear")!.caution, { note: "40x the default.", manage: { url: "https://b.example.test/plans", label: "Plans" } });
+  assert.deepEqual(by.get("bad-link")!.caution, { note: "Dear.", manage: undefined });
+  assert.equal(by.get("empty")!.caution, undefined);
+  // A locked model says why it is locked; a warning about switching to it means nothing.
+  assert.equal(by.get("locked")!.caution, undefined);
+});
 check("a row with no id is dropped, not given one", () => {
   const models = parseManagedCatalogPayload({ data: [{ object: "model" }, { id: "  " }, { id: "real" }] });
   assert.deepEqual(models.map((model) => model.id), ["real"]);
