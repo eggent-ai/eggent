@@ -27,8 +27,10 @@ export default function ModelsPage() {
         description={t("settings.models.description")}
         scope={<SettingsScopeSelect scope={scope} />}
       />
-      {/* Programs found on this computer; nothing at all where there are none. */}
-      <EnginesPlate key={scope.scopeId} projectId={scope.isOrchestrator ? null : scope.scopeId} />
+      {/* Programs found on this computer; nothing at all where there are none.
+          Its key must differ from the project form's below: two siblings under one key
+          left the previous project's plate on screen after every switch. */}
+      <EnginesPlate key={`engines:${scope.scopeId}`} projectId={scope.isOrchestrator ? null : scope.scopeId} />
       {scope.isOrchestrator ? (
         <>
           <WorkspaceModelSettings />
