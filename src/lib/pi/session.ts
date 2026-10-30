@@ -348,7 +348,7 @@ function buildEggentProjectContext(options: {
     "- Settings -> Context / Memory / Skills / MCP: the orchestrator's own files. A project has the same four on its own page under Settings -> Projects.",
     "- Settings -> Messengers: Telegram. Settings -> API: the external API token. Settings -> Schedules: recurring work.",
     "- Board, in the sidebar: the task board - cards of work you carry out one by one, each in a chat of its own, with columns Inbox, Queue, Working, Waiting for you and Done.",
-    "- list_projects / create_project / switch_project for navigating Eggent projects.",
+    "- list_projects / create_project / switch_project / delete_project for Eggent projects.",
     options.projectId
       ? "- eggent_memory_search / eggent_memory_save / eggent_memory_delete for the project memory.md file."
       : "- eggent_memory_search / eggent_memory_save / eggent_memory_delete for the orchestrator's own memory.md file. Pass project_id to reach a specific project's memory instead.",

@@ -24,7 +24,9 @@ import { DEFER_INTERACTION_ANSWER, type PiPendingInteraction } from "@/lib/pi/in
 import { resolveTelegramDestination } from "@/lib/telegram/outbound";
 import { afterTelegramDelivery } from "@/lib/telegram/conversation";
 import { createTelegramTools } from "@/lib/telegram/tools";
-import { createChat, getChat } from "@/lib/storage/chat-store";
+import { createChat, getAllChats, getChat } from "@/lib/storage/chat-store";
+import { getActiveRun } from "@/lib/pi/active-runs";
+import { forgetHistory } from "@/lib/files/versions/capture";
 import { getChatFiles } from "@/lib/storage/chat-files-store";
 import { squashName } from "@/lib/pi/project-mention";
 import { describeVisitResult, runProjectVisit, visitChatIdFor, visitGranted, visitProgressDetails } from "@/lib/pi/project-visit";
@@ -48,7 +50,9 @@ import { boardRunsHere } from "@/lib/board/place";
 import {
   createProject,
   createSkill,
+  deleteProject,
   deleteProjectMcpServer,
+  GLOBAL_PROJECT_ID,
   getAllProjects,
   searchProjectMemory,
   appendProjectMemory,
@@ -814,6 +818,40 @@ export async function createEggentPiTools(options: {
         return textResult(
           JSON.stringify({ success: true, action: "create_project", projectId: project.id, project }, null, 2),
           { project }
+        );
+      },
+    }),
+    defineTool({
+      name: "delete_project",
+      label: "Delete Eggent Project",
+      // Without it, asked to delete a project, an agent opened the browser and
+      // asked the person to sign in, then removed the folder with a script -
+      // past the chats, memory and file history that go with a project.
+      description: "Delete an Eggent project for good: its folder with every file, its chats, memory and file history. Only when the user asked for this project to be deleted, and only after they confirmed it (ask with eggent_ask_user, naming the project). It cannot be undone.",
+      parameters: Type.Object({
+        project_id: Type.String({ description: "Id of the project to delete, as list_projects shows it." }),
+      }),
+      execute: async (_toolCallId, params) => {
+        const fail = (error: string) => textResult(JSON.stringify({ success: false, error }, null, 2));
+        // A scheduled run has nobody in it to have asked for this.
+        if (isScheduledRunSessionId(options.chatId)) return fail("A project cannot be deleted from a scheduled run.");
+        if (options.visit) return fail("A project asked for help cannot delete projects.");
+        const wanted = params.project_id.trim();
+        const projects = await getAllProjects();
+        const project = projects.find((item) => item.id === wanted) ?? projects.find((item) => item.name === wanted);
+        if (!project || project.id === GLOBAL_PROJECT_ID) return fail(`There is no project "${wanted}". Call list_projects for the ids.`);
+        if (project.id === options.projectId) {
+          return fail("This chat belongs to that project, and deleting it would delete this chat as well. Ask the user to do it from a chat outside the project, or in Settings -> Projects.");
+        }
+        const chats = (await getAllChats()).filter((chat) => chat.projectId === project.id);
+        if (chats.some((chat) => getActiveRun(chat.id))) {
+          return fail("A chat in that project is working right now. Wait until it finishes, or stop it, then delete.");
+        }
+        if (!(await deleteProject(project.id))) return fail("The project could not be deleted. Nothing more is known; try again in a moment.");
+        await forgetHistory(GLOBAL_PROJECT_ID, project.id, { folder: true }).catch(() => undefined);
+        return textResult(
+          JSON.stringify({ success: true, action: "delete_project", projectId: project.id, name: project.name, deletedChats: chats.length }, null, 2),
+          { projectId: project.id }
         );
       },
     }),

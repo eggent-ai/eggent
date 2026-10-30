@@ -1837,6 +1837,17 @@ export async function updateProject(
   return updated;
 }
 
+/** Remove the table rows naming `projectId` (as `` `id` ``) from the orchestrator's context.md. */
+async function dropProjectRoutingRow(projectId: string): Promise<void> {
+  const contextPath = getProjectContextPath(GLOBAL_PROJECT_ID);
+  const existing = await readTextIfExists(contextPath);
+  if (!existing) return;
+  const mark = `\`${projectId}\``;
+  const lines = existing.split("\n");
+  const kept = lines.filter((line) => !(line.trim().startsWith("|") && line.includes(mark)));
+  if (kept.length !== lines.length) await fs.writeFile(contextPath, kept.join("\n"), "utf-8");
+}
+
 export async function deleteProject(projectId: string): Promise<boolean> {
   let targetDir: string;
   try {
@@ -1860,8 +1871,13 @@ export async function deleteProject(projectId: string): Promise<boolean> {
     const memoryDir = path.join(DATA_DIR, "memory", projectId);
     await fs.rm(memoryDir, { recursive: true, force: true });
     clearMemoryCache(projectId);
-    // Remove project directory (config files, skills, user files, legacy .meta, etc.)
-    await fs.rm(targetDir, { recursive: true, force: true });
+    // Remove project directory (config files, skills, user files, legacy .meta, etc.).
+    // Retried: a page polling the project can write a file into it mid-removal,
+    // which failed the delete with ENOTEMPTY after the chats were already gone.
+    await fs.rm(targetDir, { recursive: true, force: true, maxRetries: 3, retryDelay: 100 });
+    // The orchestrator's routing table would keep sending work to a project
+    // that is gone. Only its own row goes; the rest of context.md is untouched.
+    await dropProjectRoutingRow(projectId).catch(() => undefined);
     publishUiSyncEvent({
       topic: "projects",
       projectId,
