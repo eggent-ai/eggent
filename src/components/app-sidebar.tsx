@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
 import {
   Bot,
+  Building2,
   CalendarClock,
   Cloud,
   CornerDownRight,
@@ -13,6 +14,7 @@ import {
   Laptop,
   Mail,
   LifeBuoy,
+  Link2,
   LogOut,
   MessageSquarePlus,
   Plus,
@@ -22,6 +24,7 @@ import {
 } from "lucide-react";
 import { useAppStore } from "@/store/app-store";
 import type { ChatListItem } from "@/lib/types";
+import type { ProjectSharingAnswer, ProjectSharingMark } from "@/lib/project-sharing/types";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useMailContacts } from "@/components/mail/use-mail-contacts";
@@ -176,6 +179,16 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       });
   }, [setProjects, projectsTick]);
 
+  // Which projects are shared - by a public link or with the company's people -
+  // asked on the same tick as the list, so the marks arrive with the rows.
+  const [sharing, setSharing] = React.useState<ProjectSharingAnswer | null>(null);
+  useEffect(() => {
+    fetch("/api/project-sharing")
+      .then((r) => (r.ok ? r.json() : { enabled: false }))
+      .then((data: ProjectSharingAnswer) => setSharing(data))
+      .catch(() => setSharing((current) => current ?? { enabled: false }));
+  }, [projectsTick]);
+
   // Keep active project aligned with available projects, but keep the
   // orchestrator (activeProjectId === null) as a valid persistent mode.
   //
@@ -219,7 +232,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   // refresh updates rows in place.
   const mailAnswer = useMailContacts();
   const emailAnswer = useEmailStatus();
-  const sidesIn = mailAnswer !== null && emailAnswer !== null && companyProjects !== null;
+  const sidesIn = mailAnswer !== null && emailAnswer !== null && companyProjects !== null && sharing !== null;
   const [sidesTimedOut, setSidesTimedOut] = React.useState(false);
   useEffect(() => {
     const timer = window.setTimeout(() => setSidesTimedOut(true), SIDE_SECTIONS_WAIT_MS);
@@ -376,6 +389,38 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   );
 
   /**
+   * Small marks after a project's name: the company's building when it is open
+   * to the company's people (the same mark their own sidebar gives it), a link
+   * when it has a public one. They never shrink; a long name gives way first.
+   */
+  const renderShareMarks = (mark: ProjectSharingMark | undefined) => {
+    if (!mark) return null;
+    const company = mark.company;
+    const companyLabel = !company
+      ? null
+      : company.all
+        ? t("nav.sharedCompanyAll")
+        : company.teams.length + company.people.length > 0
+          ? t("nav.sharedCompanyTo", { who: [...company.teams.map((team) => t("nav.sharedTeam", { name: team })), ...company.people].join(", ") })
+          : t("nav.sharedCompany");
+    if (!companyLabel && !mark.public) return null;
+    return (
+      <span className="text-muted-foreground flex shrink-0 items-center gap-1">
+        {companyLabel ? (
+          <span role="img" aria-label={companyLabel} title={companyLabel} className="flex">
+            <Building2 aria-hidden className="size-3.5" />
+          </span>
+        ) : null}
+        {mark.public ? (
+          <span role="img" aria-label={t("nav.sharedPublic")} title={t("nav.sharedPublic")} className="flex">
+            <Link2 aria-hidden className="size-3.5" />
+          </span>
+        ) : null}
+      </span>
+    );
+  };
+
+  /**
    * A project's row and, under it, its newest chats. The row itself starts a
    * new chat there and reads as the open one only while that new chat is on
    * screen; once a conversation is open, its own row carries the mark.
@@ -408,7 +453,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             title={t("nav.newChatIn", { project: name })}
           >
             {icon}
-            <span className="truncate">{name}</span>
+            <span className="min-w-0 truncate">{name}</span>
+            {projectId ? renderShareMarks(sharing && sharing.enabled ? sharing.projects[projectId] : undefined) : null}
           </SidebarMenuButton>
         </SidebarMenuItem>
         {shown.map(renderChat)}
