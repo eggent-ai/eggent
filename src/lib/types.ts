@@ -116,6 +116,8 @@ export interface ChatMessage {
   piRuntimeStats?: PiRuntimeStats;
   /** Written while the turn waits on a question; replaced when the turn ends. */
   inProgress?: boolean;
+  /** A shared project's first message, put in before the guest wrote (lib/external/guest-turn.ts). */
+  opening?: boolean;
   /** What the agent saved after this answer, once it had looked back over it. */
   learned?: LearnedNotice;
   /** The files this turn made, for the row under the answer: see files/produced.ts. */

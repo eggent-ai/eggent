@@ -23,6 +23,12 @@ export interface PiSessionOptions {
    */
   publicShare?: boolean;
   /**
+   * The share's first message, said by the project before the visitor wrote:
+   * the model is told it opened the conversation with it, so a bare "yes"
+   * answers it. Read only by a public-share session.
+   */
+  publicOpening?: string;
+  /**
    * This session is a project doing work for another chat, which is where its
    * answer goes; see project-visit.ts. A visit cannot visit, runs no more than
    * two helpers at once, does not learn from the exchange, and whatever it

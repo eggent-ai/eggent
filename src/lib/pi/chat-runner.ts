@@ -1759,6 +1759,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
             chatContextMode: options.chatContextMode,
             enableEggentTools: options.enableEggentTools,
             publicShare: options.publicShare,
+            publicOpening: options.publicOpening,
             toolRuntimeData: options.toolRuntimeData,
             remote: options.remote,
             runId,

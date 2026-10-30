@@ -3,7 +3,7 @@ import { createPiChatUIMessageStream } from "@/lib/pi/chat-runner";
 import { attachToLiveRun, getLiveRun } from "@/lib/pi/live-run";
 import { getActiveRun, stopActiveRun } from "@/lib/pi/active-runs";
 import { respondToPendingInteraction, getPendingInteraction } from "@/lib/pi/pending-interactions";
-import { getChat } from "@/lib/storage/chat-store";
+import { getChat, saveChat } from "@/lib/storage/chat-store";
 import { getExternalSession, sessionChatId } from "@/lib/storage/external-session-store";
 import { resolveGuestSessionChat } from "@/lib/external/handle-external-message";
 import type { ChatMessage } from "@/lib/types";
@@ -21,6 +21,7 @@ import type { ChatMessage } from "@/lib/types";
  */
 
 export const GUEST_MAX_MESSAGE = 8000;
+export const GUEST_MAX_OPENING = 2000;
 
 /**
  * Parts a guest is not shown: what the turn cost and on which model, the
@@ -86,6 +87,8 @@ export async function guestTurnResponse(input: {
   projectId: string;
   message: string;
   toolRuntimeData?: Record<string, unknown>;
+  /** The share's first message: the project's opening line, said before the guest's first message. */
+  opening?: string;
 }): Promise<Response> {
   const message = input.message.trim();
   if (!message) throw new GuestTurnError("The message is empty.", 400, "emptyMessage");
@@ -94,6 +97,7 @@ export async function guestTurnResponse(input: {
   // A message while the turn works waits for it to end: a guest has no way to
   // say something to a working turn, and a second turn would race the first.
   if (getActiveRun(chatId)) throw new GuestTurnError("The answer to the last message is still being written.", 409, "busy");
+  const opening = await openConversation(chatId, input.opening);
   const stream = createPiChatUIMessageStream({
     chatId,
     projectId,
@@ -101,8 +105,35 @@ export async function guestTurnResponse(input: {
     publicShare: true,
     enableEggentTools: false,
     toolRuntimeData: input.toolRuntimeData,
+    ...(opening ? { publicOpening: opening } : {}),
   });
   return guestResponse(createUIMessageStreamResponse({ stream }));
+}
+
+/**
+ * The opening a conversation has: the one it began with, written into the chat
+ * as the project's first message when the conversation begins, so it is there
+ * on every later visit and the model is told it said it. No model call: it is
+ * the owner's words, not a turn. A conversation begun before the share had one
+ * keeps none, and changing the share's text does not rewrite one begun earlier.
+ */
+async function openConversation(chatId: string, raw: string | undefined): Promise<string | undefined> {
+  const chat = await getChat(chatId);
+  if (!chat) return undefined;
+  const first = chat.messages[0];
+  if (first) return first.role === "assistant" && first.opening ? first.content : undefined;
+  const text = raw?.replace(/\r\n?/g, "\n").trim().slice(0, GUEST_MAX_OPENING);
+  if (!text) return undefined;
+  chat.messages.push({
+    id: `opening-${crypto.randomUUID()}`,
+    role: "assistant",
+    content: text,
+    createdAt: new Date().toISOString(),
+    parts: [{ type: "text", text }],
+    opening: true,
+  });
+  await saveChat(chat);
+  return text;
 }
 
 /** The chat a guest session talks in, if it has one yet. */

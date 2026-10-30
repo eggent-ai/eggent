@@ -103,7 +103,8 @@ export function CompanyProjectChat({ projectId }: { projectId: string }) {
       }}
       onBusyChange={setBusy}
       onSettled={() => void loadConversations()}
-      empty={{ title: project?.title ?? t("companyProjects.pageTitle"), description: project?.welcome || t("companyProjects.empty") }}
+      empty={{ title: project?.title ?? t("companyProjects.pageTitle"), description: t("companyProjects.empty") }}
+      welcome={project?.welcome}
       note={t("companyProjects.readOnly")}
       header={header}
     />

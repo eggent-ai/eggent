@@ -38,6 +38,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
       sessionId: visitorSessionId(token, visitor.id, conversation),
       projectId: share.projectId,
       message,
+      opening: share.welcome ?? undefined,
       // Hidden from the model: who is writing, stamped on any answers they leave.
       toolRuntimeData: {
         publicAnswers: {

@@ -207,6 +207,14 @@ await check("a visitor's message is answered as the chat's own stream, naming th
   assert.match(text, /Answer from the stub/);
   assert.doesNotMatch(text, /data-piStats/);
 });
+await check("the link's first message opens the conversation as the project's, before the visitor's", async () => {
+  const chat = await (await chatRoute.GET(laptop.request("/x"), p(LINK, { conversation: annaConversation }))).json();
+  const [first, second] = chat.chat.messages;
+  assert.equal(first.role, "assistant");
+  assert.equal(first.content, "Hello there");
+  assert.equal(first.opening, true);
+  assert.equal(second.role, "user");
+});
 await check("after a refresh the same browser finds its conversation", async () => {
   const data = await info(laptop);
   assert.equal(data.conversations[0].id, annaConversation);
@@ -219,6 +227,8 @@ await check("a visitor asks no more than the link allows in an hour", async () =
   const second = await messageRoute.POST(laptop.request(`/s/${LINK}/api/message`, { method: "POST", body: { message: "And?", conversation: annaConversation } }), p(LINK));
   assert.equal(second.status, 200);
   await second.text();
+  const chat = await (await chatRoute.GET(laptop.request("/x"), p(LINK, { conversation: annaConversation }))).json();
+  assert.equal(chat.chat.messages.filter((message: { opening?: boolean }) => message.opening).length, 1, "the opening was written twice");
   const third = await messageRoute.POST(laptop.request(`/s/${LINK}/api/message`, { method: "POST", body: { message: "More?", conversation: annaConversation } }), p(LINK));
   assert.equal(third.status, 429);
 });

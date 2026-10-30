@@ -876,6 +876,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
               projectInstructions: workspaceInstructions,
               canAsk: Boolean(turn.onPiInteraction),
               canRecord: answersTargetOf(turn.toolRuntimeData) !== null,
+              opening: options.publicOpening,
             }),
         }
       : engineRun

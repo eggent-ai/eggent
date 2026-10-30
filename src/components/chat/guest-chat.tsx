@@ -51,6 +51,12 @@ interface GuestChatProps {
   onBusyChange?: (busy: boolean) => void;
   /** What an empty conversation says. */
   empty: { title: string; description?: string };
+  /**
+   * The share's first message: drawn as the project's opening message of a new
+   * conversation, and written into it by the server with the first message
+   * (lib/external/guest-turn.ts), so a stored conversation already holds it.
+   */
+  welcome?: string | null;
   /** The line under the composer. */
   note?: string;
   /** Above the conversation: a title, a conversation switcher. */
@@ -65,7 +71,7 @@ export function guestErrorText(data: { error?: unknown; code?: unknown } | null,
   return typeof data?.error === "string" && data.error ? data.error : fallback;
 }
 
-export function GuestChat({ endpoints, conversation, onConversation, onSettled, onBusyChange, empty, note, header }: GuestChatProps) {
+export function GuestChat({ endpoints, conversation, onConversation, onSettled, onBusyChange, empty, welcome, note, header }: GuestChatProps) {
   const { t } = useI18n();
   const errorText = useCallback(async (response: Response, fallback: string) =>
     guestErrorText((await response.clone().json().catch(() => null)) as { error?: unknown; code?: unknown } | null, t, fallback), [t]);
@@ -115,6 +121,14 @@ export function GuestChat({ endpoints, conversation, onConversation, onSettled, 
     onFinish: () => onSettled?.(),
   });
   const isLoading = status === "submitted" || status === "streaming";
+  // A conversation begun on this screen opens with the share's first message;
+  // one opened from the list shows what it began with, as stored.
+  const [startedHere] = useState(() => !conversation);
+  const shown = useMemo<UIMessage[]>(() => {
+    const text = welcome?.trim();
+    if (!startedHere || !text) return messages;
+    return [{ id: "opening", role: "assistant", parts: [{ type: "text", text }] }, ...messages];
+  }, [messages, startedHere, welcome]);
   const surface = useMemo(() => ({ guest: true, transcribeUrl: endpoints.transcribe }), [endpoints.transcribe]);
   const pendingInteraction = useMemo(() => getLatestPendingInteraction(messages), [messages]);
   const onBusyChangeRef = useRef(onBusyChange);
@@ -197,7 +211,7 @@ export function GuestChat({ endpoints, conversation, onConversation, onSettled, 
       <div className="flex h-full min-h-0 flex-col overflow-hidden">
         {header}
         <ChatMessages
-          messages={messages}
+          messages={shown}
           isLoading={isLoading}
           errorMessage={error}
           pendingInteraction={pendingInteraction}

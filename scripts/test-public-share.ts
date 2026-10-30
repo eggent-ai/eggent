@@ -409,6 +409,35 @@ await check("a guest answers only a card the turn in their own conversation put 
   clearActiveRun(chatId, "run-mine");
   clearActiveRun(otherChat, "run-theirs");
 });
+await check("a share's first message is written once, at the start of a new conversation, and told to the model as its own", async () => {
+  const { guestTurnResponse, guestChat } = await import("../src/lib/external/guest-turn.ts");
+  const fresh = "share:tokenA:visitor9:conv0009";
+  const before = systemPrompts.length;
+  await (await guestTurnResponse({ sessionId: fresh, projectId: project.id, message: "yes", opening: "Hi! Shall we start the survey?" })).text();
+  const first = await guestChat(fresh);
+  assert.equal(first?.messages[0].role, "assistant");
+  assert.equal(first?.messages[0].content, "Hi! Shall we start the survey?");
+  assert.equal(first?.messages[1].role, "user");
+  const prompt = systemPrompts[before] ?? "";
+  assert.match(prompt, /You opened this conversation/);
+  assert.match(prompt, /Shall we start the survey\?/);
+  // The next message neither adds it again nor changes it, whatever the share says now.
+  await (await guestTurnResponse({ sessionId: fresh, projectId: project.id, message: "go on", opening: "A new greeting" })).text();
+  const again = await guestChat(fresh);
+  assert.equal(again?.messages.filter((message) => message.opening).length, 1);
+  assert.match(systemPrompts.at(-1) ?? "", /Shall we start the survey\?/);
+  assert.doesNotMatch(systemPrompts.at(-1) ?? "", /A new greeting/);
+});
+await check("a conversation begun without one gets none later", async () => {
+  const { guestTurnResponse, guestChat } = await import("../src/lib/external/guest-turn.ts");
+  const plain = "share:tokenA:visitor9:conv0010";
+  await (await guestTurnResponse({ sessionId: plain, projectId: project.id, message: "hello" })).text();
+  await (await guestTurnResponse({ sessionId: plain, projectId: project.id, message: "again", opening: "Late greeting" })).text();
+  const chat = await guestChat(plain);
+  assert.equal(chat?.messages[0].role, "user");
+  assert.ok(!chat?.messages.some((message) => message.opening));
+  assert.doesNotMatch(systemPrompts.at(-1) ?? "", /Late greeting|You opened this conversation/);
+});
 await check("the guest route wants the external token and a guest's session id", async () => {
   const { NextRequest } = await import("next/server");
   process.env.EXTERNAL_API_TOKEN = "guest-route-token";

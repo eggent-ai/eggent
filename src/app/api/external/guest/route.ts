@@ -11,7 +11,7 @@ export const maxDuration = 300;
  * guest in (the company's service, for its people): the same token as
  * /api/external/message, every call scoped to one session id the host chose.
  *
- *   POST {action: "message", sessionId, projectId, message, toolRuntimeData?}
+ *   POST {action: "message", sessionId, projectId, message, opening?, toolRuntimeData?}
  *        -> the workspace chat's UI message stream
  *   POST {action: "stop", sessionId}                       -> {stopped}
  *   POST {action: "answer", sessionId, interactionId, value?, cancel?} -> {answered}
@@ -67,6 +67,7 @@ export async function POST(req: NextRequest) {
       sessionId,
       projectId,
       message: typeof body.message === "string" ? body.message : "",
+      opening: typeof body.opening === "string" ? body.opening : undefined,
       toolRuntimeData,
     });
   } catch (error) {

@@ -278,7 +278,8 @@ export function PublicChat({ token }: { token: string }) {
           }}
           onBusyChange={setBusy}
           onSettled={() => void load()}
-          empty={{ title: info.share.title, description: info.share.welcome || t("publicChat.empty") }}
+          empty={{ title: info.share.title, description: t("publicChat.empty") }}
+          welcome={info.share.welcome}
           note={t("publicChat.note")}
           header={header}
         />
