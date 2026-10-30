@@ -1702,7 +1702,7 @@ const enMessages = {
   "nav.approvalsReturned": "{count} of yours returned for changes",
   "companyProjects.pageTitle": "Company project",
   "companyProjects.from": "From {name}",
-  "companyProjects.notice": "From {name}. It answers from its own files and cannot change anything; {name} can read what is asked here.",
+  "companyProjects.notice": "From {name}. It answers from its own files and can only keep the answers you give it for {name}; {name} can read what is asked here.",
   "companyProjects.readOnly": "Answers come from the project's files only. Enter sends, Shift+Enter starts a new line.",
   "companyProjects.empty": "Ask anything this project knows about.",
   "companyProjects.placeholder": "Ask the project...",
