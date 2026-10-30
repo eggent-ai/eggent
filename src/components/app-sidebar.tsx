@@ -61,6 +61,18 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 
 /** How many of a project's chats it shows under its name before "show more". */
 const RECENT_CHATS = 3;
+/**
+ * Where the person is, said more firmly than the stock active row: that one
+ * fills with the same tint as a hovered row and, in light mode, is barely
+ * darker than the sidebar itself, so "here" read like "under the pointer".
+ * A deeper fill and a short bar at the left edge, in the sidebar's primary
+ * colour, which hover never gets.
+ */
+const HERE_ROW = cn(
+  "relative data-[active=true]:bg-sidebar-foreground/[0.08]",
+  "before:pointer-events-none before:absolute before:inset-y-2 before:left-0.5 before:w-[3px] before:rounded-full before:bg-sidebar-primary before:opacity-0 data-[active=true]:before:opacity-100"
+);
+
 /** The longest the first draw waits for the Messages and company sections. */
 const SIDE_SECTIONS_WAIT_MS = 2000;
 
@@ -299,7 +311,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     <SidebarMenuItem key={chat.id} className={chatArrived(chat.id) ? "eggent-row-in" : undefined}>
       {/* Indented to the project's name, so the list reads as its own. */}
       <SidebarMenuButton
-        className="pl-8"
+        className={cn("pl-8", HERE_ROW)}
         isActive={activeChatId === chat.id}
         onClick={() => handleChatClick(chat)}
         title={
@@ -379,6 +391,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       if (active) shown = [...shown, active];
     }
     const hidden = list.length - shown.length;
+    // The project the open conversation belongs to: its name carries weight,
+    // so the two rows read as one path - this project, this chat.
+    const holdsOpenChat = activeProjectId === projectId && activeChatId !== null && !onCompanyProject;
     return (
       <React.Fragment key={key || "orchestrator"}>
         {/* A little air above each project after the first, so its chats read
@@ -387,6 +402,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           className={cn(projectId !== null && "mt-2", projectId && projectArrived(projectId) && "eggent-row-in")}
         >
           <SidebarMenuButton
+            className={cn(HERE_ROW, holdsOpenChat && "font-medium")}
             isActive={activeProjectId === projectId && activeChatId === null && !onCompanyProject}
             onClick={() => handleProjectClick(projectId)}
             title={t("nav.newChatIn", { project: name })}
