@@ -146,6 +146,17 @@ export async function guestChat(sessionId: string): Promise<GuestChatView | null
   };
 }
 
+/** A conversation as a list shows it: what was first asked, when it last moved. */
+export async function guestConversationSummary(sessionId: string): Promise<{ title: string; updatedAt: string; messages: number } | null> {
+  const chatId = await chatIdOf(sessionId);
+  const chat = chatId ? await getChat(chatId) : null;
+  if (!chat) return null;
+  const said = chat.messages.filter((message) => message.role === "user" || message.role === "assistant");
+  const first = said.find((message) => message.role === "user" && message.content.trim());
+  const text = first ? first.content.replace(/\s+/g, " ").trim() : "";
+  return { title: text.length > 80 ? `${text.slice(0, 79)}…` : text, updatedAt: chat.updatedAt, messages: said.length };
+}
+
 /** The turn working in this session's chat, from its beginning, or 204 when there is none. */
 export async function guestResumeResponse(sessionId: string, signal: AbortSignal): Promise<Response> {
   const chatId = await chatIdOf(sessionId);

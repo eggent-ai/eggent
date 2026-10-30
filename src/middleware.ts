@@ -73,6 +73,12 @@ export async function middleware(req: NextRequest) {
     return NextResponse.next();
   }
 
+  // A public link to a project: its page and its own routes, open to anybody;
+  // each route finds the link and the visitor itself (lib/public-chat).
+  if (pathname.startsWith("/s/")) {
+    return NextResponse.next();
+  }
+
   const token = req.cookies.get(AUTH_COOKIE_NAME)?.value || "";
   const session = token ? await verifyActiveSession(token) : null;
 

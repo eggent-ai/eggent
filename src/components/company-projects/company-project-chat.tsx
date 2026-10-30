@@ -2,10 +2,10 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { Building2, MessageSquarePlus } from "lucide-react";
+import { Building2 } from "lucide-react";
 import { useI18n } from "@/i18n/provider";
-import { Button } from "@/components/ui/button";
 import { GuestChat, type GuestChatEndpoints } from "@/components/chat/guest-chat";
+import { GuestConversationsBar } from "@/components/chat/guest-conversations";
 import { conversationIdOf, type CompanyConversationSummary } from "@/lib/company-projects/types";
 import { useCompanyProjects } from "./use-company-projects";
 import { companyProjectPath } from "./company-projects-nav";
@@ -80,39 +80,15 @@ export function CompanyProjectChat({ projectId }: { projectId: string }) {
   }
 
   const header = (
-    <div className="flex flex-wrap items-start justify-between gap-3 border-b px-4 pt-4 pb-3 md:px-6">
-      <div className="min-w-0">
-        <h1 className="flex items-center gap-2 text-lg/7 font-semibold">
-          <Building2 aria-hidden className="text-muted-foreground size-4 shrink-0" />
-          <span className="truncate">{project?.title ?? " "}</span>
-        </h1>
-        <p className="text-muted-foreground text-sm">
-          {project ? t("companyProjects.notice", { name: project.from }) : " "}
-        </p>
-      </div>
-      <div className="flex w-full min-w-0 items-center gap-2 sm:w-auto">
-        {conversations.length > 0 ? (
-          <select
-            className="border-input bg-background h-9 min-w-0 flex-1 rounded-md border px-2 text-sm sm:max-w-56 sm:flex-none"
-            value={opened.conversation ?? ""}
-            onChange={(event) => openConversation(event.target.value || null)}
-            disabled={busy}
-            aria-label={t("companyProjects.conversations")}
-          >
-            <option value="">{t("companyProjects.newConversation")}</option>
-            {conversations.map((item) => (
-              <option key={item.id} value={item.id}>
-                {item.title || t("companyProjects.untitled")}
-              </option>
-            ))}
-          </select>
-        ) : null}
-        <Button variant="outline" size="sm" className="h-9 shrink-0" onClick={() => openConversation(null)} disabled={busy || !opened.conversation} aria-label={t("companyProjects.newConversation")}>
-          <MessageSquarePlus className="size-4" />
-          <span className="hidden sm:inline">{t("companyProjects.newConversation")}</span>
-        </Button>
-      </div>
-    </div>
+    <GuestConversationsBar
+      icon={<Building2 />}
+      title={project?.title ?? ""}
+      notice={project ? t("companyProjects.notice", { name: project.from }) : null}
+      conversations={conversations}
+      current={opened.conversation}
+      busy={busy}
+      onOpen={openConversation}
+    />
   );
 
   return (
