@@ -6,6 +6,7 @@ import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
 import {
   Bot,
+  Building2,
   CalendarClock,
   Cloud,
   CornerDownRight,
@@ -13,6 +14,7 @@ import {
   Laptop,
   Mail,
   LifeBuoy,
+  Link2,
   LogOut,
   MessageSquarePlus,
   Plus,
@@ -22,7 +24,11 @@ import {
 } from "lucide-react";
 import { useAppStore } from "@/store/app-store";
 import type { ChatListItem } from "@/lib/types";
+import type { ProjectSharingAnswer, ProjectSharingMark } from "@/lib/project-sharing/types";
 import { cn } from "@/lib/utils";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useMailContacts } from "@/components/mail/use-mail-contacts";
+import { useEmailStatus } from "@/components/email/use-email-status";
 import { chatPath } from "@/lib/dashboard-routes";
 import { useBackgroundSync } from "@/hooks/use-background-sync";
 import { useActiveRuns } from "@/hooks/use-active-runs";
@@ -58,6 +64,47 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 
 /** How many of a project's chats it shows under its name before "show more". */
 const RECENT_CHATS = 3;
+/**
+ * Where the person is, said more firmly than the stock active row: that one
+ * fills with the same tint as a hovered row and, in light mode, is barely
+ * darker than the sidebar itself, so "here" read like "under the pointer".
+ * A deeper fill and a short bar at the left edge, in the sidebar's primary
+ * colour, which hover never gets.
+ */
+const HERE_ROW = cn(
+  "relative data-[active=true]:bg-sidebar-foreground/[0.08]",
+  "before:pointer-events-none before:absolute before:inset-y-2 before:left-0.5 before:w-[3px] before:rounded-full before:bg-sidebar-primary before:opacity-0 data-[active=true]:before:opacity-100"
+);
+
+/** The longest the first draw waits for the Messages and company sections. */
+const SIDE_SECTIONS_WAIT_MS = 2000;
+
+/**
+ * Where the project list will be, while it is on its way: rows of the same
+ * height and indent as the real ones, so nothing below moves when they land.
+ */
+function SidebarRowsSkeleton() {
+  const rows: Array<{ chat: boolean; width: string }> = [
+    { chat: false, width: "w-24" },
+    { chat: true, width: "w-32" },
+    { chat: true, width: "w-28" },
+    { chat: true, width: "w-36" },
+    { chat: false, width: "w-20" },
+    { chat: true, width: "w-28" },
+  ];
+  return (
+    <div aria-hidden="true">
+      {rows.map((row, index) => (
+        <div key={index} className={cn("flex h-8 items-center gap-2 px-2", row.chat ? "pl-8" : index > 0 && "mt-2")}>
+          {/* The sidebar's ground is close to the accent the default skeleton
+              uses, so it takes a tint of its own text colour instead. */}
+          {row.chat ? null : <Skeleton className="bg-sidebar-foreground/10 size-4 shrink-0 rounded-sm" />}
+          <Skeleton className={cn("bg-sidebar-foreground/10 h-3", row.width)} />
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { t } = useI18n();
@@ -115,6 +162,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   // Until the list has actually arrived once, "this project is not in the list"
   // means nothing - see the guard below.
   const [projectsLoaded, setProjectsLoaded] = React.useState(false);
+  const [chatsLoaded, setChatsLoaded] = React.useState(false);
 
   // Keep projects list in sync with background updates.
   useEffect(() => {
@@ -130,6 +178,16 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
         // is gone, and acting on it would close the chat that is open.
       });
   }, [setProjects, projectsTick]);
+
+  // Which projects are shared - by a public link or with the company's people -
+  // asked on the same tick as the list, so the marks arrive with the rows.
+  const [sharing, setSharing] = React.useState<ProjectSharingAnswer | null>(null);
+  useEffect(() => {
+    fetch("/api/project-sharing")
+      .then((r) => (r.ok ? r.json() : { enabled: false }))
+      .then((data: ProjectSharingAnswer) => setSharing(data))
+      .catch(() => setSharing((current) => current ?? { enabled: false }));
+  }, [projectsTick]);
 
   // Keep active project aligned with available projects, but keep the
   // orchestrator (activeProjectId === null) as a valid persistent mode.
@@ -158,10 +216,32 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     fetch("/api/chat/history")
       .then((r) => r.json())
       .then((data) => {
-        if (Array.isArray(data)) setChats(data);
+        if (!Array.isArray(data)) return;
+        setChats(data);
+        setChatsLoaded(true);
       })
       .catch(() => {});
   }, [setChats, chatsTick]);
+
+  // The list is drawn once, whole: projects, their chats and the Messages
+  // section above them arrive from four requests in whatever order they
+  // finish, and drawing each as it came moved the list three times on every
+  // load. Until then the rows' own shape stands in. The side sections are
+  // waited for at most SIDE_SECTIONS_WAIT_MS - a failed one answers nothing,
+  // and the list must not wait on it. Once drawn, it stays drawn: a later
+  // refresh updates rows in place.
+  const mailAnswer = useMailContacts();
+  const emailAnswer = useEmailStatus();
+  const sidesIn = mailAnswer !== null && emailAnswer !== null && companyProjects !== null && sharing !== null;
+  const [sidesTimedOut, setSidesTimedOut] = React.useState(false);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSidesTimedOut(true), SIDE_SECTIONS_WAIT_MS);
+    return () => window.clearTimeout(timer);
+  }, []);
+  const [listReady, setListReady] = React.useState(false);
+  if (!listReady && projectsLoaded && chatsLoaded && (sidesIn || sidesTimedOut)) {
+    setListReady(true);
+  }
 
   const handleNewChat = () => {
     goToChat(null);
@@ -244,7 +324,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     <SidebarMenuItem key={chat.id} className={chatArrived(chat.id) ? "eggent-row-in" : undefined}>
       {/* Indented to the project's name, so the list reads as its own. */}
       <SidebarMenuButton
-        className="pl-8"
+        className={cn("pl-8", HERE_ROW)}
         isActive={activeChatId === chat.id}
         onClick={() => handleChatClick(chat)}
         title={
@@ -309,6 +389,38 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   );
 
   /**
+   * Small marks after a project's name: the company's building when it is open
+   * to the company's people (the same mark their own sidebar gives it), a link
+   * when it has a public one. They never shrink; a long name gives way first.
+   */
+  const renderShareMarks = (mark: ProjectSharingMark | undefined) => {
+    if (!mark) return null;
+    const company = mark.company;
+    const companyLabel = !company
+      ? null
+      : company.all
+        ? t("nav.sharedCompanyAll")
+        : company.teams.length + company.people.length > 0
+          ? t("nav.sharedCompanyTo", { who: [...company.teams.map((team) => t("nav.sharedTeam", { name: team })), ...company.people].join(", ") })
+          : t("nav.sharedCompany");
+    if (!companyLabel && !mark.public) return null;
+    return (
+      <span className="text-muted-foreground flex shrink-0 items-center gap-1">
+        {companyLabel ? (
+          <span role="img" aria-label={companyLabel} title={companyLabel} className="flex">
+            <Building2 aria-hidden className="size-3.5" />
+          </span>
+        ) : null}
+        {mark.public ? (
+          <span role="img" aria-label={t("nav.sharedPublic")} title={t("nav.sharedPublic")} className="flex">
+            <Link2 aria-hidden className="size-3.5" />
+          </span>
+        ) : null}
+      </span>
+    );
+  };
+
+  /**
    * A project's row and, under it, its newest chats. The row itself starts a
    * new chat there and reads as the open one only while that new chat is on
    * screen; once a conversation is open, its own row carries the mark.
@@ -324,6 +436,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       if (active) shown = [...shown, active];
     }
     const hidden = list.length - shown.length;
+    // The project the open conversation belongs to: its name carries weight,
+    // so the two rows read as one path - this project, this chat.
+    const holdsOpenChat = activeProjectId === projectId && activeChatId !== null && !onCompanyProject;
     return (
       <React.Fragment key={key || "orchestrator"}>
         {/* A little air above each project after the first, so its chats read
@@ -332,12 +447,14 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           className={cn(projectId !== null && "mt-2", projectId && projectArrived(projectId) && "eggent-row-in")}
         >
           <SidebarMenuButton
+            className={cn(HERE_ROW, holdsOpenChat && "font-medium")}
             isActive={activeProjectId === projectId && activeChatId === null && !onCompanyProject}
             onClick={() => handleProjectClick(projectId)}
             title={t("nav.newChatIn", { project: name })}
           >
             {icon}
-            <span className="truncate">{name}</span>
+            <span className="min-w-0 truncate">{name}</span>
+            {projectId ? renderShareMarks(sharing && sharing.enabled ? sharing.projects[projectId] : undefined) : null}
           </SidebarMenuButton>
         </SidebarMenuItem>
         {shown.map(renderChat)}
@@ -414,7 +531,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       <SidebarContent>
 
         {/* Messages with the company's people, when this workspace has them. */}
-        <MailNav />
+        {listReady ? <MailNav className="eggent-surface-in" /> : null}
 
         {/* Project selector */}
         <SidebarGroup>
@@ -441,7 +558,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               />
             </PopoverContent>
           </Popover>
-          <SidebarMenu>
+          {listReady ? (
+          <SidebarMenu className="eggent-surface-in">
             {renderProject(null, t("nav.orchestrator"), <Bot className="size-4" />)}
             {projects.length === 0 && !hasCompanyProjects && (
               <SidebarMenuItem>
@@ -458,6 +576,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             {/* Projects the company opened to this person, when it has any. */}
             <CompanyProjectsNav />
           </SidebarMenu>
+          ) : (
+            <SidebarRowsSkeleton />
+          )}
         </SidebarGroup>
 
       </SidebarContent>
