@@ -53,6 +53,11 @@ export interface EmailRequestView {
   expiresAt: string;
   decidedVia: string | null;
   error: string | null;
+  /** The whole letter as frozen; absent from a deployment older than the chat's button. */
+  text?: string;
+  files?: Array<{ name: string; size: number }>;
+  /** The cloud's page that decides from a browser the person remembered there. */
+  approveUrl?: string;
 }
 
 export interface EmailStatus {

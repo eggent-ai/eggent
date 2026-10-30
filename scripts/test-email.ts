@@ -118,7 +118,8 @@ const stub = http.createServer(async (req, res) => {
     service.sends.push(body);
     const strangers = (body.to ?? []).filter((address) => address !== PERSON && address !== "me");
     if (strangers.length) {
-      json({ status: "pending", request: { id: `r${service.sends.length}`, to: strangers, subject: "Viewing", status: "pending", waitsIn: "telegram", createdAt: "2026-10-28T10:00:00.000Z", expiresAt: "2026-10-30T10:00:00.000Z", decidedVia: null, error: null } });
+      const id = `0000000${service.sends.length}`.slice(-8) + "-0000-4000-8000-000000000000";
+      json({ status: "pending", request: { id, to: strangers, subject: "Viewing", status: "pending", waitsIn: "telegram", createdAt: "2026-10-28T10:00:00.000Z", expiresAt: "2026-10-30T10:00:00.000Z", decidedVia: null, error: null, text: (body as { text?: string }).text ?? "", files: [], approveUrl: `https://cloud.example.test/email/approve/${id}` } });
       return;
     }
     json({ status: "sent", to: [PERSON], ids: [100 + service.sends.length], failed: [] });
@@ -210,6 +211,7 @@ const { safeFileName } = await import("../src/lib/email/store.ts");
 const { meantForEmail, createEmailToolGuardExtension } = await import("../src/lib/email/tool-guard.ts");
 const { meantForMessages } = await import("../src/lib/mail/tool-guard.ts");
 const { setSmtpTransportForTests } = await import("../src/lib/email/smtp.ts");
+const { emailApprovalFromToolOutput } = await import("../src/lib/email/approval-card.ts");
 await import("../src/lib/pi/helper-tools.ts");
 const { runPiAgentText } = await import("../src/lib/pi/chat-runner.ts");
 
@@ -310,6 +312,33 @@ await check("to anybody else the letter waits, and the agent is told it cannot a
   const again = await run(tool, { action: "send_email", to: ["friend@example.test"], subject: "Viewing", text: "Saturday?" });
   assert.match(String(again.note), /not done twice/);
   assert.equal(service.sends.filter((body) => body.text === "Saturday?").length, 1);
+});
+await check("in the web chat the waiting letter comes back whole with the cloud's page for its button; a messenger's turn gets none", async () => {
+  const web = createEmailTool({ chatId: "33333333-3333-4333-8333-333333333333", marksRead: () => true, webChat: () => true }) as unknown as ToolLike;
+  const result = await run(web, { action: "send_email", to: ["friend@example.test"], subject: "Viewing", text: "Card words.\nSecond line." });
+  const card = emailApprovalFromToolOutput(JSON.stringify(result));
+  assert.ok(card, "no card in the answer");
+  assert.match(card.url, /^https:\/\/cloud\.example\.test\/email\/approve\/[0-9a-f-]{36}$/);
+  assert.equal(card.text, "Card words.\nSecond line.");
+  assert.deepEqual(card.to, ["friend@example.test"]);
+  assert.match(String(result.note), /press the button below/);
+  const telegram = createEmailTool({ chatId: "33333333-3333-4333-8333-333333333333", marksRead: () => true, webChat: () => false }) as unknown as ToolLike;
+  const there = await run(telegram, { action: "send_email", to: ["friend@example.test"], subject: "Viewing", text: "Messenger words." });
+  assert.equal(there.approval, undefined);
+  assert.match(String(there.note), /waits for your person's yes in their messenger/);
+});
+await check("the card takes only the cloud's approval page, nothing else an answer could carry", async () => {
+  const base = { to: ["a@b.test"], subject: "s", text: "t", files: [], until: "" };
+  for (const url of [
+    "javascript:alert(1)//email/approve/00000001-0000-4000-8000-000000000000",
+    "https://cloud.example.test/email/review/abc",
+    "https://cloud.example.test/email/approve/00000001-0000-4000-8000-000000000000?decision=send",
+    "https://cloud.example.test/dashboard",
+    "not a url",
+  ]) {
+    assert.equal(emailApprovalFromToolOutput(JSON.stringify({ approval: { ...base, url } })), null, url);
+  }
+  assert.ok(emailApprovalFromToolOutput({ approval: { ...base, url: "https://cloud.example.test/email/approve/00000001-0000-4000-8000-000000000000" } }));
 });
 await check("a file of the workspace goes with the letter; credentials and files outside it do not", async () => {
   const result = await run(tool, { action: "send_email", text: "The report.", files: ["report.txt"] });

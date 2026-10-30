@@ -14,6 +14,8 @@ import { FileMention } from "./file-mention";
 import { StickyCopyButton, UserMessageFooter } from "./user-message-footer";
 import { LearnedNote } from "./learned-note";
 import { EmailReplyNote } from "@/components/email/email-chat-notes";
+import { EmailApprovalCard } from "@/components/email/email-approval-card";
+import { emailApprovalFromToolOutput, type EmailApprovalCard as EmailApproval } from "@/lib/email/approval-card";
 import type { EmailReplyNotice } from "@/lib/email/types";
 import { FilesProduced } from "./files-produced";
 import { GoogleConnectCard } from "@/components/google-connect-card";
@@ -357,6 +359,7 @@ export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
   if (!renderedParts.some(Boolean)) return null;
   const learned = learnedNoticeOf(message.parts);
   const emailReplies = emailRepliesOf(message.parts);
+  const emailApprovals = emailApprovalsOf(message.parts);
   const producedFiles = producedFilesOf(message.parts);
   const googleConnect = googleLinkOf(message.parts, connectUrlFromToolOutput);
   const googlePick = googleLinkOf(message.parts, pickUrlFromToolOutput);
@@ -374,6 +377,7 @@ export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
         {renderedParts}
         {producedFiles.length > 0 ? <FilesProduced groups={producedFiles} /> : null}
         {learned ? <LearnedNote notice={learned} /> : null}
+        {emailApprovals.map((card) => <EmailApprovalCard key={card.url} card={card} />)}
         {emailReplies.length ? <EmailReplyNote replies={emailReplies} /> : null}
         {googleConnect || googlePick ? <GoogleConnectCard variant="chat" connectUrl={googleConnect ?? undefined} pickUrl={googlePick ?? undefined} /> : null}
         {/* A program that could not finish: carry on with a model instead. Only under a complete answer. */}
@@ -456,6 +460,18 @@ function learnedNoticeOf(parts: UIMessage["parts"]): LearnedNotice | null {
     if (data && typeof data === "object" && Array.isArray(data.items) && data.items.length > 0) return data;
   }
   return null;
+}
+
+/** Letters to somebody else this answer asked to send, each waiting for the person's yes. */
+function emailApprovalsOf(parts: UIMessage["parts"]): EmailApproval[] {
+  const cards = new Map<string, EmailApproval>();
+  for (const part of parts) {
+    const tool = toolPartInfo(part);
+    if (!tool || tool.toolName !== "eggent_email" || tool.state !== "output-available") continue;
+    const card = emailApprovalFromToolOutput(tool.output);
+    if (card) cards.set(card.url, card);
+  }
+  return [...cards.values()];
 }
 
 /** Replies that came to letters the agent sent from this chat, when any did. */

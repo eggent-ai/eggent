@@ -1382,6 +1382,8 @@ export async function createEggentPiTools(options: {
         });
         return answer === true;
       },
+      // Somebody reads this turn in the web chat: not a messenger, not a run nobody watches.
+      webChat: () => Boolean(options.interactive) && !getTelegramRuntimeData(options.toolRuntimeData),
     }));
   }
 

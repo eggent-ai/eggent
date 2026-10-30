@@ -60,6 +60,8 @@ export interface EmailToolOptions {
    * letter to somebody else.
    */
   confirm?: (title: string, message: string) => Promise<boolean | null>;
+  /** Whether this turn is somebody's web chat, where a waiting letter is drawn with its button. */
+  webChat?: () => boolean;
 }
 
 function textResult(value: Record<string, unknown>) {
@@ -243,6 +245,7 @@ export function createEmailTool(options: EmailToolOptions) {
             attachments: read.files,
             replyTo: typeof params.reply_to === "number" && params.reply_to > 0 ? Math.floor(params.reply_to) : null,
           });
+          const card = answer.status === "pending" && Boolean(answer.request.approveUrl) && Boolean(options.chatId) && (options.webChat?.() ?? false);
           // So a reply to it can be told in this chat (notice.ts). A helper has no chat to tell.
           if (options.chatId) {
             await rememberLetterOrigin(
@@ -259,7 +262,23 @@ export function createEmailTool(options: EmailToolOptions) {
                 success: true,
                 sent: false,
                 waiting: { to: answer.request.to, subject: answer.request.subject, until: answer.request.expiresAt },
-                note: `Nothing is sent yet. The letter waits for your person's yes in ${answer.request.waitsIn === "telegram" ? "their messenger" : "their own mailbox"} until ${answer.request.expiresAt}. You cannot approve it, and no other way of sending is allowed: tell your person where to look, in one line.`,
+                // The web chat draws this as the letter with a button to the
+                // cloud's page; only a browser the person remembered there decides.
+                ...(card
+                  ? {
+                      approval: {
+                        url: answer.request.approveUrl,
+                        to: answer.request.to,
+                        subject: answer.request.subject,
+                        text: answer.request.text ?? text,
+                        files: answer.request.files ?? [],
+                        until: answer.request.expiresAt,
+                      },
+                    }
+                  : {}),
+                note: card
+                  ? `Nothing is sent yet. The whole letter is shown to your person under your answer in the web chat, with a button to approve it; the request also waits in ${answer.request.waitsIn === "telegram" ? "their messenger" : "their own mailbox"} until ${answer.request.expiresAt}. You cannot approve it, and no other way of sending is allowed: in one line, ask them to check the letter and press the button below, and do not repeat the letter.`
+                  : `Nothing is sent yet. The letter waits for your person's yes in ${answer.request.waitsIn === "telegram" ? "their messenger" : "their own mailbox"} until ${answer.request.expiresAt}. You cannot approve it, and no other way of sending is allowed: tell your person where to look, in one line.`,
               };
         } else {
           result = await sendSelfHosted(config, wanted, params.subject, text, read.files, options);
