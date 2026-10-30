@@ -23,6 +23,9 @@ import {
 import { useAppStore } from "@/store/app-store";
 import type { ChatListItem } from "@/lib/types";
 import { cn } from "@/lib/utils";
+import { Skeleton } from "@/components/ui/skeleton";
+import { useMailContacts } from "@/components/mail/use-mail-contacts";
+import { useEmailStatus } from "@/components/email/use-email-status";
 import { chatPath } from "@/lib/dashboard-routes";
 import { useBackgroundSync } from "@/hooks/use-background-sync";
 import { useActiveRuns } from "@/hooks/use-active-runs";
@@ -58,6 +61,35 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 
 /** How many of a project's chats it shows under its name before "show more". */
 const RECENT_CHATS = 3;
+/** The longest the first draw waits for the Messages and company sections. */
+const SIDE_SECTIONS_WAIT_MS = 2000;
+
+/**
+ * Where the project list will be, while it is on its way: rows of the same
+ * height and indent as the real ones, so nothing below moves when they land.
+ */
+function SidebarRowsSkeleton() {
+  const rows: Array<{ chat: boolean; width: string }> = [
+    { chat: false, width: "w-24" },
+    { chat: true, width: "w-32" },
+    { chat: true, width: "w-28" },
+    { chat: true, width: "w-36" },
+    { chat: false, width: "w-20" },
+    { chat: true, width: "w-28" },
+  ];
+  return (
+    <div aria-hidden="true">
+      {rows.map((row, index) => (
+        <div key={index} className={cn("flex h-8 items-center gap-2 px-2", row.chat ? "pl-8" : index > 0 && "mt-2")}>
+          {/* The sidebar's ground is close to the accent the default skeleton
+              uses, so it takes a tint of its own text colour instead. */}
+          {row.chat ? null : <Skeleton className="bg-sidebar-foreground/10 size-4 shrink-0 rounded-sm" />}
+          <Skeleton className={cn("bg-sidebar-foreground/10 h-3", row.width)} />
+        </div>
+      ))}
+    </div>
+  );
+}
 
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { t } = useI18n();
@@ -115,6 +147,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   // Until the list has actually arrived once, "this project is not in the list"
   // means nothing - see the guard below.
   const [projectsLoaded, setProjectsLoaded] = React.useState(false);
+  const [chatsLoaded, setChatsLoaded] = React.useState(false);
 
   // Keep projects list in sync with background updates.
   useEffect(() => {
@@ -158,10 +191,32 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     fetch("/api/chat/history")
       .then((r) => r.json())
       .then((data) => {
-        if (Array.isArray(data)) setChats(data);
+        if (!Array.isArray(data)) return;
+        setChats(data);
+        setChatsLoaded(true);
       })
       .catch(() => {});
   }, [setChats, chatsTick]);
+
+  // The list is drawn once, whole: projects, their chats and the Messages
+  // section above them arrive from four requests in whatever order they
+  // finish, and drawing each as it came moved the list three times on every
+  // load. Until then the rows' own shape stands in. The side sections are
+  // waited for at most SIDE_SECTIONS_WAIT_MS - a failed one answers nothing,
+  // and the list must not wait on it. Once drawn, it stays drawn: a later
+  // refresh updates rows in place.
+  const mailAnswer = useMailContacts();
+  const emailAnswer = useEmailStatus();
+  const sidesIn = mailAnswer !== null && emailAnswer !== null && companyProjects !== null;
+  const [sidesTimedOut, setSidesTimedOut] = React.useState(false);
+  useEffect(() => {
+    const timer = window.setTimeout(() => setSidesTimedOut(true), SIDE_SECTIONS_WAIT_MS);
+    return () => window.clearTimeout(timer);
+  }, []);
+  const [listReady, setListReady] = React.useState(false);
+  if (!listReady && projectsLoaded && chatsLoaded && (sidesIn || sidesTimedOut)) {
+    setListReady(true);
+  }
 
   const handleNewChat = () => {
     goToChat(null);
@@ -414,7 +469,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
       <SidebarContent>
 
         {/* Messages with the company's people, when this workspace has them. */}
-        <MailNav />
+        {listReady ? <MailNav className="eggent-surface-in" /> : null}
 
         {/* Project selector */}
         <SidebarGroup>
@@ -441,7 +496,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
               />
             </PopoverContent>
           </Popover>
-          <SidebarMenu>
+          {listReady ? (
+          <SidebarMenu className="eggent-surface-in">
             {renderProject(null, t("nav.orchestrator"), <Bot className="size-4" />)}
             {projects.length === 0 && !hasCompanyProjects && (
               <SidebarMenuItem>
@@ -458,6 +514,9 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             {/* Projects the company opened to this person, when it has any. */}
             <CompanyProjectsNav />
           </SidebarMenu>
+          ) : (
+            <SidebarRowsSkeleton />
+          )}
         </SidebarGroup>
 
       </SidebarContent>

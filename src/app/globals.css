@@ -305,6 +305,17 @@
     animation-duration: 3.2s !important;
     animation-iteration-count: infinite !important;
   }
+  /* Content replacing its skeleton still fades rather than snapping over the
+     shape: nothing travels, but the swap is not a flash. */
+  .eggent-surface-in {
+    animation-name: eggent-fade-in !important;
+    animation-duration: 160ms !important;
+  }
+}
+
+@keyframes eggent-fade-in {
+  from { opacity: 0; }
+  to   { opacity: 1; }
 }
 
 /* The authored moment: a result confirming itself.
@@ -404,6 +415,16 @@
 }
 .eggent-row-in {
   animation: eggent-row-in 160ms var(--ease-out) both;
+}
+
+/* A surface replacing its skeleton: the real content settles where the shape
+   stood, once, instead of each piece popping in as its request returns. */
+@keyframes eggent-surface-in {
+  from { opacity: 0; transform: translateY(4px); }
+  to   { opacity: 1; transform: none; }
+}
+.eggent-surface-in {
+  animation: eggent-surface-in 240ms var(--ease-out) both;
 }
 
 /* A count changing beside a row: the new number settles in place. */

@@ -33,7 +33,7 @@ export function mailThreadPath(contactId: string): string {
  * workspace has a mailbox, then one row per person of the company, newest
  * first, with what is unread from each. Absent when there is neither.
  */
-export function MailNav() {
+export function MailNav({ className }: { className?: string } = {}) {
   const { t } = useI18n();
   const pathname = usePathname();
   const answer = useMailContacts();
@@ -48,7 +48,7 @@ export function MailNav() {
   const emailUnread = email && email.enabled ? email.unread.inbox : 0;
 
   return (
-    <SidebarGroup>
+    <SidebarGroup className={className}>
       <SidebarGroupLabel>{t("nav.messages")}</SidebarGroupLabel>
       <SidebarMenu>
         {hasEmail ? (

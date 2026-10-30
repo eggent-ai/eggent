@@ -402,12 +402,22 @@ export function ChatMessages({ messages, isLoading, errorMessage, errorActions, 
     return () => observer.disconnect();
   }, [transcript]);
 
+  // Whether the transcript is about to replace the skeleton below: then it
+  // settles in where the shape stood, instead of the shape blinking into
+  // messages. A conversation that starts on this screen had no skeleton and
+  // does not fade.
+  const showingSkeleton = messages.length === 0 && !isLoading && awaitingHistory;
+  const showingEmpty = messages.length === 0 && !isLoading && !awaitingHistory && cards.length === 0;
+  const [fromSkeleton, setFromSkeleton] = useState(false);
+  if (showingSkeleton && !fromSkeleton) setFromSkeleton(true);
+  if (showingEmpty && fromSkeleton) setFromSkeleton(false);
+
   // A conversation whose messages are still on their way is not an empty one.
   // Switching chats put the new-chat screen on the screen for the half second
   // the fetch took - an invitation to start something, over a conversation that
   // already exists. The same wrapper and the same rhythm as the transcript, so
   // nothing moves when the real messages land.
-  if (messages.length === 0 && !isLoading && awaitingHistory) {
+  if (showingSkeleton) {
     return (
       <div className="flex-1 overflow-y-auto px-4 md:px-6">
         <div className="max-w-3xl mx-auto py-4">
@@ -417,7 +427,7 @@ export function ChatMessages({ messages, isLoading, errorMessage, errorActions, 
     );
   }
 
-  if (messages.length === 0 && !isLoading && cards.length === 0) {
+  if (showingEmpty) {
     return (
       // Scrolls instead of clipping: the quick-start row is taller than a short
       // viewport, and `m-auto` still centres the block when there is room.
@@ -505,7 +515,7 @@ export function ChatMessages({ messages, isLoading, errorMessage, errorActions, 
       onScroll={updateShouldAutoScroll}
       className="flex-1 overflow-y-auto px-4 md:px-6"
     >
-      <div ref={setTranscript} className="max-w-3xl mx-auto py-4 space-y-1">
+      <div ref={setTranscript} className={cn("max-w-3xl mx-auto py-4 space-y-1", fromSkeleton && "eggent-surface-in")}>
         {(cardsByAnchor.get(null) ?? NO_CARDS).map((card) => (
           <ShellCardRow key={card.key} card={card} />
         ))}
