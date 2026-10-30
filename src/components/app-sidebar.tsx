@@ -28,6 +28,7 @@ import type { ProjectSharingAnswer, ProjectSharingMark } from "@/lib/project-sha
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
 import { SIDEBAR_HERE_ROW } from "@/components/sidebar-here";
+import { EggentMark } from "@/components/eggent-mark";
 import { useMailContacts } from "@/components/mail/use-mail-contacts";
 import { useEmailStatus } from "@/components/email/use-email-status";
 import { chatPath, DASHBOARD_CHAT_ROOT, isReservedDashboardSegment } from "@/lib/dashboard-routes";
@@ -491,9 +492,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" asChild>
               <Link href="/dashboard">
-                <div className="bg-sidebar-primary text-sidebar-primary-foreground flex aspect-square size-8 items-center justify-center rounded-lg">
-                  <Bot className="size-4" />
-                </div>
+                <EggentMark className="size-8" />
                 <div className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-medium">Eggent</span>
                   <span className="truncate text-xs">{t("app.tagline")}</span>

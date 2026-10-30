@@ -298,6 +298,11 @@
     animation-duration: 3.2s !important;
     animation-iteration-count: infinite !important;
   }
+  /* The working egg is a spinner too: slower, never still. */
+  .eggent-mark-row {
+    animation-duration: 5.2s !important;
+    animation-iteration-count: infinite !important;
+  }
   /* The microphone's breath while it listens: a ring that stops says the
      microphone stopped. Slower, never still. The rings that follow the voice
      are not animations and are untouched by any of this. */
@@ -390,6 +395,20 @@
 }
 
 /* Frequent navigation and transcript mounts stay static. Only new row arrivals move. */
+
+/* The egg while the agent works: its rows turn one after another, each a
+   pixel left or right and back, like the layers of a cube. Only transform on
+   a few dozen rects, so it costs nothing; one slow wave, then a rest, so it
+   reads as "busy" without pulling the eye from the text beside it. */
+@keyframes eggent-twist {
+  0%, 46%, 100% { transform: translateX(0); }
+  14%, 32%      { transform: translateX(var(--eggent-twist, 1px)); }
+}
+
+.eggent-mark-row {
+  animation: eggent-twist 2.6s var(--ease-in-out) infinite both;
+}
+
 
 @keyframes eggent-live-pulse {
   0%, 100% { opacity: 1; transform: scale(1); }

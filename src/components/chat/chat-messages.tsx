@@ -6,6 +6,7 @@ import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { DictationButton, DictationStatus, useDictation } from "@/components/chat/dictation";
+import { EggentMark } from "@/components/eggent-mark";
 import { ArrowRight, CheckCircle2, ExternalLink, Loader2, MessageCircle, Sparkle, Sparkles, SquareTerminal, TriangleAlert } from "lucide-react";
 import type { UIMessage } from "ai";
 import { Badge } from "@/components/ui/badge";
@@ -80,9 +81,7 @@ function WorkingLine({ progress }: { progress: string }) {
     : t("chat.thinkingMinutes", { minutes: Math.floor(seconds / 60), seconds: String(seconds % 60).padStart(2, "0") });
   return (
     <div className="flex gap-3 py-3" role="status" aria-live="polite">
-      <div className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
-        <Loader2 className="size-4 animate-spin" />
-      </div>
+      <EggentMark working className="size-8" />
       <div className="flex min-w-0 flex-col justify-center gap-0.5">
         <span className="text-sm text-muted-foreground">
           {t("chat.thinking")}
