@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { SIDEBAR_HERE_ROW } from "@/components/sidebar-here";
 import { usePathname } from "next/navigation";
 import { Users } from "lucide-react";
 import { useI18n } from "@/i18n/provider";
@@ -32,7 +33,8 @@ export function SharesNav() {
       className={cn(
         "flex h-8 w-full items-center gap-2 rounded-md px-2 text-sm transition-colors",
         "outline-none focus-visible:ring-[3px] focus-visible:ring-sidebar-ring",
-        active ? "bg-sidebar-accent text-sidebar-accent-foreground" : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+        SIDEBAR_HERE_ROW,
+        active ? "" : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
       )}
     >
       <Users aria-hidden className="size-4" />

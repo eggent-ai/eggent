@@ -5,6 +5,7 @@ import { Building2 } from "lucide-react";
 import { useI18n } from "@/i18n/provider";
 import { SidebarMenuButton, SidebarMenuItem } from "@/components/ui/sidebar";
 import { useCompanyProjects } from "./use-company-projects";
+import { SIDEBAR_HERE_ROW } from "@/components/sidebar-here";
 
 export function companyProjectPath(id: string): string {
   return `/dashboard/company/${encodeURIComponent(id)}`;
@@ -29,6 +30,7 @@ export function CompanyProjectsNav() {
         return (
           <SidebarMenuItem key={project.id}>
             <SidebarMenuButton
+              className={SIDEBAR_HERE_ROW}
               isActive={pathname === href || pathname.startsWith(`${href}/`)}
               onClick={() => router.push(href)}
               title={t("companyProjects.from", { name: project.from })}

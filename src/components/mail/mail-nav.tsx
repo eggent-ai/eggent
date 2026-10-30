@@ -16,6 +16,7 @@ import { useMailContacts } from "./use-mail-contacts";
 import { useEmailStatus } from "@/components/email/use-email-status";
 import { EMAIL_ROOT_PATH } from "@/components/email/paths";
 import { SidebarCount } from "@/components/sidebar-count";
+import { SIDEBAR_HERE_ROW } from "@/components/sidebar-here";
 import { useArrivals } from "@/hooks/use-arrivals";
 
 /** The wrapper the sidebar positions; the count draws itself (SidebarCount). */
@@ -53,7 +54,7 @@ export function MailNav({ className }: { className?: string } = {}) {
       <SidebarMenu>
         {hasEmail ? (
           <SidebarMenuItem>
-            <SidebarMenuButton asChild isActive={pathname === EMAIL_ROOT_PATH || pathname.startsWith(`${EMAIL_ROOT_PATH}/`)} title={email && email.enabled ? email.address || undefined : undefined}>
+            <SidebarMenuButton asChild className={SIDEBAR_HERE_ROW} isActive={pathname === EMAIL_ROOT_PATH || pathname.startsWith(`${EMAIL_ROOT_PATH}/`)} title={email && email.enabled ? email.address || undefined : undefined}>
               <Link href={EMAIL_ROOT_PATH}>
                 <AtSign className="size-4" aria-hidden />
                 <span className={emailUnread > 0 ? "truncate font-medium" : "truncate"}>{t("nav.mail")}</span>
@@ -70,7 +71,7 @@ export function MailNav({ className }: { className?: string } = {}) {
           const href = mailThreadPath(contact.id);
           return (
             <SidebarMenuItem key={contact.id} className={arrived(contact.id) ? "eggent-row-in" : undefined}>
-              <SidebarMenuButton asChild isActive={pathname === href} title={contact.about || undefined}>
+              <SidebarMenuButton asChild className={SIDEBAR_HERE_ROW} isActive={pathname === href} title={contact.about || undefined}>
                 <Link href={href}>
                   <span className={contact.unread > 0 ? "truncate font-medium" : "truncate"}>{contact.name}</span>
                 </Link>
@@ -85,7 +86,7 @@ export function MailNav({ className }: { className?: string } = {}) {
         })}
         {hidden.length > 0 ? (
           <SidebarMenuItem>
-            <SidebarMenuButton asChild isActive={pathname === "/dashboard/messages"}>
+            <SidebarMenuButton asChild className={SIDEBAR_HERE_ROW} isActive={pathname === "/dashboard/messages"}>
               <Link href="/dashboard/messages">
                 <span className="text-muted-foreground truncate">{t("nav.messagesAll")}</span>
               </Link>
