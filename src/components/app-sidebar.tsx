@@ -27,9 +27,10 @@ import type { ChatListItem } from "@/lib/types";
 import type { ProjectSharingAnswer, ProjectSharingMark } from "@/lib/project-sharing/types";
 import { cn } from "@/lib/utils";
 import { Skeleton } from "@/components/ui/skeleton";
+import { SIDEBAR_HERE_ROW } from "@/components/sidebar-here";
 import { useMailContacts } from "@/components/mail/use-mail-contacts";
 import { useEmailStatus } from "@/components/email/use-email-status";
-import { chatPath } from "@/lib/dashboard-routes";
+import { chatPath, DASHBOARD_CHAT_ROOT, isReservedDashboardSegment } from "@/lib/dashboard-routes";
 import { useBackgroundSync } from "@/hooks/use-background-sync";
 import { useActiveRuns } from "@/hooks/use-active-runs";
 import { useRemoteStatus } from "@/hooks/use-remote-status";
@@ -64,17 +65,6 @@ import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover
 
 /** How many of a project's chats it shows under its name before "show more". */
 const RECENT_CHATS = 3;
-/**
- * Where the person is, said more firmly than the stock active row: that one
- * fills with the same tint as a hovered row and, in light mode, is barely
- * darker than the sidebar itself, so "here" read like "under the pointer".
- * A deeper fill and a short bar at the left edge, in the sidebar's primary
- * colour, which hover never gets.
- */
-const HERE_ROW = cn(
-  "relative data-[active=true]:bg-sidebar-foreground/[0.08]",
-  "before:pointer-events-none before:absolute before:inset-y-2 before:left-0.5 before:w-[3px] before:rounded-full before:bg-sidebar-primary before:opacity-0 data-[active=true]:before:opacity-100"
-);
 
 /** The longest the first draw waits for the Messages and company sections. */
 const SIDE_SECTIONS_WAIT_MS = 2000;
@@ -113,9 +103,13 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { isMobile } = useSidebar();
   const companyProjects = useCompanyProjects();
   const hasCompanyProjects = Boolean(companyProjects?.enabled && companyProjects.projects.length > 0);
-  // A company's project has a page of its own; while it is open, none of the
-  // workspace's own projects is the one being looked at.
-  const onCompanyProject = pathname.startsWith("/dashboard/company/");
+  // Only one row is "here" at a time: a chat or a project's new chat counts as
+  // open only while the chat screen is on screen. Moving to the messages, the
+  // board, a company project or settings leaves the store's chat set, and its
+  // row would otherwise stay marked beside the row of the page actually open.
+  const chatSegment = /^\/dashboard\/([^/]+)$/.exec(pathname)?.[1];
+  const onChatScreen =
+    pathname === DASHBOARD_CHAT_ROOT || (chatSegment !== undefined && !isReservedDashboardSegment(chatSegment));
   const {
     chats,
     setChats,
@@ -324,8 +318,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     <SidebarMenuItem key={chat.id} className={chatArrived(chat.id) ? "eggent-row-in" : undefined}>
       {/* Indented to the project's name, so the list reads as its own. */}
       <SidebarMenuButton
-        className={cn("pl-8", HERE_ROW)}
-        isActive={activeChatId === chat.id}
+        className={cn("pl-8", SIDEBAR_HERE_ROW)}
+        isActive={onChatScreen && activeChatId === chat.id}
         onClick={() => handleChatClick(chat)}
         title={
           chat.scheduledJob
@@ -438,7 +432,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     const hidden = list.length - shown.length;
     // The project the open conversation belongs to: its name carries weight,
     // so the two rows read as one path - this project, this chat.
-    const holdsOpenChat = activeProjectId === projectId && activeChatId !== null && !onCompanyProject;
+    const holdsOpenChat = onChatScreen && activeProjectId === projectId && activeChatId !== null;
     return (
       <React.Fragment key={key || "orchestrator"}>
         {/* A little air above each project after the first, so its chats read
@@ -447,8 +441,8 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           className={cn(projectId !== null && "mt-2", projectId && projectArrived(projectId) && "eggent-row-in")}
         >
           <SidebarMenuButton
-            className={cn(HERE_ROW, holdsOpenChat && "font-medium")}
-            isActive={activeProjectId === projectId && activeChatId === null && !onCompanyProject}
+            className={cn(SIDEBAR_HERE_ROW, holdsOpenChat && "font-medium")}
+            isActive={onChatScreen && activeProjectId === projectId && activeChatId === null}
             onClick={() => handleProjectClick(projectId)}
             title={t("nav.newChatIn", { project: name })}
           >

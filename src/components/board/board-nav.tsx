@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { SIDEBAR_HERE_ROW } from "@/components/sidebar-here";
 import { usePathname } from "next/navigation";
 import { SquareKanban } from "lucide-react";
 import { useBackgroundSync } from "@/hooks/use-background-sync";
@@ -45,7 +46,8 @@ export function BoardNav() {
       className={cn(
         "flex h-8 w-full items-center gap-2 rounded-md px-2 text-sm transition-colors",
         "outline-none focus-visible:ring-[3px] focus-visible:ring-sidebar-ring",
-        active ? "bg-sidebar-accent text-sidebar-accent-foreground" : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
+        SIDEBAR_HERE_ROW,
+        active ? "" : "text-sidebar-foreground hover:bg-sidebar-accent hover:text-sidebar-accent-foreground"
       )}
     >
       <SquareKanban aria-hidden className="size-4" />
