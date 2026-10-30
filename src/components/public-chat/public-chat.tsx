@@ -7,7 +7,7 @@ import { useI18n } from "@/i18n/provider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { GuestChat, type GuestChatEndpoints } from "@/components/chat/guest-chat";
+import { GuestChat, guestErrorText, type GuestChatEndpoints } from "@/components/chat/guest-chat";
 import { GuestConversationsBar } from "@/components/chat/guest-conversations";
 
 /**
@@ -62,7 +62,7 @@ function WhoAreYou({ base, title, welcome, onReady }: { base: string; title: str
     setError(null);
     try {
       const { ok, data } = await postJson(`${base}/visitor`, { name, email });
-      if (!ok) throw new Error(typeof data.error === "string" ? data.error : t("publicChat.failed"));
+      if (!ok) throw new Error(guestErrorText(data, t, t("publicChat.failed")));
       if (data.needsCode) {
         setSentTo(typeof data.email === "string" ? data.email : email);
         setCode("");
@@ -82,7 +82,7 @@ function WhoAreYou({ base, title, welcome, onReady }: { base: string; title: str
     setError(null);
     try {
       const { ok, data } = await postJson(`${base}/verify`, { email, code });
-      if (!ok) throw new Error(typeof data.error === "string" ? data.error : t("publicChat.failed"));
+      if (!ok) throw new Error(guestErrorText(data, t, t("publicChat.failed")));
       onReady();
     } catch (failure) {
       setError(failure instanceof Error ? failure.message : t("publicChat.failed"));

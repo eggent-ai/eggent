@@ -10,6 +10,7 @@ import { ChatSurfaceProvider } from "@/components/chat/chat-surface";
 import { chatMessagesToUIMessages, getLatestPendingInteraction } from "@/lib/chat/ui-messages";
 import type { PiPendingInteraction } from "@/lib/pi/interaction-types";
 import type { ChatMessage } from "@/lib/types";
+import type { MessageKey } from "@/i18n/messages";
 
 /**
  * The workspace's chat, for a guest: somebody asking a project that was shared
@@ -56,13 +57,18 @@ interface GuestChatProps {
   header?: ReactNode;
 }
 
-async function errorText(response: Response, fallback: string): Promise<string> {
-  const data = (await response.clone().json().catch(() => null)) as { error?: unknown } | null;
+/** Refusals the guest routes give by code, said in the guest's language rather than the server's. */
+const ERROR_CODES = new Set(["badName", "badEmail", "rateLimited", "codeLimited", "codeFailed", "badCode", "codeExpired", "codeWrong", "full", "busy", "noConversation", "tooManyConversations", "notOpen", "noVisitor"]);
+
+export function guestErrorText(data: { error?: unknown; code?: unknown } | null, t: (key: MessageKey) => string, fallback: string): string {
+  if (typeof data?.code === "string" && ERROR_CODES.has(data.code)) return t(`guestChat.error.${data.code}` as MessageKey);
   return typeof data?.error === "string" && data.error ? data.error : fallback;
 }
 
 export function GuestChat({ endpoints, conversation, onConversation, onSettled, onBusyChange, empty, note, header }: GuestChatProps) {
   const { t } = useI18n();
+  const errorText = useCallback(async (response: Response, fallback: string) =>
+    guestErrorText((await response.clone().json().catch(() => null)) as { error?: unknown; code?: unknown } | null, t, fallback), [t]);
   const [input, setInput] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loadingHistory, setLoadingHistory] = useState(Boolean(conversation));
@@ -154,7 +160,7 @@ export function GuestChat({ endpoints, conversation, onConversation, onSettled, 
     });
     if (!response.ok) throw new Error(await errorText(response, t("guestChat.failed")));
     return (await response.json().catch(() => ({}))) as Record<string, unknown>;
-  }, [t]);
+  }, [errorText, t]);
 
   const respond = useCallback(async (interaction: PiPendingInteraction, value: string | boolean | null, cancel = false) => {
     setError(null);
