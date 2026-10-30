@@ -21,6 +21,8 @@ import {
   Trash2,
 } from "lucide-react";
 import { useAppStore } from "@/store/app-store";
+import type { ChatListItem } from "@/lib/types";
+import { cn } from "@/lib/utils";
 import { chatPath } from "@/lib/dashboard-routes";
 import { useBackgroundSync } from "@/hooks/use-background-sync";
 import { useActiveRuns } from "@/hooks/use-active-runs";
@@ -54,6 +56,9 @@ import { CompanyProjectsNav } from "@/components/company-projects/company-projec
 import { useCompanyProjects } from "@/components/company-projects/use-company-projects";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 
+/** How many of a project's chats it shows under its name before "show more". */
+const RECENT_CHATS = 3;
+
 export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const { t } = useI18n();
   const router = useRouter();
@@ -79,7 +84,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   });
   const chatsTick = useBackgroundSync({
     topics: ["chat", "projects", "global"],
-    projectId: activeProjectId ?? null,
   });
   const activeRuns = useActiveRuns();
   const remote = useRemoteStatus(chatsTick);
@@ -148,21 +152,16 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     }
   }, [projects, projectsLoaded, activeProjectId, goToChat]);
 
-  // Keep chat list synced for the active project.
+  // Every project's chats, not only the open one's: each project lists its
+  // recent ones, so a chat elsewhere is one click away.
   useEffect(() => {
-    const params = new URLSearchParams();
-    if (activeProjectId) {
-      params.set("projectId", activeProjectId);
-    } else {
-      params.set("projectId", "none");
-    }
-    fetch(`/api/chat/history?${params}`)
+    fetch("/api/chat/history")
       .then((r) => r.json())
       .then((data) => {
         if (Array.isArray(data)) setChats(data);
       })
       .catch(() => {});
-  }, [activeProjectId, setChats, chatsTick]);
+  }, [setChats, chatsTick]);
 
   const handleNewChat = () => {
     goToChat(null);
@@ -172,37 +171,44 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     }
   };
 
-  const handleChatClick = (chatId: string) => {
-    goToChat(chatId);
+  // A chat may sit under another project than the open one, and opening it
+  // makes that project the open one.
+  const handleChatClick = (chat: ChatListItem) => {
+    goToChat(chat.id, chat.projectId ?? null);
   };
 
-  const handleOrchestratorClick = () => {
-    const params = new URLSearchParams({ projectId: "none" });
-    fetch(`/api/chat/history?${params}`)
-      .then((r) => r.json())
-      .then((data) => {
-        const list = Array.isArray(data) ? data : [];
-        setChats(list);
-        goToChat(list[0]?.id ?? null, null);
-      })
-      .catch(() => {
-        goToChat(null, null);
-      });
+  // A project's name starts a new conversation in it: its recent chats are
+  // already listed under it, so reopening the latest one would only repeat a
+  // row that is one click away.
+  const handleProjectClick = (projectId: string | null) => {
+    goToChat(null, projectId);
+    if (typeof window !== "undefined") {
+      window.sessionStorage.setItem("eggent-focus-chat-input", "1");
+      window.dispatchEvent(new Event("eggent:focus-chat-input"));
+    }
   };
 
-  const handleProjectClick = (projectId: string) => {
-    const params = new URLSearchParams({ projectId });
-    fetch(`/api/chat/history?${params}`)
-      .then((r) => r.json())
-      .then((data) => {
-        const list = Array.isArray(data) ? data : [];
-        setChats(list);
-        goToChat(list[0]?.id ?? null, projectId);
-      })
-      .catch(() => {
-        goToChat(null, projectId);
-      });
-  };
+  // Chats by the project they belong to, newest first (the list arrives in
+  // that order). The orchestrator's are under "".
+  const chatsByProject = React.useMemo(() => {
+    const groups = new Map<string, ChatListItem[]>();
+    for (const chat of chats) {
+      const key = chat.projectId ?? "";
+      const group = groups.get(key);
+      if (group) group.push(chat);
+      else groups.set(key, [chat]);
+    }
+    return groups;
+  }, [chats]);
+  // Projects whose whole list was asked for, until the page is left.
+  const [expanded, setExpanded] = React.useState<ReadonlySet<string>>(() => new Set());
+  const toggleExpanded = (key: string) =>
+    setExpanded((current) => {
+      const next = new Set(current);
+      if (next.has(key)) next.delete(key);
+      else next.add(key);
+      return next;
+    });
 
   // The wizard from Settings -> Projects, one click from where projects are
   // picked: no trip to settings, and no agent turn spent on making a folder.
@@ -232,6 +238,125 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
     // The address still names the chat that was just deleted; leaving it there
     // would make Reload reopen an empty conversation under a dead id.
     if (wasOpen) goToChat(null);
+  };
+
+  const renderChat = (chat: ChatListItem) => (
+    <SidebarMenuItem key={chat.id} className={chatArrived(chat.id) ? "eggent-row-in" : undefined}>
+      {/* Indented to the project's name, so the list reads as its own. */}
+      <SidebarMenuButton
+        className="pl-8"
+        isActive={activeChatId === chat.id}
+        onClick={() => handleChatClick(chat)}
+        title={
+          chat.scheduledJob
+            ? t("nav.scheduledChat", { job: chat.scheduledJob })
+            : chat.visitFrom
+              ? t("nav.visitChat", { chat: chat.visitFrom })
+              : chat.mailReplyTo
+                ? t("nav.mailReplyChat", { name: chat.mailReplyTo })
+                : isOtherSide(chat.home)
+                  ? chat.home === "cloud"
+                    ? t("nav.homeCloud")
+                    : t("nav.homeDevice", { name: remote.status?.devices.find((device) => device.node === chat.home)?.name ?? t("chat.runPlace.yourComputer") })
+                  : chat.boardCard
+                    ? t("nav.boardChat")
+                    : undefined
+        }
+      >
+        {/* A scheduled task reports into a chat a day, so these
+            would otherwise read as conversations nobody started. */}
+        {chat.scheduledJob ? (
+          <CalendarClock aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+        ) : chat.visitFrom ? (
+          // Work this project did when another chat asked it with @.
+          <CornerDownRight aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+        ) : chat.mailReplyTo ? (
+          // A chat opened to answer a colleague's message.
+          <Mail aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+        ) : isOtherSide(chat.home) ? (
+          // A chat that runs on the other side of the pair, not where this list is read.
+          chat.home === "cloud"
+            ? <Cloud aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+            : <Laptop aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+        ) : chat.boardCard ? (
+          // The conversation of a card on the board.
+          <SquareKanban aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
+        ) : null}
+        <span className="truncate">{chat.title}</span>
+      </SidebarMenuButton>
+      {/* The mark and the delete button share the right edge, so the
+          mark gives it up on hover: the pointer is there to act on
+          the row, and the state it was reporting is still one click
+          away inside the chat. */}
+      {activeRuns.byChat.has(chat.id) ? (
+        <SidebarMenuBadge className="top-1.5 transition-opacity group-hover/menu-item:opacity-0 group-focus-within/menu-item:opacity-0">
+          <span
+            data-eggent-live
+            role="status"
+            aria-label={t("nav.chatWorking")}
+            className="bg-primary size-2 rounded-full"
+          />
+        </SidebarMenuBadge>
+      ) : null}
+      <SidebarMenuAction
+        onClick={(e) => handleDeleteChat(chat.id, e)}
+        aria-label={t("nav.deleteChat")}
+        className="md:opacity-0 transition-opacity group-hover/menu-item:opacity-100 group-focus-within/menu-item:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100"
+      >
+        <Trash2 className="size-3.5" />
+      </SidebarMenuAction>
+    </SidebarMenuItem>
+  );
+
+  /**
+   * A project's row and, under it, its newest chats. The row itself starts a
+   * new chat there and reads as the open one only while that new chat is on
+   * screen; once a conversation is open, its own row carries the mark.
+   */
+  const renderProject = (projectId: string | null, name: string, icon: React.ReactNode) => {
+    const key = projectId ?? "";
+    const list = chatsByProject.get(key) ?? [];
+    const isOpen = expanded.has(key);
+    let shown = isOpen ? list : list.slice(0, RECENT_CHATS);
+    // The open conversation stays in sight even when it is older than the few.
+    if (!isOpen && activeChatId && !shown.some((chat) => chat.id === activeChatId)) {
+      const active = list.find((chat) => chat.id === activeChatId);
+      if (active) shown = [...shown, active];
+    }
+    const hidden = list.length - shown.length;
+    return (
+      <React.Fragment key={key || "orchestrator"}>
+        {/* A little air above each project after the first, so its chats read
+            as its own and not as the tail of the one above. */}
+        <SidebarMenuItem
+          className={cn(projectId !== null && "mt-2", projectId && projectArrived(projectId) && "eggent-row-in")}
+        >
+          <SidebarMenuButton
+            isActive={activeProjectId === projectId && activeChatId === null && !onCompanyProject}
+            onClick={() => handleProjectClick(projectId)}
+            title={t("nav.newChatIn", { project: name })}
+          >
+            {icon}
+            <span className="truncate">{name}</span>
+          </SidebarMenuButton>
+        </SidebarMenuItem>
+        {shown.map(renderChat)}
+        {hidden > 0 || isOpen ? (
+          list.length > RECENT_CHATS ? (
+            <SidebarMenuItem>
+              <SidebarMenuButton
+                size="sm"
+                className="pl-8 text-xs text-muted-foreground"
+                aria-expanded={isOpen}
+                onClick={() => toggleExpanded(key)}
+              >
+                <span>{isOpen ? t("nav.showFewerChats") : t("nav.showMoreChats", { count: hidden })}</span>
+              </SidebarMenuButton>
+            </SidebarMenuItem>
+          ) : null
+        ) : null}
+      </React.Fragment>
+    );
   };
 
   const handleLogout = async () => {
@@ -317,15 +442,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             </PopoverContent>
           </Popover>
           <SidebarMenu>
-            <SidebarMenuItem>
-              <SidebarMenuButton
-                isActive={activeProjectId === null && !onCompanyProject}
-                onClick={handleOrchestratorClick}
-              >
-                <Bot className="size-4" />
-                <span className="truncate">{t("nav.orchestrator")}</span>
-              </SidebarMenuButton>
-            </SidebarMenuItem>
+            {renderProject(null, t("nav.orchestrator"), <Bot className="size-4" />)}
             {projects.length === 0 && !hasCompanyProjects && (
               <SidebarMenuItem>
                 <SidebarMenuButton disabled>
@@ -335,100 +452,11 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 </SidebarMenuButton>
               </SidebarMenuItem>
             )}
-            {projects.map((project) => (
-              <SidebarMenuItem key={project.id} className={projectArrived(project.id) ? "eggent-row-in" : undefined}>
-                <SidebarMenuButton
-                  isActive={activeProjectId === project.id && !onCompanyProject}
-                  onClick={() => handleProjectClick(project.id)}
-                >
-                  <FolderOpen className="size-4" />
-                  <span className="truncate">{project.name}</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            ))}
+            {projects.map((project) =>
+              renderProject(project.id, project.name, <FolderOpen className="size-4" />)
+            )}
             {/* Projects the company opened to this person, when it has any. */}
             <CompanyProjectsNav />
-          </SidebarMenu>
-        </SidebarGroup>
-
-        {/* File tree */}
-        {/* Chat history */}
-        <SidebarGroup>
-          <SidebarGroupLabel>{t("nav.chats")}</SidebarGroupLabel>
-          <SidebarMenu>
-            {chats.length === 0 && (
-              <SidebarMenuItem>
-                <SidebarMenuButton disabled>
-                  <span className="text-muted-foreground text-xs">
-                    {t("nav.noChats")}
-                  </span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            )}
-            {chats.map((chat) => (
-              <SidebarMenuItem key={chat.id} className={chatArrived(chat.id) ? "eggent-row-in" : undefined}>
-                <SidebarMenuButton
-                  isActive={activeChatId === chat.id}
-                  onClick={() => handleChatClick(chat.id)}
-                  title={
-                    chat.scheduledJob
-                      ? t("nav.scheduledChat", { job: chat.scheduledJob })
-                      : chat.visitFrom
-                        ? t("nav.visitChat", { chat: chat.visitFrom })
-                        : chat.mailReplyTo
-                          ? t("nav.mailReplyChat", { name: chat.mailReplyTo })
-                          : isOtherSide(chat.home)
-                            ? chat.home === "cloud"
-                              ? t("nav.homeCloud")
-                              : t("nav.homeDevice", { name: remote.status?.devices.find((device) => device.node === chat.home)?.name ?? t("chat.runPlace.yourComputer") })
-                            : chat.boardCard
-                              ? t("nav.boardChat")
-                              : undefined
-                  }
-                >
-                  {/* A scheduled task reports into a chat a day, so these
-                      would otherwise read as conversations nobody started. */}
-                  {chat.scheduledJob ? (
-                    <CalendarClock aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
-                  ) : chat.visitFrom ? (
-                    // Work this project did when another chat asked it with @.
-                    <CornerDownRight aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
-                  ) : chat.mailReplyTo ? (
-                    // A chat opened to answer a colleague's message.
-                    <Mail aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
-                  ) : isOtherSide(chat.home) ? (
-                    // A chat that runs on the other side of the pair, not where this list is read.
-                    chat.home === "cloud"
-                      ? <Cloud aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
-                      : <Laptop aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
-                  ) : chat.boardCard ? (
-                    // The conversation of a card on the board.
-                    <SquareKanban aria-hidden className="size-3.5 shrink-0 text-muted-foreground" />
-                  ) : null}
-                  <span className="truncate">{chat.title}</span>
-                </SidebarMenuButton>
-                {/* The mark and the delete button share the right edge, so the
-                    mark gives it up on hover: the pointer is there to act on
-                    the row, and the state it was reporting is still one click
-                    away inside the chat. */}
-                {activeRuns.byChat.has(chat.id) ? (
-                  <SidebarMenuBadge className="top-1.5 transition-opacity group-hover/menu-item:opacity-0 group-focus-within/menu-item:opacity-0">
-                    <span
-                      data-eggent-live
-                      role="status"
-                      aria-label={t("nav.chatWorking")}
-                      className="bg-primary size-2 rounded-full"
-                    />
-                  </SidebarMenuBadge>
-                ) : null}
-                <SidebarMenuAction
-                  onClick={(e) => handleDeleteChat(chat.id, e)}
-                  className="md:opacity-0 transition-opacity group-hover/menu-item:opacity-100 group-focus-within/menu-item:opacity-100 focus-visible:opacity-100 pointer-coarse:opacity-100"
-                >
-                  <Trash2 className="size-3.5" />
-                </SidebarMenuAction>
-              </SidebarMenuItem>
-            ))}
           </SidebarMenu>
         </SidebarGroup>
 

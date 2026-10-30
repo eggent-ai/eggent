@@ -41,6 +41,10 @@ const enMessages = {
   // Read out for the mark on a chat whose turn is still running. Sighted users
   // get a pulsing dot; this is the same sentence in words.
   "nav.chatWorking": "Still working",
+  "nav.newChatIn": "New chat in {project}",
+  "nav.showMoreChats": "Show {count} more",
+  "nav.showFewerChats": "Show fewer",
+  "nav.deleteChat": "Delete chat",
   "nav.settings": "Settings",
   "nav.documentation": "Documentation",
   "nav.documentationUrl": "https://eggent.ai/docs/",
