@@ -58,6 +58,24 @@ function visibleProgress(message: UIMessage | undefined): string {
 }
 
 /**
+ * True while the agent is writing words into the answer: the last thing in the
+ * newest message is text and no new step has begun since. The line under the
+ * turn steps aside then - the words are the sign of life - and comes back when
+ * the agent moves on to a tool or to its next step, so a turn that writes and
+ * then keeps working is never left without it.
+ */
+function writingText(message: UIMessage | undefined): boolean {
+  if (!message || message.role !== "assistant") return false;
+  for (let i = message.parts.length - 1; i >= 0; i -= 1) {
+    const part = message.parts[i];
+    if (part.type.startsWith("data-")) continue;
+    if (part.type === "text") return part.text.trim().length > 0;
+    return false;
+  }
+  return false;
+}
+
+/**
  * The line under a turn that is still going. A reasoning model can think for
  * minutes before its first word, and a line that only said "Thinking..." the
  * whole time read as a hang: people pressed Stop on answers that were coming.
@@ -81,7 +99,9 @@ function WorkingLine({ progress }: { progress: string }) {
     : t("chat.thinkingMinutes", { minutes: Math.floor(seconds / 60), seconds: String(seconds % 60).padStart(2, "0") });
   return (
     <div className="flex gap-3 py-3" role="status" aria-live="polite">
-      <EggentMark working className="size-8" />
+      <span className="flex size-8 shrink-0 items-center justify-center text-muted-foreground">
+        <EggentMark working tone="quiet" className="size-8" />
+      </span>
       <div className="flex min-w-0 flex-col justify-center gap-0.5">
         <span className="text-sm text-muted-foreground">
           {t("chat.thinking")}
@@ -612,7 +632,7 @@ export function ChatMessages({ messages, isLoading, errorMessage, errorActions, 
           </div>
         ) : null}
 
-        {isLoading && messages.length > 0 && !compactionStatus && !pendingInteraction ? (
+        {isLoading && messages.length > 0 && !compactionStatus && !pendingInteraction && !writingText(shown[shown.length - 1]) ? (
           <WorkingLine progress={visibleProgress(shown[shown.length - 1])} />
         ) : null}
 

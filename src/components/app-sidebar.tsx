@@ -492,7 +492,10 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
           <SidebarMenuItem>
             <SidebarMenuButton size="lg" asChild>
               <Link href="/dashboard">
-                <EggentMark className="size-8" />
+                {/* The menu button shrinks a bare svg child to 16px; the box keeps the mark its own size. */}
+                <span className="flex size-8 shrink-0">
+                  <EggentMark className="size-8" />
+                </span>
                 <div className="grid flex-1 text-left text-sm leading-tight">
                   <span className="truncate font-medium">Eggent</span>
                   <span className="truncate text-xs">{t("app.tagline")}</span>
