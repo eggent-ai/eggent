@@ -302,7 +302,7 @@ await drain(createPiChatUIMessageStream({
   projectId: project.id,
   publicShare: true,
   enableEggentTools: false,
-  toolRuntimeData: { publicAnswers: { file: "link-price-list", visitor: VISITOR } },
+  toolRuntimeData: { publicAnswers: { file: "link-order-form", visitor: VISITOR } },
 }));
 const guestTools = toolSets[3] ?? [];
 const guestPrompt = systemPrompts[3] ?? "";
@@ -325,17 +325,17 @@ await check("a guest's turn is still not handed the deployment facts", () => {
   assert.ok(answeringPrompt.includes("PROJECT-INSTRUCTIONS-MARKER"));
 });
 
-const target = { file: "link-price-list", visitor: VISITOR };
+const target = { file: "link-order-form", visitor: VISITOR };
 await check("an answer becomes a row stamped with who wrote it, whatever the model claims", async () => {
   const saved = await recordPublicAnswer(projectDir, target, { colour: "red", email: "someone-else@example.test", name: "Mallory" }, new Date("2026-10-30T10:00:00Z"));
   assert.ok(saved.ok);
-  const rows = parseCsv(fs.readFileSync(path.join(projectDir, "responses", "link-price-list.csv"), "utf-8").replace(/^﻿/, ""));
+  const rows = parseCsv(fs.readFileSync(path.join(projectDir, "responses", "link-order-form.csv"), "utf-8").replace(/^﻿/, ""));
   assert.deepEqual(rows[0], ["time", "name", "email", "email confirmed", "conversation", "colour"]);
   assert.deepEqual(rows[1], ["2026-10-30T10:00:00.000Z", "Anna", "anna@example.test", "no", "conv0001", "red"]);
 });
 await check("a new question adds a column and keeps the earlier rows in line", async () => {
   await recordPublicAnswer(projectDir, target, { colour: "blue", size: "M" });
-  const rows = parseCsv(fs.readFileSync(path.join(projectDir, "responses", "link-price-list.csv"), "utf-8").replace(/^﻿/, ""));
+  const rows = parseCsv(fs.readFileSync(path.join(projectDir, "responses", "link-order-form.csv"), "utf-8").replace(/^﻿/, ""));
   assert.equal(rows[0].at(-1), "size");
   assert.equal(rows.length, 3);
   assert.ok(rows.every((row) => row.length === rows[0].length || row.length === rows[0].length - 1));
@@ -343,12 +343,12 @@ await check("a new question adds a column and keeps the earlier rows in line", a
 });
 await check("a formula in an answer is kept as text for a spreadsheet", async () => {
   await recordPublicAnswer(projectDir, target, { colour: "=HYPERLINK(\"http://evil.example.test\")" });
-  const text = fs.readFileSync(path.join(projectDir, "responses", "link-price-list.csv"), "utf-8");
+  const text = fs.readFileSync(path.join(projectDir, "responses", "link-order-form.csv"), "utf-8");
   assert.ok(!/,=HYPERLINK/.test(text) && !/,"=HYPERLINK/.test(text), "a formula reached the file as a formula");
   assert.match(text, /'=HYPERLINK/);
 });
 await check("answers cannot be read back: responses/ is closed to read, ls and search", async () => {
-  assert.ok(await refused("read", { path: "responses/link-price-list.csv" }));
+  assert.ok(await refused("read", { path: "responses/link-order-form.csv" }));
   assert.ok(await refused("ls", { path: "responses" }));
   assert.ok(!(await call("ls", {})).split("\n").some((line) => line.replace(/\/$/, "") === "responses"));
   assert.match(await call("search", { query: "anna@example.test" }), /No line/);
