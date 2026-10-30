@@ -206,6 +206,13 @@ interface ChatInputProps {
   contextModeLocked?: boolean;
   /** Where the chat runs, when this install can run it on the other side of a pair. */
   runPlace?: RunPlaceProps;
+  /**
+   * A guest is writing (a public link, a project of the company): the composer
+   * asks and takes voice, and has nothing of the workspace's - no model, no
+   * modes, no commands, no shell, no projects to name, no files. `note` stands
+   * where the workspace's footer would.
+   */
+  guest?: { note?: string };
 }
 
 export function ChatInput({
@@ -227,7 +234,9 @@ export function ChatInput({
   onContextModeChange,
   contextModeLocked = false,
   runPlace,
+  guest,
 }: ChatInputProps) {
+  const isGuest = Boolean(guest);
   const { t } = useI18n();
   // A chat that runs on the other side of the pair answers with the model chosen there:
   // this side's model, its context window and its tokens say nothing about it.
@@ -285,19 +294,19 @@ export function ChatInput({
   const filePreviewSelection = useAppStore((state) => state.filePreviewSelection);
   const setFilePreviewShared = useAppStore((state) => state.setFilePreviewShared);
   const sharedFileLine = useMemo(() => {
-    if (contextMode === "plain" || pendingInteraction || !filesPanelOpen || !filePreview || !filePreviewShared) return null;
+    if (isGuest || contextMode === "plain" || pendingInteraction || !filesPanelOpen || !filePreview || !filePreviewShared) return null;
     const name = filePreview.path.split("/").pop() || filePreview.path;
     if (!filePreviewSelection) return t("chat.openFile.sees", { name });
     return filePreviewSelection.startLine === filePreviewSelection.endLine
       ? t("chat.openFile.seesLine", { name, line: filePreviewSelection.startLine })
       : t("chat.openFile.seesLines", { name, from: filePreviewSelection.startLine, to: filePreviewSelection.endLine });
-  }, [contextMode, pendingInteraction, filesPanelOpen, filePreview, filePreviewShared, filePreviewSelection, t]);
+  }, [isGuest, contextMode, pendingInteraction, filesPanelOpen, filePreview, filePreviewShared, filePreviewSelection, t]);
   // What looks like a credential in the message about to be sent.
   const [secretWarning, setSecretWarning] = useState<{ kind: SecretKind; text: string } | null>(null);
 
   // Load chat files when chatId changes
   useEffect(() => {
-    if (!chatId) {
+    if (!chatId || isGuest) {
       setUploadedFiles([]);
       return;
     }
@@ -323,9 +332,10 @@ export function ChatInput({
     return () => {
       cancelled = true;
     };
-  }, [chatId]);
+  }, [chatId, isGuest]);
 
   useEffect(() => {
+    if (isGuest) return;
     let cancelled = false;
     const params = new URLSearchParams();
     if (projectId) params.set("projectId", projectId);
@@ -348,19 +358,19 @@ export function ChatInput({
     return () => {
       cancelled = true;
     };
-  }, [projectId, currentPath]);
+  }, [isGuest, projectId, currentPath]);
 
   useEffect(() => {
     latestInputRef.current = input;
   }, [input]);
 
   const slashQuery = useMemo(() => {
-    if (!input.startsWith("/")) return null;
+    if (isGuest || !input.startsWith("/")) return null;
     if (input.includes("\n")) return null;
     const afterSlash = input.slice(1);
     if (/\s/.test(afterSlash)) return null;
     return afterSlash.toLowerCase();
-  }, [input]);
+  }, [input, isGuest]);
 
   const filteredSlashCommands = useMemo(() => {
     if (slashQuery === null) return [];
@@ -428,10 +438,10 @@ export function ChatInput({
     [allProjects]
   );
   const mentionQuery = useMemo(() => {
-    if (contextMode !== "full" || pendingInteraction) return null;
+    if (isGuest || contextMode !== "full" || pendingInteraction) return null;
     const match = /^@([^\s]*)$/.exec(input);
     return match ? match[1] : null;
-  }, [input, contextMode, pendingInteraction]);
+  }, [input, isGuest, contextMode, pendingInteraction]);
   const mentionOptions = useMemo(
     () => (mentionQuery === null ? [] : suggestProjects(mentionQuery, mentionable.filter((project) => project.id !== projectId))),
     [mentionQuery, mentionable, projectId]
@@ -440,10 +450,10 @@ export function ChatInput({
   // Said above the field once the message reads as a task for a project, so
   // the person sees how it was understood before sending it.
   const mentionTarget = useMemo(() => {
-    if (contextMode !== "full" || pendingInteraction || !input.startsWith("@")) return null;
+    if (isGuest || contextMode !== "full" || pendingInteraction || !input.startsWith("@")) return null;
     const resolution = resolveProjectMention(input, mentionable, projectId);
     return resolution.kind === "project" ? resolution.project : null;
-  }, [input, contextMode, pendingInteraction, mentionable, projectId]);
+  }, [input, isGuest, contextMode, pendingInteraction, mentionable, projectId]);
 
   useEffect(() => {
     setMentionMenuDismissed(false);
@@ -486,15 +496,18 @@ export function ChatInput({
 
   // `!command` runs in the shell and has nothing to do with the agent's turn,
   // so it may be sent while one is going.
-  const shellMode = !pendingInteraction && parseShellInput(input)?.kind === "command";
+  const shellMode = !isGuest && !pendingInteraction && parseShellInput(input)?.kind === "command";
   // A message sent while a file is still on its way goes without it: the agent
   // answered the words and never saw the picture they were about.
   const waitingForUpload = uploadingFiles.length > 0 && !shellMode;
   // While a turn works a message is added to it, and a file alone has to be one
   // sent during the turn: every earlier file of the chat the turn knows already.
+  // A guest cannot say something to a turn at work: their next message waits for the answer.
   const canSubmit = !waitingForUpload && (pendingInteraction
     ? Boolean(input.trim()) || pendingInteraction.kind === "confirm" || cardFileNames.length > 0
-    : Boolean(input.trim()) || (isLoading ? turnFileNames.length > 0 : uploadedFiles.length > 0));
+    : isGuest
+      ? !isLoading && Boolean(input.trim())
+      : Boolean(input.trim()) || (isLoading ? turnFileNames.length > 0 : uploadedFiles.length > 0));
   // Empty composers show only voice input. Attachments and tool confirmations
   // retain the same submit path even when there are no typed words.
   const showSubmit = canSubmit || Boolean(input.trim());
@@ -673,7 +686,7 @@ export function ChatInput({
   const handlePaste = useCallback(
     async (e: React.ClipboardEvent<HTMLTextAreaElement>) => {
       // A question card may be asking for exactly this picture, and a turn at work may want it too.
-      if (disabled || !chatId) return;
+      if (disabled || !chatId || isGuest) return;
 
       const clipboardFiles = Array.from(e.clipboardData.files).filter(isImageFile);
       const itemFiles = Array.from(e.clipboardData.items)
@@ -704,14 +717,14 @@ export function ChatInput({
         await uploadFile(upload);
       }
     },
-    [chatId, disabled, uploadFile]
+    [chatId, disabled, isGuest, uploadFile]
   );
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault();
     e.stopPropagation();
-    setIsDragging(true);
-  }, []);
+    if (!isGuest) setIsDragging(true);
+  }, [isGuest]);
 
   const handleDragLeave = useCallback((e: React.DragEvent) => {
     e.preventDefault();
@@ -726,13 +739,13 @@ export function ChatInput({
       setIsDragging(false);
 
       const files = e.dataTransfer.files;
-      if (!files || files.length === 0) return;
+      if (isGuest || !files || files.length === 0) return;
 
       for (const file of Array.from(files)) {
         await uploadFile(file);
       }
     },
-    [uploadFile]
+    [isGuest, uploadFile]
   );
 
   const appendTranscriptToInput = useCallback((transcript: string) => {
@@ -1009,7 +1022,7 @@ export function ChatInput({
                 : "border-border/80"
             }`}
           >
-            <Button
+            {isGuest ? null : <Button
               variant="ghost"
               size="icon"
               data-composer-action="attach"
@@ -1020,7 +1033,7 @@ export function ChatInput({
               aria-label={chatId ? t("chat.attachFiles") : t("chat.attachFilesDisabled")}
             >
               <Plus className="size-5" strokeWidth={1.75} />
-            </Button>
+            </Button>}
 
             <div className="relative min-w-0 flex-1">
               <textarea
@@ -1031,10 +1044,10 @@ export function ChatInput({
                 onPaste={handlePaste}
                 placeholder={pendingInteraction
                   ? pendingInteraction.placeholder || (pendingInteraction.kind === "confirm" ? t("chat.confirmPlaceholder") : t("chat.waitingToolPlaceholder"))
-                  : isDragging ? t("chat.dropFilesPlaceholder") : isLoading ? t("chat.placeholderWhileRunning") : t("chat.placeholder")}
+                  : isDragging ? t("chat.dropFilesPlaceholder") : isLoading && !isGuest ? t("chat.placeholderWhileRunning") : t("chat.placeholder")}
                 disabled={disabled}
                 rows={1}
-                className={`block min-h-11 max-h-[200px] w-full resize-none border-0 bg-transparent px-1 py-2.5 text-base leading-6 placeholder:text-muted-foreground focus:outline-none disabled:opacity-50 sm:text-[15px] ${shellMode ? "font-mono" : ""}`}
+                className={`block min-h-11 max-h-[200px] w-full resize-none border-0 bg-transparent ${isGuest ? "px-3" : "px-1"} py-2.5 text-base leading-6 placeholder:text-muted-foreground focus:outline-none disabled:opacity-50 sm:text-[15px] ${shellMode ? "font-mono" : ""}`}
               />
             </div>
 
@@ -1076,7 +1089,9 @@ export function ChatInput({
           </div>
         </div>
         <DictationStatus dictation={dictation} className="mt-2 text-left" />
-        <div data-slot="chat-composer-footer" className="mt-2 grid min-w-0 grid-cols-[minmax(0,1fr)_fit-content(50%)] items-baseline gap-x-3 gap-y-1 px-2 text-xs/5 text-muted-foreground">
+        {isGuest ? (
+          guest?.note ? <p data-slot="chat-composer-footer" className="mt-2 px-2 text-xs/5 text-muted-foreground">{guest.note}</p> : null
+        ) : <div data-slot="chat-composer-footer" className="mt-2 grid min-w-0 grid-cols-[minmax(0,1fr)_fit-content(50%)] items-baseline gap-x-3 gap-y-1 px-2 text-xs/5 text-muted-foreground">
           <div data-slot="chat-composer-context" className="flex min-h-8 min-w-0 flex-wrap items-center gap-x-3 gap-y-1 font-sans tabular-nums [@media(pointer:coarse)]:min-h-11">
             {runPlace ? <RunPlaceControl {...runPlace} /> : null}
             {/* A program does the work with its own tools: Eggent's light modes have nothing to switch. */}
@@ -1116,7 +1131,7 @@ export function ChatInput({
               {t("engines.chatNotice", { engine: engineLabel })}
             </span>
           ) : null}
-        </div>
+        </div>}
       </div>
     </div>
   );

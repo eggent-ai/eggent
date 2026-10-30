@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Download, ExternalLink, FileText, FolderArchive, ImageIcon, Send } from "lucide-react";
 import { useI18n } from "@/i18n/provider";
 import { useAppStore } from "@/store/app-store";
+import { useChatSurface } from "@/components/chat/chat-surface";
 import { fileDownloadUrl, isOpenableFile } from "@/lib/files/openable";
 import { startZipDownload } from "@/lib/files/zip-download";
 import type { ProducedFile, ProducedGroup } from "@/lib/files/produced-shape";
@@ -48,6 +49,12 @@ function keyOf(project: string, path: string): string {
 }
 
 export function FilesProduced({ groups }: { groups: ProducedGroup[] }) {
+  const { guest } = useChatSurface();
+  // A guest has no files of this workspace to open, nor a Telegram of it to send them to.
+  return guest ? null : <OwnFilesProduced groups={groups} />;
+}
+
+function OwnFilesProduced({ groups }: { groups: ProducedGroup[] }) {
   const { t } = useI18n();
   const chatId = useAppStore((state) => state.activeChatId);
   const openFilePreview = useAppStore((state) => state.openFilePreview);

@@ -115,6 +115,8 @@ interface ChatMessagesProps {
   steerQueue?: SteerView[];
   /** Send again a message a turn ended without reading. */
   onResendSteer?: (view: SteerView) => void;
+  /** What an empty conversation says instead of the workspace's own welcome: a shared project's, say. */
+  empty?: { title: string; description?: string };
 }
 
 function interactionKindLabelKey(kind: PiPendingInteraction["kind"]): MessageKey {
@@ -339,7 +341,7 @@ function ShellCardRow({ card }: { card: ShellCard }) {
   );
 }
 
-export function ChatMessages({ messages, isLoading, errorMessage, errorActions, compactionStatus, actionNotice, pendingInteraction, onRespondToInteraction, quickSkills = [], onLaunchSkill, launchingSkill, awaitingHistory = false, steerQueue = NO_STEERS, onResendSteer }: ChatMessagesProps) {
+export function ChatMessages({ messages, isLoading, errorMessage, errorActions, compactionStatus, actionNotice, pendingInteraction, onRespondToInteraction, quickSkills = [], onLaunchSkill, launchingSkill, awaitingHistory = false, steerQueue = NO_STEERS, onResendSteer, empty }: ChatMessagesProps) {
   const { t } = useI18n();
   // The answer still being written is cut where its agent read a message said
   // to it. A stored message still waiting to be read is the turn's to show,
@@ -427,11 +429,15 @@ export function ChatMessages({ messages, isLoading, errorMessage, errorActions, 
             <div className="flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
               <MessageCircle className="size-6" />
             </div>
-            <h2 className="mt-4 text-2xl font-semibold tracking-tight">{t("chat.emptyTitle")}</h2>
-            <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
-              {/* Without cards (a self-hosted install has none) the line must not promise them. */}
-              {quickSkills.length > 0 ? t("chat.emptyDescription") : t("chat.emptyDescriptionPlain")}
-            </p>
+            <h2 className="mt-4 text-2xl font-semibold tracking-tight">{empty ? empty.title : t("chat.emptyTitle")}</h2>
+            {empty ? (
+              empty.description ? <p className="mt-2 max-w-xl text-sm leading-6 whitespace-pre-line text-muted-foreground">{empty.description}</p> : null
+            ) : (
+              <p className="mt-2 max-w-xl text-sm leading-6 text-muted-foreground">
+                {/* Without cards (a self-hosted install has none) the line must not promise them. */}
+                {quickSkills.length > 0 ? t("chat.emptyDescription") : t("chat.emptyDescriptionPlain")}
+              </p>
+            )}
           </div>
 
           {/*

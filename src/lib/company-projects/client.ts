@@ -17,7 +17,7 @@ export class CompanyProjectsError extends Error {
 
 const CALL_TIMEOUT_MS = 15_000;
 
-async function call(method: "GET" | "POST", route: string, init: { body?: unknown; stream?: boolean; signal?: AbortSignal } = {}): Promise<Response> {
+async function call(method: "GET" | "POST", route: string, init: { body?: unknown; stream?: boolean; signal?: AbortSignal; allowEmpty?: boolean } = {}): Promise<Response> {
   const config = getCompanyProjectsConfig();
   if (!config) throw new CompanyProjectsError("Company projects are not set up in this workspace.", 503, "notConfigured");
   let response: Response;
@@ -37,6 +37,7 @@ async function call(method: "GET" | "POST", route: string, init: { body?: unknow
   } catch {
     throw new CompanyProjectsError("The company's service did not answer. Try again in a minute.", 503, "unreachable");
   }
+  if (init.allowEmpty && response.status === 204) return response;
   if (!response.ok) {
     const data = (await response.json().catch(() => null)) as { error?: unknown; code?: unknown } | null;
     throw new CompanyProjectsError(
@@ -60,12 +61,27 @@ export async function fetchCompanyConversations(projectId: string): Promise<Comp
   return Array.isArray(data.chats) ? data.chats : [];
 }
 
+/** One conversation whole, as the chat draws it, and whether a turn is working in it now. */
 export async function fetchCompanyConversation(projectId: string, conversationId: string): Promise<CompanyConversation> {
-  const data = (await (await call("GET", `${idPath(projectId)}/chats${idPath(conversationId)}`)).json()) as { chat: CompanyConversation };
+  const data = (await (await call("GET", `${idPath(projectId)}/chats${idPath(conversationId)}?full=1`)).json()) as { chat: CompanyConversation };
   return data.chat;
 }
 
-/** Ask, and get the answer back as the service streams it (server-sent events). */
+/** Ask, and get the answer back as the workspace chat's own stream (server-sent events). */
 export async function askCompanyProject(projectId: string, input: { message: string; conversation?: string }, signal?: AbortSignal): Promise<Response> {
-  return await call("POST", `${idPath(projectId)}/message`, { body: input, stream: true, signal });
+  return await call("POST", `${idPath(projectId)}/message`, { body: { ...input, format: "ui" }, stream: true, signal });
+}
+
+/** The turn working in a conversation now, from its start; 204 when there is none. */
+export async function streamCompanyConversation(projectId: string, conversationId: string, signal?: AbortSignal): Promise<Response> {
+  return await call("GET", `${idPath(projectId)}/chats${idPath(conversationId)}/stream`, { stream: true, signal, allowEmpty: true });
+}
+
+/** Stop the turn in a conversation, or answer the card it put up. */
+export async function controlCompanyConversation(
+  projectId: string,
+  action: "stop" | "answer",
+  body: { conversation: string; interactionId?: string; value?: string | boolean | null; cancel?: boolean }
+): Promise<Record<string, unknown>> {
+  return (await (await call("POST", `${idPath(projectId)}/${action}`, { body })).json()) as Record<string, unknown>;
 }

@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Loader2, Mic, MicOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { MicLevelRings } from "@/components/chat/mic-level-rings";
+import { useChatSurface } from "@/components/chat/chat-surface";
 import { useI18n } from "@/i18n/provider";
 import type { MessageKey } from "@/i18n/messages";
 
@@ -57,6 +58,8 @@ export interface Dictation {
 
 export function useDictation(onTranscript: (text: string) => void, blocked = false): Dictation {
   const { t } = useI18n();
+  // A guest's screen has its own address for it (chat-surface.tsx).
+  const transcribeUrl = useChatSurface().transcribeUrl ?? "/api/speech/transcribe";
   const recorderRef = useRef<MediaRecorder | null>(null);
   const chunksRef = useRef<Blob[]>([]);
   const streamRef = useRef<MediaStream | null>(null);
@@ -91,7 +94,7 @@ export function useDictation(onTranscript: (text: string) => void, blocked = fal
       const formData = new FormData();
       formData.append("file", file);
       formData.append("language", "auto");
-      const response = await fetch("/api/speech/transcribe", { method: "POST", body: formData, signal: controller.signal });
+      const response = await fetch(transcribeUrl, { method: "POST", body: formData, signal: controller.signal });
       const data = await response.json().catch(() => null) as { transcript?: string; error?: string } | null;
       if (!response.ok || !data?.transcript) {
         throw new Error(data?.error || "Failed to transcribe audio");
@@ -103,7 +106,7 @@ export function useDictation(onTranscript: (text: string) => void, blocked = fal
       if (abortRef.current === controller) abortRef.current = null;
       if (!discardRef.current && !controller.signal.aborted) setIsTranscribing(false);
     }
-  }, []);
+  }, [transcribeUrl]);
 
   const start = useCallback(async () => {
     if (blocked || isRecording || isTranscribing) return;

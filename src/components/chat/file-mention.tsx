@@ -5,6 +5,7 @@ import { ExternalLink } from "lucide-react";
 import { useI18n } from "@/i18n/provider";
 import { fileDownloadUrl, filesPageUrl, isAudioFile, isModifiedClick, isOpenableFile } from "@/lib/files/openable";
 import { useAppStore } from "@/store/app-store";
+import { useChatSurface } from "@/components/chat/chat-surface";
 import { AudioMention } from "./audio-mention";
 
 /**
@@ -68,9 +69,12 @@ export function FileMention({ projectId, path, children, fallback }: {
 }) {
   const { t } = useI18n();
   const openFilePreview = useAppStore((state) => state.openFilePreview);
+  const { guest } = useChatSurface();
   const [exists, setExists] = useState<Existence>("unknown");
 
   useEffect(() => {
+    // A guest's screen has no file routes to ask: the name stays a name.
+    if (guest) return;
     let cancelled = false;
     const slash = path.lastIndexOf("/");
     const dir = slash === -1 ? "" : path.slice(0, slash);
@@ -81,7 +85,7 @@ export function FileMention({ projectId, path, children, fallback }: {
     return () => {
       cancelled = true;
     };
-  }, [projectId, path]);
+  }, [guest, projectId, path]);
 
   if (exists !== "present") {
     return fallback ?? <code className="bg-muted px-1.5 py-0.5 rounded text-sm">{children}</code>;

@@ -18,6 +18,7 @@ function isPublicApi(req: NextRequest, pathname: string): boolean {
   if (pathname.startsWith("/api/shares/page/")) return true;
   if (pathname === "/api/external/message") return true;
   if (pathname === "/api/external/media-message") return true;
+  if (pathname === "/api/external/guest") return true;
   if (pathname === "/api/external/telegram/sent" && req.method === "POST") return true;
   if (pathname === "/api/external/kb/warm" && req.method === "POST") return true;
   if (pathname === "/api/integrations/telegram" && req.method === "POST") {

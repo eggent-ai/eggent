@@ -6,8 +6,8 @@ import { conversationIdOf } from "@/lib/company-projects/types";
 /**
  * POST /api/company-projects/<id>/message {message, conversation?}
  *
- * The answer comes back as server-sent events, exactly as the project's own
- * workspace writes them ({type: "text" | "tool" | "done" | "error"}); the
+ * The answer comes back as the workspace chat's own stream, as the project's
+ * workspace writes it for a guest (lib/external/guest-turn.ts); the
  * conversation it went into is in the X-Eggent-Conversation header.
  */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ id: string }> }) {

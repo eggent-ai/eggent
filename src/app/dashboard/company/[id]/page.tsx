@@ -17,7 +17,7 @@ export default function CompanyProjectPage({ params }: { params: Promise<{ id: s
         <div className="flex flex-1">
           <AppSidebar />
           <SidebarInset>
-            <div className="mx-auto flex h-[calc(100svh-var(--header-height))] w-full max-w-5xl flex-col p-4 md:p-6">
+            <div className="mx-auto flex h-[calc(100svh-var(--header-height))] w-full max-w-5xl flex-col">
               <Suspense>
                 <CompanyProjectChat key={id} projectId={decodeURIComponent(id)} />
               </Suspense>

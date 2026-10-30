@@ -825,6 +825,17 @@ async function answerFiles(
   };
 }
 
+/**
+ * The chat a guest's session talks in, made on its first message: the same
+ * session and chat the JSON route would use, so a conversation begun from a
+ * screen that streams and one begun from an older caller are one conversation.
+ */
+export async function resolveGuestSessionChat(sessionId: string, projectId: string): Promise<{ chatId: string; projectId: string }> {
+  const context = await resolveExternalMessageRunContext({ sessionId, message: "", projectId, publicMode: true });
+  if (!context.resolvedProjectId) throw new ExternalMessageError(404, { error: "Project not found." });
+  return { chatId: context.resolvedChatId, projectId: context.resolvedProjectId };
+}
+
 export async function handleExternalMessage(
   input: HandleExternalMessageInput
 ): Promise<ExternalMessageResult> {

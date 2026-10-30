@@ -53,13 +53,21 @@ const service = http.createServer((req, res) => {
       return json(200, { projects: [{ id: PROJECT, projectId: "kb", title: "Knowledge base", welcome: null, from: "ACME", company: "ACME" }] });
     }
     if (req.url === `/api/company-projects/${PROJECT}/chats`) return json(200, { chats: [{ id: CONVERSATION, title: "Leave", updatedAt: "", messages: 2 }] });
-    if (req.url === `/api/company-projects/${PROJECT}/chats/${CONVERSATION}`) {
-      return json(200, { chat: { id: CONVERSATION, title: "Leave", messages: [{ id: "1", role: "user", text: "Leave?", at: "" }] } });
+    if (req.url === `/api/company-projects/${PROJECT}/chats/${CONVERSATION}?full=1`) {
+      return json(200, { chat: { id: CONVERSATION, title: "Leave", running: false, messages: [{ id: "1", role: "user", content: "Leave?", createdAt: "" }] } });
     }
+    if (req.url === `/api/company-projects/${PROJECT}/chats/${CONVERSATION}/stream`) {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+    if (req.url === `/api/company-projects/${PROJECT}/stop`) return json(200, { stopped: true });
+    if (req.url === `/api/company-projects/${PROJECT}/answer`) return json(200, { answered: true });
     if (req.url === `/api/company-projects/${PROJECT}/message`) {
       res.writeHead(200, { "Content-Type": "text/event-stream", "X-Eggent-Conversation": CONVERSATION });
-      res.write(`data: ${JSON.stringify({ type: "text", delta: "Twenty " })}\n\n`);
-      res.end(`data: ${JSON.stringify({ type: "done", result: { reply: "Twenty days." } })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: "text-start", id: "t" })}\n\n`);
+      res.write(`data: ${JSON.stringify({ type: "text-delta", id: "t", delta: "Twenty days." })}\n\n`);
+      res.end(`data: ${JSON.stringify({ type: "finish" })}\n\n`);
       return;
     }
     json(404, { error: "This project is not open to you.", code: "notShared" });
@@ -76,6 +84,9 @@ const listRoute = await import("../src/app/api/company-projects/route.ts");
 const chatsRoute = await import("../src/app/api/company-projects/[id]/chats/route.ts");
 const chatRoute = await import("../src/app/api/company-projects/[id]/chats/[conversation]/route.ts");
 const messageRoute = await import("../src/app/api/company-projects/[id]/message/route.ts");
+const streamRoute = await import("../src/app/api/company-projects/[id]/chats/[conversation]/stream/route.ts");
+const stopRoute = await import("../src/app/api/company-projects/[id]/stop/route.ts");
+const answerRoute = await import("../src/app/api/company-projects/[id]/answer/route.ts");
 const { isReservedDashboardSegment } = await import("../src/lib/dashboard-routes.ts");
 
 const session = await createSessionToken("tester", false);
@@ -132,7 +143,33 @@ await check("conversations are listed and read through", async () => {
   const list = await (await chatsRoute.GET(request("/x"), params({ id: PROJECT }))).json();
   assert.equal(list.chats[0].id, CONVERSATION);
   const one = await (await chatRoute.GET(request("/x"), params({ id: PROJECT, conversation: CONVERSATION }))).json();
-  assert.equal(one.chat.messages[0].text, "Leave?");
+  // Whole, as the chat draws it: the stored message, and whether a turn works in it.
+  assert.equal(one.chat.messages[0].content, "Leave?");
+  assert.equal(one.chat.running, false);
+});
+await check("a conversation with no turn working answers 204 to the screen that would attach to it", async () => {
+  const response = await streamRoute.GET(request("/x"), params({ id: PROJECT, conversation: CONVERSATION }));
+  assert.equal(response.status, 204);
+  assert.equal((await streamRoute.GET(request("/x"), params({ id: PROJECT, conversation: "../x" }))).status, 404);
+});
+await check("stop and a card's answer go through for one conversation, from this workspace's own page only", async () => {
+  const stopped = await stopRoute.POST(request("/x", { method: "POST", body: { conversation: CONVERSATION } }), params({ id: PROJECT }));
+  assert.deepEqual(await stopped.json(), { stopped: true });
+  assert.deepEqual(JSON.parse(seen.at(-1)!.body), { conversation: CONVERSATION });
+  const answered = await answerRoute.POST(
+    request("/x", { method: "POST", body: { conversation: CONVERSATION, interactionId: "q1", value: "Yes", extra: "ignored" } }),
+    params({ id: PROJECT })
+  );
+  assert.deepEqual(await answered.json(), { answered: true });
+  assert.deepEqual(JSON.parse(seen.at(-1)!.body), { conversation: CONVERSATION, interactionId: "q1", value: "Yes", cancel: false });
+  const before = seen.length;
+  assert.equal((await answerRoute.POST(request("/x", { method: "POST", body: { conversation: "nope!" } }), params({ id: PROJECT }))).status, 404);
+  const foreign = await stopRoute.POST(
+    request("/x", { method: "POST", body: { conversation: CONVERSATION }, headers: { origin: "https://other.example.test", "sec-fetch-site": "same-site" } }),
+    params({ id: PROJECT })
+  );
+  assert.equal(foreign.status, 403);
+  assert.equal(seen.length, before);
 });
 await check("a question's answer streams through, naming the conversation it went into", async () => {
   const response = await messageRoute.POST(request("/x", { method: "POST", body: { message: "How much leave?" } }), params({ id: PROJECT }));
@@ -140,10 +177,11 @@ await check("a question's answer streams through, naming the conversation it wen
   assert.match(response.headers.get("content-type") || "", /text\/event-stream/);
   assert.equal(response.headers.get("x-eggent-conversation"), CONVERSATION);
   const text = await response.text();
-  assert.match(text, /"type":"done"/);
+  assert.match(text, /"type":"text-delta"/);
   const sent = seen.at(-1)!;
   assert.match(sent.accept, /text\/event-stream/);
-  assert.deepEqual(JSON.parse(sent.body), { message: "How much leave?" });
+  // The workspace chat's own stream is asked for, so cards and tools come through.
+  assert.deepEqual(JSON.parse(sent.body), { message: "How much leave?", format: "ui" });
 });
 await check("a project the service does not open answers with its refusal", async () => {
   const response = await chatsRoute.GET(request("/x"), params({ id: "ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ" }));

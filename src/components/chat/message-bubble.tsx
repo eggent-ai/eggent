@@ -25,6 +25,7 @@ import { embeddedAudioPath, embeddedImageUrl, fileMentionPath } from "@/lib/file
 import { hashText, runnableCommand } from "@/lib/terminal/format";
 import { resolveProjectMention } from "@/lib/pi/project-mention";
 import { useAppStore } from "@/store/app-store";
+import { useChatSurface } from "./chat-surface";
 import { useMemo, type ReactNode } from "react";
 import type { UIMessage } from "ai";
 
@@ -46,15 +47,17 @@ interface MessageBubbleProps {
 function UserText({ text }: { text: string }) {
   const projects = useAppStore((state) => state.projects);
   const activeProjectId = useAppStore((state) => state.activeProjectId);
+  // A guest's words name no project of the workspace they are drawn in.
+  const { guest } = useChatSurface();
   const mention = useMemo(() => {
-    if (!text.startsWith("@")) return null;
+    if (guest || !text.startsWith("@")) return null;
     const resolution = resolveProjectMention(
       text,
       projects.map(({ id, name, description }) => ({ id, name, description })),
       activeProjectId
     );
     return resolution.kind === "project" ? resolution : null;
-  }, [text, projects, activeProjectId]);
+  }, [guest, text, projects, activeProjectId]);
   if (!mention) return <>{text}</>;
   return (
     <>

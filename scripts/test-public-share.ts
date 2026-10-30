@@ -275,6 +275,154 @@ await check("the boundary is the project folder however the path is spelled", as
   assert.ok(await resolvePublicPath(shareRoot, path.join(projectDir, "docs", "..", "prices.md")));
 });
 
+console.log("\nA guest's turn: a card to ask with and answers to leave, nothing more\n");
+
+const { createPiChatUIMessageStream } = await import("../src/lib/pi/chat-runner.ts");
+const { recordPublicAnswer, parseCsv } = await import("../src/lib/pi/public-share-answers.ts");
+const { guestVisibleStream, guestAnswer } = await import("../src/lib/external/guest-turn.ts");
+const { resolveGuestSessionChat } = await import("../src/lib/external/handle-external-message.ts");
+const { registerActiveRun, clearActiveRun } = await import("../src/lib/pi/active-runs.ts");
+const { createPendingInteraction } = await import("../src/lib/pi/pending-interactions.ts");
+
+async function drain(stream: ReadableStream<unknown>): Promise<void> {
+  const reader = stream.getReader();
+  for (;;) if ((await reader.read()).done) return;
+}
+const VISITOR = { name: "Anna", email: "anna@example.test", confirmed: false, conversation: "conv0001" };
+await drain(createPiChatUIMessageStream({
+  chatId: "44444444-4444-4444-8444-444444444444",
+  userMessage: "hello",
+  projectId: project.id,
+  publicShare: true,
+  enableEggentTools: false,
+}));
+await drain(createPiChatUIMessageStream({
+  chatId: "55555555-5555-4555-8555-555555555555",
+  userMessage: "hello",
+  projectId: project.id,
+  publicShare: true,
+  enableEggentTools: false,
+  toolRuntimeData: { publicAnswers: { file: "link-price-list", visitor: VISITOR } },
+}));
+const guestTools = toolSets[3] ?? [];
+const guestPrompt = systemPrompts[3] ?? "";
+const answeringTools = toolSets[4] ?? [];
+const answeringPrompt = systemPrompts[4] ?? "";
+
+await check("a guest's turn somebody watches adds the question card, and nothing else of the workspace", () => {
+  assert.deepEqual([...guestTools].sort(), ["eggent_ask_user", "kb_search", "ls", "read", "search"]);
+  assert.match(guestPrompt, /eggent_ask_user/);
+  assert.doesNotMatch(guestPrompt, /eggent_record_answer/);
+});
+await check("the answers tool is there only where the host said where answers go", () => {
+  assert.deepEqual([...answeringTools].sort(), ["eggent_ask_user", "eggent_record_answer", "kb_search", "ls", "read", "search"]);
+  assert.match(answeringPrompt, /eggent_record_answer/);
+  // Who is writing is the host's to say and is never put in front of the model.
+  assert.ok(!answeringPrompt.includes(VISITOR.email), "the visitor's email reached the prompt");
+});
+await check("a guest's turn is still not handed the deployment facts", () => {
+  assert.ok(!answeringPrompt.includes("DEPLOYMENT-FACTS-MARKER"));
+  assert.ok(answeringPrompt.includes("PROJECT-INSTRUCTIONS-MARKER"));
+});
+
+const target = { file: "link-price-list", visitor: VISITOR };
+await check("an answer becomes a row stamped with who wrote it, whatever the model claims", async () => {
+  const saved = await recordPublicAnswer(projectDir, target, { colour: "red", email: "someone-else@example.test", name: "Mallory" }, new Date("2026-10-30T10:00:00Z"));
+  assert.ok(saved.ok);
+  const rows = parseCsv(fs.readFileSync(path.join(projectDir, "responses", "link-price-list.csv"), "utf-8").replace(/^﻿/, ""));
+  assert.deepEqual(rows[0], ["time", "name", "email", "email confirmed", "conversation", "colour"]);
+  assert.deepEqual(rows[1], ["2026-10-30T10:00:00.000Z", "Anna", "anna@example.test", "no", "conv0001", "red"]);
+});
+await check("a new question adds a column and keeps the earlier rows in line", async () => {
+  await recordPublicAnswer(projectDir, target, { colour: "blue", size: "M" });
+  const rows = parseCsv(fs.readFileSync(path.join(projectDir, "responses", "link-price-list.csv"), "utf-8").replace(/^﻿/, ""));
+  assert.equal(rows[0].at(-1), "size");
+  assert.equal(rows.length, 3);
+  assert.ok(rows.every((row) => row.length === rows[0].length || row.length === rows[0].length - 1));
+  assert.equal(rows[2][rows[0].indexOf("size")], "M");
+});
+await check("a formula in an answer is kept as text for a spreadsheet", async () => {
+  await recordPublicAnswer(projectDir, target, { colour: "=HYPERLINK(\"http://evil.example.test\")" });
+  const text = fs.readFileSync(path.join(projectDir, "responses", "link-price-list.csv"), "utf-8");
+  assert.ok(!/,=HYPERLINK/.test(text) && !/,"=HYPERLINK/.test(text), "a formula reached the file as a formula");
+  assert.match(text, /'=HYPERLINK/);
+});
+await check("answers cannot be read back: responses/ is closed to read, ls and search", async () => {
+  assert.ok(await refused("read", { path: "responses/link-price-list.csv" }));
+  assert.ok(await refused("ls", { path: "responses" }));
+  assert.ok(!(await call("ls", {})).split("\n").some((line) => line.replace(/\/$/, "") === "responses"));
+  assert.match(await call("search", { query: "anna@example.test" }), /No line/);
+});
+await check("a responses folder that is a link out of the project is not written through", async () => {
+  const other = fs.mkdtempSync(path.join(os.tmpdir(), "eggent-public-other-"));
+  const linkedProject = fs.mkdtempSync(path.join(os.tmpdir(), "eggent-public-linked-"));
+  fs.symlinkSync(other, path.join(linkedProject, "responses"));
+  const saved = await recordPublicAnswer(linkedProject, target, { colour: "green" });
+  assert.equal(saved.ok, false);
+  assert.deepEqual(fs.readdirSync(other), []);
+  fs.rmSync(other, { recursive: true, force: true });
+  fs.rmSync(linkedProject, { recursive: true, force: true });
+});
+await check("a file name from the host cannot climb out of responses/", async () => {
+  const before = fs.readdirSync(path.join(projectDir, "responses")).length;
+  const saved = await recordPublicAnswer(projectDir, { file: "../../escape", visitor: VISITOR }, { colour: "x" });
+  assert.ok(saved.ok && saved.file.startsWith("responses/") && !saved.file.includes(".."), JSON.stringify(saved));
+  assert.equal(fs.readdirSync(path.join(projectDir, "responses")).length, before + 1);
+  for (const place of [projectDir, path.join(projectDir, ".."), path.join(root, "data")]) {
+    assert.ok(!fs.readdirSync(place).some((name) => name.includes("escape")), `a file escaped into ${place}`);
+  }
+});
+await check("a guest is not shown what the turn cost or the owner's file cards", async () => {
+  const frames = [
+    { type: "text-delta", id: "t", delta: "hi" },
+    { type: "data-piStats", data: { model: { id: "secret-model" }, session: { cost: 1 } } },
+    { type: "data-eggentFiles", data: [] },
+    { type: "data-piInteraction", data: { id: "q" } },
+  ].map((part) => `data: ${JSON.stringify(part)}\n\n`).join("");
+  const source = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(new TextEncoder().encode(frames)); controller.close(); } });
+  const text = await new Response(guestVisibleStream(source)).text();
+  assert.match(text, /text-delta/);
+  assert.match(text, /data-piInteraction/);
+  assert.doesNotMatch(text, /piStats|secret-model|eggentFiles/);
+});
+await check("a guest answers only a card the turn in their own conversation put up, and only words or a choice", async () => {
+  const mine = "share:tokenA:visitor1:conv0001";
+  const theirs = "share:tokenA:visitor2:conv0002";
+  const { chatId } = await resolveGuestSessionChat(mine, project.id);
+  const { chatId: otherChat } = await resolveGuestSessionChat(theirs, project.id);
+  const fake = { abort: async () => undefined, steer: async () => undefined, isStreaming: true };
+  registerActiveRun(chatId, { session: fake, runId: "run-mine", surface: "external" });
+  registerActiveRun(otherChat, { session: fake, runId: "run-theirs", surface: "external" });
+  const ask = (runId: string, kind: "text" | "secret") => {
+    let id = "";
+    const answer = createPendingInteraction({ runId, kind, title: "Q?", onUpdate: (interaction) => { id = interaction.id; } });
+    return { answer, id: () => id };
+  };
+  const theirsCard = ask("run-theirs", "text");
+  const secretCard = ask("run-mine", "secret");
+  const myCard = ask("run-mine", "text");
+  assert.equal(await guestAnswer(mine, { interactionId: theirsCard.id(), value: "stolen" }), false);
+  assert.equal(await guestAnswer(mine, { interactionId: secretCard.id(), value: "hunter2" }), false);
+  assert.equal(await guestAnswer("share:tokenA:nobody:conv9999", { interactionId: myCard.id(), value: "x" }), false);
+  assert.equal(await guestAnswer(mine, { interactionId: myCard.id(), value: "Blue" }), true);
+  assert.equal(await myCard.answer, "Blue");
+  clearActiveRun(chatId, "run-mine");
+  clearActiveRun(otherChat, "run-theirs");
+});
+await check("the guest route wants the external token and a guest's session id", async () => {
+  const { NextRequest } = await import("next/server");
+  process.env.EXTERNAL_API_TOKEN = "guest-route-token";
+  const route = await import("../src/app/api/external/guest/route.ts");
+  const req = (headers: Record<string, string>, body: unknown) =>
+    new NextRequest("http://localhost/api/external/guest", { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify(body) });
+  assert.equal((await route.POST(req({}, { action: "stop", sessionId: "share:a:b" }))).status, 401);
+  assert.equal((await route.POST(req({ authorization: "Bearer wrong-token-xx" }, { action: "stop", sessionId: "share:a:b" }))).status, 401);
+  // The workspace's own chats and its Telegram sessions are not a guest's to stop or read.
+  assert.equal((await route.POST(req({ authorization: "Bearer guest-route-token" }, { action: "stop", sessionId: "telegram:12345" }))).status, 400);
+  assert.equal((await route.POST(req({ authorization: "Bearer guest-route-token" }, { action: "stop", sessionId: "share:a:b" }))).status, 200);
+  delete process.env.EXTERNAL_API_TOKEN;
+});
+
 provider.close();
 fs.rmSync(root, { recursive: true, force: true });
 fs.rmSync(outside, { recursive: true, force: true });

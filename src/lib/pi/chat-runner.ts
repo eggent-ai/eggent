@@ -1677,7 +1677,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
       // A chat that is a board card: the card follows this turn too, written by the side that runs it.
       // A turn handed here with nobody watching - a board run, a messenger's - is the one exception:
       // the side that handed it over reads how it ends from the stream and writes the card itself.
-      const cardTurn: CardTurn | null = options.interactive === false ? null : trackCardTurn(options.chatId, runId, "web");
+      const cardTurn: CardTurn | null = options.interactive === false || options.publicShare ? null : trackCardTurn(options.chatId, runId, "web");
       const stall: { stalled: StalledTurn | null; question: PiPendingInteraction | null } = { stalled: null, question: null };
       const thresholds = watchdogThresholds();
       const watchdog = thresholds
@@ -1719,7 +1719,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         }
         // A session built for this turn that nothing took over: back to where it came from, or let go.
         if (built) {
-          const retained = await retainPiScheduleSession({ chatId: options.chatId, projectId: options.projectId, session: built });
+          const retained = !options.publicShare && await retainPiScheduleSession({ chatId: options.chatId, projectId: options.projectId, session: built });
           if (retained) releaseSessionTurn(built);
           else built.dispose();
         }
@@ -1727,7 +1727,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
 
       const onEngine = (await resolveEngineRun(options.projectId)) !== null;
       const mention = await planProjectMention(options.userMessage, {
-        disabled: options.enableEggentTools === false || Boolean(options.visit) || !chatAllowsVisits(options.chatContextMode) || onEngine,
+        disabled: options.enableEggentTools === false || options.publicShare === true || Boolean(options.visit) || !chatAllowsVisits(options.chatContextMode) || onEngine,
         currentProjectId: options.projectId,
       });
       const promptFor = promptForMessage(options.userMessage, "", mention, options.openFileNote);
@@ -1746,7 +1746,8 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
       let session: Awaited<ReturnType<typeof createEggentPiSession>>;
       try {
         // A session kept for its schedules is built for the turn that made them: it serves this one now.
-        const lent = takeRetainedPiScheduleSession(options.chatId);
+        // Never for a public share, whose session is built narrower than any the workspace keeps.
+        const lent = options.publicShare ? null : takeRetainedPiScheduleSession(options.chatId);
         if (lent) rebindSessionTurn(lent, { runId, abortSignal: runAbort.signal, onPiInteraction });
         session = lent ?? await raceAbort(
           createEggentPiSession({
@@ -1757,6 +1758,8 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
             projectId: options.projectId,
             chatContextMode: options.chatContextMode,
             enableEggentTools: options.enableEggentTools,
+            publicShare: options.publicShare,
+            toolRuntimeData: options.toolRuntimeData,
             remote: options.remote,
             runId,
             abortSignal: runAbort.signal,
@@ -2285,6 +2288,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
           chatId: options.chatId,
           projectId: options.projectId,
           contextMode: options.chatContextMode,
+          isPublicShare: options.publicShare === true,
           userMessage: options.userMessage,
           assistantText,
           tools: tools.values(),
@@ -2374,14 +2378,14 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         // A stopped turn still goes through retention: the chat's schedules
         // live in this session too, and disposing it here ended every one of
         // them until the next restart.
-        const retained = await retainPiScheduleSession({
+        const retained = !options.publicShare && await retainPiScheduleSession({
           chatId: options.chatId,
           projectId: options.projectId,
           session,
         });
         // Kept for its schedules, it must not go on holding this turn's stop signal and question stream.
         if (retained) releaseSessionTurn(session);
-        const retainedForMcpOAuth = !retained && !aborted && mcpOAuthPending
+        const retainedForMcpOAuth = !retained && !aborted && mcpOAuthPending && !options.publicShare
           ? retainPiMcpOAuthSession({
               chatId: options.chatId,
               projectId: options.projectId,

@@ -14,7 +14,8 @@ import { formatLearnedForPrompt, learnedSnapshot } from "@/lib/learning/notes";
 import { createEggentPiTools } from "@/lib/pi/eggent-tools";
 import { createEggentPiExtensionUIContext } from "@/lib/pi/interaction-ui-context";
 import { createEggentInteractiveBashTool } from "@/lib/pi/interactive-bash-tool";
-import { buildPublicSharePrompt, createPublicShareTools, PUBLIC_SHARE_TOOL_NAMES } from "@/lib/pi/public-share";
+import { buildPublicSharePrompt, createPublicShareTools } from "@/lib/pi/public-share";
+import { answersTargetOf } from "@/lib/pi/public-share-answers";
 import { checkNewScheduleLimits, normalizePiScheduleStore } from "@/lib/pi/schedule-host";
 import { openChatSessionManager } from "@/lib/pi/session-files";
 import { logExtensionError, ownsScheduleStore, shutdownSessionExtensions } from "@/lib/pi/session-lifecycle";
@@ -873,6 +874,8 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
               projectName: project?.name,
               projectDescription: project?.description,
               projectInstructions: workspaceInstructions,
+              canAsk: Boolean(turn.onPiInteraction),
+              canRecord: answersTargetOf(turn.toolRuntimeData) !== null,
             }),
         }
       : engineRun
@@ -969,7 +972,12 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
       return (result.content || []).map((part) => part.text ?? "").join("\n");
     };
   }
-  const customTools = publicShare ? await createPublicShareTools(cwd) : engineRun ? [
+  const customTools = publicShare ? await createPublicShareTools(cwd, {
+    get runId() { return turn.runId; },
+    get abortSignal() { return turn.abortSignal; },
+    get onPiInteraction() { return turn.onPiInteraction; },
+    get toolRuntimeData() { return turn.toolRuntimeData; },
+  }) : engineRun ? [
     createEngineTool({ run: engineRun, chatId: options.chatId, projectId: projectId ?? null, cwd }),
   ] : [
     ...eggentTools.tools,
@@ -996,7 +1004,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
   // noTools "all" leaves the request without a tools field at all, which is
   // what "plain" means; an allowlist is what every other mode narrows through.
   const toolSelection = publicShare
-    ? { tools: PUBLIC_SHARE_TOOL_NAMES }
+    ? { tools: customToolNames }
     : engineRun
     ? { tools: [ENGINE_TOOL_NAME] }
     : liteMode === "plain"

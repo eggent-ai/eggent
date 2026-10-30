@@ -1,4 +1,5 @@
 /** Shapes the company-projects service answers with. Client-safe. */
+import type { ChatMessage } from "@/lib/types";
 
 export interface CompanyProject {
   id: string;
@@ -20,7 +21,10 @@ export interface CompanyConversationSummary {
 export interface CompanyConversation {
   id: string;
   title: string;
-  messages: Array<{ id: string; role: "user" | "assistant"; text: string; at: string }>;
+  /** As stored in the administrator's workspace, what a guest may see of it (lib/external/guest-turn.ts). */
+  messages: ChatMessage[];
+  /** A turn is working in it now. */
+  running: boolean;
 }
 
 export type CompanyProjectsList = { enabled: false } | { enabled: true; projects: CompanyProject[] };
