@@ -13,8 +13,9 @@ import { GuestConversationsBar } from "@/components/chat/guest-conversations";
 /**
  * A project's public link, as its visitor sees it: who they are first (a name
  * and an email; a code from the letter when the address has been here before
- * from another browser), then the workspace's own chat with their own
- * conversations. Who may see which conversation is decided by the server
+ * from another browser), then the workspace's own chat - one conversation per
+ * visitor, which every visit returns to, with the answers' tool rows left out.
+ * Who may see which conversation is decided by the server
  * (lib/public-chat/visitors.ts); this screen only asks and shows.
  */
 
@@ -162,10 +163,9 @@ export function PublicChat({ token }: { token: string }) {
   const base = `/s/${encodeURIComponent(token)}/api`;
   const [info, setInfo] = useState<LinkInfo | null>(null);
   const [state, setState] = useState<"loading" | "closed" | "ready">("loading");
-  const [busy, setBusy] = useState(false);
   const fromAddress = search.get("c");
-  // As on the company page: a key that changes only when the visitor opens
-  // another conversation, so the first answer naming a new one keeps the screen.
+  // A key that changes only when another conversation is opened (after "Not
+  // you?"), so the first answer naming the new one keeps the screen.
   const [opened, setOpened] = useState<{ key: string; conversation: string | null } | null>(null);
   const named = useRef<string | null>(fromAddress);
 
@@ -195,12 +195,6 @@ export function PublicChat({ token }: { token: string }) {
   }, []);
 
   const path = `/s/${encodeURIComponent(token)}`;
-  const openConversation = (id: string | null) => {
-    if (busy) return;
-    named.current = id;
-    router.replace(id ? `${path}?c=${id}` : path);
-    setOpened({ key: id ?? `new-${Date.now()}`, conversation: id });
-  };
 
   const endpoints = useMemo<GuestChatEndpoints>(() => ({
     send: `${base}/message`,
@@ -257,10 +251,6 @@ export function PublicChat({ token }: { token: string }) {
           </button>
         </span>
       }
-      conversations={info.conversations}
-      current={opened?.conversation ?? null}
-      busy={busy}
-      onOpen={openConversation}
     />
   );
 
@@ -276,12 +266,12 @@ export function PublicChat({ token }: { token: string }) {
             setOpened((current) => (current ? { ...current, conversation: id } : current));
             router.replace(`${path}?c=${id}`);
           }}
-          onBusyChange={setBusy}
           onSettled={() => void load()}
           empty={{ title: info.share.title, description: t("publicChat.empty") }}
           welcome={info.share.welcome}
           note={t("publicChat.note")}
           header={header}
+          hideTools
         />
       ) : null}
     </div>

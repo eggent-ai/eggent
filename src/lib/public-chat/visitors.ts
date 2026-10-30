@@ -47,7 +47,9 @@ const CODE_TTL_MS = 10 * 60_000;
 const CODE_RESEND_MS = 60_000;
 const CODE_ATTEMPTS = 5;
 const MAX_KEYS = 10;
-const MAX_CONVERSATIONS = 200;
+// One per visitor (the message route goes on with it); visitors from before
+// that keep the ones they had.
+const MAX_CONVERSATIONS = 1;
 export const MAX_VISITORS_PER_LINK = 20_000;
 
 function dir(): string {

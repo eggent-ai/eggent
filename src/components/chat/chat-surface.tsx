@@ -16,6 +16,12 @@ export interface ChatSurface {
   guest: boolean;
   /** Where a recording is turned into words, when not the workspace's own route. */
   transcribeUrl?: string;
+  /**
+   * Draw the answer without the tool rows. A visitor of a public link came to
+   * talk, not to watch searches and file reads; an answered question card is
+   * kept, as the question and the answer.
+   */
+  hideTools?: boolean;
 }
 
 const ChatSurfaceContext = createContext<ChatSurface>({ guest: false });

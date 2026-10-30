@@ -9,9 +9,9 @@ export const maxDuration = 300;
 /**
  * POST /s/<token>/api/message {message, conversation?}
  *
- * The answer, as the workspace chat's own stream; a new conversation is named
- * in X-Eggent-Conversation. Only a visitor's own conversation can be written
- * to, and a visitor asks no more than the link allows in an hour.
+ * The answer, as the workspace chat's own stream; the conversation it went
+ * into is named in X-Eggent-Conversation. A visitor has one conversation per
+ * link, can write only to it, and asks no more than the link allows in an hour.
  */
 export async function POST(req: NextRequest, { params }: { params: Promise<{ token: string }> }) {
   const context = await linkContext(req, (await params).token, { write: true });
@@ -29,6 +29,9 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ tok
   if (!withinLimit("message", `${token}:${visitor.id}`, share.maxMessagesPerHour) || !withinLimit("message-ip", `${token}:${clientAddress(req)}`, share.maxMessagesPerHour * 3)) {
     return fail("Too many questions in an hour. Try again later.", 429, "rateLimited");
   }
+  // One conversation per visitor: a message that names none goes on with the
+  // one they have, so starting over cannot be used to begin again and again.
+  if (!conversation) conversation = visitor.conversations[visitor.conversations.length - 1]?.id ?? null;
   if (!conversation) {
     conversation = newConversationId();
     if (!(await addConversation(token, visitor.id, conversation))) return fail("You have as many conversations here as you may.", 409, "tooManyConversations");

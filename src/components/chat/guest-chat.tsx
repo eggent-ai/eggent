@@ -61,6 +61,8 @@ interface GuestChatProps {
   note?: string;
   /** Above the conversation: a title, a conversation switcher. */
   header?: ReactNode;
+  /** Answers without their tool rows (a public link's visitor). */
+  hideTools?: boolean;
 }
 
 /** Refusals the guest routes give by code, said in the guest's language rather than the server's. */
@@ -71,7 +73,7 @@ export function guestErrorText(data: { error?: unknown; code?: unknown } | null,
   return typeof data?.error === "string" && data.error ? data.error : fallback;
 }
 
-export function GuestChat({ endpoints, conversation, onConversation, onSettled, onBusyChange, empty, welcome, note, header }: GuestChatProps) {
+export function GuestChat({ endpoints, conversation, onConversation, onSettled, onBusyChange, empty, welcome, note, header, hideTools }: GuestChatProps) {
   const { t } = useI18n();
   const errorText = useCallback(async (response: Response, fallback: string) =>
     guestErrorText((await response.clone().json().catch(() => null)) as { error?: unknown; code?: unknown } | null, t, fallback), [t]);
@@ -129,7 +131,7 @@ export function GuestChat({ endpoints, conversation, onConversation, onSettled, 
     if (!startedHere || !text) return messages;
     return [{ id: "opening", role: "assistant", parts: [{ type: "text", text }] }, ...messages];
   }, [messages, startedHere, welcome]);
-  const surface = useMemo(() => ({ guest: true, transcribeUrl: endpoints.transcribe }), [endpoints.transcribe]);
+  const surface = useMemo(() => ({ guest: true, transcribeUrl: endpoints.transcribe, hideTools }), [endpoints.transcribe, hideTools]);
   const pendingInteraction = useMemo(() => getLatestPendingInteraction(messages), [messages]);
   const onBusyChangeRef = useRef(onBusyChange);
   onBusyChangeRef.current = onBusyChange;

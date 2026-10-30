@@ -142,10 +142,30 @@ function renderMarkdownBlock(content: string, key: string, scope?: string) {
 // message opens with.
 const AVATAR_TOOL_CARD_OFFSET = "mt-[5px]";
 
+/**
+ * A question card that was answered, as the question and the answer in words:
+ * what is left of it where tool rows are not drawn. Null for anything else.
+ */
+function answeredQuestionOf(tool: NonNullable<ReturnType<typeof toolPartInfo>>): { question: string; answer: string } | null {
+  if (tool.toolName !== "eggent_ask_user" || tool.state !== "output-available") return null;
+  const input = typeof tool.input === "object" && tool.input !== null ? (tool.input as Record<string, unknown>) : {};
+  const question = typeof input.question === "string" ? input.question.trim() : "";
+  if (!question) return null;
+  let answer = "";
+  try {
+    const parsed = JSON.parse(valueToText(tool.output)) as { answer?: unknown };
+    if (typeof parsed.answer === "string") answer = parsed.answer.trim();
+  } catch {
+    // Not a result that names an answer: the question alone is still worth showing.
+  }
+  return { question, answer };
+}
+
 export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
   const isUser = message.role === "user";
   // Before any return: a chat that answers a colleague's message offers to send each answer.
   const mailReply = useMailReply();
+  const { hideTools } = useChatSurface();
 
   if (isUser) {
     const visibleTextContent = normalizeVisibleText(
@@ -250,6 +270,28 @@ export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
 
     const tool = toolPartInfo(part);
     if (!tool) return;
+
+    if (hideTools) {
+      const asked = answeredQuestionOf(tool);
+      if (asked) {
+        flushTools();
+        const block = renderBlock(asked.question, `asked-${tool.toolCallId || idx}`);
+        if (block) {
+          renderedParts.push(block);
+          noteOpeningBlock(false);
+        }
+        if (asked.answer) {
+          renderedParts.push(
+            <div key={`answered-${tool.toolCallId || idx}`} className="flex justify-end">
+              <p className="max-w-[90%] rounded-2xl bg-muted px-4 py-2 text-[15px]/[26px] whitespace-pre-wrap [overflow-wrap:anywhere]">
+                {asked.answer}
+              </p>
+            </div>
+          );
+        }
+      }
+      return;
+    }
 
     const input =
       typeof tool.input === "object" && tool.input !== null

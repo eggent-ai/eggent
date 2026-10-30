@@ -313,13 +313,23 @@ await check("\"not you?\" lets the browser go of the visitor", async () => {
   bob.keep(await forgetRoute.POST(bob.request(`/s/${LINK}/api/forget`, { method: "POST", body: {} }), p(LINK)));
   assert.equal((await info(bob)).visitor, null);
 });
-await check("a visitor has no more conversations than allowed", async () => {
+await check("a visitor has one conversation: a message naming none goes on with it", async () => {
   const carol = browser("10.0.0.7");
   await start(carol, "Carol", "carol@example.test");
+  const first = await messageRoute.POST(carol.request(`/s/${LINK}/api/message`, { method: "POST", body: { message: "Hello" } }), p(LINK));
+  assert.equal(first.status, 200);
+  await first.text();
+  const named = first.headers.get("x-eggent-conversation");
+  assert.ok(named);
+  const again = await messageRoute.POST(carol.request(`/s/${LINK}/api/message`, { method: "POST", body: { message: "Start over" } }), p(LINK));
+  assert.equal(again.status, 200);
+  await again.text();
+  assert.equal(again.headers.get("x-eggent-conversation"), named, "a second conversation was started");
   const id = carol.cookie.split("=")[1].split(".")[0];
   let added = 0;
-  for (let i = 0; i < 205; i += 1) if (await addConversation(LINK, id, i.toString(16).padStart(16, "0"))) added += 1;
-  assert.equal(added, 200);
+  for (let i = 0; i < 5; i += 1) if (await addConversation(LINK, id, i.toString(16).padStart(16, "0"))) added += 1;
+  assert.equal(added, 0);
+  assert.equal((await info(carol)).conversations.length, 1);
 });
 
 console.log("\nWithout the mail\n");
