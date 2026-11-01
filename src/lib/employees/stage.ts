@@ -149,7 +149,10 @@ export function foldStages(calls: unknown[]): StageBoard {
     const before = byId.get(stage.id);
     if (!before) order.push(stage.id);
     planned.delete(stage.id);
-    byId.set(stage.id, before ? { ...before, ...definedOnly(stage) } : stage);
+    const merged = before ? { ...before, ...definedOnly(stage) } : stage;
+    // A call that names no title keeps the one given before, not its id.
+    if (before && !text((call as Record<string, unknown>).title, LIMITS.title)) merged.title = before.title;
+    byId.set(stage.id, merged);
     currentId = stage.id;
   }
   const stages = order.map((id) => {
