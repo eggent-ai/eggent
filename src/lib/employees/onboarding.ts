@@ -190,6 +190,28 @@ async function sayWhenNothingCame(chatId: string): Promise<void> {
   });
 }
 
+const STATE_FILE = path.join(DATA_DIR, "employees-state.json");
+
+/** The very first job any employee did in this workspace: the one a deployment may offer a plan under. */
+async function rememberFirstJob(chatId: string, role: string): Promise<void> {
+  try {
+    await fs.access(STATE_FILE);
+    return;
+  } catch {
+    // The first one: written once, never moved.
+  }
+  await fs.writeFile(STATE_FILE, JSON.stringify({ firstJob: { chatId, role, at: new Date().toISOString() } }, null, 2), { flag: "wx" }).catch(() => {});
+}
+
+export async function firstJob(): Promise<{ chatId: string; role: string } | null> {
+  try {
+    const parsed = JSON.parse(await fs.readFile(STATE_FILE, "utf-8")) as { firstJob?: { chatId?: string; role?: string } };
+    return parsed.firstJob?.chatId ? { chatId: parsed.firstJob.chatId, role: parsed.firstJob.role ?? "" } : null;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * Starts the first job on the server, in a chat of its own, and returns at
  * once. The screen then opens that chat and follows the turn already running
@@ -199,6 +221,7 @@ async function sayWhenNothingCame(chatId: string): Promise<void> {
 async function startFirstJob(projectId: string | null, message: string, role: string): Promise<string> {
   const chatId = crypto.randomUUID();
   await createChat(chatId, role, projectId ?? undefined);
+  await rememberFirstJob(chatId, role).catch(() => {});
   void runPiAgentText({ chatId, userMessage: message, projectId: projectId ?? undefined })
     .catch((error) => {
       console.error(`[employees] the first job in ${chatId.slice(0, 8)} failed:`, error);

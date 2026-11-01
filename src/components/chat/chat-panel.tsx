@@ -1464,6 +1464,25 @@ export function ChatPanel({ initialQuickSkills = [], onboardingPending = false }
     document.documentElement.toggleAttribute("data-eggent-focus", focus);
     return () => document.documentElement.removeAttribute("data-eggent-focus");
   }, [focus]);
+  // Under the very first employee job, once it is done: what the deployment
+  // offers (a plan, while there is none). The server says whether this chat is
+  // that first job; anything else gets nothing.
+  const [offer, setOffer] = useState<{ title: string; text: string; button: string; url: string } | null>(null);
+  useEffect(() => {
+    if (!focus || isLoading || !activeChatId || offer) return;
+    let cancelled = false;
+    void fetch(`/api/employees/offer?chatId=${encodeURIComponent(activeChatId)}`)
+      .then((response) => (response.ok ? response.json() : null))
+      .then((payload: { show?: boolean; title?: string; text?: string; button?: string; url?: string } | null) => {
+        if (!cancelled && payload?.show && payload.url) {
+          setOffer({ title: payload.title || "", text: payload.text || "", button: payload.button || "", url: payload.url });
+        }
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [focus, isLoading, activeChatId, offer]);
   const leaveFocus = useCallback(() => {
     setFocus(false);
     window.history.replaceState(null, "", window.location.pathname);
@@ -1497,6 +1516,19 @@ export function ChatPanel({ initialQuickSkills = [], onboardingPending = false }
         <div className="flex shrink-0 items-center justify-center gap-3 border-t bg-background/95 px-4 py-4">
           {isLoading ? (
             <p className="text-sm text-muted-foreground">{t("employees.focus.working")}</p>
+          ) : offer ? (
+            <div className="eggent-stage-in flex w-full max-w-3xl flex-col gap-3 rounded-2xl border border-primary/30 bg-primary/5 p-4 sm:flex-row sm:items-center">
+              <div className="min-w-0 flex-1">
+                <p className="font-semibold leading-6">{offer.title}</p>
+                {offer.text ? <p className="mt-0.5 text-sm leading-5 text-muted-foreground">{offer.text}</p> : null}
+              </div>
+              <div className="flex shrink-0 flex-wrap gap-2">
+                <Button asChild size="lg">
+                  <a href={offer.url} target="_blank" rel="noopener noreferrer">{offer.button}</a>
+                </Button>
+                <Button onClick={leaveFocus} size="lg" variant="outline">{t("employees.focus.open")}</Button>
+              </div>
+            </div>
           ) : (
             <Button onClick={leaveFocus} size="lg" className="eggent-stage-in">{t("employees.focus.open")}</Button>
           )}
