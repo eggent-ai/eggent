@@ -63,6 +63,19 @@ function UserText({ text }: { text: string }) {
     );
     return resolution.kind === "project" ? resolution : null;
   }, [guest, text, projects, activeProjectId]);
+  // Hiring an employee sends `/skill:employee-<id> <what it was given>`; the
+  // person sees who they hired and what they gave it, not the command.
+  const hire = /^\/skill:employee-[a-z0-9-]+\s*([\s\S]*)$/.exec(text);
+  if (hire) {
+    const role = projects.find((project) => project.id === activeProjectId)?.name;
+    return (
+      <>
+        {role ? <span className="font-medium">{role}</span> : null}
+        {role && hire[1] ? " · " : null}
+        {hire[1]}
+      </>
+    );
+  }
   if (!mention) return <>{text}</>;
   return (
     <>
@@ -298,29 +311,14 @@ export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
     );
   };
 
-  // An employee at work reports stages (eggent_stage). Those draw as one board
-  // where the first stage was called; the narration and the tool calls that
-  // led up to the last stage fold away under it, and what follows the last
-  // stage - the result in words - stays in the open.
+  // An employee at work reports stages (eggent_stage). Those draw as one board;
+  // every tool call and the narration before the last stage fold away under
+  // it, and only the words after the last stage - the result - stay open.
   const stages = stagesOf(message.parts);
-  let workNodes: ReactNode[] = [];
-  let boardPlaced = false;
 
   message.parts.forEach((part, idx) => {
-    if (stages && idx === stages.lastIndex + 1) {
-      flushTools();
-      workNodes = renderedParts;
-      renderedParts = [];
-    }
-    const stageTool = toolPartInfo(part);
-    if (stages && stageTool?.toolName === STAGE_TOOL) {
-      if (!boardPlaced) {
-        boardPlaced = true;
-        flushTools();
-        noteOpeningBlock(true);
-        // A placeholder: the board goes in front of the work it summarises.
-        renderedParts.push(null);
-      }
+    if (stages && toolPartInfo(part)?.toolName === STAGE_TOOL) {
+      noteOpeningBlock(true);
       return;
     }
     if (part.type === "text") {
@@ -420,9 +418,13 @@ export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
   flushTools();
 
   if (stages) {
-    const before = stages.lastIndex + 1 >= message.parts.length ? renderedParts : workNodes;
-    const after = stages.lastIndex + 1 >= message.parts.length ? [] : renderedParts;
-    const work = before.filter((node, index) => !(node === null && index === 0) && node !== null);
+    const isOpenText = (node: ReactNode) => {
+      const key = (node as { key?: unknown } | null)?.key;
+      const match = typeof key === "string" ? /^text-(\d+)$/.exec(key) : null;
+      return Boolean(match && Number(match[1]) > stages.lastIndex);
+    };
+    const after = renderedParts.filter((node) => node && isOpenText(node));
+    const work = renderedParts.filter((node) => node && !isOpenText(node));
     renderedParts = [
       <StageBoard key="stage-board" board={stages.board} running={stages.running} projectId={stageProjectId} />,
       ...(work.length

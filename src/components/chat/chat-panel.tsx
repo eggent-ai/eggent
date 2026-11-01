@@ -1286,9 +1286,12 @@ export function ChatPanel({ initialQuickSkills = [], onboardingPending = false }
         try {
           setLaunchingSkill("onboarding");
           const response = await fetch("/api/employees/onboarding", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
-          const payload = await response.json().catch(() => null) as { projectId?: string | null; message?: string } | null;
-          if (response.ok && payload?.message) await startPreparedChat(payload.projectId ?? null, payload.message);
-        } finally {
+          const payload = await response.json().catch(() => null) as { chatId?: string } | null;
+          // The first job is already running on the server: open its chat with
+          // a fresh page, which attaches to the turn in flight.
+          if (response.ok && payload?.chatId) window.location.assign(`/dashboard/${encodeURIComponent(payload.chatId)}`);
+          else setLaunchingSkill(null);
+        } catch {
           setLaunchingSkill(null);
         }
       })();
@@ -1296,7 +1299,7 @@ export function ChatPanel({ initialQuickSkills = [], onboardingPending = false }
     }
     const task = takeFirstTask();
     if (task) void launchBundledSkill(task.skill, task.brief);
-  }, [activeChatId, activeProjectId, launchBundledSkill, onboardingPending, startPreparedChat]);
+  }, [activeChatId, activeProjectId, launchBundledSkill, onboardingPending]);
 
   // A card is an offer to start something, so it starts it. Asking which
   // project to install into put a decision in front of people who had nothing

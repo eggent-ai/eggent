@@ -36,7 +36,7 @@ export async function POST(req: NextRequest) {
     if (!input && !filePath) return jsonError("Give the employee what it asks for.", 400);
     const hired = await hireEmployee({ skill, input, filePath, locale });
     if (!hired.ok) return jsonError(hired.error, hired.code);
-    return Response.json({ projectId: hired.result.projectId, message: hired.result.message, role: hired.result.skill.employee?.role }, { status: 201 });
+    return Response.json({ projectId: hired.result.projectId, chatId: hired.result.chatId, message: hired.result.message, role: hired.result.skill.employee?.role }, { status: 201 });
   } finally {
     if (tempDir) await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
   }

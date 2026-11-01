@@ -42,7 +42,7 @@ export function StageBoard({ board, running, projectId }: { board: Board; runnin
                 <span className="min-w-0">
                   <span className="block font-medium leading-5">{stage.title}</span>
                   {stage.detail && !isPending(stage) ? (
-                    <span className="mt-0.5 line-clamp-2 block text-xs leading-4 text-muted-foreground">{stage.detail}</span>
+                    <span className="mt-0.5 line-clamp-2 text-xs leading-4 text-muted-foreground">{stage.detail}</span>
                   ) : null}
                 </span>
               </button>

@@ -10,5 +10,5 @@ export async function POST(req: NextRequest) {
   const locale = await getServerLocale(req.headers.get("accept-language"));
   const taken = await takeOnboarding(locale);
   if (!taken.ok) return jsonError(taken.error, taken.code);
-  return Response.json({ projectId: taken.result.projectId, message: taken.result.message, role: taken.result.skill.employee?.role });
+  return Response.json({ projectId: taken.result.projectId, chatId: taken.result.chatId, message: taken.result.message, role: taken.result.skill.employee?.role });
 }

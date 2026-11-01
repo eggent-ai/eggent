@@ -13,6 +13,8 @@ import path from "node:path";
 import { launchBundledSkill, listBundledSkills, type BundledSkill } from "@/lib/storage/bundled-skills-store";
 import { getProjectModelSettingsPath, getWorkDir } from "@/lib/storage/project-store";
 import { getManagedProviderId } from "@/lib/pi/config-store";
+import { runPiAgentText } from "@/lib/pi/chat-runner";
+import { createChat } from "@/lib/storage/chat-store";
 import type { SupportedLocale } from "@/i18n/locales";
 
 const DATA_DIR = path.join(process.cwd(), "data");
@@ -32,10 +34,13 @@ export interface OnboardingRecord {
   createdAt?: string;
   takenAt?: string;
   projectId?: string | null;
+  chatId?: string;
 }
 
 export interface HireResult {
   projectId: string | null;
+  /** The chat the employee's first job runs in, already started. */
+  chatId: string;
   /** The first message, as the chat sends it: `/skill:<name> <input>`. */
   message: string;
   skill: BundledSkill;
@@ -124,14 +129,24 @@ export async function hireEmployee(options: {
     const relative = await moveIntoProject(options.filePath, launched.projectId);
     input = input ? `${relative} ${input}` : relative;
   }
-  return {
-    ok: true,
-    result: {
-      projectId: launched.projectId,
-      message: input ? `${launched.initialMessage} ${input}` : launched.initialMessage,
-      skill,
-    },
-  };
+  const message = input ? `${launched.initialMessage} ${input}` : launched.initialMessage;
+  const chatId = await startFirstJob(launched.projectId, message, skill.employee.role);
+  return { ok: true, result: { projectId: launched.projectId, chatId, message, skill } };
+}
+
+/**
+ * Starts the first job on the server, in a chat of its own, and returns at
+ * once. The screen then opens that chat and follows the turn already running
+ * - the way a turn started from Telegram is watched from the web - so the job
+ * does not depend on which page happened to be mounted when it began.
+ */
+async function startFirstJob(projectId: string | null, message: string, role: string): Promise<string> {
+  const chatId = crypto.randomUUID();
+  await createChat(chatId, role, projectId ?? undefined);
+  void runPiAgentText({ chatId, userMessage: message, projectId: projectId ?? undefined }).catch((error) => {
+    console.error(`[employees] the first job in ${chatId.slice(0, 8)} failed:`, error);
+  });
+  return chatId;
 }
 
 /**
@@ -166,6 +181,7 @@ export async function takeOnboarding(locale: SupportedLocale): Promise<
       ...record,
       takenAt: new Date().toISOString(),
       projectId: hired.ok ? hired.result.projectId : null,
+      ...(hired.ok ? { chatId: hired.result.chatId } : {}),
     };
     await fs.writeFile(`${ONBOARDING_FILE}.tmp`, JSON.stringify(done, null, 2));
     await fs.rename(`${ONBOARDING_FILE}.tmp`, ONBOARDING_FILE);
