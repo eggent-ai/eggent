@@ -1965,6 +1965,7 @@ const enMessages = {
   "employees.home.nextRun": "Next job: {when}",
   "employees.home.noSchedule": "Waiting for your task",
   "employees.home.hire": "Hire and start",
+  "employees.home.assign": "Give the task",
   "employees.home.needInput": "Give the employee what it asks for.",
   "employees.home.chooseFile": "Choose a file",
   "employees.home.failed": "Could not start. Try again.",

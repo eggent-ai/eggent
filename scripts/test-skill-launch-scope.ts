@@ -122,24 +122,24 @@ await check("a workspace-scoped skill adds no routing row", async () => {
 
 // Launching the same card twice must not collide on the project id.
 const ragAgain = await launchBundledSkill("iishenka-rag");
-await check("launching the same card again makes a second project rather than failing", async () => {
+await check("launching the same card again goes back to its project instead of making a second one", async () => {
   assert.equal(ragAgain.success, true);
-  assert.equal(ragAgain.success && ragAgain.projectId, "iishenka-rag-2");
-  assert.equal((await listProjects()).length, 2);
+  assert.equal(ragAgain.success && ragAgain.projectId, "iishenka-rag");
+  assert.equal((await listProjects()).length, 1);
 });
 
 // The skills screen inside a project still targets that project explicitly.
-await check("the second project gets its own row under the same heading", async () => {
+await check("going back adds no second routing row", async () => {
   const context = await orchestratorContext();
   assert.equal((context.match(/## Projects in this workspace/g) || []).length, 1, "one heading only");
-  assert.match(context, /`iishenka-rag-2`/);
+  assert.doesNotMatch(context, /`iishenka-rag-2`/);
 });
 
 const explicit = await launchBundledSkill("iishenka-rag", "iishenka-rag");
 await check("an explicit target still wins over the automatic one", async () => {
   assert.equal(explicit.success, true);
   assert.equal(explicit.success && explicit.projectId, "iishenka-rag");
-  assert.equal((await listProjects()).length, 2, "no extra project should appear");
+  assert.equal((await listProjects()).length, 1, "no extra project should appear");
 });
 await check("and it does not add a duplicate routing row", async () => {
   const context = await orchestratorContext();

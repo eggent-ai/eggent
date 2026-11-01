@@ -467,7 +467,17 @@
   display: inline-block;
   animation: eggent-egg-hop 1.6s var(--ease-out) infinite;
 }
+/* The employees on the home screen: an idle hop each on its own beat, a
+   livelier one under the pointer. */
+.eggent-egg-idle {
+  display: inline-block;
+  animation: eggent-egg-hop 3.6s var(--ease-out) infinite;
+}
+@media (hover: hover) {
+  .group:hover .eggent-egg-idle { animation-duration: 0.9s; animation-delay: 0s !important; }
+}
 @media (prefers-reduced-motion: reduce) {
+  .eggent-egg-idle { animation: none; }
   .eggent-egg-hop { animation-duration: 3.2s; }
   .eggent-stage-in { animation: none; }
 }

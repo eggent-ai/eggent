@@ -3,6 +3,7 @@ import fs from "fs/promises";
 import path from "path";
 import {
   createProject,
+  getAllProjects,
   getProject,
   getProjectContextPath,
   getProjectSkillsDir,
@@ -550,6 +551,18 @@ async function uniqueProjectId(baseId: string): Promise<string> {
 }
 
 /**
+ * The project a card already made: an employee's by its employee id, any
+ * other skill's by the id the first launch gave it. Null when there is none.
+ */
+async function existingProjectFor(skillName: string, skill: BundledSkill): Promise<string | null> {
+  if (skill.employee) {
+    const projects = await getAllProjects();
+    return projects.find((project) => project.employee === skill.employee?.id)?.id ?? null;
+  }
+  return (await getProject(skillName)) ? skillName : null;
+}
+
+/**
  * Start a bundled skill from a quick-start card.
  *
  * A card is an offer to begin a piece of work, so tapping one gives that work
@@ -582,6 +595,7 @@ export async function launchBundledSkill(
 
   const requestedScope = projectId?.trim();
   let targetScope: string;
+  let existing: string | null = null;
 
   if (requestedScope) {
     if (!isOrchestratorScope(requestedScope) && !(await getProject(requestedScope))) {
@@ -590,6 +604,10 @@ export async function launchBundledSkill(
     targetScope = requestedScope;
   } else if (skill.scope === "orchestrator" || isOrchestratorScopedSkill(normalizedName)) {
     targetScope = GLOBAL_PROJECT_ID;
+  } else if ((existing = await existingProjectFor(normalizedName, skill))) {
+    // The same card again is more work for the same project - a new chat
+    // there - not one more project with the same name.
+    targetScope = existing;
   } else {
     // The card names the work in the user's own language; the id stays derived
     // from the skill so it is predictable on disk.
