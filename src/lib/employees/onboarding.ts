@@ -14,7 +14,7 @@ import { launchBundledSkill, listBundledSkills, type BundledSkill } from "@/lib/
 import { getProjectModelSettingsPath, getWorkDir } from "@/lib/storage/project-store";
 import { getManagedProviderId } from "@/lib/pi/config-store";
 import { runPiAgentText } from "@/lib/pi/chat-runner";
-import { createChat } from "@/lib/storage/chat-store";
+import { createChat, getChat, saveChat } from "@/lib/storage/chat-store";
 import type { SupportedLocale } from "@/i18n/locales";
 
 const DATA_DIR = path.join(process.cwd(), "data");
@@ -165,6 +165,32 @@ export async function hireEmployee(options: {
 }
 
 /**
+ * A first job that ended without a word - the model could not be reached, the
+ * turn failed before it began - must not leave the person looking at an empty
+ * chat they were sent to: one line says so and how to go on.
+ */
+async function sayWhenNothingCame(chatId: string): Promise<void> {
+  const chat = await getChat(chatId).catch(() => null);
+  if (!chat || chat.messages.at(-1)?.role !== "user") return;
+  const ru = (process.env.EGGENT_DEFAULT_LANGUAGE || "").toLowerCase().startsWith("ru");
+  await saveChat({
+    ...chat,
+    messages: [
+      ...chat.messages,
+      {
+        id: crypto.randomUUID(),
+        role: "assistant",
+        content: ru
+          ? "Не получилось начать: сервис моделей сейчас не ответил. Напиши «начни заново» - и я возьмусь за работу ещё раз."
+          : "I could not start: the model service did not answer. Write \"start again\" and I will take the job up once more.",
+        createdAt: new Date().toISOString(),
+      },
+    ],
+    updatedAt: new Date().toISOString(),
+  });
+}
+
+/**
  * Starts the first job on the server, in a chat of its own, and returns at
  * once. The screen then opens that chat and follows the turn already running
  * - the way a turn started from Telegram is watched from the web - so the job
@@ -173,9 +199,12 @@ export async function hireEmployee(options: {
 async function startFirstJob(projectId: string | null, message: string, role: string): Promise<string> {
   const chatId = crypto.randomUUID();
   await createChat(chatId, role, projectId ?? undefined);
-  void runPiAgentText({ chatId, userMessage: message, projectId: projectId ?? undefined }).catch((error) => {
-    console.error(`[employees] the first job in ${chatId.slice(0, 8)} failed:`, error);
-  });
+  void runPiAgentText({ chatId, userMessage: message, projectId: projectId ?? undefined })
+    .catch((error) => {
+      console.error(`[employees] the first job in ${chatId.slice(0, 8)} failed:`, error);
+      return "";
+    })
+    .then(() => sayWhenNothingCame(chatId));
   return chatId;
 }
 
