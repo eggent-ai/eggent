@@ -1956,6 +1956,8 @@ const enMessages = {
   "employees.board.finished": "Done",
   "employees.board.work": "How it was done",
   "employees.home.title": "Your employees",
+  "employees.focus.working": "Your employee is at work - every step shows up above.",
+  "employees.focus.open": "Open your workspace",
   "employees.home.hired": "At work",
   "employees.home.hireFirst": "Who do you hire?",
   "employees.home.hireMore": "Hire one more",

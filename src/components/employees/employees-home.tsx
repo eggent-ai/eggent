@@ -139,7 +139,7 @@ function HireCard({ employee, expanded, onToggle }: { employee: AvailableEmploye
     const response = await fetch("/api/employees/hire", { method: "POST", body: form }).catch(() => null);
     const payload = response ? ((await response.json().catch(() => null)) as { chatId?: string; error?: string } | null) : null;
     if (response?.ok && payload?.chatId) {
-      window.location.assign(`/dashboard/${encodeURIComponent(payload.chatId)}`);
+      window.location.assign(`/dashboard/${encodeURIComponent(payload.chatId)}?focus=1`);
       return;
     }
     setBusy(false);

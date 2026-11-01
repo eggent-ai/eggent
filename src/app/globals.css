@@ -446,6 +446,40 @@
   animation: eggent-surface-in 240ms var(--ease-out) both;
 }
 
+/* An employee's stage coming to the front: the new finding slides in over
+   the last one, once, so a change of step reads as progress, not a flicker. */
+@keyframes eggent-stage-in {
+  from { opacity: 0; transform: translateY(8px) scale(0.99); }
+  to   { opacity: 1; transform: none; }
+}
+.eggent-stage-in {
+  animation: eggent-stage-in 320ms var(--ease-out) both;
+}
+
+/* The employee's egg while it works: a small hop now and then. A state, not
+   an event, so it keeps going - slower under reduced motion, never frozen. */
+@keyframes eggent-egg-hop {
+  0%, 70%, 100% { transform: translateY(0); }
+  80% { transform: translateY(-3px); }
+  90% { transform: translateY(0); }
+}
+.eggent-egg-hop {
+  display: inline-block;
+  animation: eggent-egg-hop 1.6s var(--ease-out) infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .eggent-egg-hop { animation-duration: 3.2s; }
+  .eggent-stage-in { animation: none; }
+}
+
+/* Focus on an employee's first job: the workspace around it steps aside until
+   the job is done and the person opens the workspace themselves. */
+html[data-eggent-focus] [data-slot="sidebar"],
+html[data-eggent-focus] [data-slot="sidebar-gap"],
+html[data-eggent-focus] [data-slot="site-header"] {
+  display: none !important;
+}
+
 /* A count changing beside a row: the new number settles in place. */
 @keyframes eggent-count-in {
   from { opacity: 0; transform: scale(0.96); }
