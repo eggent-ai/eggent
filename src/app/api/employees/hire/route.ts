@@ -4,7 +4,7 @@ import path from "node:path";
 import { NextRequest } from "next/server";
 import { checkTerminalRequest, guardStatus, jsonError } from "@/lib/terminal/guard";
 import { getServerLocale } from "@/i18n/server";
-import { hireEmployee } from "@/lib/employees/onboarding";
+import { firstJob, hireEmployee } from "@/lib/employees/onboarding";
 
 const MAX_FILE_BYTES = 20 * 1024 * 1024;
 
@@ -36,7 +36,10 @@ export async function POST(req: NextRequest) {
     if (!input && !filePath) return jsonError("Give the employee what it asks for.", 400);
     const hired = await hireEmployee({ skill, input, filePath, locale });
     if (!hired.ok) return jsonError(hired.error, hired.code);
-    return Response.json({ projectId: hired.result.projectId, chatId: hired.result.chatId, message: hired.result.message, role: hired.result.skill.employee?.role }, { status: 201 });
+    // Focus mode is the first meeting with an employee; after that the person
+    // knows the workspace, and their next jobs open in it as usual.
+    const first = (await firstJob())?.chatId === hired.result.chatId;
+    return Response.json({ projectId: hired.result.projectId, chatId: hired.result.chatId, message: hired.result.message, role: hired.result.skill.employee?.role, first }, { status: 201 });
   } finally {
     if (tempDir) await fs.rm(tempDir, { recursive: true, force: true }).catch(() => {});
   }

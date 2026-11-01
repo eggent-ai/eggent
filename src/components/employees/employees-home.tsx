@@ -72,9 +72,9 @@ function HireCard({ employee, index, hired, expanded, onToggle }: { employee: Av
     if (value.trim()) form.set("input", value.trim());
     if (file) form.set("file", file);
     const response = await fetch("/api/employees/hire", { method: "POST", body: form }).catch(() => null);
-    const payload = response ? ((await response.json().catch(() => null)) as { chatId?: string; error?: string } | null) : null;
+    const payload = response ? ((await response.json().catch(() => null)) as { chatId?: string; error?: string; first?: boolean } | null) : null;
     if (response?.ok && payload?.chatId) {
-      window.location.assign(`/dashboard/${encodeURIComponent(payload.chatId)}?focus=1`);
+      window.location.assign(`/dashboard/${encodeURIComponent(payload.chatId)}${payload.first ? "?focus=1" : ""}`);
       return;
     }
     setBusy(false);
