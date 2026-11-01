@@ -167,3 +167,18 @@ function definedOnly(stage: Stage): Partial<Stage> {
 export function isPending(stage: Stage): boolean {
   return Boolean((stage as Stage & { pending?: boolean }).pending);
 }
+
+/** The stage a finished eggent_stage call reported, from its result text; null for anything else. */
+export function stageFromToolOutput(output: unknown): Stage | null {
+  const text = typeof output === "string"
+    ? output
+    : Array.isArray((output as { content?: unknown })?.content)
+      ? ((output as { content: Array<{ type?: string; text?: string }> }).content.find((item) => item.type === "text")?.text ?? "")
+      : "";
+  try {
+    const parsed = JSON.parse(text) as { stage?: unknown };
+    return normalizeStage(parsed.stage);
+  } catch {
+    return null;
+  }
+}

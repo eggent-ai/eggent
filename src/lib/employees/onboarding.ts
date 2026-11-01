@@ -112,6 +112,8 @@ export async function hireEmployee(options: {
   /** An absolute path to a file to hand over. */
   filePath?: string;
   locale?: SupportedLocale;
+  /** False leaves the first message to the caller: the Telegram bot relays it so the job streams into the chat. */
+  startTurn?: boolean;
 }): Promise<{ ok: true; result: HireResult } | { ok: false; error: string; code: number }> {
   const locale = options.locale ?? "en";
   const skill = (await listBundledSkills(locale)).find((item) => item.name === options.skill.trim().toLowerCase());
@@ -130,7 +132,7 @@ export async function hireEmployee(options: {
     input = input ? `${relative} ${input}` : relative;
   }
   const message = input ? `${launched.initialMessage} ${input}` : launched.initialMessage;
-  const chatId = await startFirstJob(launched.projectId, message, skill.employee.role);
+  const chatId = options.startTurn === false ? "" : await startFirstJob(launched.projectId, message, skill.employee.role);
   return { ok: true, result: { projectId: launched.projectId, chatId, message, skill } };
 }
 

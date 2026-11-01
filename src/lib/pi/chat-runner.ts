@@ -1,3 +1,4 @@
+import { STAGE_TOOL, stageFromToolOutput } from "@/lib/employees/stage";
 import { DEFAULT_CHAT_TITLES } from "@/i18n/vocabulary";
 import { createUIMessageStream } from "ai";
 import type { UIMessage, UIMessageStreamWriter } from "ai";
@@ -1380,6 +1381,10 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
       tools.set(toolCallId, toolRecord);
       upsertTimelineTool(timelineParts, toolRecord);
       report({ type: "tool", name: toolName, phase: "end" });
+      if (toolName === STAGE_TOOL && !record.isError) {
+        const stage = stageFromToolOutput(output);
+        if (stage && stage.status !== "running") report({ type: "stage", stage });
+      }
       live?.push(
         toolRecord.status === "error"
           ? { type: "tool-output-error", toolCallId, errorText: stringifyForDisplay(output), dynamic: true }

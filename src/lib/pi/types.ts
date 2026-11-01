@@ -93,7 +93,9 @@ export type AgentProgressEvent =
   /** Helpers started with the Agent tool: how many of this turn's are still working. */
   | { type: "helpers"; running: number; total: number }
   /** The turn has gone quiet for a while (active), or has spoken again (not): a surface can say it is still going. */
-  | { type: "silent"; active: boolean };
+  | { type: "silent"; active: boolean }
+  /** An employee finished a stage of its work (eggent_stage): a surface can say so as it happens. */
+  | { type: "stage"; stage: import("@/lib/employees/stage").Stage };
 
 export interface PiRuntimeStats {
   model?: {
