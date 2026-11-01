@@ -1958,6 +1958,7 @@ const enMessages = {
   "employees.home.title": "Your employees",
   "employees.focus.working": "Your employee is at work - every step shows up above.",
   "employees.focus.open": "Open your workspace",
+  "employees.focus.startFailed": "I could not start: the model service did not answer. Write \"start again\" and I will take the job up once more.",
   "employees.home.hired": "At work",
   "employees.home.hireFirst": "Who do you hire?",
   "employees.home.hireMore": "Hire one more",

@@ -17,7 +17,7 @@ function check(name: string, fn: () => void) {
 check("a stage needs an id of letters, digits, - or _", () => {
   assert.equal(normalizeStage({ title: "No id" }), null);
   assert.equal(normalizeStage({ id: "../x", title: "Bad" }), null);
-  assert.equal(normalizeStage({ id: "Search", title: "Поиск" })?.id, "search");
+  assert.equal(normalizeStage({ id: "Search", title: "Search" })?.id, "search");
 });
 
 check("an unknown status counts as running; done and warn are kept", () => {
@@ -26,7 +26,7 @@ check("an unknown status counts as running; done and warn are kept", () => {
 });
 
 check("a verdict may come as a string or an object, tone only from the three", () => {
-  assert.deepEqual(normalizeStage({ id: "a", verdict: "Тебя нет в поиске" })?.verdict, { text: "Тебя нет в поиске" });
+  assert.deepEqual(normalizeStage({ id: "a", verdict: "You are not in search" })?.verdict, { text: "You are not in search" });
   assert.deepEqual(normalizeStage({ id: "a", verdict: { text: "ok", tone: "loud" } })?.verdict, { text: "ok", tone: undefined });
 });
 
@@ -38,7 +38,7 @@ check("a table without rows or columns is dropped, long ones are cut", () => {
 
 check("the plan draws the stages ahead greyed out, in order, and a started one leaves the plan", () => {
   const board = foldStages([
-    { id: "site", title: "Сайт", status: "running", plan: [{ id: "site", title: "Сайт" }, { id: "search", title: "Поиск" }, { id: "plan", title: "Что делать" }] },
+    { id: "site", title: "Site", status: "running", plan: [{ id: "site", title: "Site" }, { id: "search", title: "Search" }, { id: "plan", title: "What to do" }] },
   ]);
   assert.deepEqual(board.stages.map((s) => s.id), ["site", "search", "plan"]);
   assert.equal(isPending(board.stages[0]), false);
@@ -48,14 +48,14 @@ check("the plan draws the stages ahead greyed out, in order, and a started one l
 
 check("a later call for the same stage updates it and keeps what it does not repeat", () => {
   const board = foldStages([
-    { id: "site", title: "Сайт", status: "running", detail: "Открываю", image: "shots/site.png" },
-    { id: "site", status: "done", verdict: { text: "Сервис ремонта iPhone" } },
+    { id: "site", title: "Site", status: "running", detail: "Opening", image: "shots/site.png" },
+    { id: "site", status: "done", verdict: { text: "An iPhone repair service" } },
   ]);
   assert.equal(board.stages.length, 1);
   assert.equal(board.stages[0].status, "done");
   assert.equal(board.stages[0].image, "shots/site.png");
-  assert.equal(board.stages[0].title, "Сайт");
-  assert.equal(board.stages[0].verdict?.text, "Сервис ремонта iPhone");
+  assert.equal(board.stages[0].title, "Site");
+  assert.equal(board.stages[0].verdict?.text, "An iPhone repair service");
 });
 
 check("the current stage is the last one touched", () => {
@@ -64,9 +64,9 @@ check("the current stage is the last one touched", () => {
 });
 
 check("a finished stage is read back from the tool's own result, in either shape", () => {
-  const text = JSON.stringify({ success: true, stage: { id: "law", title: "Закон", status: "done", verdict: { text: "ст. 333" } } });
+  const text = JSON.stringify({ success: true, stage: { id: "law", title: "Law", status: "done", verdict: { text: "art. 333" } } });
   assert.equal(stageFromToolOutput(text)?.id, "law");
-  assert.equal(stageFromToolOutput({ content: [{ type: "text", text }] })?.verdict?.text, "ст. 333");
+  assert.equal(stageFromToolOutput({ content: [{ type: "text", text }] })?.verdict?.text, "art. 333");
   assert.equal(stageFromToolOutput("not json"), null);
   assert.equal(stageFromToolOutput({ content: [] }), null);
 });

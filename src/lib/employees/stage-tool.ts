@@ -43,7 +43,7 @@ export function createStageTool(options: { cwd?: string }) {
       plan: Type.Optional(Type.Array(Type.Object({ id: Type.String(), title: Type.String() }), { description: "All stages ahead, in order; only on the first call." })),
       image: Type.Optional(Type.String({ description: "A picture in your working folder to show big." })),
       caption: Type.Optional(Type.String()),
-      stat: Type.Optional(Type.Object({ value: Type.String({ description: "A short figure, e.g. 3 из 5, 2,5 с, 38/100." }), label: Type.Optional(Type.String()), tone: Tone })),
+      stat: Type.Optional(Type.Object({ value: Type.String({ description: "A short figure, e.g. 3 of 5, 2.5 s, 38/100." }), label: Type.Optional(Type.String()), tone: Tone })),
       table: Type.Optional(Type.Object({ columns: Type.Array(Type.String()), rows: Type.Array(Type.Array(Type.String())) })),
       cards: Type.Optional(Type.Array(Type.Object({ title: Type.String(), body: Type.Optional(Type.String()), badge: Type.Optional(Type.String()), tone: Tone }))),
       verdict: Type.Optional(Type.Object({ text: Type.String({ description: "The finding in one sentence, plainly." }), tone: Tone })),

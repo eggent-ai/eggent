@@ -220,7 +220,7 @@ export type EmployeeInputKind = "url" | "channel" | "file" | "topic" | "role";
 export interface BundledEmployee {
   id: string;
   input: EmployeeInputKind;
-  /** Who it is: "Маркетолог". */
+  /** Who it is: "Marketer". */
   role: string;
   /** What it will do with the input, one sentence. */
   pitch: string;

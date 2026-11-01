@@ -15,7 +15,8 @@ import { getProjectModelSettingsPath, getWorkDir } from "@/lib/storage/project-s
 import { getManagedProviderId } from "@/lib/pi/config-store";
 import { runPiAgentText } from "@/lib/pi/chat-runner";
 import { createChat, getChat, saveChat } from "@/lib/storage/chat-store";
-import type { SupportedLocale } from "@/i18n/locales";
+import { resolveLocalePreference, type SupportedLocale } from "@/i18n/locales";
+import { translate } from "@/i18n/messages";
 
 const DATA_DIR = path.join(process.cwd(), "data");
 const ONBOARDING_FILE = path.join(DATA_DIR, "onboarding.json");
@@ -172,7 +173,7 @@ export async function hireEmployee(options: {
 async function sayWhenNothingCame(chatId: string): Promise<void> {
   const chat = await getChat(chatId).catch(() => null);
   if (!chat || chat.messages.at(-1)?.role !== "user") return;
-  const ru = (process.env.EGGENT_DEFAULT_LANGUAGE || "").toLowerCase().startsWith("ru");
+  const locale = resolveLocalePreference(process.env.EGGENT_DEFAULT_LANGUAGE);
   await saveChat({
     ...chat,
     messages: [
@@ -180,9 +181,7 @@ async function sayWhenNothingCame(chatId: string): Promise<void> {
       {
         id: crypto.randomUUID(),
         role: "assistant",
-        content: ru
-          ? "Не получилось начать: сервис моделей сейчас не ответил. Напиши «начни заново» - и я возьмусь за работу ещё раз."
-          : "I could not start: the model service did not answer. Write \"start again\" and I will take the job up once more.",
+        content: translate(locale, "employees.focus.startFailed"),
         createdAt: new Date().toISOString(),
       },
     ],
