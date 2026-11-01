@@ -449,6 +449,10 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
   const remote = useRemoteStatus(syncTick);
   const internalChatIdRef = useRef(internalChatId);
   internalChatIdRef.current = internalChatId;
+  /** A stream that ended with an error, held until the run list says whether its turn lives on. */
+  const brokenStreamRef = useRef<{ message: string; chatId: string; afterVersion: number } | null>(null);
+  const refreshActiveRunsRef = useRef<() => void>(() => {});
+  const activeRunsVersionRef = useRef(0);
 
   const activeProjectIdRef = useRef(activeProjectId);
   activeProjectIdRef.current = activeProjectId;
@@ -580,7 +584,21 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
       handoverFailureRef.current = refusal;
       // The message that was refused stays on the screen, as the last thing said.
       unsentRef.current = refusal ? ([...messagesRef.current].reverse().find((message) => message.role === "user") ?? null) : null;
-      setChatError(refusal ? refusal.message : formatChatErrorMessage(error, t));
+      if (refusal || stopRequestedRef.current) {
+        setChatError(refusal ? refusal.message : formatChatErrorMessage(error, t));
+        return;
+      }
+      // The stream this tab was reading ended, which says nothing about the turn:
+      // a phone that dimmed its screen or a network that blinked drops the
+      // connection while the agent works on. Ask whether the turn is still
+      // running before saying anything - if it is, the panel attaches again and
+      // the person never sees an error that was not one.
+      brokenStreamRef.current = {
+        message: formatChatErrorMessage(error, t),
+        chatId: internalChatIdRef.current,
+        afterVersion: activeRunsVersionRef.current,
+      };
+      refreshActiveRunsRef.current();
     },
   });
   stopStreamRef.current = stop;
@@ -588,6 +606,37 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
   const activeRuns = useActiveRuns();
   const activeRunForChat = activeRuns.byChat.get(internalChatId);
   const refreshActiveRuns = activeRuns.refresh;
+  refreshActiveRunsRef.current = refreshActiveRuns;
+  activeRunsVersionRef.current = activeRuns.version;
+
+  // Whatever starts next - a message, or attaching to the turn again - is its own stream.
+  useEffect(() => {
+    if (status === "submitted") brokenStreamRef.current = null;
+  }, [status]);
+
+  // A stream that broke is settled by the next look at the run list: a turn
+  // still running is attached to again (the effect below does that), and only
+  // a turn that is over without an answer stored is reported as the failure.
+  useEffect(() => {
+    const broken = brokenStreamRef.current;
+    if (!broken || activeRuns.version <= broken.afterVersion) return;
+    brokenStreamRef.current = null;
+    if (broken.chatId !== internalChatId) return;
+    if (activeRuns.byChat.has(broken.chatId)) return;
+    let cancelled = false;
+    void fetch(`/api/chat/history?id=${encodeURIComponent(broken.chatId)}`, { cache: "no-store" })
+      .then((response) => (response.ok ? (response.json() as Promise<{ messages?: ChatMessage[] }>) : null))
+      .catch(() => null)
+      .then((chat) => {
+        if (cancelled) return;
+        const last = chat?.messages?.[chat.messages.length - 1];
+        const answered = last?.role === "assistant" && !last.inProgress && Boolean(last.content?.trim());
+        if (!answered) setChatError(broken.message);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [activeRuns.byChat, activeRuns.version, internalChatId]);
 
   const runtimeStats = useMemo(() => getLatestPiRuntimeStats(messages), [messages]);
   const compactionStatus = useMemo(() => getLatestPiCompactionStatus(messages), [messages]);
@@ -893,7 +942,10 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
 
     if (status === "ready" || status === "error") {
       const wasStoppedByUser = stopRequestedRef.current;
-      if (!wasStoppedByUser && hasToolOutput && !hasVisibleAssistantAnswer) {
+      // A broken stream is not a turn that ended without an answer: the run list
+      // decides that, above, and the stored chat carries whatever the turn said.
+      const streamBroke = status === "error" && brokenStreamRef.current !== null;
+      if (!wasStoppedByUser && !streamBroke && hasToolOutput && !hasVisibleAssistantAnswer) {
         const alreadyPresent = assistantMessages.some(
           (m) => extractVisibleAssistantText(m) === noFinalResponseFallback
         );

@@ -41,6 +41,7 @@ import type { EmailLetterInfo } from "@/lib/email/types";
 import { createMailToolGuardExtension, type MessagesRunner } from "@/lib/mail/tool-guard";
 import { emailEnabled, emailPromptLine } from "@/lib/email/config";
 import { createEmailToolGuardExtension } from "@/lib/email/tool-guard";
+import { createOwnToolGuardExtension } from "@/lib/pi/own-tool-guard";
 import type { MailReplyInfo } from "@/lib/mail/types";
 import type { ChatContextMode, ChatFile, ProjectSkillMetadata } from "@/lib/types";
 import {
@@ -855,6 +856,8 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
       }),
       ...(!options.visit && mailEnabled() ? [createMailToolGuardExtension(() => messagesRunner)] : []),
       ...(!options.visit && emailEnabled() ? [createEmailToolGuardExtension()] : []),
+      // Any other own tool reached for through the proxy; after the two above, which answer their own.
+      ...(corePiToolsOnly ? [] : [createOwnToolGuardExtension()]),
       // What the agent writes into a file is kept as a version of it (lib/files/versions).
       createFileVersionsExtension({ chatId: options.chatId, runOf: () => turn.runId }),
     ],
