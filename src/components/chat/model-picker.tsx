@@ -330,6 +330,10 @@ export function ModelPicker({ projectId, triggerClassName, compact }: ModelPicke
     }
   }
 
+  // Still asking which models there are: saying "no model" for those seconds
+  // reads as a workspace with no model at all.
+  if (state === null) return <span className={triggerClassName ?? "font-mono"} aria-hidden>…</span>;
+
   if (!options.some((option) => !option.locked)) {
     // Nothing to choose between - a workspace with one model, or none loaded.
     return (

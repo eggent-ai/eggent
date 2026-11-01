@@ -35,6 +35,8 @@ export interface OnboardingRecord {
   takenAt?: string;
   projectId?: string | null;
   chatId?: string;
+  /** When somebody first opened the employee's chat after it was started without them. */
+  openedAt?: string;
 }
 
 export interface HireResult {
@@ -65,7 +67,33 @@ export async function readOnboarding(): Promise<OnboardingRecord | null> {
 /** Whether a signup left an employee waiting to start. */
 export async function onboardingPending(): Promise<boolean> {
   const record = await readOnboarding();
-  return Boolean(record && !record.takenAt);
+  // Waiting to start, or started by the deployment before anybody opened it.
+  return Boolean(record && (!record.takenAt || (record.chatId && !record.openedAt)));
+}
+
+async function writeRecord(record: OnboardingRecord): Promise<void> {
+  await fs.writeFile(`${ONBOARDING_FILE}.tmp`, JSON.stringify(record, null, 2));
+  await fs.rename(`${ONBOARDING_FILE}.tmp`, ONBOARDING_FILE);
+}
+
+/**
+ * The first visit to the dashboard after the signup: the employee's chat to
+ * open - started now if nothing started it yet, else the one the deployment
+ * started the moment the workspace was ready. Once only.
+ */
+export async function openOnboarding(locale: SupportedLocale): Promise<
+  { ok: true; chatId: string; projectId: string | null } | { ok: false; error: string; code: number }
+> {
+  const record = await readOnboarding();
+  if (record?.takenAt && record.chatId && !record.openedAt) {
+    await writeRecord({ ...record, openedAt: new Date().toISOString() });
+    return { ok: true, chatId: record.chatId, projectId: record.projectId ?? null };
+  }
+  const taken = await takeOnboarding(locale);
+  if (!taken.ok) return taken;
+  const after = await readOnboarding();
+  if (after) await writeRecord({ ...after, openedAt: new Date().toISOString() });
+  return { ok: true, chatId: taken.result.chatId, projectId: taken.result.projectId };
 }
 
 /** Copies a file into the employee's project, beside its work, under a name that is not taken. */
