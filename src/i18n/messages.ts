@@ -1951,6 +1951,10 @@ const enMessages = {
   "shares.view.loadTheirs": "Load the new version",
   "shares.view.reloadConfirm": "Load the new version? What you typed here is replaced.",
   "shares.view.saveFirst": "Save your change first",
+  "employees.board.label": "What the employee is doing",
+  "employees.board.progress": "{done} of {total} done",
+  "employees.board.finished": "Done",
+  "employees.board.work": "How it was done",
 } as const;
 
 export type MessageKey = keyof typeof enMessages;

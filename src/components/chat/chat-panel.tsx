@@ -356,9 +356,11 @@ function assistantMessageHasToolOutput(message: UIMessage): boolean {
 
 interface ChatPanelProps {
   initialQuickSkills?: QuickSkillAction[];
+  /** A signup left an employee waiting to start (lib/employees/onboarding.ts). */
+  onboardingPending?: boolean;
 }
 
-export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
+export function ChatPanel({ initialQuickSkills = [], onboardingPending = false }: ChatPanelProps) {
   const { t } = useI18n();
   const router = useRouter();
   const pathname = usePathname();
@@ -1210,6 +1212,31 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     [activeChatId, internalChatId, isLoading, pendingInteraction, onSubmit]
   );
 
+  // A chat the server has already prepared - a skill installed, maybe a project
+  // made for it - begins here: follow it into its project and say its first words.
+  const startPreparedChat = useCallback(async (projectId: string | null, messageText: string) => {
+    stopRequestedRef.current = false;
+    submissionStartCountRef.current = messagesRef.current.length;
+    handledSwitchToolCallsRef.current.clear();
+    queuedSwitchResultRef.current = null;
+
+    // Installing into a project means running there; the orchestrator scope
+    // is where the chat already is, so nothing needs to switch.
+    if (projectId) {
+      await refreshProjects();
+      activeProjectIdRef.current = projectId;
+      currentPathRef.current = "";
+      setActiveProjectId(projectId);
+      setCurrentPath("");
+      pendingProjectSwitchRef.current = true;
+      shouldRefreshProjectsRef.current = true;
+    }
+
+    registerOutgoingChat(messageText, projectId);
+    lastSentRef.current = messageText;
+    sendMessage({ text: messageText, metadata: { createdAt: new Date().toISOString() } });
+  }, [refreshProjects, registerOutgoingChat, sendMessage, setActiveProjectId, setCurrentPath]);
+
   // No target is sent on purpose: the server gives the skill its home, and the
   // response says which one so the chat can follow it there.
   const launchBundledSkill = useCallback(async (skillName: string, brief?: string) => {
@@ -1235,32 +1262,13 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
       // What the person already said about the task goes after the command,
       // where the runtime hands it to the skill as its first instruction.
       const messageText = brief?.trim() ? `${payload.initialMessage} ${brief.trim()}` : payload.initialMessage;
-      stopRequestedRef.current = false;
-      submissionStartCountRef.current = messagesRef.current.length;
-      handledSwitchToolCallsRef.current.clear();
-      queuedSwitchResultRef.current = null;
-
-      // Installing into a project means running there; the orchestrator scope
-      // is where the chat already is, so nothing needs to switch.
-      if (projectId) {
-        await refreshProjects();
-        activeProjectIdRef.current = projectId;
-        currentPathRef.current = "";
-        setActiveProjectId(projectId);
-        setCurrentPath("");
-        pendingProjectSwitchRef.current = true;
-        shouldRefreshProjectsRef.current = true;
-      }
-
-      registerOutgoingChat(messageText, projectId);
-      lastSentRef.current = messageText;
-      sendMessage({ text: messageText, metadata: { createdAt: new Date().toISOString() } });
+      await startPreparedChat(projectId, messageText);
     } catch (error) {
       setChatError(error instanceof Error ? error.message : t("chat.errors.launchSkill"));
     } finally {
       setLaunchingSkill(null);
     }
-  }, [isLoading, launchingSkill, refreshProjects, registerOutgoingChat, sendMessage, setActiveProjectId, setCurrentPath]);
+  }, [isLoading, launchingSkill, startPreparedChat]);
 
   // A first task chosen at signup (lib/first-task.ts) starts once, the way its
   // quick-start card would, with what the person wrote as the first thing said
@@ -1271,9 +1279,24 @@ export function ChatPanel({ initialQuickSkills = [] }: ChatPanelProps) {
     if (firstTaskCheckedRef.current) return;
     if (activeChatId !== null || activeProjectId) return;
     firstTaskCheckedRef.current = true;
+    // An employee the signup left waiting comes first: the person chose it
+    // and gave it what it asked for before they ever saw this screen.
+    if (onboardingPending) {
+      void (async () => {
+        try {
+          setLaunchingSkill("onboarding");
+          const response = await fetch("/api/employees/onboarding", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
+          const payload = await response.json().catch(() => null) as { projectId?: string | null; message?: string } | null;
+          if (response.ok && payload?.message) await startPreparedChat(payload.projectId ?? null, payload.message);
+        } finally {
+          setLaunchingSkill(null);
+        }
+      })();
+      return;
+    }
     const task = takeFirstTask();
     if (task) void launchBundledSkill(task.skill, task.brief);
-  }, [activeChatId, activeProjectId, launchBundledSkill]);
+  }, [activeChatId, activeProjectId, launchBundledSkill, onboardingPending, startPreparedChat]);
 
   // A card is an offer to start something, so it starts it. Asking which
   // project to install into put a decision in front of people who had nothing

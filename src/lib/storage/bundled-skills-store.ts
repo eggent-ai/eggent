@@ -202,6 +202,48 @@ export interface BundledSkill {
   order: number;
   /** Where a card launch runs: the orchestrator, or a project of its own. */
   scope: "orchestrator" | "project";
+  /** Set when the skill is an AI employee one can hire: see readEmployee. */
+  employee?: BundledEmployee;
+}
+
+export type EmployeeInputKind = "url" | "channel" | "file" | "topic" | "role";
+
+/**
+ * An AI employee: a skill that asks for one personal thing - a site, a
+ * channel, a file, a topic - and does a first job on it at once. Its copy
+ * lives in the skill's own frontmatter (`employee`, `employee_input`,
+ * `role_<locale>`, `pitch_<locale>`, `ask_<locale>`, `placeholder_<locale>`),
+ * so the signup page, the hire screen and the card agree without a list kept
+ * in code.
+ */
+export interface BundledEmployee {
+  id: string;
+  input: EmployeeInputKind;
+  /** Who it is: "Маркетолог". */
+  role: string;
+  /** What it will do with the input, one sentence. */
+  pitch: string;
+  /** The one question it asks. */
+  ask: string;
+  placeholder?: string;
+}
+
+const EMPLOYEE_INPUTS = new Set<EmployeeInputKind>(["url", "channel", "file", "topic", "role"]);
+
+function readEmployee(frontmatter: Record<string, string>, locale: string, title: string, summary: string): BundledEmployee | undefined {
+  const id = frontmatter.employee?.trim().toLowerCase();
+  if (!id || !/^[a-z0-9][a-z0-9-]{0,39}$/.test(id)) return undefined;
+  const input = frontmatter.employee_input?.trim().toLowerCase() as EmployeeInputKind;
+  if (!EMPLOYEE_INPUTS.has(input)) return undefined;
+  const placeholder = resolveCardText(frontmatter, "placeholder", locale, "");
+  return {
+    id,
+    input,
+    role: resolveCardText(frontmatter, "role", locale, title),
+    pitch: resolveCardText(frontmatter, "pitch", locale, summary),
+    ask: resolveCardText(frontmatter, "ask", locale, title),
+    ...(placeholder ? { placeholder } : {}),
+  };
 }
 
 /**
@@ -218,7 +260,7 @@ export interface BundledSkill {
  */
 function resolveCardText(
   frontmatter: Record<string, string>,
-  field: "title" | "summary",
+  field: "title" | "summary" | "role" | "pitch" | "ask" | "placeholder",
   locale: string,
   fallback: string
 ): string {
@@ -310,15 +352,19 @@ async function readBundledSkillFromDir(
 
   const parsedOrder = Number.parseInt(frontmatter.card_order ?? "", 10);
 
+  const title = resolveCardText(frontmatter, "title", locale, name);
+  const summary = resolveCardText(frontmatter, "summary", locale, description);
+  const employee = readEmployee(frontmatter, locale, title, summary);
   return {
     name,
     description,
     license: frontmatter.license?.trim() || undefined,
     compatibility: frontmatter.compatibility?.trim() || undefined,
-    title: resolveCardText(frontmatter, "title", locale, name),
-    summary: resolveCardText(frontmatter, "summary", locale, description),
+    title,
+    summary,
     order: Number.isFinite(parsedOrder) ? parsedOrder : DEFAULT_CARD_ORDER,
     scope: frontmatterLaunchScope(frontmatter.launch_scope),
+    ...(employee ? { employee } : {}),
   };
 }
 
@@ -549,10 +595,11 @@ export async function launchBundledSkill(
     // from the skill so it is predictable on disk.
     const created = await createProject({
       id: await uniqueProjectId(normalizedName),
-      name: skill.title || normalizedName,
+      name: skill.employee?.role || skill.title || normalizedName,
       description: skill.summary || skill.description,
       instructions: `# ${skill.title || normalizedName}\n\n`,
       memoryMode: "global",
+      ...(skill.employee ? { employee: skill.employee.id } : {}),
     });
     targetScope = created.id;
     // A project the orchestrator does not know about is a project the user has

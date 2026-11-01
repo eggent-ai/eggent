@@ -254,6 +254,8 @@ export interface Project {
   description: string;
   instructions: string;
   memoryMode: "global" | "isolated";
+  /** Set when the project is an AI employee hired from a bundled skill: the skill's employee id. */
+  employee?: string;
   createdAt: string;
   updatedAt: string;
 }

@@ -43,6 +43,8 @@ import { sharesEnabled } from "@/lib/shares/config";
 import { isScheduledRunSessionId } from "@/lib/pi/scheduled-run-state";
 import { createBoardTool } from "@/lib/board/tool";
 import { createCalendarFileTool } from "@/lib/calendar/tool";
+import { createStageTool } from "@/lib/employees/stage-tool";
+import { createSummaryTool, summaryConfigured } from "@/lib/employees/summary-tool";
 import { googleEnabled } from "@/lib/google/config";
 import { createGoogleTool } from "@/lib/google/tool";
 import { putQuestionOnCard } from "@/lib/board/runs";
@@ -54,6 +56,7 @@ import {
   deleteProjectMcpServer,
   GLOBAL_PROJECT_ID,
   getAllProjects,
+  getProject,
   searchProjectMemory,
   appendProjectMemory,
   deleteProjectMemoryMatches,
@@ -1342,6 +1345,14 @@ export async function createEggentPiTools(options: {
 
   // An event for the person's own calendar, as a file: needs no account anywhere.
   tools.push(createCalendarFileTool({ cwd: options.cwd }));
+
+  // Stages of the work for the person's screen. Only in an employee's project:
+  // a schema is billed on every turn, and only employees' skills use it.
+  const employeeProject = options.projectId && !options.visit ? await getProject(options.projectId).catch(() => null) : null;
+  if (employeeProject?.employee) {
+    tools.push(createStageTool({ cwd: options.cwd }));
+    if (summaryConfigured()) tools.push(createSummaryTool({ cwd: options.cwd, fromName: employeeProject.name }));
+  }
 
   // Google Sheets and Calendar through the deployment's connection
   // (EGGENT_GOOGLE_API_URL). Not inside a visit: the connection is the person's.

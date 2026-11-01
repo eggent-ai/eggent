@@ -8,6 +8,8 @@ import { ToolOutput } from "./tool-output";
 import { ToolGroup } from "./tool-group";
 import { SubagentGroup, type HelperItem } from "./subagent-group";
 import { EngineFallbackButton } from "./engine-fallback";
+import { StageBoard } from "@/components/employees/stage-board";
+import { foldStages, STAGE_TOOL } from "@/lib/employees/stage";
 import { isAgentToolName, isEngineToolName, isProjectToolName } from "@/lib/pi/subagent-format";
 import type { SubagentSnapshot } from "@/lib/pi/types";
 import { FileMention } from "./file-mention";
@@ -28,6 +30,7 @@ import { hashText, runnableCommand } from "@/lib/terminal/format";
 import { resolveProjectMention } from "@/lib/pi/project-mention";
 import { useAppStore } from "@/store/app-store";
 import { useChatSurface } from "./chat-surface";
+import { useI18n } from "@/i18n/provider";
 import { useMemo, type ReactNode } from "react";
 import type { UIMessage } from "ai";
 
@@ -163,11 +166,47 @@ function answeredQuestionOf(tool: NonNullable<ReturnType<typeof toolPartInfo>>):
   return { question, answer };
 }
 
+/**
+ * The eggent_stage calls of one answer folded into a board, with where they
+ * sit among the parts; null when the answer reports no stages.
+ */
+function stagesOf(parts: UIMessage["parts"]) {
+  const calls: unknown[] = [];
+  let lastIndex = -1;
+  parts.forEach((part, index) => {
+    const tool = toolPartInfo(part);
+    if (!tool || tool.toolName !== STAGE_TOOL) return;
+    lastIndex = index;
+    const input = typeof tool.input === "object" && tool.input !== null ? (tool.input as Record<string, unknown>) : {};
+    // The checked result once it is back (a picture that is not there is
+    // dropped by the tool), what the model asked for while it runs.
+    let checked: Record<string, unknown> | null = null;
+    if (tool.state === "output-available") {
+      try {
+        const parsed = JSON.parse(valueToText(tool.output)) as { stage?: Record<string, unknown> };
+        if (parsed.stage && typeof parsed.stage === "object") checked = parsed.stage;
+      } catch {
+        // Not the tool's own answer: keep what was asked.
+      }
+    }
+    calls.push(checked ? { ...checked, plan: input.plan } : input);
+  });
+  if (lastIndex < 0) return null;
+  const board = foldStages(calls);
+  if (!board.stages.length) return null;
+  // The work is still going while nothing has been said after the last stage.
+  const running = !parts.slice(lastIndex + 1).some((part) => part.type === "text" && part.text.trim());
+  return { board, lastIndex, running };
+}
+
 export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
   const isUser = message.role === "user";
   // Before any return: a chat that answers a colleague's message offers to send each answer.
   const mailReply = useMailReply();
   const { hideTools } = useChatSurface();
+  const { t } = useI18n();
+  const stageProjectId = useAppStore((state) => state.activeProjectId) ?? "none";
+  const stageWorkLabel = t("employees.board.work");
 
   if (isUser) {
     const visibleTextContent = normalizeVisibleText(
@@ -201,7 +240,7 @@ export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
   // Consecutive tool calls are collected so they can be shown as one collapsed
   // row instead of a stack of boxes. Rendering of an individual call is
   // unchanged; only the grouping around it is new.
-  const renderedParts: ReactNode[] = [];
+  let renderedParts: ReactNode[] = [];
   let pendingTools: { node: ReactNode; name: string; running: boolean }[] = [];
   // Helpers started with the Agent tool get their own group: each one is a whole
   // agent at work, and what it is doing is the thing to show while it runs.
@@ -259,7 +298,31 @@ export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
     );
   };
 
+  // An employee at work reports stages (eggent_stage). Those draw as one board
+  // where the first stage was called; the narration and the tool calls that
+  // led up to the last stage fold away under it, and what follows the last
+  // stage - the result in words - stays in the open.
+  const stages = stagesOf(message.parts);
+  let workNodes: ReactNode[] = [];
+  let boardPlaced = false;
+
   message.parts.forEach((part, idx) => {
+    if (stages && idx === stages.lastIndex + 1) {
+      flushTools();
+      workNodes = renderedParts;
+      renderedParts = [];
+    }
+    const stageTool = toolPartInfo(part);
+    if (stages && stageTool?.toolName === STAGE_TOOL) {
+      if (!boardPlaced) {
+        boardPlaced = true;
+        flushTools();
+        noteOpeningBlock(true);
+        // A placeholder: the board goes in front of the work it summarises.
+        renderedParts.push(null);
+      }
+      return;
+    }
     if (part.type === "text") {
       flushTools();
       const block = renderBlock(part.text, `text-${idx}`);
@@ -355,6 +418,24 @@ export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
     });
   });
   flushTools();
+
+  if (stages) {
+    const before = stages.lastIndex + 1 >= message.parts.length ? renderedParts : workNodes;
+    const after = stages.lastIndex + 1 >= message.parts.length ? [] : renderedParts;
+    const work = before.filter((node, index) => !(node === null && index === 0) && node !== null);
+    renderedParts = [
+      <StageBoard key="stage-board" board={stages.board} running={stages.running} projectId={stageProjectId} />,
+      ...(work.length
+        ? [
+            <details key="stage-work" className="group rounded-xl border px-3 py-2 text-sm text-muted-foreground">
+              <summary className="cursor-pointer select-none">{stageWorkLabel}</summary>
+              <div className="mt-3 flex flex-col gap-3 text-foreground">{work}</div>
+            </details>,
+          ]
+        : []),
+      ...after,
+    ];
+  }
 
   if (!renderedParts.some(Boolean)) return null;
   const learned = learnedNoticeOf(message.parts);
