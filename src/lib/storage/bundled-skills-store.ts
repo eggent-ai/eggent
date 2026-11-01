@@ -213,7 +213,7 @@ export type EmployeeInputKind = "url" | "channel" | "file" | "topic" | "role";
  * An AI employee: a skill that asks for one personal thing - a site, a
  * channel, a file, a topic - and does a first job on it at once. Its copy
  * lives in the skill's own frontmatter (`employee`, `employee_input`,
- * `role_<locale>`, `pitch_<locale>`, `ask_<locale>`, `placeholder_<locale>`),
+ * `role_<locale>`, `task_<locale>`, `pitch_<locale>`, `ask_<locale>`, `placeholder_<locale>`),
  * so the signup page, the hire screen and the card agree without a list kept
  * in code.
  */
@@ -222,6 +222,8 @@ export interface BundledEmployee {
   input: EmployeeInputKind;
   /** Who it is: "Marketer". */
   role: string;
+  /** What its chats are called: "Marketer's task" (falls back to the role). */
+  task: string;
   /** What it will do with the input, one sentence. */
   pitch: string;
   /** The one question it asks. */
@@ -241,6 +243,7 @@ function readEmployee(frontmatter: Record<string, string>, locale: string, title
     id,
     input,
     role: resolveCardText(frontmatter, "role", locale, title),
+    task: resolveCardText(frontmatter, "task", locale, resolveCardText(frontmatter, "role", locale, title)),
     pitch: resolveCardText(frontmatter, "pitch", locale, summary),
     ask: resolveCardText(frontmatter, "ask", locale, title),
     ...(placeholder ? { placeholder } : {}),
@@ -261,7 +264,7 @@ function readEmployee(frontmatter: Record<string, string>, locale: string, title
  */
 function resolveCardText(
   frontmatter: Record<string, string>,
-  field: "title" | "summary" | "role" | "pitch" | "ask" | "placeholder",
+  field: "title" | "summary" | "role" | "task" | "pitch" | "ask" | "placeholder",
   locale: string,
   fallback: string
 ): string {

@@ -5,8 +5,7 @@ import { Loader2, Upload } from "lucide-react";
 import { useI18n } from "@/i18n/provider";
 import { employeeEggSvg } from "@/lib/employees/egg";
 
-interface AvailableEmployee {
-  skill: string;
+export interface EmployeeCard {
   id: string;
   input: "url" | "channel" | "file" | "topic" | "role";
   role: string;
@@ -15,53 +14,29 @@ interface AvailableEmployee {
   placeholder?: string;
 }
 
-interface HiredEmployee {
-  projectId: string;
-  name: string;
-  employee: string;
-  createdAt: string;
-}
+type AvailableEmployee = EmployeeCard & { skill: string };
 
 /**
  * The home screen of a workspace that has AI employees: each one asking its
  * one question right here. One already hired gets the task in a new chat of
- * its own project; one not yet hired gets its project first. Renders nothing where the deployment offers no
- * employees, so the plain new-chat screen stays as it was.
+ * its own project; one not yet hired gets its project first. Everything it
+ * draws comes with the page, so nothing appears or moves after the first paint.
  */
-export function EmployeesHome({ onReady }: { onReady?: (present: boolean) => void }) {
+export function EmployeesHome({ available, hiredIds }: { available: AvailableEmployee[]; hiredIds: string[] }) {
   const { t } = useI18n();
-  const [available, setAvailable] = useState<AvailableEmployee[] | null>(null);
-  const [hired, setHired] = useState<HiredEmployee[]>([]);
   const [open, setOpen] = useState<string | null>(null);
-
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      const response = await fetch("/api/employees").catch(() => null);
-      const payload = response?.ok ? ((await response.json().catch(() => null)) as { available?: AvailableEmployee[]; hired?: HiredEmployee[] } | null) : null;
-      if (cancelled) return;
-      setAvailable(payload?.available ?? []);
-      setHired(payload?.hired ?? []);
-      onReady?.(Boolean(payload?.available?.length));
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [onReady]);
-
-  if (!available || available.length === 0) return null;
-
+  if (available.length === 0) return null;
   return (
     <div className="flex flex-col gap-8" data-slot="employees-home">
       <section className="flex flex-col gap-3">
-        {hired.length > 0 ? null : <h3 className="text-sm font-semibold">{t("employees.home.hireFirst")}</h3>}
+        {hiredIds.length > 0 ? null : <h3 className="text-sm font-semibold">{t("employees.home.hireFirst")}</h3>}
         <div className="grid gap-3 sm:grid-cols-2">
           {available.map((employee, index) => (
             <HireCard
               key={employee.id}
               index={index}
               employee={employee}
-              hired={hired.some((person) => person.employee === employee.id)}
+              hired={hiredIds.includes(employee.id)}
               expanded={open === employee.id}
               onToggle={() => setOpen(open === employee.id ? null : employee.id)}
             />

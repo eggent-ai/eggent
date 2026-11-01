@@ -12,7 +12,7 @@ import type { UIMessage } from "ai";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SkeletonList } from "@/components/ui/skeleton-list";
-import { EmployeesHome } from "@/components/employees/employees-home";
+import { EmployeesHome, type EmployeeCard } from "@/components/employees/employees-home";
 import { useI18n } from "@/i18n/provider";
 import type { MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/utils";
@@ -23,12 +23,17 @@ import { useShellActions } from "@/components/chat/shell-actions";
 import { useShellRuns, type ShellCard } from "@/store/shell-runs";
 import { splitAtSteers, SteerBubble, steerStateOf, type SteerView } from "@/components/chat/steer-bubble";
 
+const NO_HIRED: string[] = [];
+
 export interface QuickSkillAction {
   name: string;
   description: string;
   /** Short card copy in the deployment language; falls back to name/description. */
   title?: string;
   summary?: string;
+  order?: number;
+  /** Set when the skill is an AI employee (lib/storage/bundled-skills-store.ts). */
+  employee?: EmployeeCard;
 }
 
 export interface PiCompactionStatus {
@@ -127,6 +132,7 @@ interface ChatMessagesProps {
   pendingInteraction?: PiPendingInteraction | null;
   onRespondToInteraction?: (value: string | boolean | null, cancel?: boolean) => void;
   quickSkills?: QuickSkillAction[];
+  hiredEmployees?: string[];
   onLaunchSkill?: (skillName: string) => void;
   launchingSkill?: string | null;
   /** A conversation is open but its stored messages have not arrived yet. */
@@ -361,10 +367,18 @@ function ShellCardRow({ card }: { card: ShellCard }) {
   );
 }
 
-export function ChatMessages({ messages, isLoading, errorMessage, errorActions, compactionStatus, actionNotice, pendingInteraction, onRespondToInteraction, quickSkills = [], onLaunchSkill, launchingSkill, awaitingHistory = false, steerQueue = NO_STEERS, onResendSteer, empty }: ChatMessagesProps) {
+export function ChatMessages({ messages, isLoading, errorMessage, errorActions, compactionStatus, actionNotice, pendingInteraction, onRespondToInteraction, quickSkills = [], hiredEmployees = NO_HIRED, onLaunchSkill, launchingSkill, awaitingHistory = false, steerQueue = NO_STEERS, onResendSteer, empty }: ChatMessagesProps) {
   const { t } = useI18n();
-  // Whether this workspace offers AI employees; their home replaces the plain heading.
-  const [employeesPresent, setEmployeesPresent] = useState(false);
+  // The employees this workspace offers, straight from the skills the page was
+  // rendered with: their home replaces the plain heading from the first paint.
+  const employees = useMemo(
+    () =>
+      quickSkills
+        .flatMap((skill) => (skill.employee ? [{ ...skill.employee, skill: skill.name, order: skill.order ?? 0 }] : []))
+        .sort((a, b) => a.order - b.order),
+    [quickSkills]
+  );
+  const employeesPresent = employees.length > 0;
   // The answer still being written is cut where its agent read a message said
   // to it. A stored message still waiting to be read is the turn's to show,
   // under the answer, while it works.
@@ -481,9 +495,9 @@ export function ChatMessages({ messages, isLoading, errorMessage, errorActions, 
             own model-facing name and description, and the first one is the
             onboarding skill - so it leads, visually and in the order.
           */}
-          {quickSkills.length > 0 && !empty ? (
+          {employeesPresent && !empty ? (
             <div className="mt-8">
-              <EmployeesHome onReady={setEmployeesPresent} />
+              <EmployeesHome available={employees} hiredIds={hiredEmployees} />
             </div>
           ) : null}
 

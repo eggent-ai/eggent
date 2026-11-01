@@ -9,6 +9,7 @@ import {
 import { getServerMessage } from "@/i18n/server"
 import { listBundledSkills } from "@/lib/storage/bundled-skills-store"
 import { onboardingPending } from "@/lib/employees/onboarding"
+import { getAllProjects } from "@/lib/storage/project-store"
 export const dynamic = "force-dynamic"
 
 /**
@@ -32,6 +33,10 @@ export default async function ChatLayout({
 }) {
   const quickSkills = await listBundledSkills()
   const pendingEmployee = await onboardingPending()
+  // Who is already hired, so the home screen draws its employees on the first
+  // paint instead of the plain cards and then the employees a moment later.
+  const hiredEmployees = (await getAllProjects().catch(() => []))
+    .flatMap((project) => (project.employee ? [project.employee] : []))
   const title = await getServerMessage("dashboard.chatTitle")
 
   return (
@@ -42,7 +47,7 @@ export default async function ChatLayout({
           <AppSidebar />
           <SidebarInset className="min-h-0">
             <div className="flex min-h-0 flex-1 flex-col">
-              <ChatPanel initialQuickSkills={quickSkills} onboardingPending={pendingEmployee} />
+              <ChatPanel initialQuickSkills={quickSkills} onboardingPending={pendingEmployee} hiredEmployees={hiredEmployees} />
             </div>
           </SidebarInset>
           <SidePanels />

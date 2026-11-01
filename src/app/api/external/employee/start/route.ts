@@ -2,7 +2,7 @@ import { NextRequest } from "next/server";
 import { timingSafeEqual } from "node:crypto";
 import { getExternalApiToken } from "@/lib/storage/external-api-token-store";
 import { getServerLocale } from "@/i18n/server";
-import { takeOnboarding } from "@/lib/employees/onboarding";
+import { readOnboarding, takeOnboarding } from "@/lib/employees/onboarding";
 
 /**
  * The deployment starts the employee its signup chose the moment the
@@ -25,6 +25,11 @@ export async function POST(req: NextRequest) {
   }
   const locale = await getServerLocale(req.headers.get("accept-language"));
   const taken = await takeOnboarding(locale);
-  if (!taken.ok) return Response.json({ error: taken.error }, { status: taken.code });
+  if (!taken.ok) {
+    // Already started (by the dashboard, or a second call): which chat it is,
+    // so the deployment can still send the person straight to it.
+    const record = taken.code === 409 ? await readOnboarding().catch(() => null) : null;
+    return Response.json({ error: taken.error, ...(record?.chatId ? { chatId: record.chatId, projectId: record.projectId } : {}) }, { status: taken.code });
+  }
   return Response.json({ chatId: taken.result.chatId, projectId: taken.result.projectId });
 }

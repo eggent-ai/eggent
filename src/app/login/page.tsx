@@ -34,7 +34,13 @@ function LoginPageClient() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { t } = useI18n();
-  const [handoff, setHandoff] = useState<"none" | "redeeming" | "failed">("none");
+  // A deployment that sends a one-time link says so in the query as well
+  // (`?via=handoff`), which the server can read: the page is then drawn
+  // signing in from the first paint, and no sign-in form flashes before the
+  // fragment is read.
+  const [handoff, setHandoff] = useState<"none" | "redeeming" | "failed">(
+    searchParams.get("via") === "handoff" ? "redeeming" : "none",
+  );
   const handoffStarted = useRef(false);
   // Deliberately empty. These fields used to be seeded with the default
   // credentials on every visit, forever - so a returning user had to clear two
@@ -64,7 +70,12 @@ function LoginPageClient() {
   useLayoutEffect(() => {
     if (handoffStarted.current) return;
     const token = readHandoffToken();
-    if (!token) return;
+    if (!token) {
+      // Marked as a link but the link is not there (opened again from history):
+      // the form, as for anybody else.
+      setHandoff((state) => (state === "redeeming" ? "none" : state));
+      return;
+    }
     handoffStarted.current = true;
     // Read before the fragment goes: a first task chosen at signup rides in
     // the same link, and it counts only if this sign-in succeeds.
@@ -85,6 +96,9 @@ function LoginPageClient() {
           | null;
         if (!response.ok) throw new Error("handoff refused");
         if (firstTask) rememberFirstTask(firstTask);
+        // An employee's chat opens in focus mode; hide the workspace's frame
+        // now, so it does not show for a moment while the chat loads.
+        if (/[?&]focus=1(&|$)/.test(nextPath)) document.documentElement.setAttribute("data-eggent-focus", "");
         router.replace(payload?.mustChangeCredentials ? "/dashboard/onboarding" : nextPath);
         router.refresh();
       } catch {

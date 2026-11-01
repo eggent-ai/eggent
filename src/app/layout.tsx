@@ -17,6 +17,9 @@ export const viewport: Viewport = {
   viewportFit: "cover",
 };
 
+const FOCUS_BEFORE_PAINT =
+  "if(/[?&]focus=1(&|$)/.test(location.search))document.documentElement.setAttribute('data-eggent-focus','')";
+
 export default async function RootLayout({
   children,
 }: Readonly<{
@@ -29,7 +32,11 @@ export default async function RootLayout({
   const locale = resolveLocalePreference(localePreference, requestHeaders.get("accept-language"));
 
   return (
-    <html lang={locale} className={settings.general.darkMode ? "dark" : undefined}>
+    <html lang={locale} className={settings.general.darkMode ? "dark" : undefined} suppressHydrationWarning>
+      <head>
+        {/* An employee's chat opened with ?focus=1 hides the frame before the first paint, not after it. */}
+        <script dangerouslySetInnerHTML={{ __html: FOCUS_BEFORE_PAINT }} />
+      </head>
       <body className="antialiased">
         <I18nProvider initialLocale={locale} initialPreference={localePreference}>
           {children}

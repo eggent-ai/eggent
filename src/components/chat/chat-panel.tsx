@@ -359,9 +359,11 @@ interface ChatPanelProps {
   initialQuickSkills?: QuickSkillAction[];
   /** A signup left an employee waiting to start (lib/employees/onboarding.ts). */
   onboardingPending?: boolean;
+  /** Employee ids already hired here, known when the page is rendered. */
+  hiredEmployees?: string[];
 }
 
-export function ChatPanel({ initialQuickSkills = [], onboardingPending = false }: ChatPanelProps) {
+export function ChatPanel({ initialQuickSkills = [], onboardingPending = false, hiredEmployees = [] }: ChatPanelProps) {
   const { t } = useI18n();
   const router = useRouter();
   const pathname = usePathname();
@@ -1506,6 +1508,7 @@ export function ChatPanel({ initialQuickSkills = [], onboardingPending = false }
         pendingInteraction={pendingInteraction}
         onRespondToInteraction={(value, cancel) => pendingInteraction ? respondToInteraction(pendingInteraction, value, cancel) : undefined}
         quickSkills={showQuickSkills}
+        hiredEmployees={hiredEmployees}
         onLaunchSkill={requestSkillLaunch}
         launchingSkill={launchingSkill}
         awaitingHistory={awaitingHistory}

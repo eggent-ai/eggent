@@ -7,6 +7,7 @@
  */
 import assert from "node:assert/strict";
 import { foldStages, isPending, normalizeStage, stageFromToolOutput } from "../src/lib/employees/stage.ts";
+import { jobTitle } from "../src/lib/employees/job-title.ts";
 
 let failed = 0;
 function check(name: string, fn: () => void) {
@@ -69,6 +70,14 @@ check("a finished stage is read back from the tool's own result, in either shape
   assert.equal(stageFromToolOutput({ content: [{ type: "text", text }] })?.verdict?.text, "art. 333");
   assert.equal(stageFromToolOutput("not json"), null);
   assert.equal(stageFromToolOutput({ content: [] }), null);
+});
+
+check("an employee's chat is named by its task and what it was given, short", () => {
+  assert.equal(jobTitle("Marketer's task", "url", "https://www.shop.example/catalog"), "Marketer's task: shop.example");
+  assert.equal(jobTitle("Channel editor's task", "channel", "@coffee_daily"), "Channel editor's task: @coffee_daily");
+  assert.equal(jobTitle("Lawyer's task", "file", "inbox/contract.pdf", "/app/data/onboarding/contract.pdf"), "Lawyer's task: contract.pdf");
+  assert.equal(jobTitle("Analyst's task", "topic", undefined), "Analyst's task");
+  assert.ok(jobTitle("Analyst's task", "topic", "x".repeat(80)).endsWith("…"));
 });
 
 if (failed) {

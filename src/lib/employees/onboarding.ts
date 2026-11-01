@@ -15,6 +15,7 @@ import { getProjectModelSettingsPath, getWorkDir } from "@/lib/storage/project-s
 import { getManagedProviderId } from "@/lib/pi/config-store";
 import { runPiAgentText } from "@/lib/pi/chat-runner";
 import { createChat, getChat, saveChat } from "@/lib/storage/chat-store";
+import { jobTitle } from "@/lib/employees/job-title";
 import { resolveLocalePreference, type SupportedLocale } from "@/i18n/locales";
 import { translate } from "@/i18n/messages";
 
@@ -161,7 +162,8 @@ export async function hireEmployee(options: {
     input = input ? `${relative} ${input}` : relative;
   }
   const message = input ? `${launched.initialMessage} ${input}` : launched.initialMessage;
-  const chatId = options.startTurn === false ? "" : await startFirstJob(launched.projectId, message, skill.employee.role);
+  const title = jobTitle(skill.employee.task, skill.employee.input, cleanInput(options.input), options.filePath);
+  const chatId = options.startTurn === false ? "" : await startFirstJob(launched.projectId, message, title, skill.employee.role);
   return { ok: true, result: { projectId: launched.projectId, chatId, message, skill } };
 }
 
@@ -217,9 +219,9 @@ export async function firstJob(): Promise<{ chatId: string; role: string } | nul
  * - the way a turn started from Telegram is watched from the web - so the job
  * does not depend on which page happened to be mounted when it began.
  */
-async function startFirstJob(projectId: string | null, message: string, role: string): Promise<string> {
+async function startFirstJob(projectId: string | null, message: string, title: string, role: string): Promise<string> {
   const chatId = crypto.randomUUID();
-  await createChat(chatId, role, projectId ?? undefined);
+  await createChat(chatId, title, projectId ?? undefined);
   await rememberFirstJob(chatId, role).catch(() => {});
   void runPiAgentText({ chatId, userMessage: message, projectId: projectId ?? undefined })
     .catch((error) => {
