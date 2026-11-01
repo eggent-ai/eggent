@@ -12,6 +12,7 @@ import type { UIMessage } from "ai";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SkeletonList } from "@/components/ui/skeleton-list";
+import { EmployeesHome } from "@/components/employees/employees-home";
 import { useI18n } from "@/i18n/provider";
 import type { MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/utils";
@@ -362,6 +363,8 @@ function ShellCardRow({ card }: { card: ShellCard }) {
 
 export function ChatMessages({ messages, isLoading, errorMessage, errorActions, compactionStatus, actionNotice, pendingInteraction, onRespondToInteraction, quickSkills = [], onLaunchSkill, launchingSkill, awaitingHistory = false, steerQueue = NO_STEERS, onResendSteer, empty }: ChatMessagesProps) {
   const { t } = useI18n();
+  // Whether this workspace offers AI employees; their home replaces the plain heading.
+  const [employeesPresent, setEmployeesPresent] = useState(false);
   // The answer still being written is cut where its agent read a message said
   // to it. A stored message still waiting to be read is the turn's to show,
   // under the answer, while it works.
@@ -449,6 +452,9 @@ export function ChatMessages({ messages, isLoading, errorMessage, errorActions, 
   }
 
   if (showingEmpty) {
+    // Employees are skills too; on a workspace that has them they lead, and the
+    // rest of the cards fold under "what else it can do".
+    const otherSkills = employeesPresent ? quickSkills.filter((skill) => !skill.name.startsWith("employee-")) : quickSkills;
     return (
       // Scrolls instead of clipping: the quick-start row is taller than a short
       // viewport, and `m-auto` still centres the block when there is room.
@@ -458,7 +464,7 @@ export function ChatMessages({ messages, isLoading, errorMessage, errorActions, 
             <div className="flex size-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
               <MessageCircle className="size-6" />
             </div>
-            <h2 className="mt-4 text-2xl font-semibold tracking-tight">{empty ? empty.title : t("chat.emptyTitle")}</h2>
+            <h2 className="mt-4 text-2xl font-semibold tracking-tight">{empty ? empty.title : employeesPresent ? t("employees.home.title") : t("chat.emptyTitle")}</h2>
             {empty ? (
               empty.description ? <p className="mt-2 max-w-xl text-sm leading-6 whitespace-pre-line text-muted-foreground">{empty.description}</p> : null
             ) : (
@@ -475,14 +481,22 @@ export function ChatMessages({ messages, isLoading, errorMessage, errorActions, 
             own model-facing name and description, and the first one is the
             onboarding skill - so it leads, visually and in the order.
           */}
-          {quickSkills.length > 0 ? (
+          {quickSkills.length > 0 && !empty ? (
             <div className="mt-8">
+              <EmployeesHome onReady={setEmployeesPresent} />
+            </div>
+          ) : null}
+
+          {otherSkills.length > 0 ? (
+            <details className="mt-8 group/skills" open={!employeesPresent}>
+              {employeesPresent ? <summary className="cursor-pointer select-none text-sm font-semibold">{t("employees.home.more")}</summary> : null}
+            <div className={employeesPresent ? "mt-3" : ""}>
               <div className="flex items-baseline justify-between gap-3">
                 <h3 className="text-sm font-semibold">{t("chat.quickStartTitle")}</h3>
                 <span className="text-xs text-muted-foreground">{t("chat.quickStartHint")}</span>
               </div>
               <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-                {quickSkills.map((skill, index) => {
+                {otherSkills.map((skill, index) => {
                   const isLaunching = launchingSkill === skill.name;
                   const isLead = index === 0;
                   return (
@@ -528,6 +542,7 @@ export function ChatMessages({ messages, isLoading, errorMessage, errorActions, 
                 })}
               </div>
             </div>
+            </details>
           ) : null}
         </div>
       </div>

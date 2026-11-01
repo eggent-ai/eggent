@@ -1955,6 +1955,17 @@ const enMessages = {
   "employees.board.progress": "{done} of {total} done",
   "employees.board.finished": "Done",
   "employees.board.work": "How it was done",
+  "employees.home.title": "Your employees",
+  "employees.home.hired": "At work",
+  "employees.home.hireFirst": "Who do you hire?",
+  "employees.home.hireMore": "Hire one more",
+  "employees.home.more": "What else it can do",
+  "employees.home.nextRun": "Next job: {when}",
+  "employees.home.noSchedule": "Waiting for your task",
+  "employees.home.hire": "Hire and start",
+  "employees.home.needInput": "Give the employee what it asks for.",
+  "employees.home.chooseFile": "Choose a file",
+  "employees.home.failed": "Could not start. Try again.",
 } as const;
 
 export type MessageKey = keyof typeof enMessages;
