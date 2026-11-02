@@ -21,6 +21,8 @@ import {
   sessionUpdate,
   functionCallOf,
   turnDetectionUpdate,
+  isAmendment,
+  overlapOf,
   gateMic,
   rmsOf,
   GATE_HOLD_MS,
@@ -56,7 +58,7 @@ function fakeChat(running: boolean) {
   return {
     sent,
     deps: {
-      delegate: (task: string) => {
+      delegate: (task: string, _amends: boolean) => {
         sent.push(task);
         return running ? ("added" as const) : ("started" as const);
       },
@@ -215,6 +217,37 @@ await check("while our answer plays, its echo does not go up as the person's voi
   assert.equal(gateMic({ now, playing: true, micRms: 0.015, outRms: 0.005, openUntil: 0 }).pass, false);
   assert.ok(Math.abs(rmsOf(new Float32Array([0.5, -0.5, 0.5, -0.5])) - 0.5) < 1e-9);
   assert.equal(rmsOf(new Float32Array(0)), 0);
+});
+await check("one request said in two breaths is one task: the fuller version nine seconds later is a correction, not a second task", () => {
+  const t0 = 1_000_000;
+  // the live case: the name came after a pause, as a fuller request
+  const first = { task: "Create a new project. Ask for the name, start by creating it", at: t0, endedAt: null };
+  const fuller = "Create a new project named Voice assistant testing, start by creating it";
+  assert.ok(overlapOf(first.task, fuller) >= 0.5, `overlap ${overlapOf(first.task, fuller)}`);
+  assert.equal(isAmendment({ task: fuller, amends: false, last: first, now: t0 + 9_000 }), true);
+  // the voice model saying so is enough while the task runs, whatever the words
+  assert.equal(isAmendment({ task: "no, call it Alpha", amends: true, last: first, now: t0 + 40_000 }), true);
+  // ... and for half a minute after it ended
+  assert.equal(isAmendment({ task: "call it Alpha", amends: true, last: { ...first, endedAt: t0 + 20_000 }, now: t0 + 45_000 }), true);
+  assert.equal(isAmendment({ task: "call it Alpha", amends: true, last: { ...first, endedAt: t0 + 20_000 }, now: t0 + 60_000 }), false);
+  // a different task right after is a task of its own
+  assert.equal(isAmendment({ task: "Find flights to Kazan for Friday", amends: false, last: first, now: t0 + 5_000 }), false);
+  // the same words long after are a new request
+  assert.equal(isAmendment({ task: fuller, amends: false, last: first, now: t0 + 60_000 }), false);
+  // nothing before: never a correction
+  assert.equal(isAmendment({ task: fuller, amends: true, last: null, now: t0 }), false);
+});
+await check("a correction is handed to the chat as one, and the voice model is told it was", async () => {
+  const sent: Array<[string, boolean]> = [];
+  const out = await runVoiceTool("delegate", JSON.stringify({ task: "call it Alpha", amends: true }), {
+    delegate: (task, amends) => { sent.push([task, amends]); return "amended"; },
+    turn: () => describeTurn([], true),
+  });
+  assert.deepEqual(sent, [["call it Alpha", true]]);
+  assert.equal(out.how, "amended");
+  assert.match(String(out.note), /correction/);
+  const tool = VOICE_TOOLS[0].parameters as { properties: Record<string, { type: string }> };
+  assert.equal(tool.properties.amends.type, "boolean");
 });
 await check("a function call is read from either provider's event, and both name the same call", () => {
   const fromXai = functionCallOf({ type: "response.function_call_arguments.done", name: "delegate", call_id: "c1", arguments: "{\"task\":\"x\"}" });

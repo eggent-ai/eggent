@@ -23,6 +23,8 @@ import {
   recentForVoice,
   runVoiceTool,
   questionUpdate,
+  isAmendment,
+  type LastDelegate,
   endingNote,
   IDLE_WARNING_NOTE,
   watchCall,
@@ -228,6 +230,8 @@ function useVoiceCall(bindings: VoiceCallBindings) {
   const summary = useRef<{ text: string; responseId: string | null; done: () => void } | null>(null);
   const lineIds = useRef(new Map<string, string>());
   const handledCalls = useRef(new Set<string>());
+  /** The task this call handed over last, so that the rest of the same request is not handed over again as a new one. */
+  const lastDelegate = useRef<LastDelegate | null>(null);
   const protocolRef = useRef<VoiceProtocol>("xai");
   const thresholdRef = useRef(0.5);
   /** The answer being played; audio of any other is dropped. Null after the person cut in, until the next answer starts. */
@@ -409,12 +413,20 @@ function useVoiceCall(bindings: VoiceCallBindings) {
         handledCalls.current.add(fn.callId);
         const { name, callId } = fn;
         const output = await runVoiceTool(name, fn.arguments, {
-          delegate: (task) => {
+          delegate: (task, amends) => {
             call.current?.delegated.push(task);
             const b = bindingsRef.current;
+            const now = Date.now();
+            const amend = isAmendment({ task, amends, last: lastDelegate.current, now });
+            // A correction goes to the same work as one, said plainly, so the agent fixes what it made rather than making it again.
+            const text = amend ? t("voice.amend", { task }) : task;
+            lastDelegate.current = amend && lastDelegate.current
+              ? { task: `${lastDelegate.current.task} ${task}`, at: now, endedAt: null }
+              : { task, at: now, endedAt: null };
             // The work starts in this chat: the panel says where, so the person can go and watch.
             setState((current) => ({ ...current, work: { href: b.chatHref, projectName: b.projectName ?? null, done: false } }));
-            return b.delegate(task);
+            const how = b.delegate(text);
+            return amend && how !== "answered" ? "amended" : how;
           },
           turn: () => bindingsRef.current.turn(),
         });
@@ -437,7 +449,7 @@ function useVoiceCall(bindings: VoiceCallBindings) {
         break;
       }
     }
-  }, [flushUpdate, play, send, stopPlayback, upsertLine]);
+  }, [flushUpdate, play, send, stopPlayback, t, upsertLine]);
 
   const cleanup = useCallback(() => {
     const c = call.current;
@@ -545,6 +557,7 @@ function useVoiceCall(bindings: VoiceCallBindings) {
     muted.current = false;
     lineIds.current.clear();
     handledCalls.current.clear();
+    lastDelegate.current = null;
     currentResponse.current = null;
     droppingAudio.current = false;
     gateOpenUntil.current = 0;
@@ -724,6 +737,7 @@ function useVoiceCall(bindings: VoiceCallBindings) {
     wasRunning.current = bindings.running;
     if (!before || bindings.running || state.phase !== "live" || !call.current?.delegated.length) return;
     setState((current) => (current.work ? { ...current, work: { ...current.work, done: true } } : current));
+    if (lastDelegate.current) lastDelegate.current = { ...lastDelegate.current, endedAt: Date.now() };
     const turn = bindingsRef.current.turn();
     pendingUpdate.current = `[Agent update] The agent has finished working. Its latest message in the chat: ${turn.latestText || "(no text)"}`;
     flushUpdate();

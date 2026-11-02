@@ -24,11 +24,13 @@ export const VOICE_TOOLS: VoiceToolDefinition[] = [
       "Hand a task to the agent, who works in the open chat with every tool: files, the web, documents, letters, schedules. " +
       "Use it at once for anything that needs doing rather than saying - connecting a service or app, comparing, finding, writing, posting, sending, documents, schedules. " +
       "If the agent is already working, the task is added to what it is doing; if the agent asked the person a question on screen, this is the answer. " +
-      "Write the task in the person's own words and language, complete enough to act on without the call.",
+      "Write the task in the person's own words and language, complete enough to act on without the call. " +
+      "When the person adds to or corrects the task you have just passed on (a name they had not said yet, \"no, call it X\", \"and also...\"), pass only the correction with amends set to true - never the whole task again as a new one, or the agent does it twice.",
     parameters: {
       type: "object",
       properties: {
-        task: { type: "string", description: "What the agent should do, in the person's words." },
+        task: { type: "string", description: "What the agent should do, in the person's words; for a correction, only what changes." },
+        amends: { type: "boolean", description: "True when this corrects or completes the task passed on just before, rather than being a new task." },
       },
       required: ["task"],
     },
@@ -84,6 +86,7 @@ export function buildVoiceInstructions(input: VoiceInstructionsInput): string {
       (input.locale ? ` Their interface is set to "${input.locale}", so start in that language until they speak.` : ""),
     "Any request that implies doing something - connect a service (Google, a CRM, a shop, a bank), compare prices, find, write, post to a channel, send a letter, make a document, schedule, remind - goes to the agent at once: call `delegate` with the task in the person's words, in the same turn, before saying anything else. Do not ask whether to do it and do not try to do it yourself; you cannot open files, browse, connect accounts or send anything.",
     "Right after delegating say one short line that you are on it (\"I'm on it\", or the same in the person's language) and keep the conversation going - ask what else, or what matters most. Never invent the result.",
+    "If the person goes on about the task you just passed on - finishes the sentence, names what they had not named, changes their mind - that is a correction to the same task: call `delegate` with only the correction and `amends: true`. One thing asked for is one task, however many breaths it took to say.",
     "Only answer by yourself what is a plain question or conversation that needs no tool.",
     "The agent's work appears in the chat on the person's screen - a connection card, a file, a table. When asked how it is going, or when the person seems to wait, call `status` and say what it shows in one or two sentences.",
     "Messages that start with \"[Agent update]\" come from the agent, not the person: tell the person briefly what changed and what they may need to do on screen (for example press the connect button).",
@@ -331,13 +334,61 @@ export function voiceContextOf(messages: TurnMessage[]): VoiceContextMessage[] {
   return out;
 }
 
+// --- one task said in several breaths ---------------------------------------
+
+/**
+ * A person who pauses mid-request, or corrects it ("no, call it X"), must not
+ * get the work done twice: on a live call "create a project" was handed over,
+ * the rest of the sentence came nine seconds later as a fuller request, and
+ * the agent made two projects. A delegate is a correction of the last one when
+ * the voice model says so (`amends`) while that task is still running or ended
+ * a moment ago, or - whatever the model said - when it comes within a few
+ * seconds of the last one and repeats most of its words.
+ */
+export const AMEND_WINDOW_MS = 30_000;
+export const REPEAT_WINDOW_MS = 15_000;
+
+export interface LastDelegate {
+  task: string;
+  at: number;
+  /** When the turn it started (or joined) ended; null while it runs. */
+  endedAt: number | null;
+}
+
+/** Words by their first five letters: Russian changes a word's ending ("название", "названием"), not its stem. */
+function words(text: string): string[] {
+  return text.toLowerCase().replace(/[^\p{L}\p{N}\s]+/gu, " ").split(/\s+/).filter((word) => word.length > 2).map((word) => word.slice(0, 5));
+}
+
+/** How much of the earlier task the new one repeats, 0..1. */
+export function overlapOf(earlier: string, later: string): number {
+  const before = new Set(words(earlier));
+  if (before.size === 0) return 0;
+  const after = new Set(words(later));
+  let shared = 0;
+  for (const word of before) if (after.has(word)) shared += 1;
+  return shared / before.size;
+}
+
+export function isAmendment(input: { task: string; amends: boolean; last: LastDelegate | null; now: number }): boolean {
+  const last = input.last;
+  if (!last) return false;
+  const recent = last.endedAt === null || input.now - last.endedAt <= AMEND_WINDOW_MS;
+  if (input.amends && recent) return true;
+  return input.now - last.at <= REPEAT_WINDOW_MS && recent && overlapOf(last.task, input.task) >= 0.5;
+}
+
 // --- running a tool call ---------------------------------------------------
 
-export type DelegateResult = "started" | "added" | "answered";
+export type DelegateResult = "started" | "added" | "answered" | "amended";
 
 export interface VoiceToolDeps {
-  /** Starts a turn with this text, adds it to the turn already working, or answers the question it waits on. Answers which. */
-  delegate(task: string): DelegateResult | Promise<DelegateResult>;
+  /**
+   * Starts a turn with this text, adds it to the turn already working, or
+   * answers the question it waits on. Answers which. `amends` is set when the
+   * voice model says the text corrects the task passed on just before.
+   */
+  delegate(task: string, amends: boolean): DelegateResult | Promise<DelegateResult>;
   /** What the turn in the open chat is doing. */
   turn(): TurnStatus;
 }
@@ -362,11 +413,13 @@ export async function runVoiceTool(name: string, rawArguments: string, deps: Voi
     if (!task) return { ok: false, error: "No task was given." };
     if (task.length > MAX_TASK_CHARS) return { ok: false, error: "The task is too long to hand over by voice." };
     try {
-      const how = await deps.delegate(task);
+      const how = await deps.delegate(task, args.amends === true);
       return {
         ok: true,
         how,
-        note: how === "answered"
+        note: how === "amended"
+          ? "Passed on as a correction to the task already handed over, not as a new one. Tell the person in a few words that you have passed it on."
+          : how === "answered"
           ? "This answered the question the agent was waiting on; it carries on. Tell the person in a few words."
           : how === "added"
             ? "Added to what the agent is already doing. Tell the person in a few words."

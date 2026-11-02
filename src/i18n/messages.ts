@@ -362,6 +362,7 @@ const enMessages = {
   "voice.work.done": "Done, the result is in the chat",
   "voice.work.open": "Open the chat",
   "voice.work.here": "on screen",
+  "voice.amend": "A correction to the task you are doing (or have just done): {task}. Do not start over and do not make again what you have already made - change what you made.",
   "chat.placeholderWhileRunning": "Add to the task...",
   "chat.steer.send": "Add to the turn",
   "chat.steer.sending": "Sending...",
