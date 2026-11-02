@@ -78,7 +78,10 @@ export function createAppsTool() {
       const app = typeof params.app === "string" ? params.app.trim().toLowerCase() : "";
       if (action === "list") {
         const { data } = await ask("GET", "");
-        return textResult(JSON.stringify(data, null, 2));
+        // Something on the list is not connected: the chat offers the page under the answer.
+        const apps = Array.isArray(data.apps) ? (data.apps as Array<{ connected?: unknown }>) : [];
+        const offer = typeof data.connectUrl === "string" && apps.some((app) => app.connected !== true);
+        return textResult(JSON.stringify(offer ? { ...data, connect: { url: data.connectUrl } } : data, null, 2));
       }
       if (action === "request") {
         const id = typeof params.request_id === "string" && /^[0-9a-f-]{36}$/i.test(params.request_id) ? `/${params.request_id}` : "";

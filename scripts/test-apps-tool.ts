@@ -28,7 +28,7 @@ const server = http.createServer((req, res) => {
     const body = Buffer.concat(chunks).toString("utf8");
     seen.push({ method: req.method || "", url: req.url || "", auth: String(req.headers.authorization || ""), body });
     res.setHeader("content-type", "application/json");
-    if (req.url === "/apps") return res.end(JSON.stringify({ apps: [{ id: "bitrix24", connected: false }] }));
+    if (req.url === "/apps") return res.end(JSON.stringify({ connectUrl: "https://ws.example.test/__eggent/apps", apps: [{ id: "bitrix24", connected: false }] }));
     if (req.url === "/apps/bitrix24") return res.end(JSON.stringify({ id: "bitrix24", connected: false, connectUrl: "https://ws.example.test/__eggent/apps#bitrix24", guide: "crm.deal.list" }));
     if (req.url === "/apps/amocrm/call" && body.includes("POST")) {
       res.statusCode = 202;
@@ -64,6 +64,7 @@ await check("the list comes from the service, with the services token", async ()
   const data = await run({ action: "list" });
   assert.equal((data.apps as unknown[]).length, 1);
   assert.equal(seen.at(-1)?.auth, "Bearer eggs_test_token");
+  assert.deepEqual(data.connect, { url: "https://ws.example.test/__eggent/apps" });
 });
 await check("a guide of an app not connected carries connect.url for the chat's button", async () => {
   const data = await run({ action: "guide", app: "bitrix24" });
