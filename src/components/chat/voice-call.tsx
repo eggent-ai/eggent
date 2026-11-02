@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { AudioLines, Bot, Captions, ChevronDown, ChevronUp, Loader2, Mic, MicOff, PhoneOff } from "lucide-react";
+import { AudioLines, Bot, Captions, ChevronDown, ChevronUp, Loader2, Mic, MicOff, PhoneOff, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n/provider";
 import type { MessageKey } from "@/i18n/messages";
@@ -11,6 +11,10 @@ import {
   buildVoiceInstructions,
   functionCallOf,
   sessionUpdate,
+  turnDetectionUpdate,
+  isAnswerPace,
+  PACE_MS,
+  type AnswerPace,
   type VoiceProtocol,
   formatCallLength,
   recentForVoice,
@@ -172,6 +176,18 @@ declare global {
   }
 }
 
+const PACE_KEY = "eggent.voice.pace";
+
+/** The person's own answer speed, if they chose one in this browser. */
+function storedPace(): AnswerPace | null {
+  try {
+    const value = window.localStorage.getItem(PACE_KEY);
+    return isAnswerPace(value) ? value : null;
+  } catch {
+    return null;
+  }
+}
+
 function useVoiceCall(bindings: VoiceCallBindings) {
   const { t, locale } = useI18n();
   const [state, setState] = useState<CallState>(INITIAL);
@@ -198,6 +214,9 @@ function useVoiceCall(bindings: VoiceCallBindings) {
   const summary = useRef<{ text: string; responseId: string | null; done: () => void } | null>(null);
   const lineIds = useRef(new Map<string, string>());
   const handledCalls = useRef(new Set<string>());
+  const protocolRef = useRef<VoiceProtocol>("xai");
+  const [pace, setPaceState] = useState<AnswerPace | null>(null);
+  useEffect(() => { setPaceState(storedPace()); }, []);
   const beatNow = useRef<() => void>(() => undefined);
   const watchNow = useRef<() => void>(() => undefined);
   const lastPersonAt = useRef(0);
@@ -291,8 +310,10 @@ function useVoiceCall(bindings: VoiceCallBindings) {
       case "input_audio_buffer.speech_started":
         lastPersonAt.current = Date.now();
         warnedAt.current = null;
-        // The person talks over the answer: it stops here at once.
+        // The person talks over the answer: it stops here at once, and the
+        // provider is told to drop it rather than finish it unheard.
         stopPlayback();
+        if (responding.current) send({ type: "response.cancel" });
         speechStoppedAt.current = null;
         setState((current) => ({ ...current, floor: "listening" }));
         break;
@@ -509,7 +530,9 @@ function useVoiceCall(bindings: VoiceCallBindings) {
       // Through the deployment (the URL carries a one-use token), or straight to the provider with a secret.
       const relayed = answer.mode === "relay";
       const protocol: VoiceProtocol = answer.protocol === "openai-ga" ? "openai-ga" : "xai";
-      const silenceMs = Math.min(2000, Math.max(200, Number(answer.silenceMs) || 600));
+      const chosen = storedPace();
+      const silenceMs = chosen ? PACE_MS[chosen] : Math.min(2000, Math.max(200, Number(answer.silenceMs) || 600));
+      protocolRef.current = protocol;
       if (!callId || !realtimeUrl || (!relayed && !secret)) throw new Error(t("voice.error.failed"));
       setState((current) => ({
         ...current,
@@ -664,6 +687,17 @@ function useVoiceCall(bindings: VoiceCallBindings) {
     flushUpdate();
   }, [bindings.question, flushUpdate, state.phase]);
 
+  /** The person's answer speed: remembered in this browser, and applied at once to a call in progress. */
+  const setPace = useCallback((next: AnswerPace) => {
+    setPaceState(next);
+    try {
+      window.localStorage.setItem(PACE_KEY, next);
+    } catch {
+      // Not remembered; still applied to this call.
+    }
+    if (call.current) send(turnDetectionUpdate(protocolRef.current, PACE_MS[next]));
+  }, [send]);
+
   const toggleMute = useCallback(() => {
     muted.current = !muted.current;
     mutedSince.current = muted.current ? Date.now() : null;
@@ -700,7 +734,7 @@ function useVoiceCall(bindings: VoiceCallBindings) {
 
   const dismissError = useCallback(() => setState((current) => ({ ...current, error: null })), []);
 
-  return { state, start, hangUp, toggleMute, dismissError, audio };
+  return { state, start, hangUp, toggleMute, dismissError, audio, pace, setPace };
 }
 
 // --- the screen ----------------------------------------------------------
@@ -752,7 +786,8 @@ function Waveform({ audio, active, className }: { audio: ReturnType<typeof useVo
 export function VoiceCallControl({ bindings, disabled }: { bindings: VoiceCallBindings; disabled?: boolean }) {
   const { t } = useI18n();
   const offered = useVoiceOffered();
-  const { state, start, hangUp, toggleMute, dismissError, audio } = useVoiceCall(bindings);
+  const { state, start, hangUp, toggleMute, dismissError, audio, pace, setPace } = useVoiceCall(bindings);
+  const [showSettings, setShowSettings] = useState(false);
   const [showTranscript, setShowTranscript] = useState(true);
   const [expanded, setExpanded] = useState(true);
   const inCallNow = state.phase !== "idle";
@@ -869,7 +904,40 @@ export function VoiceCallControl({ bindings, disabled }: { bindings: VoiceCallBi
                   <div ref={transcriptEnd} />
                 </div>
               ) : null}
+              {showSettings ? (
+                <div className="flex flex-col gap-1.5" role="group" aria-label={t("voice.pace.title")}>
+                  <span className="text-xs font-medium text-muted-foreground">{t("voice.pace.title")}</span>
+                  <div className="grid grid-cols-3 gap-1 rounded-lg bg-muted p-1">
+                    {(["fast", "normal", "calm"] as const).map((option) => {
+                      const active = (pace ?? "normal") === option;
+                      return (
+                        <button
+                          key={option}
+                          type="button"
+                          onClick={() => setPace(option)}
+                          aria-pressed={active}
+                          className={`min-h-9 rounded-md px-2 text-xs/4 transition-colors ${active ? "bg-background font-medium text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+                        >
+                          {t(`voice.pace.${option}`)}
+                          <span className="block text-[11px]/4 tabular-nums text-muted-foreground">{t("voice.pace.ms", { ms: String(PACE_MS[option]) })}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null}
               <div className="flex items-center justify-center gap-3">
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => setShowSettings((value) => !value)}
+                  aria-pressed={showSettings}
+                  aria-label={t("voice.settings")}
+                  title={t("voice.settings")}
+                  className="size-11 rounded-full"
+                >
+                  <Settings2 className="size-5" />
+                </Button>
                 <Button
                   variant="outline"
                   size="icon"

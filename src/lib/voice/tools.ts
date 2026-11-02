@@ -159,6 +159,28 @@ export function sessionUpdate(input: SessionInput): Record<string, unknown> {
 }
 
 /**
+ * How long a pause ends the person's turn, as the person chooses it in the call
+ * panel. Measured on Yandex with phrases that pause at commas: 500 ms answered
+ * half-finished sentences several times over, 800 ms about half as often, 1200 ms
+ * almost never - each step adds its length to the wait for the answer.
+ */
+export type AnswerPace = "fast" | "normal" | "calm";
+export const PACE_MS: Record<AnswerPace, number> = { fast: 500, normal: 800, calm: 1200 };
+
+export function isAnswerPace(value: unknown): value is AnswerPace {
+  return value === "fast" || value === "normal" || value === "calm";
+}
+
+/** Changes only the pause during a call: the provider keeps its voice and instructions. */
+export function turnDetectionUpdate(protocol: VoiceProtocol, silenceMs: number): Record<string, unknown> {
+  const turnDetection = { type: "server_vad", threshold: 0.5, silence_duration_ms: silenceMs };
+  if (protocol === "openai-ga") {
+    return { type: "session.update", session: { type: "realtime", audio: { input: { turn_detection: turnDetection } } } };
+  }
+  return { type: "session.update", session: { turn_detection: { type: "server_vad", silence_duration_ms: silenceMs } } };
+}
+
+/**
  * A function call in an event, whichever way the provider announces it: xAI
  * sends `response.function_call_arguments.done`, Yandex the finished output
  * item. Both carry the same call id, so a caller that sees both runs it once.

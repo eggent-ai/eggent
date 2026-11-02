@@ -20,6 +20,9 @@ import {
   questionUpdate,
   sessionUpdate,
   functionCallOf,
+  turnDetectionUpdate,
+  isAnswerPace,
+  PACE_MS,
   endingNote,
   watchCall,
   IDLE_WARN_MS,
@@ -178,6 +181,18 @@ await check("Yandex gets the OpenAI Realtime GA session: voice and turn detectio
   assert.equal(xai.session.voice, "eve");
   assert.equal(xai.session.turn_detection.type, "server_vad");
   assert.equal(xai.session.audio.input.transcription.model, "grok-transcribe");
+});
+await check("the answer speed a person picks is 500, 800 or 1200 ms, and changes only the pause mid-call", () => {
+  assert.deepEqual(PACE_MS, { fast: 500, normal: 800, calm: 1200 });
+  assert.ok(isAnswerPace("calm"));
+  assert.ok(!isAnswerPace("slow"));
+  assert.ok(!isAnswerPace(null));
+  assert.deepEqual(turnDetectionUpdate("openai-ga", 1200), {
+    type: "session.update",
+    session: { type: "realtime", audio: { input: { turn_detection: { type: "server_vad", threshold: 0.5, silence_duration_ms: 1200 } } } },
+  });
+  const xai = turnDetectionUpdate("xai", 500) as { session: Record<string, unknown> };
+  assert.deepEqual(xai.session, { turn_detection: { type: "server_vad", silence_duration_ms: 500 } });
 });
 await check("a function call is read from either provider's event, and both name the same call", () => {
   const fromXai = functionCallOf({ type: "response.function_call_arguments.done", name: "delegate", call_id: "c1", arguments: "{\"task\":\"x\"}" });
