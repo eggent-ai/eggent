@@ -172,20 +172,22 @@ await check("the instructions carry the newest messages that fit, oldest first, 
   assert.ok(kept.length < 40 && kept.length > 5);
   assert.ok(kept.at(-1)!.text.startsWith("39 "));
 });
-await check("Yandex gets the OpenAI Realtime GA session: voice and turn detection inside audio, our tools, our pause", () => {
-  const update = sessionUpdate({ protocol: "openai-ga", voice: "dasha", instructions: "hi", silenceMs: 600 }) as { type: string; session: Record<string, any> };
+await check("the OpenAI Realtime GA shape keeps voice and turn detection inside audio; the flat shape keeps them at the top", () => {
+  const update = sessionUpdate({ protocol: "openai-ga", voice: "voice-a", instructions: "hi", silenceMs: 600 }) as { type: string; session: Record<string, any> };
   assert.equal(update.type, "session.update");
   assert.equal(update.session.type, "realtime");
   assert.deepEqual(update.session.output_modalities, ["audio"]);
-  assert.equal(update.session.audio.output.voice, "dasha");
+  assert.equal(update.session.audio.output.voice, "voice-a");
   assert.deepEqual(update.session.audio.input.format, { type: "audio/pcm", rate: 24000 });
   assert.equal(update.session.audio.input.turn_detection.silence_duration_ms, 600);
-  assert.equal(update.session.voice, undefined, "voice at the top is xAI's shape");
+  assert.equal(update.session.voice, undefined, "voice at the top is the flat shape");
   assert.deepEqual(update.session.tools.map((tool: { name: string }) => tool.name), ["delegate", "status"]);
-  const xai = sessionUpdate({ protocol: "xai", voice: "eve", instructions: "hi", silenceMs: 600 }) as { session: Record<string, any> };
-  assert.equal(xai.session.voice, "eve");
-  assert.equal(xai.session.turn_detection.type, "server_vad");
-  assert.equal(xai.session.audio.input.transcription.model, "grok-transcribe");
+  const flat = sessionUpdate({ protocol: "flat", voice: "voice-b", instructions: "hi", silenceMs: 600, transcriptionModel: "transcriber-1" }) as { session: Record<string, any> };
+  assert.equal(flat.session.voice, "voice-b");
+  assert.equal(flat.session.turn_detection.type, "server_vad");
+  assert.equal(flat.session.audio.input.transcription.model, "transcriber-1");
+  const untold = sessionUpdate({ protocol: "flat", voice: "voice-b", instructions: "hi", silenceMs: 600 }) as { session: Record<string, any> };
+  assert.equal(untold.session.audio.input.transcription, undefined, "no transcription model is named unless the deployment names one");
 });
 await check("the answer speed a person picks is 500, 800 or 1200 ms, and changes only the pause mid-call", () => {
   assert.deepEqual(PACE_MS, { fast: 1500, normal: 2500, calm: 3500 });
@@ -196,8 +198,8 @@ await check("the answer speed a person picks is 500, 800 or 1200 ms, and changes
     type: "session.update",
     session: { type: "realtime", audio: { input: { turn_detection: { type: "server_vad", threshold: 0.6, silence_duration_ms: 1400 } } } },
   });
-  const xai = turnDetectionUpdate("xai", 500) as { session: Record<string, unknown> };
-  assert.deepEqual(xai.session, { turn_detection: { type: "server_vad", silence_duration_ms: 500 } });
+  const flat = turnDetectionUpdate("flat", 500) as { session: Record<string, unknown> };
+  assert.deepEqual(flat.session, { turn_detection: { type: "server_vad", silence_duration_ms: 500 } });
 });
 await check("while our answer plays, its echo does not go up as the person's voice; a person talking over it does, and is not cut into pieces", () => {
   const now = 1_000_000;
@@ -250,10 +252,10 @@ await check("a correction is handed to the chat as one, and the voice model is t
   assert.equal(tool.properties.amends.type, "boolean");
 });
 await check("a function call is read from either provider's event, and both name the same call", () => {
-  const fromXai = functionCallOf({ type: "response.function_call_arguments.done", name: "delegate", call_id: "c1", arguments: "{\"task\":\"x\"}" });
-  const fromYandex = functionCallOf({ type: "response.output_item.done", item: { type: "function_call", name: "delegate", call_id: "c1", arguments: "{\"task\":\"x\"}" } });
-  assert.deepEqual(fromXai, { name: "delegate", callId: "c1", arguments: "{\"task\":\"x\"}" });
-  assert.deepEqual(fromYandex, fromXai);
+  const fromArgumentsDone = functionCallOf({ type: "response.function_call_arguments.done", name: "delegate", call_id: "c1", arguments: "{\"task\":\"x\"}" });
+  const fromOutputItem = functionCallOf({ type: "response.output_item.done", item: { type: "function_call", name: "delegate", call_id: "c1", arguments: "{\"task\":\"x\"}" } });
+  assert.deepEqual(fromArgumentsDone, { name: "delegate", callId: "c1", arguments: "{\"task\":\"x\"}" });
+  assert.deepEqual(fromOutputItem, fromArgumentsDone);
   assert.equal(functionCallOf({ type: "response.output_item.done", item: { type: "message" } }), null);
   assert.equal(functionCallOf({ type: "response.function_call_arguments.done", name: "delegate" }), null);
 });
@@ -325,7 +327,7 @@ const cloudServer = http.createServer((req, res) => {
   if (req.url === "/v1/tools/voice/call" && req.method === "POST") {
     if (cloudRefuses) { res.statusCode = 402; return res.end(JSON.stringify({ error: "The balance is too low for a call.", code: "balance", pricePerMinute: "€0.10", balanceLeft: "€0.01" })); }
     res.statusCode = 201;
-    return res.end(JSON.stringify({ call: { id: "a".repeat(32) }, mode: "direct", protocol: "xai", silenceMs: 600, secret: "eph_secret", realtimeUrl: "wss://voice.example.test/v1/realtime?model=m", model: "m", voice: "eve", maxSeconds: 600, beatSeconds: 10, pricePerMinute: "€0.10", balanceLeft: "€0.43" }));
+    return res.end(JSON.stringify({ call: { id: "a".repeat(32) }, mode: "direct", protocol: "flat", subprotocolPrefix: "client-secret.", silenceMs: 600, secret: "eph_secret", realtimeUrl: "wss://voice.example.test/v1/realtime?model=m", model: "m", voice: "voice-b", maxSeconds: 600, beatSeconds: 10, pricePerMinute: "€0.10", balanceLeft: "€0.43" }));
   }
   if (req.url === `/v1/tools/voice/call/${"a".repeat(32)}/beat`) return res.end(JSON.stringify({ continue: true, leftSeconds: 590, balanceLeft: "€0.41" }));
   if (req.url === `/v1/tools/voice/call/${"a".repeat(32)}` && req.method === "DELETE") return res.end(JSON.stringify({ ok: true, ended: true, seconds: 64 }));
@@ -374,7 +376,8 @@ await check("a call's secret comes from the deployment, asked with the workspace
   assert.equal(json.callId, CALL);
   assert.equal(json.secret, "eph_secret");
   assert.equal(json.mode, "direct");
-  assert.equal(json.protocol, "xai");
+  assert.equal(json.protocol, "flat");
+  assert.equal(json.subprotocolPrefix, "client-secret.");
   assert.equal(json.silenceMs, 600);
   assert.equal(json.pricePerMinute, "€0.10");
   assert.equal(json.balanceLeft, "€0.43");

@@ -112,11 +112,11 @@ export function buildSummaryInstructions(): string {
 // --- the provider's own shapes ---------------------------------------------
 
 /**
- * Which event and session shapes the provider speaks, as the deployment says:
- * "openai-ga" is the OpenAI Realtime GA shape Yandex AI Studio speaks (voice
- * and turn detection inside `audio`); "xai" is xAI's (both at the top).
+ * Which session shape the provider speaks, as the deployment says: "openai-ga"
+ * is the OpenAI Realtime GA shape (voice and turn detection inside `audio`);
+ * "flat" has both at the top of the session.
  */
-export type VoiceProtocol = "openai-ga" | "xai";
+export type VoiceProtocol = "openai-ga" | "flat";
 
 export interface SessionInput {
   protocol: VoiceProtocol;
@@ -126,6 +126,8 @@ export interface SessionInput {
   silenceMs: number;
   /** How loud a sound has to be to count as speech, 0..1: higher ignores more of the room. */
   threshold?: number;
+  /** The provider's model for writing down what the person says, when it needs one named. */
+  transcriptionModel?: string | null;
 }
 
 const PCM = { type: "audio/pcm", rate: 24000 };
@@ -155,7 +157,7 @@ export function sessionUpdate(input: SessionInput): Record<string, unknown> {
       turn_detection: { type: "server_vad", silence_duration_ms: input.silenceMs, ...(input.threshold ? { threshold: input.threshold } : {}) },
       reasoning: { effort: "none" },
       audio: {
-        input: { format: PCM, transcription: { model: "grok-transcribe" } },
+        input: { format: PCM, ...(input.transcriptionModel ? { transcription: { model: input.transcriptionModel } } : {}) },
         output: { format: PCM },
       },
       tools: VOICE_TOOLS,
@@ -166,7 +168,7 @@ export function sessionUpdate(input: SessionInput): Record<string, unknown> {
 /**
  * How long a pause ends the person's turn, as the person chooses it in the call
  * panel. Shorter pauses kept cutting people off: at 500 ms a sentence with two
- * commas started several replies on Yandex, and on a live call an unhurried
+ * commas started several replies, and on a live call an unhurried
  * speaker was still cut in three times at 1000 ms - the operator's call is two
  * and a half seconds for "normal". Each choice adds its length to the wait for
  * the answer. A choice is stored by name, so one saved on the old scale lands
@@ -189,9 +191,9 @@ export function turnDetectionUpdate(protocol: VoiceProtocol, silenceMs: number, 
 }
 
 /**
- * A function call in an event, whichever way the provider announces it: xAI
- * sends `response.function_call_arguments.done`, Yandex the finished output
- * item. Both carry the same call id, so a caller that sees both runs it once.
+ * A function call in an event, whichever way the provider announces it: by
+ * `response.function_call_arguments.done`, by the finished output item, or
+ * both. They carry the same call id, so a caller that sees both runs it once.
  */
 export function functionCallOf(event: Record<string, unknown>): { name: string; callId: string; arguments: string } | null {
   if (event.type === "response.function_call_arguments.done") {
@@ -212,7 +214,7 @@ export function functionCallOf(event: Record<string, unknown>): { name: string; 
 /**
  * Without headphones the agent's own voice comes back through the microphone,
  * the provider takes it for the person, stops its answer and answers itself
- * (measured on Yandex: one question, eleven replies). The browser's echo
+ * (measured: one question, eleven replies). The browser's echo
  * cancellation does not reliably know about sound played by the page itself, so
  * while our answer plays the microphone goes up only when it is clearly louder
  * than what we are playing - a person talking over the answer is - and stays
@@ -357,7 +359,7 @@ export interface LastDelegate {
   endedAt: number | null;
 }
 
-/** Words by their first five letters: Russian changes a word's ending ("название", "названием"), not its stem. */
+/** Words by their first five letters: an inflected language changes a word's ending, not its stem. */
 function words(text: string): string[] {
   return text.toLowerCase().replace(/[^\p{L}\p{N}\s]+/gu, " ").split(/\s+/).filter((word) => word.length > 2).map((word) => word.slice(0, 5));
 }

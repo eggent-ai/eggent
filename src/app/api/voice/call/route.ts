@@ -44,7 +44,9 @@ export async function POST(req: NextRequest) {
     {
       callId: call.id,
       mode: answer.json.mode === "relay" ? "relay" : "direct",
-      protocol: answer.json.protocol ?? "xai",
+      protocol: answer.json.protocol ?? "flat",
+      subprotocolPrefix: answer.json.subprotocolPrefix ?? null,
+      transcriptionModel: answer.json.transcriptionModel ?? null,
       silenceMs: answer.json.silenceMs ?? null,
       vadThreshold: answer.json.vadThreshold ?? null,
       secret: answer.json.secret ?? null,

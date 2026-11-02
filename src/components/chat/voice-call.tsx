@@ -237,7 +237,7 @@ function useVoiceCall(bindings: VoiceCallBindings) {
   const handledCalls = useRef(new Set<string>());
   /** The task this call handed over last, so that the rest of the same request is not handed over again as a new one. */
   const lastDelegate = useRef<LastDelegate | null>(null);
-  const protocolRef = useRef<VoiceProtocol>("xai");
+  const protocolRef = useRef<VoiceProtocol>("flat");
   const thresholdRef = useRef(0.5);
   /** The answer being played; audio of any other is dropped. Null after the person cut in, until the next answer starts. */
   const currentResponse = useRef<string | null>(null);
@@ -396,7 +396,7 @@ function useVoiceCall(bindings: VoiceCallBindings) {
           if (summary.current.responseId && event.response_id === summary.current.responseId && typeof event.transcript === "string" && event.transcript.length > summary.current.text.length) summary.current.text = event.transcript;
           break;
         }
-        // Yandex closes the answer with an empty transcript (its words came as text deltas): an empty one replaces nothing.
+        // Some providers close the answer with an empty transcript (its words came as text deltas): an empty one replaces nothing.
         if (typeof event.transcript === "string" && event.transcript.trim()) upsertLine(String(event.item_id || event.response_id || "agent"), "agent", event.transcript, "replace", true);
         break;
       }
@@ -589,7 +589,7 @@ function useVoiceCall(bindings: VoiceCallBindings) {
       const realtimeUrl = String(answer.realtimeUrl || "");
       // Through the deployment (the URL carries a one-use token), or straight to the provider with a secret.
       const relayed = answer.mode === "relay";
-      const protocol: VoiceProtocol = answer.protocol === "openai-ga" ? "openai-ga" : "xai";
+      const protocol: VoiceProtocol = answer.protocol === "openai-ga" ? "openai-ga" : "flat";
       const chosen = storedPace();
       const silenceMs = chosen ? PACE_MS[chosen] : Math.min(10_000, Math.max(200, Number(answer.silenceMs) || PACE_MS.fast));
       protocolRef.current = protocol;
@@ -655,7 +655,9 @@ function useVoiceCall(bindings: VoiceCallBindings) {
         send({ type: "input_audio_buffer.append", audio: floatToPcm16Base64(resample(joined, ctx.sampleRate)) });
       };
 
-      const socket = relayed ? new WebSocket(realtimeUrl) : new WebSocket(realtimeUrl, [`xai-client-secret.${secret}`]);
+      // A direct connection carries its secret the way the provider asks, which the deployment names.
+      const subprotocolPrefix = typeof answer.subprotocolPrefix === "string" ? answer.subprotocolPrefix : "";
+      const socket = relayed || !subprotocolPrefix ? new WebSocket(realtimeUrl) : new WebSocket(realtimeUrl, [`${subprotocolPrefix}${secret}`]);
       ws.current = socket;
       call.current = { id: callId, startedAt: Date.now(), beat: null, tick: null, delegated: [] };
       socket.onopen = () => {
@@ -663,10 +665,11 @@ function useVoiceCall(bindings: VoiceCallBindings) {
         const b = bindingsRef.current;
         send(sessionUpdate({
           protocol,
-          voice: typeof answer.voice === "string" && answer.voice ? answer.voice : "eve",
+          voice: typeof answer.voice === "string" ? answer.voice : "",
           instructions: buildVoiceInstructions({ locale, projectName: b.projectName, recent: recentForVoice(b.recent()) }),
           silenceMs,
           threshold: vadThreshold,
+          transcriptionModel: typeof answer.transcriptionModel === "string" ? answer.transcriptionModel : null,
         }));
         // The agent speaks first, as somebody who picked up the phone does.
         send({ type: "response.create" });
