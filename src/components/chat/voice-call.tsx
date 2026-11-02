@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import { AudioLines, Captions, Loader2, Mic, MicOff, PhoneOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n/provider";
@@ -408,7 +409,9 @@ function useVoiceCall(bindings: VoiceCallBindings) {
             resolve(summary.current?.text ?? "");
           },
         };
-        send({ type: "response.create", response: { instructions: buildSummaryInstructions() } });
+        // As a message, not a per-response instruction: the voice model ignored the latter.
+        send({ type: "conversation.item.create", item: { type: "message", role: "user", content: [{ type: "input_text", text: `[Call ended - not from the person] ${buildSummaryInstructions()}` }] } });
+        send({ type: "response.create" });
       });
     }
     await finish(snapshot, summaryText.trim());
@@ -655,6 +658,9 @@ export function VoiceCallControl({ bindings, disabled }: { bindings: VoiceCallBi
       >
         <AudioLines className="size-5" strokeWidth={1.75} />
       </Button>
+      {typeof document !== "undefined"
+        ? createPortal(
+            <>
       {state.error && !inCall ? (
         <div role="alert" className="fixed inset-x-0 top-16 z-50 mx-auto w-[min(420px,calc(100vw-32px))] rounded-xl border bg-popover px-4 py-3 text-sm shadow-lg">
           <p>{state.error}</p>
@@ -724,6 +730,11 @@ export function VoiceCallControl({ bindings, disabled }: { bindings: VoiceCallBi
           </div>
         </div>
       ) : null}
+            </>,
+            // Above the page, not inside the composer: a parent there makes its own frame for fixed elements.
+            document.body
+          )
+        : null}
     </>
   );
 }
