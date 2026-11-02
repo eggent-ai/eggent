@@ -503,7 +503,9 @@ function useVoiceCall(bindings: VoiceCallBindings) {
           // Not JSON: nothing to act on.
         }
       };
-      socket.onclose = () => {
+      socket.onclose = (event) => {
+        // Said in the console: a drop the person did not ask for is what to look into.
+        if (call.current) console.warn(`[voice] the voice model closed the call: ${event.code} ${event.reason || ""}`.trim());
         if (call.current) void hangUp("voice.error.dropped");
       };
       socket.onerror = () => {
