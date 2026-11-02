@@ -23,7 +23,7 @@ export const VOICE_TOOLS: VoiceToolDefinition[] = [
     description:
       "Hand a task to the agent, who works in the open chat with every tool: files, the web, documents, letters, schedules. " +
       "Use it at once for anything that needs doing rather than saying - connecting a service or app, comparing, finding, writing, posting, sending, documents, schedules. " +
-      "If the agent is already working, the task is added to what it is doing. " +
+      "If the agent is already working, the task is added to what it is doing; if the agent asked the person a question on screen, this is the answer. " +
       "Write the task in the person's own words and language, complete enough to act on without the call.",
     parameters: {
       type: "object",
@@ -129,6 +129,29 @@ export interface TurnStatus {
   done: string[];
   /** The end of the newest thing the agent wrote. */
   latestText: string;
+  /** A question the agent put on screen and waits on, with its choices. */
+  question?: { text: string; options?: string[] };
+}
+
+/** A question card as the chat holds it, reduced to what can be said aloud. */
+export interface VoiceQuestion {
+  id: string;
+  title: string;
+  message?: string;
+  options?: string[];
+}
+
+export function questionForVoice(question: VoiceQuestion | null | undefined): TurnStatus["question"] {
+  if (!question) return undefined;
+  const text = [question.title, question.message].filter((part) => part && part.trim()).join(" - ").replace(/\s+/g, " ").trim().slice(0, 600);
+  const options = (question.options ?? []).filter((option) => typeof option === "string" && option.trim()).slice(0, 8);
+  return { text, ...(options.length ? { options } : {}) };
+}
+
+/** What the voice model is told when a question appears on screen. */
+export function questionUpdate(question: VoiceQuestion): string {
+  const said = questionForVoice(question)!;
+  return `[Agent update] The agent asks the person on screen: ${said.text}${said.options ? ` Choices: ${said.options.join("; ")}.` : ""} Ask the person in a short sentence and pass their answer with \`delegate\`.`;
 }
 
 function toolNameOf(part: TurnPart): string | null {
@@ -138,9 +161,10 @@ function toolNameOf(part: TurnPart): string | null {
 }
 
 /** What the newest answer shows: the running tools, the finished ones, the latest words. */
-export function describeTurn(messages: TurnMessage[], running: boolean): TurnStatus {
+export function describeTurn(messages: TurnMessage[], running: boolean, question?: VoiceQuestion | null): TurnStatus {
   const last = [...messages].reverse().find((message) => message.role === "assistant");
-  const status: TurnStatus = { running, doing: [], done: [], latestText: "" };
+  const asked = questionForVoice(question);
+  const status: TurnStatus = { running, doing: [], done: [], latestText: "", ...(asked ? { question: asked } : {}) };
   if (!last) return status;
   let text = "";
   for (const part of last.parts) {
@@ -171,9 +195,11 @@ export function voiceContextOf(messages: TurnMessage[]): VoiceContextMessage[] {
 
 // --- running a tool call ---------------------------------------------------
 
+export type DelegateResult = "started" | "added" | "answered";
+
 export interface VoiceToolDeps {
-  /** Starts a turn with this text, or adds it to the turn already working. Answers which. */
-  delegate(task: string): "started" | "added" | Promise<"started" | "added">;
+  /** Starts a turn with this text, adds it to the turn already working, or answers the question it waits on. Answers which. */
+  delegate(task: string): DelegateResult | Promise<DelegateResult>;
   /** What the turn in the open chat is doing. */
   turn(): TurnStatus;
 }
@@ -202,9 +228,11 @@ export async function runVoiceTool(name: string, rawArguments: string, deps: Voi
       return {
         ok: true,
         how,
-        note: how === "added"
-          ? "Added to what the agent is already doing. Tell the person in a few words."
-          : "The agent has started on it in the chat. Tell the person in a few words; do not invent the result.",
+        note: how === "answered"
+          ? "This answered the question the agent was waiting on; it carries on. Tell the person in a few words."
+          : how === "added"
+            ? "Added to what the agent is already doing. Tell the person in a few words."
+            : "The agent has started on it in the chat. Tell the person in a few words; do not invent the result.",
       };
     } catch (error) {
       return { ok: false, error: error instanceof Error ? error.message : "The task could not be handed over." };

@@ -1187,18 +1187,22 @@ export function ChatPanel({ initialQuickSkills = [], onboardingPending = false, 
   onSubmitRef.current = onSubmit;
   const isLoadingRef = useRef(isLoading);
   isLoadingRef.current = isLoading;
+  const pendingInteractionRef = useRef(pendingInteraction);
+  pendingInteractionRef.current = pendingInteraction;
   const voiceBindings = useMemo<VoiceCallBindings>(() => ({
     chatId: activeChatId || internalChatId,
     projectId: activeProjectId,
     recent: () => voiceContextOf(messagesRef.current as unknown as TurnMessage[]),
     delegate: (task: string) => {
-      const how = isLoadingRef.current ? "added" : "started";
+      // The same path as typing: an answer to the card on screen, a message for the working turn, or a turn of its own.
+      const how = pendingInteractionRef.current ? "answered" : isLoadingRef.current ? "added" : "started";
       onSubmitRef.current(task);
       return how;
     },
-    turn: () => describeTurn(messagesRef.current as unknown as TurnMessage[], isLoadingRef.current),
+    turn: () => describeTurn(messagesRef.current as unknown as TurnMessage[], isLoadingRef.current, pendingInteractionRef.current),
     running: isLoading,
-  }), [activeChatId, internalChatId, activeProjectId, isLoading]);
+    question: pendingInteraction,
+  }), [activeChatId, internalChatId, activeProjectId, isLoading, pendingInteraction]);
 
   // The turn is over. What it read is in the stored chat now, where it was read,
   // and what it did not is there marked; the history reload shows both. A

@@ -17,6 +17,7 @@ import {
   cleanTranscript,
   describeTurn,
   formatCallLength,
+  questionUpdate,
   recentForVoice,
   runVoiceTool,
   voiceContextOf,
@@ -122,6 +123,18 @@ await check("a long answer is told by its end, where the latest words are", () =
   assert.ok(status.latestText.endsWith("THE END"));
 });
 
+await check("a question the agent waits on is part of the status, told aloud, and a spoken answer reaches it", async () => {
+  const question = { id: "q1", title: "Which Google services?", message: "Pick one or several", options: ["Gmail", "Calendar", "", "Drive"] };
+  const status = describeTurn(working, true, question);
+  assert.deepEqual(status.question, { text: "Which Google services? - Pick one or several", options: ["Gmail", "Calendar", "Drive"] });
+  assert.match(questionUpdate(question), /^\[Agent update\] The agent asks the person on screen: Which Google services\?.*Choices: Gmail; Calendar; Drive\..*`delegate`/);
+  const sent: string[] = [];
+  const out = await runVoiceTool("delegate", JSON.stringify({ task: "Gmail and Calendar" }), { delegate: (task) => { sent.push(task); return "answered"; }, turn: () => status });
+  assert.equal(out.how, "answered");
+  assert.match(String(out.note), /answered the question/);
+  assert.deepEqual(sent, ["Gmail and Calendar"]);
+  assert.equal(describeTurn(working, true, null).question, undefined);
+});
 await check("the instructions carry the newest messages that fit, oldest first, and say to delegate the work", () => {
   const messages = voiceContextOf([
     { role: "user", parts: [{ type: "text", text: "first" }] },

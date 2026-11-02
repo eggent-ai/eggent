@@ -12,7 +12,10 @@ import {
   recentForVoice,
   runVoiceTool,
   VOICE_TOOLS,
+  questionUpdate,
+  type DelegateResult,
   type TurnStatus,
+  type VoiceQuestion,
   type VoiceContextMessage,
   type VoiceTranscriptLine,
 } from "@/lib/voice/tools";
@@ -35,10 +38,12 @@ export interface VoiceCallBindings {
   projectId: string | null;
   projectName?: string | null;
   recent(): VoiceContextMessage[];
-  delegate(task: string): "started" | "added";
+  delegate(task: string): DelegateResult;
   turn(): TurnStatus;
   /** Whether the agent is working in the chat now. */
   running: boolean;
+  /** The question the agent waits on, if any: the voice model is told when one appears. */
+  question: VoiceQuestion | null;
 }
 
 const RATE = 24000;
@@ -180,8 +185,11 @@ function useVoiceCall(bindings: VoiceCallBindings) {
   const speechStoppedAt = useRef<number | null>(null);
   const responding = useRef(false);
   const pendingUpdate = useRef<string | null>(null);
-  const summary = useRef<{ text: string; done: () => void } | null>(null);
+  /** The summary at the end: only the response asked for it counts, never one cancelled before it. */
+  const summary = useRef<{ text: string; responseId: string | null; done: () => void } | null>(null);
   const lineIds = useRef(new Map<string, string>());
+  const beatNow = useRef<() => void>(() => undefined);
+  const lastBeatAt = useRef(0);
   const linesRef = useRef<CallState["lines"]>([]);
   useEffect(() => { linesRef.current = state.lines; }, [state.lines]);
 
@@ -262,9 +270,12 @@ function useVoiceCall(bindings: VoiceCallBindings) {
         speechStoppedAt.current = performance.now();
         setState((current) => ({ ...current, floor: "thinking" }));
         break;
-      case "response.created":
+      case "response.created": {
         responding.current = true;
+        const id = (event.response as { id?: string } | undefined)?.id ?? null;
+        if (summary.current && summary.current.responseId === null && id) summary.current.responseId = id;
         break;
+      }
       case "response.output_audio.delta":
       case "response.audio.delta": {
         if (speechStoppedAt.current !== null) {
@@ -283,7 +294,7 @@ function useVoiceCall(bindings: VoiceCallBindings) {
       case "response.text.delta": {
         const delta = typeof event.delta === "string" ? event.delta : "";
         if (summary.current) {
-          summary.current.text += delta;
+          if (summary.current.responseId && event.response_id === summary.current.responseId) summary.current.text += delta;
           break;
         }
         upsertLine(String(event.item_id || event.response_id || "agent"), "agent", delta, "append", false);
@@ -292,7 +303,7 @@ function useVoiceCall(bindings: VoiceCallBindings) {
       case "response.output_audio_transcript.done":
       case "response.audio_transcript.done": {
         if (summary.current) {
-          if (typeof event.transcript === "string" && event.transcript.length > summary.current.text.length) summary.current.text = event.transcript;
+          if (summary.current.responseId && event.response_id === summary.current.responseId && typeof event.transcript === "string" && event.transcript.length > summary.current.text.length) summary.current.text = event.transcript;
           break;
         }
         if (typeof event.transcript === "string") upsertLine(String(event.item_id || event.response_id || "agent"), "agent", event.transcript, "replace", true);
@@ -322,16 +333,18 @@ function useVoiceCall(bindings: VoiceCallBindings) {
         send({ type: "response.create" });
         break;
       }
-      case "response.done":
+      case "response.done": {
         responding.current = false;
-        if (summary.current) summary.current.done();
+        const id = (event.response as { id?: string } | undefined)?.id ?? null;
+        if (summary.current?.responseId && id === summary.current.responseId) summary.current.done();
         setState((current) => (current.floor === "speaking" ? { ...current, floor: "listening" } : current));
         flushUpdate();
         break;
+      }
       case "error": {
         const detail = event.error as { message?: string } | undefined;
         console.warn("[voice] error from the voice model:", detail?.message || event);
-        if (summary.current) summary.current.done();
+        if (summary.current?.responseId) summary.current.done();
         break;
       }
     }
@@ -389,6 +402,7 @@ function useVoiceCall(bindings: VoiceCallBindings) {
         const timer = window.setTimeout(() => resolve(summary.current?.text ?? ""), 12_000);
         summary.current = {
           text: "",
+          responseId: null,
           done: () => {
             window.clearTimeout(timer);
             resolve(summary.current?.text ?? "");
@@ -441,6 +455,7 @@ function useVoiceCall(bindings: VoiceCallBindings) {
       let pendingLength = 0;
       capture.port.onmessage = (message: MessageEvent<Float32Array>) => {
         if (ws.current?.readyState !== WebSocket.OPEN) return;
+        beatNow.current();
         const chunk = muted.current ? new Float32Array(message.data.length) : message.data;
         pending.push(chunk);
         pendingLength += chunk.length;
@@ -493,16 +508,23 @@ function useVoiceCall(bindings: VoiceCallBindings) {
       };
 
       const beatSeconds = Math.max(5, Number(answer.beatSeconds) || 10);
-      call.current.beat = window.setInterval(() => {
+      // Timers of a page in the background can be held back for a minute or
+      // more, which the deployment would read as a call that has gone. The
+      // microphone's frames come from the audio thread whatever the page is
+      // doing, so a beat is also sent from there when one is due.
+      beatNow.current = () => {
         const c = call.current;
-        if (!c) return;
+        if (!c || Date.now() - lastBeatAt.current < beatSeconds * 1000 - 500) return;
+        lastBeatAt.current = Date.now();
         void fetch(`/api/voice/call/${c.id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
           .then((r) => r.json())
           .then((beat: { continue?: boolean; reason?: string }) => {
-            if (beat.continue === false && call.current) void hangUp(beat.reason === "time up" ? "voice.error.timeUp" : "voice.error.ended");
+            if (beat.continue === false && call.current) void hangUp(beat.reason === "time up" ? "voice.error.timeUp" : beat.reason === "replaced" ? "voice.error.ended" : "voice.error.dropped");
           })
           .catch(() => undefined);
-      }, beatSeconds * 1000);
+      };
+      lastBeatAt.current = Date.now();
+      call.current.beat = window.setInterval(() => beatNow.current(), beatSeconds * 1000);
       call.current.tick = window.setInterval(() => {
         const c = call.current;
         if (c) setState((current) => ({ ...current, seconds: Math.floor((Date.now() - c.startedAt) / 1000) }));
@@ -527,6 +549,16 @@ function useVoiceCall(bindings: VoiceCallBindings) {
     pendingUpdate.current = `[Agent update] The agent has finished working. Its latest message in the chat: ${turn.latestText || "(no text)"}`;
     flushUpdate();
   }, [bindings.running, flushUpdate, state.phase]);
+
+  // The agent asked the person something on screen: the voice model asks it aloud.
+  const toldQuestion = useRef<string | null>(null);
+  useEffect(() => {
+    const question = bindings.question;
+    if (!question || state.phase !== "live" || toldQuestion.current === question.id) return;
+    toldQuestion.current = question.id;
+    pendingUpdate.current = questionUpdate(question);
+    flushUpdate();
+  }, [bindings.question, flushUpdate, state.phase]);
 
   const toggleMute = useCallback(() => {
     muted.current = !muted.current;
@@ -624,7 +656,7 @@ export function VoiceCallControl({ bindings, disabled }: { bindings: VoiceCallBi
         <AudioLines className="size-5" strokeWidth={1.75} />
       </Button>
       {state.error && !inCall ? (
-        <div role="alert" className="fixed inset-x-0 bottom-32 z-50 mx-auto w-[min(420px,calc(100vw-32px))] rounded-xl border bg-popover px-4 py-3 text-sm shadow-lg">
+        <div role="alert" className="fixed inset-x-0 top-16 z-50 mx-auto w-[min(420px,calc(100vw-32px))] rounded-xl border bg-popover px-4 py-3 text-sm shadow-lg">
           <p>{state.error}</p>
           <button type="button" onClick={dismissError} className="mt-1 text-xs text-muted-foreground underline underline-offset-2">{t("voice.dismiss")}</button>
         </div>
@@ -634,7 +666,7 @@ export function VoiceCallControl({ bindings, disabled }: { bindings: VoiceCallBi
           role="dialog"
           aria-label={t("voice.panel")}
           data-voice-call-panel
-          className="fixed inset-x-0 bottom-32 z-50 mx-auto flex w-[min(420px,calc(100vw-32px))] flex-col gap-3 rounded-2xl border bg-popover p-4 text-popover-foreground shadow-xl"
+          className="fixed inset-x-0 top-16 z-50 mx-auto flex w-[min(420px,calc(100vw-32px))] flex-col gap-3 rounded-2xl border bg-popover p-4 text-popover-foreground shadow-xl"
         >
           <div className="flex items-center justify-between gap-3 text-sm">
             <span className="flex items-center gap-2" aria-live="polite">
