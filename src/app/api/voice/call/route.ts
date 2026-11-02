@@ -8,7 +8,7 @@ export const dynamic = "force-dynamic";
 const NO_STORE = { "Cache-Control": "no-store" };
 
 /**
- * GET /api/voice/call - whether calls are offered here and the minutes left.
+ * GET /api/voice/call - whether calls are offered here, what a minute costs and the balance left.
  * POST /api/voice/call - starts a call: the deployment answers with a
  * short-lived secret for the voice model, which only this person's page gets.
  * Both behind the same checks as the terminal: a session of this site, and
@@ -20,7 +20,10 @@ export async function GET(req: NextRequest) {
   if (!voiceAvailable()) return Response.json({ available: false }, { headers: NO_STORE });
   const answer = await voiceRequest("GET", "/call").catch(() => null);
   if (!answer?.ok) return Response.json({ available: false }, { headers: NO_STORE });
-  return Response.json({ available: Boolean(answer.json.available), minutes: answer.json.minutes ?? null }, { headers: NO_STORE });
+  return Response.json(
+    { available: Boolean(answer.json.available), pricePerMinute: answer.json.pricePerMinute ?? null, balanceLeft: answer.json.balanceLeft ?? null },
+    { headers: NO_STORE }
+  );
 }
 
 export async function POST(req: NextRequest) {
@@ -32,7 +35,7 @@ export async function POST(req: NextRequest) {
   if (!answer) return Response.json({ error: "The voice service could not be reached." }, { status: 502, headers: NO_STORE });
   if (!answer.ok) {
     return Response.json(
-      { error: String(answer.json.error || `status ${answer.status}`), code: answer.json.code ?? null, minutes: answer.json.minutes ?? null },
+      { error: String(answer.json.error || `status ${answer.status}`), code: answer.json.code ?? null, pricePerMinute: answer.json.pricePerMinute ?? null, balanceLeft: answer.json.balanceLeft ?? null },
       { status: answer.status, headers: NO_STORE }
     );
   }
@@ -46,7 +49,8 @@ export async function POST(req: NextRequest) {
       voice: answer.json.voice,
       maxSeconds: answer.json.maxSeconds,
       beatSeconds: answer.json.beatSeconds,
-      minutes: answer.json.minutes,
+      pricePerMinute: answer.json.pricePerMinute ?? null,
+      balanceLeft: answer.json.balanceLeft ?? null,
     },
     { status: 201, headers: NO_STORE }
   );

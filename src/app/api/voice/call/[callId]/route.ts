@@ -20,7 +20,7 @@ export async function POST(req: NextRequest, { params }: { params: Promise<{ cal
   const answer = await voiceRequest("POST", `/call/${callId}/beat`).catch(() => null);
   if (!answer) return Response.json({ continue: true, unreachable: true });
   return Response.json(
-    { continue: Boolean(answer.json.continue), leftSeconds: answer.json.leftSeconds ?? null, reason: answer.json.reason ?? null },
+    { continue: Boolean(answer.json.continue), leftSeconds: answer.json.leftSeconds ?? null, reason: answer.json.reason ?? null, balanceLeft: answer.json.balanceLeft ?? null },
     { headers: { "Cache-Control": "no-store" } }
   );
 }

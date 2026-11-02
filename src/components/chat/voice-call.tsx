@@ -14,6 +14,9 @@ import {
   runVoiceTool,
   VOICE_TOOLS,
   questionUpdate,
+  endingNote,
+  IDLE_WARNING_NOTE,
+  watchCall,
   type DelegateResult,
   type TurnStatus,
   type VoiceQuestion,
@@ -147,9 +150,12 @@ interface CallState {
   muted: boolean;
   error: string | null;
   lines: Array<VoiceTranscriptLine & { id: string; final: boolean }>;
+  /** What a minute costs and what is left of the balance, as the deployment wrote them. */
+  price: string | null;
+  balance: string | null;
 }
 
-const INITIAL: CallState = { phase: "idle", floor: "listening", seconds: 0, muted: false, error: null, lines: [] };
+const INITIAL: CallState = { phase: "idle", floor: "listening", seconds: 0, muted: false, error: null, lines: [], price: null, balance: null };
 
 /** For checking a call by hand: the measured waits before the first word of each answer. */
 interface VoiceStats {
@@ -190,6 +196,12 @@ function useVoiceCall(bindings: VoiceCallBindings) {
   const summary = useRef<{ text: string; responseId: string | null; done: () => void } | null>(null);
   const lineIds = useRef(new Map<string, string>());
   const beatNow = useRef<() => void>(() => undefined);
+  const watchNow = useRef<() => void>(() => undefined);
+  const lastPersonAt = useRef(0);
+  const lastAgentAt = useRef(0);
+  const mutedSince = useRef<number | null>(null);
+  const warnedAt = useRef<number | null>(null);
+  const ending = useRef(false);
   const lastBeatAt = useRef(0);
   const linesRef = useRef<CallState["lines"]>([]);
   useEffect(() => { linesRef.current = state.lines; }, [state.lines]);
@@ -262,12 +274,15 @@ function useVoiceCall(bindings: VoiceCallBindings) {
     counts[type] = (counts[type] || 0) + 1;
     switch (type) {
       case "input_audio_buffer.speech_started":
+        lastPersonAt.current = Date.now();
+        warnedAt.current = null;
         // The person talks over the answer: it stops here at once.
         stopPlayback();
         speechStoppedAt.current = null;
         setState((current) => ({ ...current, floor: "listening" }));
         break;
       case "input_audio_buffer.speech_stopped":
+        lastPersonAt.current = Date.now();
         speechStoppedAt.current = performance.now();
         setState((current) => ({ ...current, floor: "thinking" }));
         break;
@@ -285,6 +300,7 @@ function useVoiceCall(bindings: VoiceCallBindings) {
           console.info(`[voice] first audio ${waited} ms after the person stopped`);
           speechStoppedAt.current = null;
         }
+        lastAgentAt.current = Date.now();
         if (typeof event.delta === "string") play(event.delta);
         if (!ignoreAudio.current) setState((current) => (current.floor === "speaking" ? current : { ...current, floor: "speaking" }));
         break;
@@ -390,6 +406,8 @@ function useVoiceCall(bindings: VoiceCallBindings) {
   }, [cleanup]);
 
   const hangUp = useCallback(async (reason?: MessageKey) => {
+    if (!call.current || ending.current) return;
+    ending.current = true;
     const snapshot = linesRef.current;
     setState((current) => ({ ...current, phase: "ending", error: reason ? t(reason) : current.error }));
     // A short summary for the chat, written by the voice model from what was
@@ -418,6 +436,37 @@ function useVoiceCall(bindings: VoiceCallBindings) {
     setState((current) => ({ ...INITIAL, error: current.error }));
   }, [finish, send, stopPlayback, t]);
 
+  /**
+   * The call ends for a reason the person did not choose (money, time): the
+   * voice says so first, in their language, and the line closes once it has
+   * been heard - at most ten seconds later.
+   */
+  const sayThenHangUp = useCallback(async (note: string, reason: MessageKey) => {
+    if (!call.current || ending.current || ws.current?.readyState !== WebSocket.OPEN) {
+      await hangUp(reason);
+      return;
+    }
+    if (responding.current) send({ type: "response.cancel" });
+    stopPlayback();
+    await new Promise<void>((resolve) => {
+      const timer = window.setTimeout(resolve, 10_000);
+      const startedAt = Date.now();
+      const poll = window.setInterval(() => {
+        const a = audio.current;
+        const playing = a ? a.nextTime - a.ctx.currentTime > 0.05 : false;
+        // Done once the answer has come and been played out.
+        if (Date.now() - startedAt > 800 && !responding.current && !playing) {
+          window.clearInterval(poll);
+          window.clearTimeout(timer);
+          resolve();
+        }
+      }, 200);
+      send({ type: "conversation.item.create", item: { type: "message", role: "user", content: [{ type: "input_text", text: note }] } });
+      send({ type: "response.create" });
+    });
+    await hangUp(reason);
+  }, [hangUp, send, stopPlayback]);
+
   const start = useCallback(async () => {
     if (call.current || state.phase !== "idle") return;
     ignoreAudio.current = false;
@@ -432,11 +481,21 @@ function useVoiceCall(bindings: VoiceCallBindings) {
       stream = await navigator.mediaDevices.getUserMedia({ audio: { echoCancellation: true, noiseSuppression: true, autoGainControl: true } });
       const response = await fetch("/api/voice/call", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" });
       const answer = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-      if (!response.ok) throw new Error(String(answer.error || t("voice.error.failed")));
+      if (!response.ok) throw new Error(answer.code === "balance" ? t("voice.error.balance") : String(answer.error || t("voice.error.failed")));
       const callId = String(answer.callId || "");
       const secret = String(answer.secret || "");
       const realtimeUrl = String(answer.realtimeUrl || "");
       if (!callId || !secret || !realtimeUrl) throw new Error(t("voice.error.failed"));
+      setState((current) => ({
+        ...current,
+        price: typeof answer.pricePerMinute === "string" ? answer.pricePerMinute : null,
+        balance: typeof answer.balanceLeft === "string" ? answer.balanceLeft : null,
+      }));
+      lastPersonAt.current = Date.now();
+      lastAgentAt.current = Date.now();
+      mutedSince.current = null;
+      warnedAt.current = null;
+      ending.current = false;
 
       const ctx = new AudioContext();
       await ctx.audioWorklet.addModule(URL.createObjectURL(new Blob([CAPTURE_WORKLET], { type: "application/javascript" })));
@@ -459,6 +518,7 @@ function useVoiceCall(bindings: VoiceCallBindings) {
       capture.port.onmessage = (message: MessageEvent<Float32Array>) => {
         if (ws.current?.readyState !== WebSocket.OPEN) return;
         beatNow.current();
+        watchNow.current();
         const chunk = muted.current ? new Float32Array(message.data.length) : message.data;
         pending.push(chunk);
         pendingLength += chunk.length;
@@ -523,16 +583,36 @@ function useVoiceCall(bindings: VoiceCallBindings) {
         lastBeatAt.current = Date.now();
         void fetch(`/api/voice/call/${c.id}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
           .then((r) => r.json())
-          .then((beat: { continue?: boolean; reason?: string }) => {
-            if (beat.continue === false && call.current) void hangUp(beat.reason === "time up" ? "voice.error.timeUp" : beat.reason === "replaced" ? "voice.error.ended" : "voice.error.dropped");
+          .then((beat: { continue?: boolean; reason?: string; balanceLeft?: string | null }) => {
+            if (typeof beat.balanceLeft === "string") setState((current) => ({ ...current, balance: beat.balanceLeft as string }));
+            if (beat.continue !== false || !call.current) return;
+            if (beat.reason === "balance") void sayThenHangUp(endingNote("balance"), "voice.error.balance");
+            else if (beat.reason === "time up") void sayThenHangUp(endingNote("time"), "voice.error.timeUp");
+            else void hangUp(beat.reason === "replaced" ? "voice.error.ended" : "voice.error.dropped");
           })
           .catch(() => undefined);
+      };
+      // Nobody on the line: checked from the timer and from the microphone's
+      // frames, which keep coming in a background tab.
+      watchNow.current = () => {
+        if (!call.current || ending.current) return;
+        const verdict = watchCall({ now: Date.now(), lastPersonAt: lastPersonAt.current, lastAgentAt: lastAgentAt.current, mutedSince: mutedSince.current, warnedAt: warnedAt.current });
+        if (verdict === "warn") {
+          warnedAt.current = Date.now();
+          pendingUpdate.current = IDLE_WARNING_NOTE;
+          flushUpdate();
+        } else if (verdict === "end-idle") {
+          void hangUp("voice.error.idle");
+        } else if (verdict === "end-muted") {
+          void hangUp("voice.error.mutedTooLong");
+        }
       };
       lastBeatAt.current = Date.now();
       call.current.beat = window.setInterval(() => beatNow.current(), beatSeconds * 1000);
       call.current.tick = window.setInterval(() => {
         const c = call.current;
         if (c) setState((current) => ({ ...current, seconds: Math.floor((Date.now() - c.startedAt) / 1000) }));
+        watchNow.current();
       }, 500);
     } catch (error) {
       if (stream && !audio.current) for (const track of stream.getTracks()) track.stop();
@@ -541,7 +621,7 @@ function useVoiceCall(bindings: VoiceCallBindings) {
       cleanup();
       setState({ ...INITIAL, error: message });
     }
-  }, [cleanup, finish, handleEvent, hangUp, locale, send, state.phase, t]);
+  }, [cleanup, finish, flushUpdate, handleEvent, hangUp, locale, send, sayThenHangUp, state.phase, t]);
 
   // The agent finished what the call handed it: the voice model is told, so it
   // can say so without being asked.
@@ -567,13 +647,37 @@ function useVoiceCall(bindings: VoiceCallBindings) {
 
   const toggleMute = useCallback(() => {
     muted.current = !muted.current;
+    mutedSince.current = muted.current ? Date.now() : null;
+    // Back from mute: the person is here, the silence starts again.
+    if (!muted.current) {
+      lastPersonAt.current = Date.now();
+      warnedAt.current = null;
+    }
     setState((current) => ({ ...current, muted: muted.current }));
   }, []);
 
-  // Leaving the page ends the call; the deployment stops counting at the last beat anyway.
-  useEffect(() => () => {
-    if (call.current) void finish([], "");
-  }, [finish]);
+  // Leaving the page ends the call at once, so nothing is paid for a tab that
+  // has gone; the deployment would stop at the last beat anyway, 45 s later.
+  useEffect(() => {
+    const leave = () => {
+      const c = call.current;
+      if (!c) return;
+      call.current = null;
+      const transcript = linesRef.current.filter((line) => line.text.trim()).map((line) => ({ role: line.role, text: line.text.trim() }));
+      void fetch(`/api/voice/call/${c.id}/end`, {
+        method: "POST",
+        keepalive: true,
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chatId: bindingsRef.current.chatId, projectId: bindingsRef.current.projectId, seconds: (Date.now() - c.startedAt) / 1000, transcript: transcript.slice(-80), summary: "", delegated: c.delegated }),
+      }).catch(() => undefined);
+      cleanup();
+    };
+    window.addEventListener("pagehide", leave);
+    return () => {
+      window.removeEventListener("pagehide", leave);
+      if (call.current) void finish([], "");
+    };
+  }, [cleanup, finish]);
 
   const dismissError = useCallback(() => setState((current) => ({ ...current, error: null })), []);
 
@@ -710,7 +814,11 @@ export function VoiceCallControl({ bindings, disabled }: { bindings: VoiceCallBi
               </span>
               <span className="flex min-w-0 flex-1 flex-col">
                 <span className="truncate text-sm/5 font-medium" aria-live="polite">{status}</span>
-                <span className="text-xs/4 tabular-nums text-muted-foreground">{t("voice.card.title")} · {formatCallLength(state.seconds)}</span>
+                <span className="truncate text-xs/4 tabular-nums text-muted-foreground">
+                  {formatCallLength(state.seconds)}
+                  {state.price ? ` · ${t("voice.pricePerMinute", { price: state.price })}` : ""}
+                  {state.balance && expanded ? ` · ${t("voice.balanceLeft", { balance: state.balance })}` : ""}
+                </span>
               </span>
               {expanded ? null : <Waveform audio={audio} active={state.phase === "live"} className="h-6 w-14 shrink-0" />}
               {expanded ? <ChevronUp className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" /> : <ChevronDown className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />}

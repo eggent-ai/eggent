@@ -245,6 +245,51 @@ export async function runVoiceTool(name: string, rawArguments: string, deps: Voi
   return { ok: false, error: `There is no tool called ${name}.` };
 }
 
+// --- nobody on the line ----------------------------------------------------
+
+/**
+ * A call costs money for every minute it is open, whoever is on it, so a call
+ * nobody is in ends: 45 seconds with nothing said by either side brings a
+ * spoken warning, and if the person still says nothing for 15 seconds after
+ * it, the call ends - about a minute in all. Two minutes with the microphone
+ * muted end it too; a muted microphone is silence on purpose, so only that
+ * rule applies while it is muted.
+ */
+export const IDLE_WARN_MS = 45_000;
+export const IDLE_GRACE_AFTER_WARNING_MS = 15_000;
+export const MUTED_END_MS = 120_000;
+
+export interface CallWatchInput {
+  now: number;
+  lastPersonAt: number;
+  lastAgentAt: number;
+  /** When the microphone was muted, if it is. */
+  mutedSince: number | null;
+  /** When the warning was given, if it has been since the person last spoke. */
+  warnedAt: number | null;
+}
+
+export type CallWatch = "ok" | "warn" | "end-idle" | "end-muted";
+
+export function watchCall(input: CallWatchInput): CallWatch {
+  if (input.mutedSince !== null) return input.now - input.mutedSince >= MUTED_END_MS ? "end-muted" : "ok";
+  if (input.warnedAt !== null) {
+    if (input.lastPersonAt > input.warnedAt) return "ok";
+    return input.now - input.warnedAt >= IDLE_GRACE_AFTER_WARNING_MS ? "end-idle" : "ok";
+  }
+  return input.now - Math.max(input.lastPersonAt, input.lastAgentAt) >= IDLE_WARN_MS ? "warn" : "ok";
+}
+
+/** What the voice model is asked to say when the line has gone quiet. */
+export const IDLE_WARNING_NOTE =
+  "[Call note - not from the person] The person has said nothing for a while. In one short sentence, in their language, ask whether they are still there and say you will hang up in a few seconds if not; the agent's results will stay in the chat.";
+
+/** What the voice model is asked to say before the call ends for money or time. */
+export function endingNote(reason: "balance" | "time"): string {
+  const why = reason === "balance" ? "the balance for calls has run out" : "the call has reached its time limit";
+  return `[Call note - not from the person] The call is ending now because ${why}. Say so in one short sentence in the person's language, mention that the agent's work stays in the chat, and say goodbye.`;
+}
+
 // --- the call's record -----------------------------------------------------
 
 export interface VoiceTranscriptLine {

@@ -18,6 +18,11 @@ import {
   describeTurn,
   formatCallLength,
   questionUpdate,
+  endingNote,
+  watchCall,
+  IDLE_WARN_MS,
+  IDLE_GRACE_AFTER_WARNING_MS,
+  MUTED_END_MS,
   recentForVoice,
   runVoiceTool,
   voiceContextOf,
@@ -157,6 +162,30 @@ await check("the instructions carry the newest messages that fit, oldest first, 
   assert.ok(kept.length < 40 && kept.length > 5);
   assert.ok(kept.at(-1)!.text.startsWith("39 "));
 });
+await check("a quiet line is warned at 45 s and ended 15 s after the warning unless the person speaks", () => {
+  const t0 = 1_000_000;
+  const base = { lastPersonAt: t0, lastAgentAt: t0, mutedSince: null, warnedAt: null };
+  assert.equal(watchCall({ ...base, now: t0 + IDLE_WARN_MS - 1 }), "ok");
+  assert.equal(watchCall({ ...base, now: t0 + IDLE_WARN_MS }), "warn");
+  const warned = { ...base, warnedAt: t0 + IDLE_WARN_MS };
+  // the voice speaking the warning does not buy more time
+  assert.equal(watchCall({ ...warned, lastAgentAt: t0 + IDLE_WARN_MS + 4000, now: t0 + IDLE_WARN_MS + IDLE_GRACE_AFTER_WARNING_MS - 1 }), "ok");
+  assert.equal(watchCall({ ...warned, lastAgentAt: t0 + IDLE_WARN_MS + 4000, now: t0 + IDLE_WARN_MS + IDLE_GRACE_AFTER_WARNING_MS }), "end-idle");
+  // the person answering the warning keeps the call
+  assert.equal(watchCall({ ...warned, lastPersonAt: t0 + IDLE_WARN_MS + 3000, now: t0 + IDLE_WARN_MS + 60_000 }), "ok");
+  // the agent talking counts as a line in use
+  assert.equal(watchCall({ ...base, lastAgentAt: t0 + 30_000, now: t0 + IDLE_WARN_MS + 1000 }), "ok");
+});
+await check("a muted microphone is not idle, but two minutes of it end the call", () => {
+  const t0 = 1_000_000;
+  const muted = { lastPersonAt: t0, lastAgentAt: t0, mutedSince: t0, warnedAt: null };
+  assert.equal(watchCall({ ...muted, now: t0 + 90_000 }), "ok");
+  assert.equal(watchCall({ ...muted, now: t0 + MUTED_END_MS }), "end-muted");
+});
+await check("the voice is told why the call ends, in words for the person, not the person's own", () => {
+  assert.match(endingNote("balance"), /^\[Call note - not from the person\].*balance.*goodbye/);
+  assert.match(endingNote("time"), /time limit/);
+});
 await check("a call's length reads like a phone's", () => {
   assert.equal(formatCallLength(124), "02:04");
   assert.equal(formatCallLength(0), "00:00");
@@ -183,13 +212,13 @@ const cloudServer = http.createServer((req, res) => {
   cloud.calls.push({ method: req.method || "", url: req.url || "", auth: req.headers.authorization });
   res.setHeader("content-type", "application/json");
   if (req.headers.authorization !== "Bearer eggw_workspace_token") { res.statusCode = 401; return res.end("{}"); }
-  if (req.url === "/v1/tools/voice/call" && req.method === "GET") return res.end(JSON.stringify({ available: true, minutes: { monthly: 10, used: 1, left: 9 } }));
+  if (req.url === "/v1/tools/voice/call" && req.method === "GET") return res.end(JSON.stringify({ available: true, pricePerMinute: "€0.10", balanceLeft: "€0.43" }));
   if (req.url === "/v1/tools/voice/call" && req.method === "POST") {
-    if (cloudRefuses) { res.statusCode = 402; return res.end(JSON.stringify({ error: "This month's 10 voice minutes are used up.", code: "minutes" })); }
+    if (cloudRefuses) { res.statusCode = 402; return res.end(JSON.stringify({ error: "The balance is too low for a call.", code: "balance", pricePerMinute: "€0.10", balanceLeft: "€0.01" })); }
     res.statusCode = 201;
-    return res.end(JSON.stringify({ call: { id: "a".repeat(32) }, secret: "eph_secret", realtimeUrl: "wss://voice.example.test/v1/realtime?model=m", model: "m", voice: "eve", maxSeconds: 600, beatSeconds: 10, minutes: { monthly: 10, used: 0, left: 10 } }));
+    return res.end(JSON.stringify({ call: { id: "a".repeat(32) }, secret: "eph_secret", realtimeUrl: "wss://voice.example.test/v1/realtime?model=m", model: "m", voice: "eve", maxSeconds: 600, beatSeconds: 10, pricePerMinute: "€0.10", balanceLeft: "€0.43" }));
   }
-  if (req.url === `/v1/tools/voice/call/${"a".repeat(32)}/beat`) return res.end(JSON.stringify({ continue: true, leftSeconds: 590 }));
+  if (req.url === `/v1/tools/voice/call/${"a".repeat(32)}/beat`) return res.end(JSON.stringify({ continue: true, leftSeconds: 590, balanceLeft: "€0.41" }));
   if (req.url === `/v1/tools/voice/call/${"a".repeat(32)}` && req.method === "DELETE") return res.end(JSON.stringify({ ok: true, ended: true, seconds: 64 }));
   res.statusCode = 404;
   res.end("{}");
@@ -235,27 +264,30 @@ await check("a call's secret comes from the deployment, asked with the workspace
   const json = JSON.parse(text);
   assert.equal(json.callId, CALL);
   assert.equal(json.secret, "eph_secret");
+  assert.equal(json.pricePerMinute, "€0.10");
+  assert.equal(json.balanceLeft, "€0.43");
   assert.equal(json.realtimeUrl, "wss://voice.example.test/v1/realtime?model=m");
   assert.ok(!text.includes("eggw_workspace_token"));
   assert.equal(response.headers.get("cache-control"), "no-store");
   assert.equal(cloud.calls.at(-1)!.auth, "Bearer eggw_workspace_token");
 });
-await check("a refusal past the allowance is passed on as said, with its code", async () => {
+await check("a refusal for money is passed on as said, with its code, the price and what is left", async () => {
   cloudRefuses = true;
   const response = await callRoute.POST(request("/api/voice/call", "POST", {}));
   cloudRefuses = false;
   assert.equal(response.status, 402);
   const json = await response.json();
-  assert.equal(json.code, "minutes");
-  assert.match(json.error, /used up/);
+  assert.equal(json.code, "balance");
+  assert.match(json.error, /too low/);
+  assert.equal(json.balanceLeft, "€0.01");
 });
 await check("the status says whether calls are offered", async () => {
   const json = await (await callRoute.GET(request("/api/voice/call", "GET", null))).json();
-  assert.deepEqual(json, { available: true, minutes: { monthly: 10, used: 1, left: 9 } });
+  assert.deepEqual(json, { available: true, pricePerMinute: "€0.10", balanceLeft: "€0.43" });
 });
 await check("a beat goes through for a call id, and nothing that is not one", async () => {
   const ok = await beatRoute.POST(request(`/api/voice/call/${CALL}`, "POST", {}), { params: Promise.resolve({ callId: CALL }) });
-  assert.deepEqual(await ok.json(), { continue: true, leftSeconds: 590, reason: null });
+  assert.deepEqual(await ok.json(), { continue: true, leftSeconds: 590, reason: null, balanceLeft: "€0.41" });
   const bad = await beatRoute.POST(request("/api/voice/call/..%2F..", "POST", {}), { params: Promise.resolve({ callId: "../.." }) });
   assert.equal(bad.status, 400);
 });
