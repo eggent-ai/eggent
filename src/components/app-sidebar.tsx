@@ -14,6 +14,7 @@ import {
   Laptop,
   Mail,
   LifeBuoy,
+  Blocks,
   Link2,
   LogOut,
   MessageSquarePlus,
@@ -103,6 +104,20 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
   const pathname = usePathname();
   const { isMobile } = useSidebar();
   const companyProjects = useCompanyProjects();
+  // "Apps": the deployment's page for connected services, when it offers them.
+  const [appsUrl, setAppsUrl] = React.useState<string | null>(null);
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/apps/status", { cache: "no-store" })
+      .then((response) => (response.ok ? response.json() : null))
+      .then((data: { enabled?: boolean; url?: string } | null) => {
+        if (!cancelled && data?.enabled && typeof data.url === "string") setAppsUrl(data.url);
+      })
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, []);
   const hasCompanyProjects = Boolean(companyProjects?.enabled && companyProjects.projects.length > 0);
   // Only one row is "here" at a time: a chat or a project's new chat counts as
   // open only while the chat screen is on screen. Moving to the messages, the
@@ -606,6 +621,17 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>
+            {appsUrl ? (
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild>
+                  {/* The deployment's own page, on this address: a full load, not the app's router. */}
+                  <a href={appsUrl}>
+                    <Blocks className="size-4" />
+                    <span>{t("nav.apps")}</span>
+                  </a>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ) : null}
             <SidebarMenuItem>
               <SidebarMenuButton asChild>
                 <a
