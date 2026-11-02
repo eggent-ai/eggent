@@ -165,13 +165,15 @@ export function sessionUpdate(input: SessionInput): Record<string, unknown> {
 
 /**
  * How long a pause ends the person's turn, as the person chooses it in the call
- * panel. Measured on Yandex with phrases that pause at commas: 500 ms answered
- * half-finished sentences several times over, 800 ms about half as often, 1200 ms
- * almost never; a person speaking Russian slowly was still answered mid-thought
- * at 600, so the choices start at 700 - each adds its length to the wait.
+ * panel. Shorter pauses kept cutting people off: at 500 ms a sentence with two
+ * commas started several replies on Yandex, and on a live call an unhurried
+ * speaker was still cut in three times at 1000 ms - the operator's call is two
+ * and a half seconds for "normal". Each choice adds its length to the wait for
+ * the answer. A choice is stored by name, so one saved on the old scale lands
+ * on this one.
  */
 export type AnswerPace = "fast" | "normal" | "calm";
-export const PACE_MS: Record<AnswerPace, number> = { fast: 700, normal: 1000, calm: 1400 };
+export const PACE_MS: Record<AnswerPace, number> = { fast: 1500, normal: 2500, calm: 3500 };
 
 export function isAnswerPace(value: unknown): value is AnswerPace {
   return value === "fast" || value === "normal" || value === "calm";

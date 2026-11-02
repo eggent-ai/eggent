@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import Link from "next/link";
-import { AudioLines, Bot, Captions, Check, ChevronDown, ChevronUp, Loader2, Mic, MicOff, PhoneOff, Settings2 } from "lucide-react";
+import { AudioLines, Bot, Captions, Check, ChevronDown, ChevronUp, Loader2, Mic, MicOff, PhoneOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n/provider";
 import type { MessageKey } from "@/i18n/messages";
@@ -578,7 +578,7 @@ function useVoiceCall(bindings: VoiceCallBindings) {
       const relayed = answer.mode === "relay";
       const protocol: VoiceProtocol = answer.protocol === "openai-ga" ? "openai-ga" : "xai";
       const chosen = storedPace();
-      const silenceMs = chosen ? PACE_MS[chosen] : Math.min(2000, Math.max(200, Number(answer.silenceMs) || 600));
+      const silenceMs = chosen ? PACE_MS[chosen] : Math.min(10_000, Math.max(200, Number(answer.silenceMs) || PACE_MS.normal));
       protocolRef.current = protocol;
       const vadThreshold = Math.min(0.95, Math.max(0.1, Number(answer.vadThreshold) || 0.5));
       thresholdRef.current = vadThreshold;
@@ -848,12 +848,42 @@ function Waveform({ audio, active, className }: { audio: ReturnType<typeof useVo
   return <canvas ref={canvas} className={`text-foreground ${className}`} aria-hidden="true" />;
 }
 
+/**
+ * How long the agent waits after the person stops before it answers, in sight
+ * on the panel: a choice behind a gear went unfound by the one person who
+ * needed it.
+ */
+function PaceChoice({ pace, onChange, compact = false }: { pace: AnswerPace | null; onChange: (pace: AnswerPace) => void; compact?: boolean }) {
+  const { t } = useI18n();
+  return (
+    <div className={`flex items-center gap-2 ${compact ? "px-1.5 pb-0.5" : ""}`} role="group" aria-label={t("voice.pace.title")}>
+      <span className="shrink-0 text-xs text-muted-foreground">{t("voice.pace.label")}</span>
+      <div className="grid min-w-0 flex-1 grid-cols-3 gap-0.5 rounded-lg bg-muted p-0.5">
+        {(["fast", "normal", "calm"] as const).map((option) => {
+          const active = (pace ?? "normal") === option;
+          return (
+            <button
+              key={option}
+              type="button"
+              onClick={() => onChange(option)}
+              aria-pressed={active}
+              title={t("voice.pace.hint", { seconds: String(PACE_MS[option] / 1000) })}
+              className={`min-h-8 rounded-md px-1.5 text-xs/4 transition-colors ${active ? "bg-background font-medium text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+            >
+              {t(`voice.pace.${option}`)}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 /** The waveform button beside the microphone, and the call panel it opens. */
 export function VoiceCallControl({ bindings, disabled }: { bindings: VoiceCallBindings; disabled?: boolean }) {
   const { t } = useI18n();
   const offered = useVoiceOffered();
   const { state, start, hangUp, toggleMute, dismissError, audio, pace, setPace } = useVoiceCall(bindings);
-  const [showSettings, setShowSettings] = useState(false);
   const [showTranscript, setShowTranscript] = useState(true);
   const [expanded, setExpanded] = useState(true);
   const inCallNow = state.phase !== "idle";
@@ -911,7 +941,7 @@ export function VoiceCallControl({ bindings, disabled }: { bindings: VoiceCallBi
           data-voice-call-panel
           data-expanded={expanded ? "true" : "false"}
           className={`fixed inset-x-2 top-14 z-50 flex flex-col border bg-popover text-popover-foreground shadow-lg md:inset-x-auto md:right-4 md:top-16 ${
-            expanded ? "gap-3 rounded-2xl p-3 md:w-80" : state.work ? "gap-1.5 rounded-3xl p-1.5 md:w-80" : "rounded-full p-1.5 md:w-auto"
+            expanded ? "gap-3 rounded-2xl p-3 md:w-80" : "gap-1.5 rounded-3xl p-1.5 md:w-80"
           }`}
         >
           {/* The call's own row: who, the sound, how long, and the way out. Collapsed, it is all there is. */}
@@ -970,6 +1000,7 @@ export function VoiceCallControl({ bindings, disabled }: { bindings: VoiceCallBi
               )}
             </div>
           ) : null}
+          {expanded ? null : <PaceChoice pace={pace} onChange={setPace} compact />}
           {expanded ? (
             <>
               <Waveform audio={audio} active={state.phase === "live"} className="h-10 w-full" />
@@ -984,40 +1015,7 @@ export function VoiceCallControl({ bindings, disabled }: { bindings: VoiceCallBi
                   <div ref={transcriptEnd} />
                 </div>
               ) : null}
-              {showSettings ? (
-                <div className="flex flex-col gap-1.5" role="group" aria-label={t("voice.pace.title")}>
-                  <span className="text-xs font-medium text-muted-foreground">{t("voice.pace.title")}</span>
-                  <div className="grid grid-cols-3 gap-1 rounded-lg bg-muted p-1">
-                    {(["fast", "normal", "calm"] as const).map((option) => {
-                      const active = (pace ?? "normal") === option;
-                      return (
-                        <button
-                          key={option}
-                          type="button"
-                          onClick={() => setPace(option)}
-                          aria-pressed={active}
-                          className={`min-h-9 rounded-md px-2 text-xs/4 transition-colors ${active ? "bg-background font-medium text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
-                        >
-                          {t(`voice.pace.${option}`)}
-                          <span className="block text-[11px]/4 tabular-nums text-muted-foreground">{t("voice.pace.ms", { ms: String(PACE_MS[option]) })}</span>
-                        </button>
-                      );
-                    })}
-                  </div>
-                </div>
-              ) : null}
               <div className="flex items-center justify-center gap-3">
-                <Button
-                  variant="outline"
-                  size="icon"
-                  onClick={() => setShowSettings((value) => !value)}
-                  aria-pressed={showSettings}
-                  aria-label={t("voice.settings")}
-                  title={t("voice.settings")}
-                  className="size-11 rounded-full"
-                >
-                  <Settings2 className="size-5" />
-                </Button>
                 <Button
                   variant="outline"
                   size="icon"
@@ -1052,6 +1050,7 @@ export function VoiceCallControl({ bindings, disabled }: { bindings: VoiceCallBi
                   <PhoneOff className="size-5" />
                 </Button>
               </div>
+              <PaceChoice pace={pace} onChange={setPace} />
             </>
           ) : null}
         </div>

@@ -188,7 +188,7 @@ await check("Yandex gets the OpenAI Realtime GA session: voice and turn detectio
   assert.equal(xai.session.audio.input.transcription.model, "grok-transcribe");
 });
 await check("the answer speed a person picks is 500, 800 or 1200 ms, and changes only the pause mid-call", () => {
-  assert.deepEqual(PACE_MS, { fast: 700, normal: 1000, calm: 1400 });
+  assert.deepEqual(PACE_MS, { fast: 1500, normal: 2500, calm: 3500 });
   assert.ok(isAnswerPace("calm"));
   assert.ok(!isAnswerPace("slow"));
   assert.ok(!isAnswerPace(null));
