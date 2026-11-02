@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { AudioLines, Bot, Captions, ChevronDown, ChevronUp, Loader2, Mic, MicOff, PhoneOff, Settings2 } from "lucide-react";
+import Link from "next/link";
+import { AudioLines, Bot, Captions, Check, ChevronDown, ChevronUp, Loader2, Mic, MicOff, PhoneOff, Settings2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n/provider";
 import type { MessageKey } from "@/i18n/messages";
@@ -49,6 +50,9 @@ export interface VoiceCallBindings {
   chatId: string;
   projectId: string | null;
   projectName?: string | null;
+  /** Where the chat is, for the call panel to point at the work; and whether the person is looking at it. */
+  chatHref: string;
+  onChatPage: boolean;
   recent(): VoiceContextMessage[];
   delegate(task: string): DelegateResult;
   turn(): TurnStatus;
@@ -151,8 +155,16 @@ function errorKey(error: unknown): MessageKey {
 
 // --- the call ------------------------------------------------------------
 
+/** What the call handed to the agent, and where it is happening. */
+interface CallWork {
+  href: string;
+  projectName: string | null;
+  done: boolean;
+}
+
 interface CallState {
   phase: Phase;
+  work: CallWork | null;
   floor: Floor;
   seconds: number;
   muted: boolean;
@@ -163,7 +175,7 @@ interface CallState {
   balance: string | null;
 }
 
-const INITIAL: CallState = { phase: "idle", floor: "listening", seconds: 0, muted: false, error: null, lines: [], price: null, balance: null };
+const INITIAL: CallState = { work: null, phase: "idle", floor: "listening", seconds: 0, muted: false, error: null, lines: [], price: null, balance: null };
 
 /** For checking a call by hand: the measured waits before the first word of each answer. */
 interface VoiceStats {
@@ -399,7 +411,10 @@ function useVoiceCall(bindings: VoiceCallBindings) {
         const output = await runVoiceTool(name, fn.arguments, {
           delegate: (task) => {
             call.current?.delegated.push(task);
-            return bindingsRef.current.delegate(task);
+            const b = bindingsRef.current;
+            // The work starts in this chat: the panel says where, so the person can go and watch.
+            setState((current) => ({ ...current, work: { href: b.chatHref, projectName: b.projectName ?? null, done: false } }));
+            return b.delegate(task);
           },
           turn: () => bindingsRef.current.turn(),
         });
@@ -708,6 +723,7 @@ function useVoiceCall(bindings: VoiceCallBindings) {
     const before = wasRunning.current;
     wasRunning.current = bindings.running;
     if (!before || bindings.running || state.phase !== "live" || !call.current?.delegated.length) return;
+    setState((current) => (current.work ? { ...current, work: { ...current.work, done: true } } : current));
     const turn = bindingsRef.current.turn();
     pendingUpdate.current = `[Agent update] The agent has finished working. Its latest message in the chat: ${turn.latestText || "(no text)"}`;
     flushUpdate();
@@ -881,7 +897,7 @@ export function VoiceCallControl({ bindings, disabled }: { bindings: VoiceCallBi
           data-voice-call-panel
           data-expanded={expanded ? "true" : "false"}
           className={`fixed inset-x-2 top-14 z-50 flex flex-col border bg-popover text-popover-foreground shadow-lg md:inset-x-auto md:right-4 md:top-16 ${
-            expanded ? "gap-3 rounded-2xl p-3 md:w-80" : "rounded-full p-1.5 md:w-auto"
+            expanded ? "gap-3 rounded-2xl p-3 md:w-80" : state.work ? "gap-1.5 rounded-3xl p-1.5 md:w-80" : "rounded-full p-1.5 md:w-auto"
           }`}
         >
           {/* The call's own row: who, the sound, how long, and the way out. Collapsed, it is all there is. */}
@@ -926,6 +942,20 @@ export function VoiceCallControl({ bindings, disabled }: { bindings: VoiceCallBi
               </Button>
             )}
           </div>
+          {state.work ? (
+            <div data-voice-call-work className={`flex min-h-9 items-center gap-2 rounded-xl bg-muted/50 px-3 py-1.5 text-xs/4 ${expanded ? "" : "mx-0.5 mb-0.5"}`}>
+              {state.work.done ? <Check className="size-3.5 shrink-0 text-success" aria-hidden="true" /> : <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" aria-hidden="true" />}
+              <span className="min-w-0 flex-1 truncate">
+                {t(state.work.done ? "voice.work.done" : "voice.work.running")}
+                {state.work.projectName ? <span className="text-muted-foreground"> · {state.work.projectName}</span> : null}
+              </span>
+              {bindings.onChatPage && state.work.href === bindings.chatHref ? (
+                <span className="shrink-0 text-muted-foreground">{t("voice.work.here")}</span>
+              ) : (
+                <Link href={state.work.href} className="shrink-0 font-medium underline underline-offset-2">{t("voice.work.open")}</Link>
+              )}
+            </div>
+          ) : null}
           {expanded ? (
             <>
               <Waveform audio={audio} active={state.phase === "live"} className="h-10 w-full" />

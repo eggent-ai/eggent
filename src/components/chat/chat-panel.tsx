@@ -379,6 +379,7 @@ export function ChatPanel({ initialQuickSkills = [], onboardingPending = false, 
     setActiveProjectId,
     setProjects,
     addChat,
+    projects,
   } = useAppStore();
   const [input, setInput] = useState("");
   // Settled when the chat is opened and then fixed: the server stores it on the
@@ -1192,6 +1193,9 @@ export function ChatPanel({ initialQuickSkills = [], onboardingPending = false, 
   const voiceBindings = useMemo<VoiceCallBindings>(() => ({
     chatId: activeChatId || internalChatId,
     projectId: activeProjectId,
+    projectName: activeProjectId ? projects.find((project) => project.id === activeProjectId)?.name ?? null : null,
+    chatHref: chatPath(activeChatId || internalChatId),
+    onChatPage: pathname === chatPath(activeChatId || internalChatId),
     recent: () => voiceContextOf(messagesRef.current as unknown as TurnMessage[]),
     delegate: (task: string) => {
       // The same path as typing: an answer to the card on screen, a message for the working turn, or a turn of its own.
@@ -1202,7 +1206,7 @@ export function ChatPanel({ initialQuickSkills = [], onboardingPending = false, 
     turn: () => describeTurn(messagesRef.current as unknown as TurnMessage[], isLoadingRef.current, pendingInteractionRef.current),
     running: isLoading,
     question: pendingInteraction,
-  }), [activeChatId, internalChatId, activeProjectId, isLoading, pendingInteraction]);
+  }), [activeChatId, internalChatId, activeProjectId, projects, pathname, isLoading, pendingInteraction]);
 
   // The turn is over. What it read is in the stored chat now, where it was read,
   // and what it did not is there marked; the history reload shows both. A
