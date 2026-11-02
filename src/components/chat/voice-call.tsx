@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
+import { clearSummary, failSummary, startSummary } from "@/lib/voice/summary-state";
 import Link from "next/link";
 import { AudioLines, Bot, Captions, Check, ChevronDown, ChevronUp, Loader2, Mic, MicOff, PhoneOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
@@ -55,6 +56,8 @@ export interface VoiceCallBindings {
   /** Where the chat is, for the call panel to point at the work; and whether the person is looking at it. */
   chatHref: string;
   onChatPage: boolean;
+  /** The call was put into this chat: a chat that only came to be through the call is opened, so its card shows. */
+  onRecorded?(chatId: string): void;
   recent(): VoiceContextMessage[];
   delegate(task: string): DelegateResult;
   turn(): TurnStatus;
@@ -193,6 +196,8 @@ declare global {
 }
 
 const PACE_KEY = "eggent.voice.pace";
+/** What a browser that has chosen nothing gets: the operator found "fast" (1.5 s) right once turns stopped being cut. */
+const DEFAULT_PACE: AnswerPace = "fast";
 
 /** The person's own answer speed, if they chose one in this browser. */
 function storedPace(): AnswerPace | null {
@@ -475,18 +480,25 @@ function useVoiceCall(bindings: VoiceCallBindings) {
     if (!c) return;
     const seconds = (Date.now() - c.startedAt) / 1000;
     const transcript = linesAtEnd.filter((line) => line.text.trim()).map((line) => ({ role: line.role, text: line.text.trim() }));
-    await fetch(`/api/voice/call/${c.id}/end`, {
+    const chatId = bindingsRef.current.chatId;
+    const ended = await fetch(`/api/voice/call/${c.id}/end`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        chatId: bindingsRef.current.chatId,
+        chatId,
         projectId: bindingsRef.current.projectId,
         seconds,
         transcript,
         summary: summaryText,
         delegated: c.delegated,
       }),
-    }).catch(() => undefined);
+    })
+      .then((response) => (response.ok ? response.json() as Promise<{ recorded?: boolean }> : null))
+      .catch(() => null);
+    // The placeholder in the chat waits for the card; a call that could not be put there says so.
+    if (transcript.length > 0 && !ended?.recorded) failSummary(chatId);
+    else if (transcript.length === 0) clearSummary(chatId);
+    if (ended?.recorded) bindingsRef.current.onRecorded?.(chatId);
   }, [cleanup]);
 
   const hangUp = useCallback(async (reason?: MessageKey) => {
@@ -494,6 +506,7 @@ function useVoiceCall(bindings: VoiceCallBindings) {
     ending.current = true;
     const snapshot = linesRef.current;
     setState((current) => ({ ...current, phase: "ending", error: reason ? t(reason) : current.error }));
+    if (snapshot.some((line) => line.text.trim())) startSummary(bindingsRef.current.chatId);
     // A short summary for the chat, written by the voice model from what was
     // said; nothing is played while it writes. Only when somebody spoke.
     let summaryText = "";
@@ -578,7 +591,7 @@ function useVoiceCall(bindings: VoiceCallBindings) {
       const relayed = answer.mode === "relay";
       const protocol: VoiceProtocol = answer.protocol === "openai-ga" ? "openai-ga" : "xai";
       const chosen = storedPace();
-      const silenceMs = chosen ? PACE_MS[chosen] : Math.min(10_000, Math.max(200, Number(answer.silenceMs) || PACE_MS.normal));
+      const silenceMs = chosen ? PACE_MS[chosen] : Math.min(10_000, Math.max(200, Number(answer.silenceMs) || PACE_MS.fast));
       protocolRef.current = protocol;
       const vadThreshold = Math.min(0.95, Math.max(0.1, Number(answer.vadThreshold) || 0.5));
       thresholdRef.current = vadThreshold;
@@ -860,7 +873,7 @@ function PaceChoice({ pace, onChange, compact = false }: { pace: AnswerPace | nu
       <span className="shrink-0 text-xs text-muted-foreground">{t("voice.pace.label")}</span>
       <div className="grid min-w-0 flex-1 grid-cols-3 gap-0.5 rounded-lg bg-muted p-0.5">
         {(["fast", "normal", "calm"] as const).map((option) => {
-          const active = (pace ?? "normal") === option;
+          const active = (pace ?? DEFAULT_PACE) === option;
           return (
             <button
               key={option}

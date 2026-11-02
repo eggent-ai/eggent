@@ -20,6 +20,8 @@ import { questionPieces } from "@/lib/question-links";
 import { DEFER_INTERACTION_ANSWER, type PiPendingInteraction } from "@/lib/pi/interaction-types";
 import { ShellRunView } from "@/components/chat/shell-run";
 import { useShellActions } from "@/components/chat/shell-actions";
+import { VoiceSummaryPlaceholder } from "@/components/chat/voice-call-card";
+import { usePendingSummary } from "@/lib/voice/summary-state";
 import { useShellRuns, type ShellCard } from "@/store/shell-runs";
 import { splitAtSteers, SteerBubble, steerStateOf, type SteerView } from "@/components/chat/steer-bubble";
 
@@ -392,6 +394,11 @@ export function ChatMessages({ messages, isLoading, errorMessage, errorActions, 
   const AUTO_SCROLL_THRESHOLD_PX = 96;
   const { chatId } = useShellActions();
   const cards = useShellRuns((state) => state.cards[chatId]) ?? NO_CARDS;
+  // Call cards in the chat, for the placeholder of one being written to give way when it lands.
+  const callCards = useMemo(
+    () => messages.reduce((count, message) => count + (message.parts.some((part) => (part as { type?: string }).type === "data-eggentVoiceCall") ? 1 : 0), 0),
+    [messages]
+  );
   // Where each command stands: after the message it was typed under. One whose
   // message is not in the list (a chat that was trimmed, or a conversation that
   // has not loaded yet) goes last rather than disappearing.
@@ -445,7 +452,9 @@ export function ChatMessages({ messages, isLoading, errorMessage, errorActions, 
   // messages. A conversation that starts on this screen had no skeleton and
   // does not fade.
   const showingSkeleton = messages.length === 0 && !isLoading && awaitingHistory;
-  const showingEmpty = messages.length === 0 && !isLoading && !awaitingHistory && cards.length === 0;
+  // A call just ended in this chat is about to put its card here: not an empty chat.
+  const summaryPending = usePendingSummary(chatId);
+  const showingEmpty = messages.length === 0 && !isLoading && !awaitingHistory && cards.length === 0 && !summaryPending;
   const [fromSkeleton, setFromSkeleton] = useState(false);
   if (showingSkeleton && !fromSkeleton) setFromSkeleton(true);
   if (showingEmpty && fromSkeleton) setFromSkeleton(false);
@@ -606,6 +615,8 @@ export function ChatMessages({ messages, isLoading, errorMessage, errorActions, 
         {steerQueue.map((view) => (
           <SteerBubble key={view.messageId} view={view} />
         ))}
+
+        <VoiceSummaryPlaceholder chatId={chatId} callCards={callCards} />
 
 
         {pendingInteraction ? (

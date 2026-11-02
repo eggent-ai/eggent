@@ -342,6 +342,8 @@ const enMessages = {
   "voice.card.you": "You",
   "voice.card.agent": "Agent",
   "voice.summaryHeading": "Briefly on our call",
+  "voice.summary.preparing": "Preparing the call's summary…",
+  "voice.summary.failed": "The summary could not be prepared",
   "voice.chatTitle": "Voice call",
   "voice.error.failed": "The call could not start. Try again in a minute.",
   "voice.error.dropped": "The call dropped.",

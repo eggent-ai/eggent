@@ -1188,6 +1188,8 @@ export function ChatPanel({ initialQuickSkills = [], onboardingPending = false, 
   onSubmitRef.current = onSubmit;
   const isLoadingRef = useRef(isLoading);
   isLoadingRef.current = isLoading;
+  const activeChatIdRef = useRef(activeChatId);
+  activeChatIdRef.current = activeChatId;
   const pendingInteractionRef = useRef(pendingInteraction);
   pendingInteractionRef.current = pendingInteraction;
   const voiceBindings = useMemo<VoiceCallBindings>(() => ({
@@ -1204,9 +1206,13 @@ export function ChatPanel({ initialQuickSkills = [], onboardingPending = false, 
       return how;
     },
     turn: () => describeTurn(messagesRef.current as unknown as TurnMessage[], isLoadingRef.current, pendingInteractionRef.current),
+    // A call in a chat nothing was written in yet made the chat: open it, so its card is read.
+    onRecorded: (recordedChatId: string) => {
+      if (!activeChatIdRef.current) router.replace(chatPath(recordedChatId));
+    },
     running: isLoading,
     question: pendingInteraction,
-  }), [activeChatId, internalChatId, activeProjectId, projects, pathname, isLoading, pendingInteraction]);
+  }), [activeChatId, internalChatId, activeProjectId, projects, pathname, router, isLoading, pendingInteraction]);
 
   // The turn is over. What it read is in the stored chat now, where it was read,
   // and what it did not is there marked; the history reload shows both. A

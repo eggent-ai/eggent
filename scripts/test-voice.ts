@@ -281,6 +281,20 @@ await check("the voice is told why the call ends, in words for the person, not t
   assert.match(endingNote("balance"), /^\[Call note - not from the person\].*balance.*goodbye/);
   assert.match(endingNote("time"), /time limit/);
 });
+await check("the placeholder for a call's summary belongs to its chat, can fail, and goes away", async () => {
+  const { startSummary, failSummary, clearSummary, pendingSummary } = await import("../src/lib/voice/summary-state.ts");
+  startSummary("chat-a");
+  assert.equal(pendingSummary()?.chatId, "chat-a");
+  assert.equal(pendingSummary()?.state, "pending");
+  // another chat's failure or clearing leaves it alone
+  failSummary("chat-b");
+  clearSummary("chat-b");
+  assert.equal(pendingSummary()?.state, "pending");
+  failSummary("chat-a");
+  assert.equal(pendingSummary()?.state, "failed");
+  clearSummary("chat-a");
+  assert.equal(pendingSummary(), null);
+});
 await check("a call's length reads like a phone's", () => {
   assert.equal(formatCallLength(124), "02:04");
   assert.equal(formatCallLength(0), "00:00");
