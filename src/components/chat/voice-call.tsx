@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { AudioLines, Captions, Loader2, Mic, MicOff, PhoneOff } from "lucide-react";
+import { AudioLines, Bot, Captions, ChevronDown, ChevronUp, Loader2, Mic, MicOff, PhoneOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n/provider";
 import type { MessageKey } from "@/i18n/messages";
@@ -582,7 +582,7 @@ function useVoiceCall(bindings: VoiceCallBindings) {
 
 // --- the screen ----------------------------------------------------------
 
-function Waveform({ audio, active }: { audio: ReturnType<typeof useVoiceCall>["audio"]; active: boolean }) {
+function Waveform({ audio, active, className }: { audio: ReturnType<typeof useVoiceCall>["audio"]; active: boolean; className: string }) {
   const canvas = useRef<HTMLCanvasElement | null>(null);
   useEffect(() => {
     if (!active) return;
@@ -604,8 +604,8 @@ function Waveform({ audio, active }: { audio: ReturnType<typeof useVoiceCall>["a
       g.clearRect(0, 0, width, height);
       a.micAnalyser.getByteFrequencyData(bins);
       a.outAnalyser.getByteFrequencyData(bins2);
-      const bars = 28;
-      const gap = 3;
+      const bars = Math.max(5, Math.min(28, Math.floor(width / 10)));
+      const gap = width < 120 ? 2 : 3;
       const barWidth = (width - gap * (bars - 1)) / bars;
       g.fillStyle = getComputedStyle(element).color;
       for (let i = 0; i < bars; i += 1) {
@@ -622,7 +622,7 @@ function Waveform({ audio, active }: { audio: ReturnType<typeof useVoiceCall>["a
     draw();
     return () => cancelAnimationFrame(frame);
   }, [active, audio]);
-  return <canvas ref={canvas} className="h-12 w-full text-foreground" aria-hidden="true" />;
+  return <canvas ref={canvas} className={`text-foreground ${className}`} aria-hidden="true" />;
 }
 
 /** The waveform button beside the microphone, and the call panel it opens. */
@@ -631,6 +631,11 @@ export function VoiceCallControl({ bindings, disabled }: { bindings: VoiceCallBi
   const offered = useVoiceOffered();
   const { state, start, hangUp, toggleMute, dismissError, audio } = useVoiceCall(bindings);
   const [showTranscript, setShowTranscript] = useState(true);
+  const [expanded, setExpanded] = useState(true);
+  const inCallNow = state.phase !== "idle";
+  useEffect(() => {
+    if (inCallNow) setExpanded(window.matchMedia("(min-width: 768px)").matches);
+  }, [inCallNow]);
   const transcriptEnd = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
     transcriptEnd.current?.scrollIntoView({ block: "nearest" });
@@ -664,7 +669,7 @@ export function VoiceCallControl({ bindings, disabled }: { bindings: VoiceCallBi
         ? createPortal(
             <>
       {state.error && !inCall ? (
-        <div role="alert" className="fixed inset-x-0 top-16 z-50 mx-auto w-[min(420px,calc(100vw-32px))] rounded-xl border bg-popover px-4 py-3 text-sm shadow-lg">
+        <div role="alert" className="fixed inset-x-2 top-14 z-50 rounded-xl border bg-popover px-4 py-3 text-sm shadow-lg md:inset-x-auto md:right-4 md:top-16 md:w-80">
           <p>{state.error}</p>
           <button type="button" onClick={dismissError} className="mt-1 text-xs text-muted-foreground underline underline-offset-2">{t("voice.dismiss")}</button>
         </div>
@@ -674,62 +679,100 @@ export function VoiceCallControl({ bindings, disabled }: { bindings: VoiceCallBi
           role="dialog"
           aria-label={t("voice.panel")}
           data-voice-call-panel
-          className="fixed inset-x-0 top-16 z-50 mx-auto flex w-[min(420px,calc(100vw-32px))] flex-col gap-3 rounded-2xl border bg-popover p-4 text-popover-foreground shadow-xl"
+          data-expanded={expanded ? "true" : "false"}
+          className={`fixed inset-x-2 top-14 z-50 flex flex-col border bg-popover text-popover-foreground shadow-lg md:inset-x-auto md:right-4 md:top-16 ${
+            expanded ? "gap-3 rounded-2xl p-3 md:w-80" : "rounded-full p-1.5 md:w-auto"
+          }`}
         >
-          <div className="flex items-center justify-between gap-3 text-sm">
-            <span className="flex items-center gap-2" aria-live="polite">
-              {state.phase === "connecting" || state.phase === "ending" ? <Loader2 className="size-4 animate-spin" aria-hidden="true" /> : <span className="size-2 rounded-full bg-success" aria-hidden="true" />}
-              {status}
-            </span>
-            <span className="tabular-nums text-muted-foreground">{t("voice.card.title")} · {formatCallLength(state.seconds)}</span>
+          {/* The call's own row: who, the sound, how long, and the way out. Collapsed, it is all there is. */}
+          <div className="flex min-w-0 items-center gap-2">
+            <button
+              type="button"
+              onClick={() => setExpanded((value) => !value)}
+              aria-expanded={expanded}
+              aria-label={t(expanded ? "voice.collapse" : "voice.expand")}
+              title={t(expanded ? "voice.collapse" : "voice.expand")}
+              className="flex min-h-9 min-w-0 flex-1 items-center gap-2 rounded-full text-left"
+            >
+              <span className="relative flex size-9 shrink-0 items-center justify-center rounded-full bg-foreground text-background">
+                <Bot className="size-4" aria-hidden="true" />
+                {state.phase === "connecting" || state.phase === "ending" ? (
+                  <Loader2 className="absolute -right-0.5 -bottom-0.5 size-3.5 animate-spin rounded-full bg-popover text-foreground" aria-hidden="true" />
+                ) : (
+                  <span className="absolute -right-0.5 -bottom-0.5 size-2.5 rounded-full border-2 border-popover bg-success" aria-hidden="true" />
+                )}
+              </span>
+              <span className="flex min-w-0 flex-1 flex-col">
+                <span className="truncate text-sm/5 font-medium" aria-live="polite">{status}</span>
+                <span className="text-xs/4 tabular-nums text-muted-foreground">{t("voice.card.title")} · {formatCallLength(state.seconds)}</span>
+              </span>
+              {expanded ? null : <Waveform audio={audio} active={state.phase === "live"} className="h-6 w-14 shrink-0" />}
+              {expanded ? <ChevronUp className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" /> : <ChevronDown className="size-4 shrink-0 text-muted-foreground" aria-hidden="true" />}
+            </button>
+            {expanded ? null : (
+              <Button
+                size="icon"
+                onClick={() => void hangUp()}
+                disabled={state.phase === "ending"}
+                aria-label={t("voice.hangUp")}
+                title={t("voice.hangUp")}
+                className="size-9 shrink-0 rounded-full bg-destructive text-white hover:bg-destructive/90"
+              >
+                <PhoneOff className="size-4" />
+              </Button>
+            )}
           </div>
-          <Waveform audio={audio} active={state.phase === "live"} />
-          {showTranscript && state.lines.length > 0 ? (
-            <div className="max-h-40 overflow-y-auto rounded-lg bg-muted/40 px-3 py-2 text-sm/6">
-              {state.lines.filter((line) => line.text.trim()).slice(-12).map((line) => (
-                <p key={line.id} className={line.role === "user" ? "text-muted-foreground" : ""}>
-                  <span className="font-medium">{t(line.role === "user" ? "voice.card.you" : "voice.card.agent")}: </span>
-                  {line.text}
-                </p>
-              ))}
-              <div ref={transcriptEnd} />
-            </div>
+          {expanded ? (
+            <>
+              <Waveform audio={audio} active={state.phase === "live"} className="h-10 w-full" />
+              {showTranscript && state.lines.some((line) => line.text.trim()) ? (
+                <div className="max-h-[min(40vh,18rem)] overflow-y-auto rounded-lg bg-muted/40 px-3 py-2 text-sm/6">
+                  {state.lines.filter((line) => line.text.trim()).slice(-12).map((line) => (
+                    <p key={line.id} className={line.role === "user" ? "text-muted-foreground" : ""}>
+                      <span className="font-medium">{t(line.role === "user" ? "voice.card.you" : "voice.card.agent")}: </span>
+                      {line.text}
+                    </p>
+                  ))}
+                  <div ref={transcriptEnd} />
+                </div>
+              ) : null}
+              <div className="flex items-center justify-center gap-3">
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={toggleMute}
+                  disabled={state.phase !== "live"}
+                  aria-pressed={state.muted}
+                  aria-label={t(state.muted ? "voice.unmute" : "voice.mute")}
+                  title={t(state.muted ? "voice.unmute" : "voice.mute")}
+                  className="size-11 rounded-full"
+                >
+                  {state.muted ? <MicOff className="size-5" /> : <Mic className="size-5" />}
+                </Button>
+                <Button
+                  variant="outline"
+                  size="icon"
+                  onClick={() => setShowTranscript((value) => !value)}
+                  aria-pressed={showTranscript}
+                  aria-label={t("voice.transcript")}
+                  title={t("voice.transcript")}
+                  className="size-11 rounded-full"
+                >
+                  <Captions className="size-5" />
+                </Button>
+                <Button
+                  size="icon"
+                  onClick={() => void hangUp()}
+                  disabled={state.phase === "ending"}
+                  aria-label={t("voice.hangUp")}
+                  title={t("voice.hangUp")}
+                  className="size-11 rounded-full bg-destructive text-white hover:bg-destructive/90"
+                >
+                  <PhoneOff className="size-5" />
+                </Button>
+              </div>
+            </>
           ) : null}
-          <div className="flex items-center justify-center gap-3">
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={toggleMute}
-              disabled={state.phase !== "live"}
-              aria-pressed={state.muted}
-              aria-label={t(state.muted ? "voice.unmute" : "voice.mute")}
-              title={t(state.muted ? "voice.unmute" : "voice.mute")}
-              className="size-11 rounded-full"
-            >
-              {state.muted ? <MicOff className="size-5" /> : <Mic className="size-5" />}
-            </Button>
-            <Button
-              variant="outline"
-              size="icon"
-              onClick={() => setShowTranscript((value) => !value)}
-              aria-pressed={showTranscript}
-              aria-label={t("voice.transcript")}
-              title={t("voice.transcript")}
-              className="size-11 rounded-full"
-            >
-              <Captions className="size-5" />
-            </Button>
-            <Button
-              size="icon"
-              onClick={() => void hangUp()}
-              disabled={state.phase === "ending"}
-              aria-label={t("voice.hangUp")}
-              title={t("voice.hangUp")}
-              className="size-11 rounded-full bg-destructive text-white hover:bg-destructive/90"
-            >
-              <PhoneOff className="size-5" />
-            </Button>
-          </div>
         </div>
       ) : null}
             </>,

@@ -333,6 +333,8 @@ const enMessages = {
   "voice.unmute": "Unmute the microphone",
   "voice.transcript": "Show what is said",
   "voice.hangUp": "Hang up",
+  "voice.expand": "Show the call",
+  "voice.collapse": "Fold the call away",
   "voice.dismiss": "Close",
   "voice.card.title": "Voice chat",
   "voice.card.showTranscript": "What was said",

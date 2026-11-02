@@ -454,7 +454,7 @@ export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
     <div className="flex items-start gap-3 py-2" data-message-role="assistant">
       <div
         className={`flex size-8 shrink-0 items-center justify-center rounded-full bg-foreground text-background ${
-          opensWithToolCard ? AVATAR_TOOL_CARD_OFFSET : ""
+          opensWithToolCard || voiceCall ? AVATAR_TOOL_CARD_OFFSET : ""
         }`}
       >
         <Bot className="size-4" />
