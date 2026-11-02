@@ -126,6 +126,16 @@ export interface ChatMessage {
   steer?: ChatSteerInfo;
   /** Replies that came to letters the agent sent from this chat: see lib/email/notice.ts. */
   emailReplies?: EmailReplyNotice[];
+  /** A live voice call held in this chat, with what was said: see lib/voice. */
+  voiceCall?: VoiceCallRecord;
+}
+
+/** A voice call with the agent, as it stands in the chat once it is over. */
+export interface VoiceCallRecord {
+  seconds: number;
+  transcript: Array<{ role: "user" | "agent"; text: string }>;
+  /** Tasks the call handed to the agent, in order. */
+  delegated?: string[];
 }
 
 /**

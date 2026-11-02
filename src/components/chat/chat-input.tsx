@@ -12,6 +12,7 @@ import {
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ModelPicker } from "@/components/chat/model-picker";
 import { DictationButton, DictationStatus, useDictation } from "@/components/chat/dictation";
+import { VoiceCallControl, type VoiceCallBindings } from "@/components/chat/voice-call";
 import { useI18n } from "@/i18n/provider";
 import { formatUploadSize, MAX_UPLOAD_BYTES, MAX_UPLOAD_LABEL } from "@/lib/files/upload-limits";
 import type { MessageKey } from "@/i18n/messages";
@@ -213,6 +214,8 @@ interface ChatInputProps {
    * where the workspace's footer would.
    */
   guest?: { note?: string };
+  /** A live voice call with the agent in this chat, where the deployment offers one. */
+  voice?: VoiceCallBindings;
 }
 
 export function ChatInput({
@@ -235,6 +238,7 @@ export function ChatInput({
   contextModeLocked = false,
   runPlace,
   guest,
+  voice,
 }: ChatInputProps) {
   const isGuest = Boolean(guest);
   const { t } = useI18n();
@@ -1071,6 +1075,8 @@ export function ChatInput({
               disabled={disabled || Boolean(pendingInteraction)}
               className="size-11 rounded-full"
             />
+
+            {voice && !isGuest ? <VoiceCallControl bindings={voice} disabled={disabled} /> : null}
 
             {/* Stop stays available with an empty draft and while a tool waits. */}
             {isLoading ? (

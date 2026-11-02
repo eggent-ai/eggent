@@ -15,6 +15,8 @@ import type { SubagentSnapshot } from "@/lib/pi/types";
 import { FileMention } from "./file-mention";
 import { StickyCopyButton, UserMessageFooter } from "./user-message-footer";
 import { LearnedNote } from "./learned-note";
+import { VoiceCallCard } from "./voice-call-card";
+import type { VoiceCallRecord } from "@/lib/types";
 import { EmailReplyNote } from "@/components/email/email-chat-notes";
 import { EmailApprovalCard } from "@/components/email/email-approval-card";
 import { emailApprovalFromToolOutput, type EmailApprovalCard as EmailApproval } from "@/lib/email/approval-card";
@@ -439,7 +441,8 @@ export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
     ];
   }
 
-  if (!renderedParts.some(Boolean)) return null;
+  const voiceCall = voiceCallOf(message.parts);
+  if (!renderedParts.some(Boolean) && !voiceCall) return null;
   const learned = learnedNoticeOf(message.parts);
   const emailReplies = emailRepliesOf(message.parts);
   const emailApprovals = emailApprovalsOf(message.parts);
@@ -457,6 +460,7 @@ export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
         <Bot className="size-4" />
       </div>
       <div className="flex min-w-0 flex-1 flex-col gap-3 pt-0.5 text-[15px]/[26px]">
+        {voiceCall ? <VoiceCallCard record={voiceCall} hasSummary={renderedParts.some(Boolean)} /> : null}
         {renderedParts}
         {producedFiles.length > 0 ? <FilesProduced groups={producedFiles} /> : null}
         {learned ? <LearnedNote notice={learned} /> : null}
@@ -532,6 +536,17 @@ function googleLinkOf(parts: UIMessage["parts"], read: (output: unknown) => stri
     found = read(tool.output) ?? found;
   }
   return found;
+}
+
+/** The voice call this message records, when it is one. */
+function voiceCallOf(parts: UIMessage["parts"]): VoiceCallRecord | null {
+  for (const part of parts) {
+    const candidate = part as { type?: string; data?: unknown };
+    if (candidate.type !== "data-eggentVoiceCall") continue;
+    const data = candidate.data as VoiceCallRecord | null | undefined;
+    if (data && typeof data === "object" && typeof data.seconds === "number") return data;
+  }
+  return null;
 }
 
 /** What the agent saved after this answer, when it saved anything. */

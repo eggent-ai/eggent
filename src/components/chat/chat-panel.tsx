@@ -13,6 +13,8 @@ import type { EmailLetterInfo } from "@/lib/email/types";
 import { EmailLetterBanner } from "@/components/email/email-chat-notes";
 import { ChatInput } from "./chat-input";
 import { openFileForAgent, useAppStore } from "@/store/app-store";
+import type { VoiceCallBindings } from "@/components/chat/voice-call";
+import { describeTurn, voiceContextOf, type TurnMessage } from "@/lib/voice/tools";
 import { useState, useCallback, useEffect, useRef, useMemo } from "react";
 import type { ChatContextMode, ChatMessage } from "@/lib/types";
 import type { PiRuntimeStats } from "@/lib/pi/types";
@@ -1179,6 +1181,25 @@ export function ChatPanel({ initialQuickSkills = [], onboardingPending = false, 
     steerMessage,
   ]);
 
+  // A live voice call in this chat: its tasks go through the same path a typed
+  // message does - a turn of its own, or added to the one working.
+  const onSubmitRef = useRef(onSubmit);
+  onSubmitRef.current = onSubmit;
+  const isLoadingRef = useRef(isLoading);
+  isLoadingRef.current = isLoading;
+  const voiceBindings = useMemo<VoiceCallBindings>(() => ({
+    chatId: activeChatId || internalChatId,
+    projectId: activeProjectId,
+    recent: () => voiceContextOf(messagesRef.current as unknown as TurnMessage[]),
+    delegate: (task: string) => {
+      const how = isLoadingRef.current ? "added" : "started";
+      onSubmitRef.current(task);
+      return how;
+    },
+    turn: () => describeTurn(messagesRef.current as unknown as TurnMessage[], isLoadingRef.current),
+    running: isLoading,
+  }), [activeChatId, internalChatId, activeProjectId, isLoading]);
+
   // The turn is over. What it read is in the stored chat now, where it was read,
   // and what it did not is there marked; the history reload shows both. A
   // message that missed the turn by a moment goes now, as a turn of its own.
@@ -1556,6 +1577,7 @@ export function ChatPanel({ initialQuickSkills = [], onboardingPending = false, 
         // and a history of calls to tools that are no longer offered is not
         // worth what it costs at the provider.
         contextModeLocked={messages.length > 0 || isLoading}
+        voice={voiceBindings}
         runPlace={{
           status: remote.status,
           home: chatHome,

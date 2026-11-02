@@ -1,0 +1,296 @@
+/**
+ * Voice calls with the agent: the two tools the voice model has, what it is
+ * told about the turn in the chat, and the workspace's routes - the secret
+ * comes from the deployment with the workspace's token and only this site's
+ * session gets it, beats pass through, and an ended call lands in its chat as
+ * a card with what was said.
+ *
+ * Run with Node 22: npm run test:voice
+ */
+import assert from "node:assert/strict";
+import fs from "node:fs";
+import http from "node:http";
+import os from "node:os";
+import path from "node:path";
+import {
+  buildVoiceInstructions,
+  cleanTranscript,
+  describeTurn,
+  formatCallLength,
+  recentForVoice,
+  runVoiceTool,
+  voiceContextOf,
+  VOICE_TOOLS,
+  type TurnMessage,
+} from "../src/lib/voice/tools.ts";
+
+let failed = 0;
+async function check(name: string, fn: () => void | Promise<void>): Promise<void> {
+  try {
+    await fn();
+    console.log(`  ok    ${name}`);
+  } catch (error) {
+    failed += 1;
+    console.log(`  FAIL  ${name}: ${(error as Error).message}`);
+  }
+}
+
+console.log("voice tools:");
+
+function fakeChat(running: boolean) {
+  const sent: string[] = [];
+  return {
+    sent,
+    deps: {
+      delegate: (task: string) => {
+        sent.push(task);
+        return running ? ("added" as const) : ("started" as const);
+      },
+      turn: () => describeTurn([], running),
+    },
+  };
+}
+
+await check("the voice model is offered exactly delegate and status", () => {
+  assert.deepEqual(VOICE_TOOLS.map((tool) => tool.name), ["delegate", "status"]);
+  assert.deepEqual((VOICE_TOOLS[0].parameters as { required: string[] }).required, ["task"]);
+});
+await check("delegate hands the task, in the person's words, to the chat: a turn of its own when idle", async () => {
+  const chat = fakeChat(false);
+  const out = await runVoiceTool("delegate", JSON.stringify({ task: "  Draft the contract for Ivanov  " }), chat.deps);
+  assert.equal(out.ok, true);
+  assert.equal(out.how, "started");
+  assert.deepEqual(chat.sent, ["Draft the contract for Ivanov"]);
+  assert.match(String(out.note), /do not invent/);
+});
+await check("delegate while the agent works adds to that turn, and says so", async () => {
+  const chat = fakeChat(true);
+  const out = await runVoiceTool("delegate", JSON.stringify({ task: "also cc the accountant" }), chat.deps);
+  assert.equal(out.how, "added");
+  assert.deepEqual(chat.sent, ["also cc the accountant"]);
+});
+await check("an empty, missing or malformed task reaches nobody and is answered as a failure", async () => {
+  const chat = fakeChat(false);
+  for (const args of ["{}", JSON.stringify({ task: "   " }), JSON.stringify({ task: 42 }), "not json", "[]"]) {
+    const out = await runVoiceTool("delegate", args, chat.deps);
+    assert.equal(out.ok, false, args);
+  }
+  assert.equal((await runVoiceTool("delegate", JSON.stringify({ task: "x".repeat(8001) }), chat.deps)).ok, false);
+  assert.deepEqual(chat.sent, []);
+});
+await check("a delegate that fails is reported, not claimed done", async () => {
+  const out = await runVoiceTool("delegate", JSON.stringify({ task: "send it" }), {
+    delegate: () => { throw new Error("offline"); },
+    turn: () => describeTurn([], false),
+  });
+  assert.deepEqual(out, { ok: false, error: "offline" });
+});
+await check("an unknown tool is refused by name", async () => {
+  const out = await runVoiceTool("delete_everything", "{}", fakeChat(false).deps);
+  assert.equal(out.ok, false);
+  assert.match(String(out.error), /delete_everything/);
+});
+
+const working: TurnMessage[] = [
+  { role: "user", parts: [{ type: "text", text: "find the invoice" }] },
+  {
+    role: "assistant",
+    parts: [
+      { type: "text", text: "Looking through the files." },
+      { type: "tool-read", state: "output-available" },
+      { type: "dynamic-tool", toolName: "bash", state: "input-available" },
+    ],
+  },
+];
+await check("status tells what the turn is doing now, what it finished and the latest words", async () => {
+  const out = await runVoiceTool("status", "", { delegate: () => "started", turn: () => describeTurn(working, true) });
+  assert.equal(out.ok, true);
+  assert.equal(out.running, true);
+  assert.deepEqual(out.doing, ["bash"]);
+  assert.deepEqual(out.done, ["read"]);
+  assert.equal(out.latestText, "Looking through the files.");
+});
+await check("a finished turn has nothing running even when a tool part never closed", () => {
+  const status = describeTurn(working, false);
+  assert.equal(status.running, false);
+  assert.deepEqual(status.doing, []);
+  assert.equal(describeTurn([], false).latestText, "");
+});
+await check("a long answer is told by its end, where the latest words are", () => {
+  const status = describeTurn([{ role: "assistant", parts: [{ type: "text", text: `${"a".repeat(800)} THE END` }] }], false);
+  assert.ok(status.latestText.length <= 500);
+  assert.ok(status.latestText.endsWith("THE END"));
+});
+
+await check("the instructions carry the newest messages that fit, oldest first, and say to delegate the work", () => {
+  const messages = voiceContextOf([
+    { role: "user", parts: [{ type: "text", text: "first" }] },
+    { role: "assistant", parts: [{ type: "tool-read", state: "output-available" }] },
+    { role: "assistant", parts: [{ type: "text", text: "second" }] },
+    { role: "system", parts: [{ type: "text", text: "hidden" }] },
+  ]);
+  assert.deepEqual(messages, [{ role: "user", text: "first" }, { role: "assistant", text: "second" }]);
+  const text = buildVoiceInstructions({ locale: "ru", projectName: "Shop", recent: recentForVoice(messages) });
+  assert.match(text, /Person: first\nAgent: second/);
+  assert.match(text, /call `delegate`/);
+  assert.match(text, /language the person speaks/);
+  assert.match(text, /"ru"/);
+  assert.match(text, /project "Shop"/);
+  const many = Array.from({ length: 40 }, (_, i) => ({ role: "user" as const, text: `${i} ${"x".repeat(300)}` }));
+  const kept = recentForVoice(many);
+  assert.ok(kept.length < 40 && kept.length > 5);
+  assert.ok(kept.at(-1)!.text.startsWith("39 "));
+});
+await check("a call's length reads like a phone's", () => {
+  assert.equal(formatCallLength(124), "02:04");
+  assert.equal(formatCallLength(0), "00:00");
+  assert.equal(formatCallLength(3725), "1:02:05");
+});
+await check("a transcript from the page is kept to its shape", () => {
+  assert.deepEqual(cleanTranscript([
+    { role: "user", text: " hi " },
+    { role: "system", text: "x" },
+    { role: "agent", text: "" },
+    { role: "agent", text: 5 },
+    null,
+    { role: "agent", text: "hello" },
+  ]), [{ role: "user", text: "hi" }, { role: "agent", text: "hello" }]);
+  assert.deepEqual(cleanTranscript("nope"), []);
+  assert.equal(cleanTranscript(Array.from({ length: 900 }, () => ({ role: "user", text: "a" }))).length, 400);
+});
+
+// --- the routes, against a stand-in deployment ----------------------------
+
+console.log("voice routes:");
+const cloud = { calls: [] as Array<{ method: string; url: string; auth: string | undefined }> };
+const cloudServer = http.createServer((req, res) => {
+  cloud.calls.push({ method: req.method || "", url: req.url || "", auth: req.headers.authorization });
+  res.setHeader("content-type", "application/json");
+  if (req.headers.authorization !== "Bearer eggw_workspace_token") { res.statusCode = 401; return res.end("{}"); }
+  if (req.url === "/v1/tools/voice/call" && req.method === "GET") return res.end(JSON.stringify({ available: true, minutes: { monthly: 10, used: 1, left: 9 } }));
+  if (req.url === "/v1/tools/voice/call" && req.method === "POST") {
+    if (cloudRefuses) { res.statusCode = 402; return res.end(JSON.stringify({ error: "This month's 10 voice minutes are used up.", code: "minutes" })); }
+    res.statusCode = 201;
+    return res.end(JSON.stringify({ call: { id: "a".repeat(32) }, secret: "eph_secret", realtimeUrl: "wss://voice.example.test/v1/realtime?model=m", model: "m", voice: "eve", maxSeconds: 600, beatSeconds: 10, minutes: { monthly: 10, used: 0, left: 10 } }));
+  }
+  if (req.url === `/v1/tools/voice/call/${"a".repeat(32)}/beat`) return res.end(JSON.stringify({ continue: true, leftSeconds: 590 }));
+  if (req.url === `/v1/tools/voice/call/${"a".repeat(32)}` && req.method === "DELETE") return res.end(JSON.stringify({ ok: true, ended: true, seconds: 64 }));
+  res.statusCode = 404;
+  res.end("{}");
+});
+let cloudRefuses = false;
+await new Promise<void>((resolve) => cloudServer.listen(0, "127.0.0.1", resolve));
+
+const root = fs.mkdtempSync(path.join(os.tmpdir(), "eggent-voice-"));
+process.chdir(root);
+process.env.EGGENT_AUTH_SECRET = "voice-test-secret-0123456789abcdef";
+process.env.EGGENT_VOICE_API_URL = `http://127.0.0.1:${(cloudServer.address() as { port: number }).port}/v1/tools/voice/`;
+process.env.EGGENT_USAGE_API_TOKEN = "eggw_workspace_token";
+
+const { AUTH_COOKIE_NAME, createSessionToken } = await import("../src/lib/auth/session.ts");
+const { NextRequest } = await import("next/server");
+const { getChat, createChat } = await import("../src/lib/storage/chat-store.ts");
+const callRoute = await import("../src/app/api/voice/call/route.ts");
+const beatRoute = await import("../src/app/api/voice/call/[callId]/route.ts");
+const endRoute = await import("../src/app/api/voice/call/[callId]/end/route.ts");
+
+const cookie = `${AUTH_COOKIE_NAME}=${await createSessionToken("owner@example.test", false)}`;
+function request(url: string, method: string, body: unknown, headers: Record<string, string> = {}) {
+  return new NextRequest(`http://workspace.example.test${url}`, {
+    method,
+    headers: { cookie, origin: "http://workspace.example.test", host: "workspace.example.test", "content-type": "application/json", ...headers },
+    ...(method === "GET" ? {} : { body: JSON.stringify(body) }),
+  });
+}
+const CALL = "a".repeat(32);
+const CHAT = "11111111-2222-4333-8444-555555555555";
+
+await check("starting a call needs this site's session and JSON; nobody else gets the secret", async () => {
+  const before = cloud.calls.length;
+  assert.equal((await callRoute.POST(request("/api/voice/call", "POST", {}, { cookie: "" }))).status, 401);
+  assert.equal((await callRoute.POST(request("/api/voice/call", "POST", {}, { origin: "http://sibling.example.test" }))).status, 403);
+  assert.equal((await callRoute.POST(request("/api/voice/call", "POST", {}, { "content-type": "text/plain" }))).status, 415);
+  assert.equal(cloud.calls.length, before, "a refused request reached the deployment");
+});
+await check("a call's secret comes from the deployment, asked with the workspace's own token, which the page never sees", async () => {
+  const response = await callRoute.POST(request("/api/voice/call", "POST", {}));
+  assert.equal(response.status, 201);
+  const text = await response.text();
+  const json = JSON.parse(text);
+  assert.equal(json.callId, CALL);
+  assert.equal(json.secret, "eph_secret");
+  assert.equal(json.realtimeUrl, "wss://voice.example.test/v1/realtime?model=m");
+  assert.ok(!text.includes("eggw_workspace_token"));
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.equal(cloud.calls.at(-1)!.auth, "Bearer eggw_workspace_token");
+});
+await check("a refusal past the allowance is passed on as said, with its code", async () => {
+  cloudRefuses = true;
+  const response = await callRoute.POST(request("/api/voice/call", "POST", {}));
+  cloudRefuses = false;
+  assert.equal(response.status, 402);
+  const json = await response.json();
+  assert.equal(json.code, "minutes");
+  assert.match(json.error, /used up/);
+});
+await check("the status says whether calls are offered", async () => {
+  const json = await (await callRoute.GET(request("/api/voice/call", "GET", null))).json();
+  assert.deepEqual(json, { available: true, minutes: { monthly: 10, used: 1, left: 9 } });
+});
+await check("a beat goes through for a call id, and nothing that is not one", async () => {
+  const ok = await beatRoute.POST(request(`/api/voice/call/${CALL}`, "POST", {}), { params: Promise.resolve({ callId: CALL }) });
+  assert.deepEqual(await ok.json(), { continue: true, leftSeconds: 590, reason: null });
+  const bad = await beatRoute.POST(request("/api/voice/call/..%2F..", "POST", {}), { params: Promise.resolve({ callId: "../.." }) });
+  assert.equal(bad.status, 400);
+});
+await check("an ended call lands in its chat as one card with what was said and the summary, timed by the deployment", async () => {
+  await createChat(CHAT, "Talk", undefined);
+  const response = await endRoute.POST(request(`/api/voice/call/${CALL}/end`, "POST", {
+    chatId: CHAT,
+    seconds: 9999,
+    summary: "Discussed the contract. Handed the draft to the agent.",
+    transcript: [{ role: "user", text: "Γεια, φτιάξε τη σύμβαση" }, { role: "agent", text: "Το έδωσα στον πράκτορα." }, { role: "hacker", text: "x" }],
+    delegated: ["φτιάξε τη σύμβαση", 5],
+  }), { params: Promise.resolve({ callId: CALL }) });
+  const json = await response.json();
+  assert.equal(json.recorded, true);
+  assert.equal(cloud.calls.at(-1)!.method, "DELETE");
+  const chat = await getChat(CHAT);
+  const card = chat!.messages.at(-1)!;
+  assert.equal(card.role, "assistant");
+  assert.equal(card.content, "Discussed the contract. Handed the draft to the agent.");
+  assert.equal(card.voiceCall!.seconds, 64, "the page's own count was believed over the deployment's");
+  assert.deepEqual(card.voiceCall!.transcript, [{ role: "user", text: "Γεια, φτιάξε τη σύμβαση" }, { role: "agent", text: "Το έδωσα στον πράκτορα." }]);
+  assert.deepEqual(card.voiceCall!.delegated, ["φτιάξε τη σύμβαση"]);
+});
+await check("the card is drawn from the stored chat after a reload", async () => {
+  const { chatMessagesToUIMessages } = await import("../src/lib/chat/ui-messages.ts");
+  const chat = await getChat(CHAT);
+  const ui = chatMessagesToUIMessages(chat!.messages);
+  const last = ui.at(-1)!;
+  assert.equal((last.parts[0] as { type: string }).type, "data-eggentVoiceCall");
+  assert.ok(last.parts.some((part) => part.type === "text"));
+});
+await check("a call in a chat nobody had written in yet makes the chat; a call where nothing was said leaves nothing", async () => {
+  const fresh = "99999999-2222-4333-8444-555555555555";
+  const empty = await endRoute.POST(request(`/api/voice/call/${CALL}/end`, "POST", { chatId: fresh, transcript: [], summary: "" }), { params: Promise.resolve({ callId: CALL }) });
+  assert.equal((await empty.json()).recorded, false);
+  assert.equal(await getChat(fresh), null);
+  await endRoute.POST(request(`/api/voice/call/${CALL}/end`, "POST", { chatId: fresh, transcript: [{ role: "user", text: "hello" }], summary: "", projectId: "../../etc" }), { params: Promise.resolve({ callId: CALL }) });
+  const chat = await getChat(fresh);
+  assert.ok(chat);
+  assert.equal(chat!.projectId, undefined, "a path was accepted as a project id");
+  assert.equal(chat!.messages.length, 1);
+});
+await check("ending needs the session too", async () => {
+  const response = await endRoute.POST(request(`/api/voice/call/${CALL}/end`, "POST", { chatId: CHAT }, { cookie: "" }), { params: Promise.resolve({ callId: CALL }) });
+  assert.equal(response.status, 401);
+});
+
+cloudServer.close();
+if (failed) {
+  console.log(`${failed} failed`);
+  process.exit(1);
+}
+console.log("all passed");
+process.exit(0);

@@ -140,6 +140,15 @@ export function chatMessagesToUIMessages(chatMessages: ChatMessage[]): UIMessage
         } as UIMessage["parts"][number]);
       }
 
+      // A voice call held in this chat: its card, with what was said.
+      if (m.voiceCall) {
+        parts.unshift({
+          type: "data-eggentVoiceCall",
+          id: `voice-call-${m.id}`,
+          data: m.voiceCall,
+        } as UIMessage["parts"][number]);
+      }
+
       // Replies that came to letters the agent sent from this chat.
       if (m.emailReplies?.length) {
         parts.push({
