@@ -633,8 +633,14 @@ export function VoiceCallControl({ bindings, disabled }: { bindings: VoiceCallBi
   const [showTranscript, setShowTranscript] = useState(true);
   const [expanded, setExpanded] = useState(true);
   const inCallNow = state.phase !== "idle";
+  // Open only where it fits beside the conversation: the composer is as wide as
+  // the chat column, and the panel needs 20 rem plus its margin to its right.
+  // Elsewhere it starts as the pill, which covers no more than a line or two.
   useEffect(() => {
-    if (inCallNow) setExpanded(window.matchMedia("(min-width: 768px)").matches);
+    if (!inCallNow) return;
+    const column = document.querySelector('[data-slot="chat-composer-footer"]')?.getBoundingClientRect();
+    const room = column ? window.innerWidth - column.right : 0;
+    setExpanded(window.matchMedia("(min-width: 768px)").matches && room >= 352);
   }, [inCallNow]);
   const transcriptEnd = useRef<HTMLDivElement | null>(null);
   useEffect(() => {
