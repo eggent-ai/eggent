@@ -21,6 +21,9 @@ import {
   sessionUpdate,
   functionCallOf,
   turnDetectionUpdate,
+  gateMic,
+  rmsOf,
+  GATE_HOLD_MS,
   isAnswerPace,
   PACE_MS,
   endingNote,
@@ -183,16 +186,35 @@ await check("Yandex gets the OpenAI Realtime GA session: voice and turn detectio
   assert.equal(xai.session.audio.input.transcription.model, "grok-transcribe");
 });
 await check("the answer speed a person picks is 500, 800 or 1200 ms, and changes only the pause mid-call", () => {
-  assert.deepEqual(PACE_MS, { fast: 500, normal: 800, calm: 1200 });
+  assert.deepEqual(PACE_MS, { fast: 700, normal: 1000, calm: 1400 });
   assert.ok(isAnswerPace("calm"));
   assert.ok(!isAnswerPace("slow"));
   assert.ok(!isAnswerPace(null));
-  assert.deepEqual(turnDetectionUpdate("openai-ga", 1200), {
+  assert.deepEqual(turnDetectionUpdate("openai-ga", 1400, 0.6), {
     type: "session.update",
-    session: { type: "realtime", audio: { input: { turn_detection: { type: "server_vad", threshold: 0.5, silence_duration_ms: 1200 } } } },
+    session: { type: "realtime", audio: { input: { turn_detection: { type: "server_vad", threshold: 0.6, silence_duration_ms: 1400 } } } },
   });
   const xai = turnDetectionUpdate("xai", 500) as { session: Record<string, unknown> };
   assert.deepEqual(xai.session, { turn_detection: { type: "server_vad", silence_duration_ms: 500 } });
+});
+await check("while our answer plays, its echo does not go up as the person's voice; a person talking over it does, and is not cut into pieces", () => {
+  const now = 1_000_000;
+  // nothing playing: everything goes up, however quiet
+  assert.equal(gateMic({ now, playing: false, micRms: 0.001, outRms: 0, openUntil: 0 }).pass, true);
+  // our answer at 0.2 comes back through the microphone at a third of it: held back
+  assert.equal(gateMic({ now, playing: true, micRms: 0.07, outRms: 0.2, openUntil: 0 }).pass, false);
+  // a person speaking over it, louder than the echo would be: through, and the gate stays open
+  const through = gateMic({ now, playing: true, micRms: 0.25, outRms: 0.2, openUntil: 0 });
+  assert.equal(through.pass, true);
+  assert.equal(through.openUntil, now + GATE_HOLD_MS);
+  // a quieter syllable of the same words a moment later still goes up
+  assert.equal(gateMic({ now: now + 200, playing: true, micRms: 0.05, outRms: 0.2, openUntil: through.openUntil }).pass, true);
+  // and once the hold is over, the echo alone is held back again
+  assert.equal(gateMic({ now: now + GATE_HOLD_MS + 1, playing: true, micRms: 0.05, outRms: 0.2, openUntil: through.openUntil }).pass, false);
+  // a quiet answer does not lower the bar under the room's own noise
+  assert.equal(gateMic({ now, playing: true, micRms: 0.015, outRms: 0.005, openUntil: 0 }).pass, false);
+  assert.ok(Math.abs(rmsOf(new Float32Array([0.5, -0.5, 0.5, -0.5])) - 0.5) < 1e-9);
+  assert.equal(rmsOf(new Float32Array(0)), 0);
 });
 await check("a function call is read from either provider's event, and both name the same call", () => {
   const fromXai = functionCallOf({ type: "response.function_call_arguments.done", name: "delegate", call_id: "c1", arguments: "{\"task\":\"x\"}" });

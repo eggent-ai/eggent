@@ -12,6 +12,8 @@ import {
   functionCallOf,
   sessionUpdate,
   turnDetectionUpdate,
+  gateMic,
+  rmsOf,
   isAnswerPace,
   PACE_MS,
   type AnswerPace,
@@ -215,6 +217,11 @@ function useVoiceCall(bindings: VoiceCallBindings) {
   const lineIds = useRef(new Map<string, string>());
   const handledCalls = useRef(new Set<string>());
   const protocolRef = useRef<VoiceProtocol>("xai");
+  const thresholdRef = useRef(0.5);
+  /** The answer being played; audio of any other is dropped. Null after the person cut in, until the next answer starts. */
+  const currentResponse = useRef<string | null>(null);
+  const droppingAudio = useRef(false);
+  const gateOpenUntil = useRef(0);
   const [pace, setPaceState] = useState<AnswerPace | null>(null);
   useEffect(() => { setPaceState(storedPace()); }, []);
   const beatNow = useRef<() => void>(() => undefined);
@@ -314,6 +321,9 @@ function useVoiceCall(bindings: VoiceCallBindings) {
         // provider is told to drop it rather than finish it unheard.
         stopPlayback();
         if (responding.current) send({ type: "response.cancel" });
+        // What is still on its way of the answer cut off is not played.
+        currentResponse.current = null;
+        droppingAudio.current = true;
         speechStoppedAt.current = null;
         setState((current) => ({ ...current, floor: "listening" }));
         break;
@@ -325,11 +335,17 @@ function useVoiceCall(bindings: VoiceCallBindings) {
       case "response.created": {
         responding.current = true;
         const id = (event.response as { id?: string } | undefined)?.id ?? null;
+        // One answer at a time: a new one stops whatever of the last is still playing.
+        if (id && currentResponse.current && id !== currentResponse.current) stopPlayback();
+        currentResponse.current = id;
+        droppingAudio.current = false;
         if (summary.current && summary.current.responseId === null && id) summary.current.responseId = id;
         break;
       }
       case "response.output_audio.delta":
       case "response.audio.delta": {
+        const from = typeof event.response_id === "string" ? event.response_id : null;
+        if (droppingAudio.current || (from && currentResponse.current && from !== currentResponse.current)) break;
         if (speechStoppedAt.current !== null) {
           const waited = Math.round(performance.now() - speechStoppedAt.current);
           stats().firstAudioMs.push(waited);
@@ -514,6 +530,9 @@ function useVoiceCall(bindings: VoiceCallBindings) {
     muted.current = false;
     lineIds.current.clear();
     handledCalls.current.clear();
+    currentResponse.current = null;
+    droppingAudio.current = false;
+    gateOpenUntil.current = 0;
     setState({ ...INITIAL, phase: "connecting" });
     const startedAt = performance.now();
     let stream: MediaStream | null = null;
@@ -533,6 +552,8 @@ function useVoiceCall(bindings: VoiceCallBindings) {
       const chosen = storedPace();
       const silenceMs = chosen ? PACE_MS[chosen] : Math.min(2000, Math.max(200, Number(answer.silenceMs) || 600));
       protocolRef.current = protocol;
+      const vadThreshold = Math.min(0.95, Math.max(0.1, Number(answer.vadThreshold) || 0.5));
+      thresholdRef.current = vadThreshold;
       if (!callId || !realtimeUrl || (!relayed && !secret)) throw new Error(t("voice.error.failed"));
       setState((current) => ({
         ...current,
@@ -556,6 +577,7 @@ function useVoiceCall(bindings: VoiceCallBindings) {
       const out = ctx.createGain();
       const outAnalyser = ctx.createAnalyser();
       outAnalyser.fftSize = 256;
+      const outLevel = new Float32Array(outAnalyser.fftSize);
       out.connect(outAnalyser);
       outAnalyser.connect(ctx.destination);
       audio.current = { ctx, stream, micAnalyser, outAnalyser, out, nextTime: 0, sources: new Set() };
@@ -567,7 +589,20 @@ function useVoiceCall(bindings: VoiceCallBindings) {
         if (ws.current?.readyState !== WebSocket.OPEN) return;
         beatNow.current();
         watchNow.current();
-        const chunk = muted.current ? new Float32Array(message.data.length) : message.data;
+        let chunk = muted.current ? new Float32Array(message.data.length) : message.data;
+        // While our answer plays, its echo must not reach the provider as the person's voice.
+        const a = audio.current;
+        if (a && !muted.current) {
+          const playing = a.nextTime + 0.3 > a.ctx.currentTime;
+          let outRms = 0;
+          if (playing) {
+            a.outAnalyser.getFloatTimeDomainData(outLevel);
+            outRms = rmsOf(outLevel);
+          }
+          const verdict = gateMic({ now: Date.now(), playing, micRms: rmsOf(chunk), outRms, openUntil: gateOpenUntil.current });
+          gateOpenUntil.current = verdict.openUntil;
+          if (!verdict.pass) chunk = new Float32Array(chunk.length);
+        }
         pending.push(chunk);
         pendingLength += chunk.length;
         if (pendingLength < ctx.sampleRate * 0.04) return;
@@ -590,6 +625,7 @@ function useVoiceCall(bindings: VoiceCallBindings) {
           voice: typeof answer.voice === "string" && answer.voice ? answer.voice : "eve",
           instructions: buildVoiceInstructions({ locale, projectName: b.projectName, recent: recentForVoice(b.recent()) }),
           silenceMs,
+          threshold: vadThreshold,
         }));
         // The agent speaks first, as somebody who picked up the phone does.
         send({ type: "response.create" });
@@ -695,7 +731,7 @@ function useVoiceCall(bindings: VoiceCallBindings) {
     } catch {
       // Not remembered; still applied to this call.
     }
-    if (call.current) send(turnDetectionUpdate(protocolRef.current, PACE_MS[next]));
+    if (call.current) send(turnDetectionUpdate(protocolRef.current, PACE_MS[next], thresholdRef.current));
   }, [send]);
 
   const toggleMute = useCallback(() => {

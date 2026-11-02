@@ -121,6 +121,8 @@ export interface SessionInput {
   instructions: string;
   /** How long a pause ends the person's turn. */
   silenceMs: number;
+  /** How loud a sound has to be to count as speech, 0..1: higher ignores more of the room. */
+  threshold?: number;
 }
 
 const PCM = { type: "audio/pcm", rate: 24000 };
@@ -135,7 +137,7 @@ export function sessionUpdate(input: SessionInput): Record<string, unknown> {
         output_modalities: ["audio"],
         instructions: input.instructions,
         audio: {
-          input: { format: PCM, turn_detection: { type: "server_vad", threshold: 0.5, silence_duration_ms: input.silenceMs } },
+          input: { format: PCM, turn_detection: { type: "server_vad", threshold: input.threshold ?? 0.5, silence_duration_ms: input.silenceMs } },
           output: { format: PCM, voice: input.voice },
         },
         tools: VOICE_TOOLS,
@@ -147,7 +149,7 @@ export function sessionUpdate(input: SessionInput): Record<string, unknown> {
     session: {
       voice: input.voice,
       instructions: input.instructions,
-      turn_detection: { type: "server_vad", silence_duration_ms: input.silenceMs },
+      turn_detection: { type: "server_vad", silence_duration_ms: input.silenceMs, ...(input.threshold ? { threshold: input.threshold } : {}) },
       reasoning: { effort: "none" },
       audio: {
         input: { format: PCM, transcription: { model: "grok-transcribe" } },
@@ -162,18 +164,19 @@ export function sessionUpdate(input: SessionInput): Record<string, unknown> {
  * How long a pause ends the person's turn, as the person chooses it in the call
  * panel. Measured on Yandex with phrases that pause at commas: 500 ms answered
  * half-finished sentences several times over, 800 ms about half as often, 1200 ms
- * almost never - each step adds its length to the wait for the answer.
+ * almost never; a person speaking Russian slowly was still answered mid-thought
+ * at 600, so the choices start at 700 - each adds its length to the wait.
  */
 export type AnswerPace = "fast" | "normal" | "calm";
-export const PACE_MS: Record<AnswerPace, number> = { fast: 500, normal: 800, calm: 1200 };
+export const PACE_MS: Record<AnswerPace, number> = { fast: 700, normal: 1000, calm: 1400 };
 
 export function isAnswerPace(value: unknown): value is AnswerPace {
   return value === "fast" || value === "normal" || value === "calm";
 }
 
 /** Changes only the pause during a call: the provider keeps its voice and instructions. */
-export function turnDetectionUpdate(protocol: VoiceProtocol, silenceMs: number): Record<string, unknown> {
-  const turnDetection = { type: "server_vad", threshold: 0.5, silence_duration_ms: silenceMs };
+export function turnDetectionUpdate(protocol: VoiceProtocol, silenceMs: number, threshold = 0.5): Record<string, unknown> {
+  const turnDetection = { type: "server_vad", threshold, silence_duration_ms: silenceMs };
   if (protocol === "openai-ga") {
     return { type: "session.update", session: { type: "realtime", audio: { input: { turn_detection: turnDetection } } } };
   }
@@ -197,6 +200,48 @@ export function functionCallOf(event: Record<string, unknown>): { name: string; 
     return callId ? { name: String(item.name || ""), callId, arguments: typeof item.arguments === "string" ? item.arguments : "" } : null;
   }
   return null;
+}
+
+// --- the microphone while the agent speaks --------------------------------
+
+/**
+ * Without headphones the agent's own voice comes back through the microphone,
+ * the provider takes it for the person, stops its answer and answers itself
+ * (measured on Yandex: one question, eleven replies). The browser's echo
+ * cancellation does not reliably know about sound played by the page itself, so
+ * while our answer plays the microphone goes up only when it is clearly louder
+ * than what we are playing - a person talking over the answer is - and stays
+ * open for half a second once it is, so their words are not cut into pieces.
+ * Outside our playback everything goes up as it is.
+ */
+export const GATE_FLOOR = 0.02;
+export const GATE_RATIO = 0.8;
+export const GATE_HOLD_MS = 500;
+
+export interface MicGateInput {
+  now: number;
+  /** Whether our answer is playing, or has just stopped (its echo still in the room). */
+  playing: boolean;
+  /** Loudness of this microphone frame and of what we are playing, as RMS 0..1. */
+  micRms: number;
+  outRms: number;
+  /** Until when the gate is held open by speech that already got through. */
+  openUntil: number;
+}
+
+export function gateMic(input: MicGateInput): { pass: boolean; openUntil: number } {
+  if (!input.playing) return { pass: true, openUntil: input.openUntil };
+  if (input.now < input.openUntil) return { pass: true, openUntil: input.openUntil };
+  if (input.micRms > Math.max(GATE_FLOOR, input.outRms * GATE_RATIO)) return { pass: true, openUntil: input.now + GATE_HOLD_MS };
+  return { pass: false, openUntil: input.openUntil };
+}
+
+/** Loudness of a frame, as root mean square. */
+export function rmsOf(samples: Float32Array): number {
+  if (!samples.length) return 0;
+  let sum = 0;
+  for (let i = 0; i < samples.length; i += 1) sum += samples[i] * samples[i];
+  return Math.sqrt(sum / samples.length);
 }
 
 // --- the agent's turn, as the voice model is told it -----------------------
