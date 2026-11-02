@@ -247,16 +247,28 @@ function useVoiceCall(bindings: VoiceCallBindings) {
 
   /** One transcript line per item, updated in place as its text grows. */
   const upsertLine = useCallback((key: string, role: VoiceTranscriptLine["role"], text: string, mode: "append" | "replace", final: boolean) => {
+    // The id is settled outside the state update: React may run an updater twice, and it must not depend on what the first run did.
+    let id = lineIds.current.get(key);
+    if (!id) {
+      id = `${role}-${key}`;
+      lineIds.current.set(key, id);
+    }
+    const lineId = id;
     setState((current) => {
-      let id = lineIds.current.get(key);
       const lines = [...current.lines];
-      if (!id) {
-        id = `${role}-${key}`;
-        lineIds.current.set(key, id);
-        lines.push({ id, role, text: "", final: false });
+      let index = lines.findIndex((line) => line.id === lineId);
+      if (index < 0) {
+        // Some providers report each pause as a new item carrying the whole phrase so far: a person's
+        // line that only continues the one before it replaces that one rather than repeating it.
+        const last = lines[lines.length - 1];
+        const continues = role === "user" && last?.role === "user" && last.text.trim() !== "" && text.trim().startsWith(last.text.trim());
+        if (continues) {
+          lines[lines.length - 1] = { ...last, id: lineId };
+        } else {
+          lines.push({ id: lineId, role, text: "", final: false });
+        }
+        index = lines.length - 1;
       }
-      const index = lines.findIndex((line) => line.id === id);
-      if (index < 0) return current;
       const line = lines[index];
       lines[index] = { ...line, text: mode === "append" ? line.text + text : text, final: final || line.final };
       return { ...current, lines };
@@ -326,7 +338,8 @@ function useVoiceCall(bindings: VoiceCallBindings) {
           if (summary.current.responseId && event.response_id === summary.current.responseId && typeof event.transcript === "string" && event.transcript.length > summary.current.text.length) summary.current.text = event.transcript;
           break;
         }
-        if (typeof event.transcript === "string") upsertLine(String(event.item_id || event.response_id || "agent"), "agent", event.transcript, "replace", true);
+        // Yandex closes the answer with an empty transcript (its words came as text deltas): an empty one replaces nothing.
+        if (typeof event.transcript === "string" && event.transcript.trim()) upsertLine(String(event.item_id || event.response_id || "agent"), "agent", event.transcript, "replace", true);
         break;
       }
       case "conversation.item.input_audio_transcription.updated":
