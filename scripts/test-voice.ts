@@ -133,6 +133,9 @@ await check("the instructions carry the newest messages that fit, oldest first, 
   const text = buildVoiceInstructions({ locale: "ru", projectName: "Shop", recent: recentForVoice(messages) });
   assert.match(text, /Person: first\nAgent: second/);
   assert.match(text, /call `delegate`/);
+  assert.match(text, /connect a service/);
+  assert.match(text, /at once/);
+  assert.match(text, /keep the conversation going/);
   assert.match(text, /language the person speaks/);
   assert.match(text, /"ru"/);
   assert.match(text, /project "Shop"/);

@@ -22,7 +22,8 @@ export const VOICE_TOOLS: VoiceToolDefinition[] = [
     name: "delegate",
     description:
       "Hand a task to the agent, who works in the open chat with every tool: files, the web, documents, letters, schedules. " +
-      "Use it for anything that needs doing rather than saying. If the agent is already working, the task is added to what it is doing. " +
+      "Use it at once for anything that needs doing rather than saying - connecting a service or app, comparing, finding, writing, posting, sending, documents, schedules. " +
+      "If the agent is already working, the task is added to what it is doing. " +
       "Write the task in the person's own words and language, complete enough to act on without the call.",
     parameters: {
       type: "object",
@@ -77,13 +78,15 @@ export interface VoiceInstructionsInput {
 
 export function buildVoiceInstructions(input: VoiceInstructionsInput): string {
   const lines = [
-    "You are the voice of the person's AI employee in Eggent, on a live phone-style call.",
+    "You are the voice of the person's AI employee in Eggent, on a live phone-style call. The employee behind you is a real agent with every tool of the workspace.",
     "Speak like a capable colleague on the phone: short sentences, one thought at a time, no lists, no markdown, no reading out links or file paths.",
     "Answer in the language the person speaks; if they switch, switch with them." +
       (input.locale ? ` Their interface is set to "${input.locale}", so start in that language until they speak.` : ""),
-    "You cannot open files, browse, write documents or send anything yourself. For any such work call `delegate` with the task, then say in a few words that you have handed it over - do not wait in silence and do not invent the result.",
-    "The agent's work appears in the chat on the person's screen. When asked how it is going, call `status` and say what it shows in one or two sentences.",
-    "Messages that start with \"[Agent update]\" come from the agent, not the person: tell the person briefly what changed.",
+    "Any request that implies doing something - connect a service (Google, a CRM, a shop, a bank), compare prices, find, write, post to a channel, send a letter, make a document, schedule, remind - goes to the agent at once: call `delegate` with the task in the person's words, in the same turn, before saying anything else. Do not ask whether to do it and do not try to do it yourself; you cannot open files, browse, connect accounts or send anything.",
+    "Right after delegating say one short line that you are on it (\"I'm on it\", or the same in the person's language) and keep the conversation going - ask what else, or what matters most. Never invent the result.",
+    "Only answer by yourself what is a plain question or conversation that needs no tool.",
+    "The agent's work appears in the chat on the person's screen - a connection card, a file, a table. When asked how it is going, or when the person seems to wait, call `status` and say what it shows in one or two sentences.",
+    "Messages that start with \"[Agent update]\" come from the agent, not the person: tell the person briefly what changed and what they may need to do on screen (for example press the connect button).",
     "If something is unclear, ask one short question.",
   ];
   if (input.projectName) lines.push(`The chat belongs to the project "${clip(input.projectName, 80)}".`);
