@@ -9,10 +9,12 @@ import type { MessageKey } from "@/i18n/messages";
 import {
   buildSummaryInstructions,
   buildVoiceInstructions,
+  functionCallOf,
+  sessionUpdate,
+  type VoiceProtocol,
   formatCallLength,
   recentForVoice,
   runVoiceTool,
-  VOICE_TOOLS,
   questionUpdate,
   endingNote,
   IDLE_WARNING_NOTE,
@@ -195,6 +197,7 @@ function useVoiceCall(bindings: VoiceCallBindings) {
   /** The summary at the end: only the response asked for it counts, never one cancelled before it. */
   const summary = useRef<{ text: string; responseId: string | null; done: () => void } | null>(null);
   const lineIds = useRef(new Map<string, string>());
+  const handledCalls = useRef(new Set<string>());
   const beatNow = useRef<() => void>(() => undefined);
   const watchNow = useRef<() => void>(() => undefined);
   const lastPersonAt = useRef(0);
@@ -336,10 +339,14 @@ function useVoiceCall(bindings: VoiceCallBindings) {
         if (typeof event.delta === "string") upsertLine(String(event.item_id || "user"), "user", event.delta, "append", false);
         break;
       }
-      case "response.function_call_arguments.done": {
-        const name = String(event.name || "");
-        const callId = String(event.call_id || "");
-        const output = await runVoiceTool(name, typeof event.arguments === "string" ? event.arguments : "", {
+      case "response.function_call_arguments.done":
+      case "response.output_item.done": {
+        const fn = functionCallOf(event);
+        // Both events can announce one call: it runs once.
+        if (!fn || handledCalls.current.has(fn.callId)) break;
+        handledCalls.current.add(fn.callId);
+        const { name, callId } = fn;
+        const output = await runVoiceTool(name, fn.arguments, {
           delegate: (task) => {
             call.current?.delegated.push(task);
             return bindingsRef.current.delegate(task);
@@ -472,6 +479,7 @@ function useVoiceCall(bindings: VoiceCallBindings) {
     ignoreAudio.current = false;
     muted.current = false;
     lineIds.current.clear();
+    handledCalls.current.clear();
     setState({ ...INITIAL, phase: "connecting" });
     const startedAt = performance.now();
     let stream: MediaStream | null = null;
@@ -483,9 +491,13 @@ function useVoiceCall(bindings: VoiceCallBindings) {
       const answer = (await response.json().catch(() => ({}))) as Record<string, unknown>;
       if (!response.ok) throw new Error(answer.code === "balance" ? t("voice.error.balance") : String(answer.error || t("voice.error.failed")));
       const callId = String(answer.callId || "");
-      const secret = String(answer.secret || "");
+      const secret = typeof answer.secret === "string" ? answer.secret : "";
       const realtimeUrl = String(answer.realtimeUrl || "");
-      if (!callId || !secret || !realtimeUrl) throw new Error(t("voice.error.failed"));
+      // Through the deployment (the URL carries a one-use token), or straight to the provider with a secret.
+      const relayed = answer.mode === "relay";
+      const protocol: VoiceProtocol = answer.protocol === "openai-ga" ? "openai-ga" : "xai";
+      const silenceMs = Math.min(2000, Math.max(200, Number(answer.silenceMs) || 600));
+      if (!callId || !realtimeUrl || (!relayed && !secret)) throw new Error(t("voice.error.failed"));
       setState((current) => ({
         ...current,
         price: typeof answer.pricePerMinute === "string" ? answer.pricePerMinute : null,
@@ -531,34 +543,28 @@ function useVoiceCall(bindings: VoiceCallBindings) {
         send({ type: "input_audio_buffer.append", audio: floatToPcm16Base64(resample(joined, ctx.sampleRate)) });
       };
 
-      const socket = new WebSocket(realtimeUrl, [`xai-client-secret.${secret}`]);
+      const socket = relayed ? new WebSocket(realtimeUrl) : new WebSocket(realtimeUrl, [`xai-client-secret.${secret}`]);
       ws.current = socket;
       call.current = { id: callId, startedAt: Date.now(), beat: null, tick: null, delegated: [] };
       socket.onopen = () => {
         stats().connectMs = Math.round(performance.now() - startedAt);
         const b = bindingsRef.current;
-        send({
-          type: "session.update",
-          session: {
-            voice: answer.voice || "eve",
-            instructions: buildVoiceInstructions({ locale, projectName: b.projectName, recent: recentForVoice(b.recent()) }),
-            turn_detection: { type: "server_vad" },
-            reasoning: { effort: "none" },
-            audio: {
-              input: { format: { type: "audio/pcm", rate: RATE }, transcription: { model: "grok-transcribe" } },
-              output: { format: { type: "audio/pcm", rate: RATE } },
-            },
-            tools: VOICE_TOOLS,
-          },
-        });
+        send(sessionUpdate({
+          protocol,
+          voice: typeof answer.voice === "string" && answer.voice ? answer.voice : "eve",
+          instructions: buildVoiceInstructions({ locale, projectName: b.projectName, recent: recentForVoice(b.recent()) }),
+          silenceMs,
+        }));
         // The agent speaks first, as somebody who picked up the phone does.
         send({ type: "response.create" });
         setState((current) => ({ ...current, phase: "live", floor: "thinking" }));
       };
-      socket.onmessage = (message) => {
-        if (typeof message.data !== "string") return;
+      socket.onmessage = async (message) => {
+        // A relay may hand text frames over as blobs.
+        const text = typeof message.data === "string" ? message.data : message.data instanceof Blob ? await message.data.text() : "";
+        if (!text) return;
         try {
-          void handleEvent(JSON.parse(message.data) as Record<string, unknown>);
+          void handleEvent(JSON.parse(text) as Record<string, unknown>);
         } catch {
           // Not JSON: nothing to act on.
         }

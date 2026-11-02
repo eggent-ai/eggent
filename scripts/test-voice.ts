@@ -18,6 +18,8 @@ import {
   describeTurn,
   formatCallLength,
   questionUpdate,
+  sessionUpdate,
+  functionCallOf,
   endingNote,
   watchCall,
   IDLE_WARN_MS,
@@ -162,6 +164,29 @@ await check("the instructions carry the newest messages that fit, oldest first, 
   assert.ok(kept.length < 40 && kept.length > 5);
   assert.ok(kept.at(-1)!.text.startsWith("39 "));
 });
+await check("Yandex gets the OpenAI Realtime GA session: voice and turn detection inside audio, our tools, our pause", () => {
+  const update = sessionUpdate({ protocol: "openai-ga", voice: "dasha", instructions: "hi", silenceMs: 600 }) as { type: string; session: Record<string, any> };
+  assert.equal(update.type, "session.update");
+  assert.equal(update.session.type, "realtime");
+  assert.deepEqual(update.session.output_modalities, ["audio"]);
+  assert.equal(update.session.audio.output.voice, "dasha");
+  assert.deepEqual(update.session.audio.input.format, { type: "audio/pcm", rate: 24000 });
+  assert.equal(update.session.audio.input.turn_detection.silence_duration_ms, 600);
+  assert.equal(update.session.voice, undefined, "voice at the top is xAI's shape");
+  assert.deepEqual(update.session.tools.map((tool: { name: string }) => tool.name), ["delegate", "status"]);
+  const xai = sessionUpdate({ protocol: "xai", voice: "eve", instructions: "hi", silenceMs: 600 }) as { session: Record<string, any> };
+  assert.equal(xai.session.voice, "eve");
+  assert.equal(xai.session.turn_detection.type, "server_vad");
+  assert.equal(xai.session.audio.input.transcription.model, "grok-transcribe");
+});
+await check("a function call is read from either provider's event, and both name the same call", () => {
+  const fromXai = functionCallOf({ type: "response.function_call_arguments.done", name: "delegate", call_id: "c1", arguments: "{\"task\":\"x\"}" });
+  const fromYandex = functionCallOf({ type: "response.output_item.done", item: { type: "function_call", name: "delegate", call_id: "c1", arguments: "{\"task\":\"x\"}" } });
+  assert.deepEqual(fromXai, { name: "delegate", callId: "c1", arguments: "{\"task\":\"x\"}" });
+  assert.deepEqual(fromYandex, fromXai);
+  assert.equal(functionCallOf({ type: "response.output_item.done", item: { type: "message" } }), null);
+  assert.equal(functionCallOf({ type: "response.function_call_arguments.done", name: "delegate" }), null);
+});
 await check("a quiet line is warned at 45 s and ended 15 s after the warning unless the person speaks", () => {
   const t0 = 1_000_000;
   const base = { lastPersonAt: t0, lastAgentAt: t0, mutedSince: null, warnedAt: null };
@@ -216,7 +241,7 @@ const cloudServer = http.createServer((req, res) => {
   if (req.url === "/v1/tools/voice/call" && req.method === "POST") {
     if (cloudRefuses) { res.statusCode = 402; return res.end(JSON.stringify({ error: "The balance is too low for a call.", code: "balance", pricePerMinute: "€0.10", balanceLeft: "€0.01" })); }
     res.statusCode = 201;
-    return res.end(JSON.stringify({ call: { id: "a".repeat(32) }, secret: "eph_secret", realtimeUrl: "wss://voice.example.test/v1/realtime?model=m", model: "m", voice: "eve", maxSeconds: 600, beatSeconds: 10, pricePerMinute: "€0.10", balanceLeft: "€0.43" }));
+    return res.end(JSON.stringify({ call: { id: "a".repeat(32) }, mode: "direct", protocol: "xai", silenceMs: 600, secret: "eph_secret", realtimeUrl: "wss://voice.example.test/v1/realtime?model=m", model: "m", voice: "eve", maxSeconds: 600, beatSeconds: 10, pricePerMinute: "€0.10", balanceLeft: "€0.43" }));
   }
   if (req.url === `/v1/tools/voice/call/${"a".repeat(32)}/beat`) return res.end(JSON.stringify({ continue: true, leftSeconds: 590, balanceLeft: "€0.41" }));
   if (req.url === `/v1/tools/voice/call/${"a".repeat(32)}` && req.method === "DELETE") return res.end(JSON.stringify({ ok: true, ended: true, seconds: 64 }));
@@ -264,6 +289,9 @@ await check("a call's secret comes from the deployment, asked with the workspace
   const json = JSON.parse(text);
   assert.equal(json.callId, CALL);
   assert.equal(json.secret, "eph_secret");
+  assert.equal(json.mode, "direct");
+  assert.equal(json.protocol, "xai");
+  assert.equal(json.silenceMs, 600);
   assert.equal(json.pricePerMinute, "€0.10");
   assert.equal(json.balanceLeft, "€0.43");
   assert.equal(json.realtimeUrl, "wss://voice.example.test/v1/realtime?model=m");

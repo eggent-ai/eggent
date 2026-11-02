@@ -106,6 +106,77 @@ export function buildSummaryInstructions(): string {
   ].join(" ");
 }
 
+// --- the provider's own shapes ---------------------------------------------
+
+/**
+ * Which event and session shapes the provider speaks, as the deployment says:
+ * "openai-ga" is the OpenAI Realtime GA shape Yandex AI Studio speaks (voice
+ * and turn detection inside `audio`); "xai" is xAI's (both at the top).
+ */
+export type VoiceProtocol = "openai-ga" | "xai";
+
+export interface SessionInput {
+  protocol: VoiceProtocol;
+  voice: string;
+  instructions: string;
+  /** How long a pause ends the person's turn. */
+  silenceMs: number;
+}
+
+const PCM = { type: "audio/pcm", rate: 24000 };
+
+/** The session.update that opens a call. */
+export function sessionUpdate(input: SessionInput): Record<string, unknown> {
+  if (input.protocol === "openai-ga") {
+    return {
+      type: "session.update",
+      session: {
+        type: "realtime",
+        output_modalities: ["audio"],
+        instructions: input.instructions,
+        audio: {
+          input: { format: PCM, turn_detection: { type: "server_vad", threshold: 0.5, silence_duration_ms: input.silenceMs } },
+          output: { format: PCM, voice: input.voice },
+        },
+        tools: VOICE_TOOLS,
+      },
+    };
+  }
+  return {
+    type: "session.update",
+    session: {
+      voice: input.voice,
+      instructions: input.instructions,
+      turn_detection: { type: "server_vad", silence_duration_ms: input.silenceMs },
+      reasoning: { effort: "none" },
+      audio: {
+        input: { format: PCM, transcription: { model: "grok-transcribe" } },
+        output: { format: PCM },
+      },
+      tools: VOICE_TOOLS,
+    },
+  };
+}
+
+/**
+ * A function call in an event, whichever way the provider announces it: xAI
+ * sends `response.function_call_arguments.done`, Yandex the finished output
+ * item. Both carry the same call id, so a caller that sees both runs it once.
+ */
+export function functionCallOf(event: Record<string, unknown>): { name: string; callId: string; arguments: string } | null {
+  if (event.type === "response.function_call_arguments.done") {
+    const callId = String(event.call_id || "");
+    return callId ? { name: String(event.name || ""), callId, arguments: typeof event.arguments === "string" ? event.arguments : "" } : null;
+  }
+  if (event.type === "response.output_item.done") {
+    const item = event.item as Record<string, unknown> | undefined;
+    if (item?.type !== "function_call") return null;
+    const callId = String(item.call_id || "");
+    return callId ? { name: String(item.name || ""), callId, arguments: typeof item.arguments === "string" ? item.arguments : "" } : null;
+  }
+  return null;
+}
+
 // --- the agent's turn, as the voice model is told it -----------------------
 
 /** A message part as the chat screen holds it (the AI SDK's UI message part). */

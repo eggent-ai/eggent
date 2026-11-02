@@ -43,7 +43,10 @@ export async function POST(req: NextRequest) {
   return Response.json(
     {
       callId: call.id,
-      secret: answer.json.secret,
+      mode: answer.json.mode === "relay" ? "relay" : "direct",
+      protocol: answer.json.protocol ?? "xai",
+      silenceMs: answer.json.silenceMs ?? null,
+      secret: answer.json.secret ?? null,
       realtimeUrl: answer.json.realtimeUrl,
       model: answer.json.model,
       voice: answer.json.voice,
