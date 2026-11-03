@@ -25,11 +25,13 @@ export const VOICE_TOOLS: VoiceToolDefinition[] = [
       "Use it at once for anything that needs doing rather than saying - connecting a service or app, comparing, finding, writing, posting, sending, documents, schedules. " +
       "If the agent is already working, the task is added to what it is doing; if the agent asked the person a question on screen, this is the answer. " +
       "Write the task in the person's own words and language, complete enough to act on without the call. " +
-      "Add nothing they did not say: no conditions (such as \"without sending\"), no service to take something from, no guesses about where an address or a file is. The agent knows the workspace and finds those itself.",
+      "Add nothing they did not say: no conditions (such as \"without sending\"), no service to take something from, no guesses about where an address or a file is. The agent knows the workspace and finds those itself. " +
+      "When the person adds to or corrects the task you have just passed on (a name they had not said yet, \"no, call it X\", \"and also...\"), pass only the correction with amends set to true - never the whole task again as a new one, or the agent does it twice.",
     parameters: {
       type: "object",
       properties: {
-        task: { type: "string", description: "What the agent should do, in the person's words." },
+        task: { type: "string", description: "What the agent should do, in the person's words; for a correction, only what changes." },
+        amends: { type: "boolean", description: "True when this corrects or completes the task passed on just before, rather than being a new task." },
       },
       required: ["task"],
     },
@@ -87,6 +89,7 @@ export function buildVoiceInstructions(input: VoiceInstructionsInput): string {
     "Pass the request as the person said it. Do not add conditions they did not set, and do not decide how it is done or where something comes from. If they said \"write\", do not add \"without sending\"; if they said \"send it to me\", do not add where their address comes from.",
     "Do not ask the person for things the agent may already know - their own email address, their accounts, their files. The agent has its own mailbox and sends a letter to the person without being given an address. Delegate, and let the agent ask on screen if it really needs something.",
     "Right after delegating say one short line that you are on it (\"I'm on it\", or the same in the person's language) and keep the conversation going - ask what else, or what matters most. Never invent the result.",
+    "If the person goes on about the task you just passed on - finishes the sentence, names what they had not named, changes their mind - that is a correction to the same task: call `delegate` with only the correction and `amends: true`. One thing asked for is one task, however many breaths it took to say.",
     "Only answer by yourself what is a plain question or conversation that needs no tool.",
     "The agent's work appears in the chat on the person's screen - a connection card, a file, a table. When asked how it is going, or when the person seems to wait, call `status` and say what it shows in one or two sentences.",
     "Messages that start with \"[Agent update]\" come from the agent, not the person: tell the person briefly what changed and what they may need to do on screen (for example press the connect button).",
@@ -107,6 +110,148 @@ export function buildSummaryInstructions(): string {
     "two to five short lines - what was discussed, what was handed to the agent, what is left open.",
     "No greeting, no heading, nothing that was not said on the call.",
   ].join(" ");
+}
+
+// --- the provider's own shapes ---------------------------------------------
+
+/**
+ * Which session shape the provider speaks, as the deployment says: "openai-ga"
+ * is the OpenAI Realtime GA shape (voice and turn detection inside `audio`);
+ * "flat" has both at the top of the session.
+ */
+export type VoiceProtocol = "openai-ga" | "flat";
+
+export interface SessionInput {
+  protocol: VoiceProtocol;
+  voice: string;
+  instructions: string;
+  /** How long a pause ends the person's turn. */
+  silenceMs: number;
+  /** How loud a sound has to be to count as speech, 0..1: higher ignores more of the room. */
+  threshold?: number;
+  /** The provider's model for writing down what the person says, when it needs one named. */
+  transcriptionModel?: string | null;
+}
+
+const PCM = { type: "audio/pcm", rate: 24000 };
+
+/** The session.update that opens a call. */
+export function sessionUpdate(input: SessionInput): Record<string, unknown> {
+  if (input.protocol === "openai-ga") {
+    return {
+      type: "session.update",
+      session: {
+        type: "realtime",
+        output_modalities: ["audio"],
+        instructions: input.instructions,
+        audio: {
+          input: { format: PCM, turn_detection: { type: "server_vad", threshold: input.threshold ?? 0.5, silence_duration_ms: input.silenceMs } },
+          output: { format: PCM, voice: input.voice },
+        },
+        tools: VOICE_TOOLS,
+      },
+    };
+  }
+  return {
+    type: "session.update",
+    session: {
+      voice: input.voice,
+      instructions: input.instructions,
+      turn_detection: { type: "server_vad", silence_duration_ms: input.silenceMs, ...(input.threshold ? { threshold: input.threshold } : {}) },
+      reasoning: { effort: "none" },
+      audio: {
+        input: { format: PCM, ...(input.transcriptionModel ? { transcription: { model: input.transcriptionModel } } : {}) },
+        output: { format: PCM },
+      },
+      tools: VOICE_TOOLS,
+    },
+  };
+}
+
+/**
+ * How long a pause ends the person's turn, as the person chooses it in the call
+ * panel. Shorter pauses kept cutting people off: at 500 ms a sentence with two
+ * commas started several replies, and on a live call an unhurried
+ * speaker was still cut in three times at 1000 ms - the operator's call is two
+ * and a half seconds for "normal". Each choice adds its length to the wait for
+ * the answer. A choice is stored by name, so one saved on the old scale lands
+ * on this one.
+ */
+export type AnswerPace = "fast" | "normal" | "calm";
+export const PACE_MS: Record<AnswerPace, number> = { fast: 1500, normal: 2500, calm: 3500 };
+
+export function isAnswerPace(value: unknown): value is AnswerPace {
+  return value === "fast" || value === "normal" || value === "calm";
+}
+
+/** Changes only the pause during a call: the provider keeps its voice and instructions. */
+export function turnDetectionUpdate(protocol: VoiceProtocol, silenceMs: number, threshold = 0.5): Record<string, unknown> {
+  const turnDetection = { type: "server_vad", threshold, silence_duration_ms: silenceMs };
+  if (protocol === "openai-ga") {
+    return { type: "session.update", session: { type: "realtime", audio: { input: { turn_detection: turnDetection } } } };
+  }
+  return { type: "session.update", session: { turn_detection: { type: "server_vad", silence_duration_ms: silenceMs } } };
+}
+
+/**
+ * A function call in an event, whichever way the provider announces it: by
+ * `response.function_call_arguments.done`, by the finished output item, or
+ * both. They carry the same call id, so a caller that sees both runs it once.
+ */
+export function functionCallOf(event: Record<string, unknown>): { name: string; callId: string; arguments: string } | null {
+  if (event.type === "response.function_call_arguments.done") {
+    const callId = String(event.call_id || "");
+    return callId ? { name: String(event.name || ""), callId, arguments: typeof event.arguments === "string" ? event.arguments : "" } : null;
+  }
+  if (event.type === "response.output_item.done") {
+    const item = event.item as Record<string, unknown> | undefined;
+    if (item?.type !== "function_call") return null;
+    const callId = String(item.call_id || "");
+    return callId ? { name: String(item.name || ""), callId, arguments: typeof item.arguments === "string" ? item.arguments : "" } : null;
+  }
+  return null;
+}
+
+// --- the microphone while the agent speaks --------------------------------
+
+/**
+ * Without headphones the agent's own voice comes back through the microphone,
+ * the provider takes it for the person, stops its answer and answers itself
+ * (measured: one question, eleven replies). The browser's echo
+ * cancellation does not reliably know about sound played by the page itself, so
+ * while our answer plays the microphone goes up only when it is clearly louder
+ * than what we are playing - a person talking over the answer is - and stays
+ * open for half a second once it is, so their words are not cut into pieces.
+ * Outside our playback everything goes up as it is.
+ */
+export const GATE_FLOOR = 0.02;
+export const GATE_RATIO = 0.8;
+export const GATE_HOLD_MS = 500;
+
+export interface MicGateInput {
+  now: number;
+  /** Whether our answer is playing, or has just stopped (its echo still in the room). */
+  playing: boolean;
+  /** Loudness of this microphone frame and of what we are playing, as RMS 0..1. */
+  micRms: number;
+  outRms: number;
+  /** Until when the gate is held open by speech that already got through. */
+  openUntil: number;
+}
+
+export function gateMic(input: MicGateInput): { pass: boolean; openUntil: number } {
+  if (!input.playing) return { pass: true, openUntil: input.openUntil };
+  if (input.now < input.openUntil) return { pass: true, openUntil: input.openUntil };
+  if (input.micRms > Math.max(GATE_FLOOR, input.outRms * GATE_RATIO)) return { pass: true, openUntil: input.now + GATE_HOLD_MS };
+  return { pass: false, openUntil: input.openUntil };
+}
+
+/** Loudness of a frame, as root mean square. */
+export function rmsOf(samples: Float32Array): number {
+  if (!samples.length) return 0;
+  let sum = 0;
+  for (let i = 0; i < samples.length; i += 1) sum += samples[i] * samples[i];
+  return Math.sqrt(sum / samples.length);
 }
 
 // --- the agent's turn, as the voice model is told it -----------------------
@@ -196,13 +341,61 @@ export function voiceContextOf(messages: TurnMessage[]): VoiceContextMessage[] {
   return out;
 }
 
+// --- one task said in several breaths ---------------------------------------
+
+/**
+ * A person who pauses mid-request, or corrects it ("no, call it X"), must not
+ * get the work done twice: on a live call "create a project" was handed over,
+ * the rest of the sentence came nine seconds later as a fuller request, and
+ * the agent made two projects. A delegate is a correction of the last one when
+ * the voice model says so (`amends`) while that task is still running or ended
+ * a moment ago, or - whatever the model said - when it comes within a few
+ * seconds of the last one and repeats most of its words.
+ */
+export const AMEND_WINDOW_MS = 30_000;
+export const REPEAT_WINDOW_MS = 15_000;
+
+export interface LastDelegate {
+  task: string;
+  at: number;
+  /** When the turn it started (or joined) ended; null while it runs. */
+  endedAt: number | null;
+}
+
+/** Words by their first five letters: an inflected language changes a word's ending, not its stem. */
+function words(text: string): string[] {
+  return text.toLowerCase().replace(/[^\p{L}\p{N}\s]+/gu, " ").split(/\s+/).filter((word) => word.length > 2).map((word) => word.slice(0, 5));
+}
+
+/** How much of the earlier task the new one repeats, 0..1. */
+export function overlapOf(earlier: string, later: string): number {
+  const before = new Set(words(earlier));
+  if (before.size === 0) return 0;
+  const after = new Set(words(later));
+  let shared = 0;
+  for (const word of before) if (after.has(word)) shared += 1;
+  return shared / before.size;
+}
+
+export function isAmendment(input: { task: string; amends: boolean; last: LastDelegate | null; now: number }): boolean {
+  const last = input.last;
+  if (!last) return false;
+  const recent = last.endedAt === null || input.now - last.endedAt <= AMEND_WINDOW_MS;
+  if (input.amends && recent) return true;
+  return input.now - last.at <= REPEAT_WINDOW_MS && recent && overlapOf(last.task, input.task) >= 0.5;
+}
+
 // --- running a tool call ---------------------------------------------------
 
-export type DelegateResult = "started" | "added" | "answered";
+export type DelegateResult = "started" | "added" | "answered" | "amended";
 
 export interface VoiceToolDeps {
-  /** Starts a turn with this text, adds it to the turn already working, or answers the question it waits on. Answers which. */
-  delegate(task: string): DelegateResult | Promise<DelegateResult>;
+  /**
+   * Starts a turn with this text, adds it to the turn already working, or
+   * answers the question it waits on. Answers which. `amends` is set when the
+   * voice model says the text corrects the task passed on just before.
+   */
+  delegate(task: string, amends: boolean): DelegateResult | Promise<DelegateResult>;
   /** What the turn in the open chat is doing. */
   turn(): TurnStatus;
 }
@@ -227,11 +420,13 @@ export async function runVoiceTool(name: string, rawArguments: string, deps: Voi
     if (!task) return { ok: false, error: "No task was given." };
     if (task.length > MAX_TASK_CHARS) return { ok: false, error: "The task is too long to hand over by voice." };
     try {
-      const how = await deps.delegate(task);
+      const how = await deps.delegate(task, args.amends === true);
       return {
         ok: true,
         how,
-        note: how === "answered"
+        note: how === "amended"
+          ? "Passed on as a correction to the task already handed over, not as a new one. Tell the person in a few words that you have passed it on."
+          : how === "answered"
           ? "This answered the question the agent was waiting on; it carries on. Tell the person in a few words."
           : how === "added"
             ? "Added to what the agent is already doing. Tell the person in a few words."

@@ -18,6 +18,16 @@ import {
   describeTurn,
   formatCallLength,
   questionUpdate,
+  sessionUpdate,
+  functionCallOf,
+  turnDetectionUpdate,
+  isAmendment,
+  overlapOf,
+  gateMic,
+  rmsOf,
+  GATE_HOLD_MS,
+  isAnswerPace,
+  PACE_MS,
   endingNote,
   watchCall,
   IDLE_WARN_MS,
@@ -48,7 +58,7 @@ function fakeChat(running: boolean) {
   return {
     sent,
     deps: {
-      delegate: (task: string) => {
+      delegate: (task: string, _amends: boolean) => {
         sent.push(task);
         return running ? ("added" as const) : ("started" as const);
       },
@@ -167,6 +177,93 @@ await check("the instructions carry the newest messages that fit, oldest first, 
   assert.ok(kept.length < 40 && kept.length > 5);
   assert.ok(kept.at(-1)!.text.startsWith("39 "));
 });
+await check("the OpenAI Realtime GA shape keeps voice and turn detection inside audio; the flat shape keeps them at the top", () => {
+  const update = sessionUpdate({ protocol: "openai-ga", voice: "voice-a", instructions: "hi", silenceMs: 600 }) as { type: string; session: Record<string, any> };
+  assert.equal(update.type, "session.update");
+  assert.equal(update.session.type, "realtime");
+  assert.deepEqual(update.session.output_modalities, ["audio"]);
+  assert.equal(update.session.audio.output.voice, "voice-a");
+  assert.deepEqual(update.session.audio.input.format, { type: "audio/pcm", rate: 24000 });
+  assert.equal(update.session.audio.input.turn_detection.silence_duration_ms, 600);
+  assert.equal(update.session.voice, undefined, "voice at the top is the flat shape");
+  assert.deepEqual(update.session.tools.map((tool: { name: string }) => tool.name), ["delegate", "status"]);
+  const flat = sessionUpdate({ protocol: "flat", voice: "voice-b", instructions: "hi", silenceMs: 600, transcriptionModel: "transcriber-1" }) as { session: Record<string, any> };
+  assert.equal(flat.session.voice, "voice-b");
+  assert.equal(flat.session.turn_detection.type, "server_vad");
+  assert.equal(flat.session.audio.input.transcription.model, "transcriber-1");
+  const untold = sessionUpdate({ protocol: "flat", voice: "voice-b", instructions: "hi", silenceMs: 600 }) as { session: Record<string, any> };
+  assert.equal(untold.session.audio.input.transcription, undefined, "no transcription model is named unless the deployment names one");
+});
+await check("the answer speed a person picks is 500, 800 or 1200 ms, and changes only the pause mid-call", () => {
+  assert.deepEqual(PACE_MS, { fast: 1500, normal: 2500, calm: 3500 });
+  assert.ok(isAnswerPace("calm"));
+  assert.ok(!isAnswerPace("slow"));
+  assert.ok(!isAnswerPace(null));
+  assert.deepEqual(turnDetectionUpdate("openai-ga", 1400, 0.6), {
+    type: "session.update",
+    session: { type: "realtime", audio: { input: { turn_detection: { type: "server_vad", threshold: 0.6, silence_duration_ms: 1400 } } } },
+  });
+  const flat = turnDetectionUpdate("flat", 500) as { session: Record<string, unknown> };
+  assert.deepEqual(flat.session, { turn_detection: { type: "server_vad", silence_duration_ms: 500 } });
+});
+await check("while our answer plays, its echo does not go up as the person's voice; a person talking over it does, and is not cut into pieces", () => {
+  const now = 1_000_000;
+  // nothing playing: everything goes up, however quiet
+  assert.equal(gateMic({ now, playing: false, micRms: 0.001, outRms: 0, openUntil: 0 }).pass, true);
+  // our answer at 0.2 comes back through the microphone at a third of it: held back
+  assert.equal(gateMic({ now, playing: true, micRms: 0.07, outRms: 0.2, openUntil: 0 }).pass, false);
+  // a person speaking over it, louder than the echo would be: through, and the gate stays open
+  const through = gateMic({ now, playing: true, micRms: 0.25, outRms: 0.2, openUntil: 0 });
+  assert.equal(through.pass, true);
+  assert.equal(through.openUntil, now + GATE_HOLD_MS);
+  // a quieter syllable of the same words a moment later still goes up
+  assert.equal(gateMic({ now: now + 200, playing: true, micRms: 0.05, outRms: 0.2, openUntil: through.openUntil }).pass, true);
+  // and once the hold is over, the echo alone is held back again
+  assert.equal(gateMic({ now: now + GATE_HOLD_MS + 1, playing: true, micRms: 0.05, outRms: 0.2, openUntil: through.openUntil }).pass, false);
+  // a quiet answer does not lower the bar under the room's own noise
+  assert.equal(gateMic({ now, playing: true, micRms: 0.015, outRms: 0.005, openUntil: 0 }).pass, false);
+  assert.ok(Math.abs(rmsOf(new Float32Array([0.5, -0.5, 0.5, -0.5])) - 0.5) < 1e-9);
+  assert.equal(rmsOf(new Float32Array(0)), 0);
+});
+await check("one request said in two breaths is one task: the fuller version nine seconds later is a correction, not a second task", () => {
+  const t0 = 1_000_000;
+  // the live case: the name came after a pause, as a fuller request
+  const first = { task: "Create a new project. Ask for the name, start by creating it", at: t0, endedAt: null };
+  const fuller = "Create a new project named Voice assistant testing, start by creating it";
+  assert.ok(overlapOf(first.task, fuller) >= 0.5, `overlap ${overlapOf(first.task, fuller)}`);
+  assert.equal(isAmendment({ task: fuller, amends: false, last: first, now: t0 + 9_000 }), true);
+  // the voice model saying so is enough while the task runs, whatever the words
+  assert.equal(isAmendment({ task: "no, call it Alpha", amends: true, last: first, now: t0 + 40_000 }), true);
+  // ... and for half a minute after it ended
+  assert.equal(isAmendment({ task: "call it Alpha", amends: true, last: { ...first, endedAt: t0 + 20_000 }, now: t0 + 45_000 }), true);
+  assert.equal(isAmendment({ task: "call it Alpha", amends: true, last: { ...first, endedAt: t0 + 20_000 }, now: t0 + 60_000 }), false);
+  // a different task right after is a task of its own
+  assert.equal(isAmendment({ task: "Find flights to Kazan for Friday", amends: false, last: first, now: t0 + 5_000 }), false);
+  // the same words long after are a new request
+  assert.equal(isAmendment({ task: fuller, amends: false, last: first, now: t0 + 60_000 }), false);
+  // nothing before: never a correction
+  assert.equal(isAmendment({ task: fuller, amends: true, last: null, now: t0 }), false);
+});
+await check("a correction is handed to the chat as one, and the voice model is told it was", async () => {
+  const sent: Array<[string, boolean]> = [];
+  const out = await runVoiceTool("delegate", JSON.stringify({ task: "call it Alpha", amends: true }), {
+    delegate: (task, amends) => { sent.push([task, amends]); return "amended"; },
+    turn: () => describeTurn([], true),
+  });
+  assert.deepEqual(sent, [["call it Alpha", true]]);
+  assert.equal(out.how, "amended");
+  assert.match(String(out.note), /correction/);
+  const tool = VOICE_TOOLS[0].parameters as { properties: Record<string, { type: string }> };
+  assert.equal(tool.properties.amends.type, "boolean");
+});
+await check("a function call is read from either provider's event, and both name the same call", () => {
+  const fromArgumentsDone = functionCallOf({ type: "response.function_call_arguments.done", name: "delegate", call_id: "c1", arguments: "{\"task\":\"x\"}" });
+  const fromOutputItem = functionCallOf({ type: "response.output_item.done", item: { type: "function_call", name: "delegate", call_id: "c1", arguments: "{\"task\":\"x\"}" } });
+  assert.deepEqual(fromArgumentsDone, { name: "delegate", callId: "c1", arguments: "{\"task\":\"x\"}" });
+  assert.deepEqual(fromOutputItem, fromArgumentsDone);
+  assert.equal(functionCallOf({ type: "response.output_item.done", item: { type: "message" } }), null);
+  assert.equal(functionCallOf({ type: "response.function_call_arguments.done", name: "delegate" }), null);
+});
 await check("a quiet line is warned at 45 s and ended 15 s after the warning unless the person speaks", () => {
   const t0 = 1_000_000;
   const base = { lastPersonAt: t0, lastAgentAt: t0, mutedSince: null, warnedAt: null };
@@ -190,6 +287,20 @@ await check("a muted microphone is not idle, but two minutes of it end the call"
 await check("the voice is told why the call ends, in words for the person, not the person's own", () => {
   assert.match(endingNote("balance"), /^\[Call note - not from the person\].*balance.*goodbye/);
   assert.match(endingNote("time"), /time limit/);
+});
+await check("the placeholder for a call's summary belongs to its chat, can fail, and goes away", async () => {
+  const { startSummary, failSummary, clearSummary, pendingSummary } = await import("../src/lib/voice/summary-state.ts");
+  startSummary("chat-a");
+  assert.equal(pendingSummary()?.chatId, "chat-a");
+  assert.equal(pendingSummary()?.state, "pending");
+  // another chat's failure or clearing leaves it alone
+  failSummary("chat-b");
+  clearSummary("chat-b");
+  assert.equal(pendingSummary()?.state, "pending");
+  failSummary("chat-a");
+  assert.equal(pendingSummary()?.state, "failed");
+  clearSummary("chat-a");
+  assert.equal(pendingSummary(), null);
 });
 await check("a call's length reads like a phone's", () => {
   assert.equal(formatCallLength(124), "02:04");
@@ -221,7 +332,7 @@ const cloudServer = http.createServer((req, res) => {
   if (req.url === "/v1/tools/voice/call" && req.method === "POST") {
     if (cloudRefuses) { res.statusCode = 402; return res.end(JSON.stringify({ error: "The balance is too low for a call.", code: "balance", pricePerMinute: "€0.10", balanceLeft: "€0.01" })); }
     res.statusCode = 201;
-    return res.end(JSON.stringify({ call: { id: "a".repeat(32) }, secret: "eph_secret", realtimeUrl: "wss://voice.example.test/v1/realtime?model=m", model: "m", voice: "eve", maxSeconds: 600, beatSeconds: 10, pricePerMinute: "€0.10", balanceLeft: "€0.43" }));
+    return res.end(JSON.stringify({ call: { id: "a".repeat(32) }, mode: "direct", protocol: "flat", subprotocolPrefix: "client-secret.", silenceMs: 600, secret: "eph_secret", realtimeUrl: "wss://voice.example.test/v1/realtime?model=m", model: "m", voice: "voice-b", maxSeconds: 600, beatSeconds: 10, pricePerMinute: "€0.10", balanceLeft: "€0.43" }));
   }
   if (req.url === `/v1/tools/voice/call/${"a".repeat(32)}/beat`) return res.end(JSON.stringify({ continue: true, leftSeconds: 590, balanceLeft: "€0.41" }));
   if (req.url === `/v1/tools/voice/call/${"a".repeat(32)}` && req.method === "DELETE") return res.end(JSON.stringify({ ok: true, ended: true, seconds: 64 }));
@@ -269,6 +380,10 @@ await check("a call's secret comes from the deployment, asked with the workspace
   const json = JSON.parse(text);
   assert.equal(json.callId, CALL);
   assert.equal(json.secret, "eph_secret");
+  assert.equal(json.mode, "direct");
+  assert.equal(json.protocol, "flat");
+  assert.equal(json.subprotocolPrefix, "client-secret.");
+  assert.equal(json.silenceMs, 600);
   assert.equal(json.pricePerMinute, "€0.10");
   assert.equal(json.balanceLeft, "€0.43");
   assert.equal(json.realtimeUrl, "wss://voice.example.test/v1/realtime?model=m");

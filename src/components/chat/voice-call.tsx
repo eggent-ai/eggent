@@ -2,18 +2,30 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { AudioLines, Bot, Captions, ChevronDown, ChevronUp, Loader2, Mic, MicOff, PhoneOff } from "lucide-react";
+import { clearSummary, failSummary, startSummary } from "@/lib/voice/summary-state";
+import Link from "next/link";
+import { AudioLines, Bot, Captions, Check, ChevronDown, ChevronUp, Loader2, Mic, MicOff, PhoneOff } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { useI18n } from "@/i18n/provider";
 import type { MessageKey } from "@/i18n/messages";
 import {
   buildSummaryInstructions,
   buildVoiceInstructions,
+  functionCallOf,
+  sessionUpdate,
+  turnDetectionUpdate,
+  gateMic,
+  rmsOf,
+  isAnswerPace,
+  PACE_MS,
+  type AnswerPace,
+  type VoiceProtocol,
   formatCallLength,
   recentForVoice,
   runVoiceTool,
-  VOICE_TOOLS,
   questionUpdate,
+  isAmendment,
+  type LastDelegate,
   endingNote,
   IDLE_WARNING_NOTE,
   watchCall,
@@ -41,6 +53,11 @@ export interface VoiceCallBindings {
   chatId: string;
   projectId: string | null;
   projectName?: string | null;
+  /** Where the chat is, for the call panel to point at the work; and whether the person is looking at it. */
+  chatHref: string;
+  onChatPage: boolean;
+  /** The call was put into this chat: a chat that only came to be through the call is opened, so its card shows. */
+  onRecorded?(chatId: string): void;
   recent(): VoiceContextMessage[];
   delegate(task: string): DelegateResult;
   turn(): TurnStatus;
@@ -143,8 +160,16 @@ function errorKey(error: unknown): MessageKey {
 
 // --- the call ------------------------------------------------------------
 
+/** What the call handed to the agent, and where it is happening. */
+interface CallWork {
+  href: string;
+  projectName: string | null;
+  done: boolean;
+}
+
 interface CallState {
   phase: Phase;
+  work: CallWork | null;
   floor: Floor;
   seconds: number;
   muted: boolean;
@@ -155,7 +180,7 @@ interface CallState {
   balance: string | null;
 }
 
-const INITIAL: CallState = { phase: "idle", floor: "listening", seconds: 0, muted: false, error: null, lines: [], price: null, balance: null };
+const INITIAL: CallState = { work: null, phase: "idle", floor: "listening", seconds: 0, muted: false, error: null, lines: [], price: null, balance: null };
 
 /** For checking a call by hand: the measured waits before the first word of each answer. */
 interface VoiceStats {
@@ -167,6 +192,20 @@ interface VoiceStats {
 declare global {
   interface Window {
     __eggentVoiceStats?: VoiceStats;
+  }
+}
+
+const PACE_KEY = "eggent.voice.pace";
+/** What a browser that has chosen nothing gets: the operator found "fast" (1.5 s) right once turns stopped being cut. */
+const DEFAULT_PACE: AnswerPace = "fast";
+
+/** The person's own answer speed, if they chose one in this browser. */
+function storedPace(): AnswerPace | null {
+  try {
+    const value = window.localStorage.getItem(PACE_KEY);
+    return isAnswerPace(value) ? value : null;
+  } catch {
+    return null;
   }
 }
 
@@ -195,6 +234,17 @@ function useVoiceCall(bindings: VoiceCallBindings) {
   /** The summary at the end: only the response asked for it counts, never one cancelled before it. */
   const summary = useRef<{ text: string; responseId: string | null; done: () => void } | null>(null);
   const lineIds = useRef(new Map<string, string>());
+  const handledCalls = useRef(new Set<string>());
+  /** The task this call handed over last, so that the rest of the same request is not handed over again as a new one. */
+  const lastDelegate = useRef<LastDelegate | null>(null);
+  const protocolRef = useRef<VoiceProtocol>("flat");
+  const thresholdRef = useRef(0.5);
+  /** The answer being played; audio of any other is dropped. Null after the person cut in, until the next answer starts. */
+  const currentResponse = useRef<string | null>(null);
+  const droppingAudio = useRef(false);
+  const gateOpenUntil = useRef(0);
+  const [pace, setPaceState] = useState<AnswerPace | null>(null);
+  useEffect(() => { setPaceState(storedPace()); }, []);
   const beatNow = useRef<() => void>(() => undefined);
   const watchNow = useRef<() => void>(() => undefined);
   const lastPersonAt = useRef(0);
@@ -244,16 +294,28 @@ function useVoiceCall(bindings: VoiceCallBindings) {
 
   /** One transcript line per item, updated in place as its text grows. */
   const upsertLine = useCallback((key: string, role: VoiceTranscriptLine["role"], text: string, mode: "append" | "replace", final: boolean) => {
+    // The id is settled outside the state update: React may run an updater twice, and it must not depend on what the first run did.
+    let id = lineIds.current.get(key);
+    if (!id) {
+      id = `${role}-${key}`;
+      lineIds.current.set(key, id);
+    }
+    const lineId = id;
     setState((current) => {
-      let id = lineIds.current.get(key);
       const lines = [...current.lines];
-      if (!id) {
-        id = `${role}-${key}`;
-        lineIds.current.set(key, id);
-        lines.push({ id, role, text: "", final: false });
+      let index = lines.findIndex((line) => line.id === lineId);
+      if (index < 0) {
+        // Some providers report each pause as a new item carrying the whole phrase so far: a person's
+        // line that only continues the one before it replaces that one rather than repeating it.
+        const last = lines[lines.length - 1];
+        const continues = role === "user" && last?.role === "user" && last.text.trim() !== "" && text.trim().startsWith(last.text.trim());
+        if (continues) {
+          lines[lines.length - 1] = { ...last, id: lineId };
+        } else {
+          lines.push({ id: lineId, role, text: "", final: false });
+        }
+        index = lines.length - 1;
       }
-      const index = lines.findIndex((line) => line.id === id);
-      if (index < 0) return current;
       const line = lines[index];
       lines[index] = { ...line, text: mode === "append" ? line.text + text : text, final: final || line.final };
       return { ...current, lines };
@@ -276,8 +338,13 @@ function useVoiceCall(bindings: VoiceCallBindings) {
       case "input_audio_buffer.speech_started":
         lastPersonAt.current = Date.now();
         warnedAt.current = null;
-        // The person talks over the answer: it stops here at once.
+        // The person talks over the answer: it stops here at once, and the
+        // provider is told to drop it rather than finish it unheard.
         stopPlayback();
+        if (responding.current) send({ type: "response.cancel" });
+        // What is still on its way of the answer cut off is not played.
+        currentResponse.current = null;
+        droppingAudio.current = true;
         speechStoppedAt.current = null;
         setState((current) => ({ ...current, floor: "listening" }));
         break;
@@ -289,11 +356,17 @@ function useVoiceCall(bindings: VoiceCallBindings) {
       case "response.created": {
         responding.current = true;
         const id = (event.response as { id?: string } | undefined)?.id ?? null;
+        // One answer at a time: a new one stops whatever of the last is still playing.
+        if (id && currentResponse.current && id !== currentResponse.current) stopPlayback();
+        currentResponse.current = id;
+        droppingAudio.current = false;
         if (summary.current && summary.current.responseId === null && id) summary.current.responseId = id;
         break;
       }
       case "response.output_audio.delta":
       case "response.audio.delta": {
+        const from = typeof event.response_id === "string" ? event.response_id : null;
+        if (droppingAudio.current || (from && currentResponse.current && from !== currentResponse.current)) break;
         if (speechStoppedAt.current !== null) {
           const waited = Math.round(performance.now() - speechStoppedAt.current);
           stats().firstAudioMs.push(waited);
@@ -323,7 +396,8 @@ function useVoiceCall(bindings: VoiceCallBindings) {
           if (summary.current.responseId && event.response_id === summary.current.responseId && typeof event.transcript === "string" && event.transcript.length > summary.current.text.length) summary.current.text = event.transcript;
           break;
         }
-        if (typeof event.transcript === "string") upsertLine(String(event.item_id || event.response_id || "agent"), "agent", event.transcript, "replace", true);
+        // Some providers close the answer with an empty transcript (its words came as text deltas): an empty one replaces nothing.
+        if (typeof event.transcript === "string" && event.transcript.trim()) upsertLine(String(event.item_id || event.response_id || "agent"), "agent", event.transcript, "replace", true);
         break;
       }
       case "conversation.item.input_audio_transcription.updated":
@@ -336,13 +410,28 @@ function useVoiceCall(bindings: VoiceCallBindings) {
         if (typeof event.delta === "string") upsertLine(String(event.item_id || "user"), "user", event.delta, "append", false);
         break;
       }
-      case "response.function_call_arguments.done": {
-        const name = String(event.name || "");
-        const callId = String(event.call_id || "");
-        const output = await runVoiceTool(name, typeof event.arguments === "string" ? event.arguments : "", {
-          delegate: (task) => {
+      case "response.function_call_arguments.done":
+      case "response.output_item.done": {
+        const fn = functionCallOf(event);
+        // Both events can announce one call: it runs once.
+        if (!fn || handledCalls.current.has(fn.callId)) break;
+        handledCalls.current.add(fn.callId);
+        const { name, callId } = fn;
+        const output = await runVoiceTool(name, fn.arguments, {
+          delegate: (task, amends) => {
             call.current?.delegated.push(task);
-            return bindingsRef.current.delegate(task);
+            const b = bindingsRef.current;
+            const now = Date.now();
+            const amend = isAmendment({ task, amends, last: lastDelegate.current, now });
+            // A correction goes to the same work as one, said plainly, so the agent fixes what it made rather than making it again.
+            const text = amend ? t("voice.amend", { task }) : task;
+            lastDelegate.current = amend && lastDelegate.current
+              ? { task: `${lastDelegate.current.task} ${task}`, at: now, endedAt: null }
+              : { task, at: now, endedAt: null };
+            // The work starts in this chat: the panel says where, so the person can go and watch.
+            setState((current) => ({ ...current, work: { href: b.chatHref, projectName: b.projectName ?? null, done: false } }));
+            const how = b.delegate(text);
+            return amend && how !== "answered" ? "amended" : how;
           },
           turn: () => bindingsRef.current.turn(),
         });
@@ -365,7 +454,7 @@ function useVoiceCall(bindings: VoiceCallBindings) {
         break;
       }
     }
-  }, [flushUpdate, play, send, stopPlayback, upsertLine]);
+  }, [flushUpdate, play, send, stopPlayback, t, upsertLine]);
 
   const cleanup = useCallback(() => {
     const c = call.current;
@@ -391,18 +480,25 @@ function useVoiceCall(bindings: VoiceCallBindings) {
     if (!c) return;
     const seconds = (Date.now() - c.startedAt) / 1000;
     const transcript = linesAtEnd.filter((line) => line.text.trim()).map((line) => ({ role: line.role, text: line.text.trim() }));
-    await fetch(`/api/voice/call/${c.id}/end`, {
+    const chatId = bindingsRef.current.chatId;
+    const ended = await fetch(`/api/voice/call/${c.id}/end`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        chatId: bindingsRef.current.chatId,
+        chatId,
         projectId: bindingsRef.current.projectId,
         seconds,
         transcript,
         summary: summaryText,
         delegated: c.delegated,
       }),
-    }).catch(() => undefined);
+    })
+      .then((response) => (response.ok ? response.json() as Promise<{ recorded?: boolean }> : null))
+      .catch(() => null);
+    // The placeholder in the chat waits for the card; a call that could not be put there says so.
+    if (transcript.length > 0 && !ended?.recorded) failSummary(chatId);
+    else if (transcript.length === 0) clearSummary(chatId);
+    if (ended?.recorded) bindingsRef.current.onRecorded?.(chatId);
   }, [cleanup]);
 
   const hangUp = useCallback(async (reason?: MessageKey) => {
@@ -410,6 +506,7 @@ function useVoiceCall(bindings: VoiceCallBindings) {
     ending.current = true;
     const snapshot = linesRef.current;
     setState((current) => ({ ...current, phase: "ending", error: reason ? t(reason) : current.error }));
+    if (snapshot.some((line) => line.text.trim())) startSummary(bindingsRef.current.chatId);
     // A short summary for the chat, written by the voice model from what was
     // said; nothing is played while it writes. Only when somebody spoke.
     let summaryText = "";
@@ -472,6 +569,11 @@ function useVoiceCall(bindings: VoiceCallBindings) {
     ignoreAudio.current = false;
     muted.current = false;
     lineIds.current.clear();
+    handledCalls.current.clear();
+    lastDelegate.current = null;
+    currentResponse.current = null;
+    droppingAudio.current = false;
+    gateOpenUntil.current = 0;
     setState({ ...INITIAL, phase: "connecting" });
     const startedAt = performance.now();
     let stream: MediaStream | null = null;
@@ -483,9 +585,17 @@ function useVoiceCall(bindings: VoiceCallBindings) {
       const answer = (await response.json().catch(() => ({}))) as Record<string, unknown>;
       if (!response.ok) throw new Error(answer.code === "balance" ? t("voice.error.balance") : String(answer.error || t("voice.error.failed")));
       const callId = String(answer.callId || "");
-      const secret = String(answer.secret || "");
+      const secret = typeof answer.secret === "string" ? answer.secret : "";
       const realtimeUrl = String(answer.realtimeUrl || "");
-      if (!callId || !secret || !realtimeUrl) throw new Error(t("voice.error.failed"));
+      // Through the deployment (the URL carries a one-use token), or straight to the provider with a secret.
+      const relayed = answer.mode === "relay";
+      const protocol: VoiceProtocol = answer.protocol === "openai-ga" ? "openai-ga" : "flat";
+      const chosen = storedPace();
+      const silenceMs = chosen ? PACE_MS[chosen] : Math.min(10_000, Math.max(200, Number(answer.silenceMs) || PACE_MS.fast));
+      protocolRef.current = protocol;
+      const vadThreshold = Math.min(0.95, Math.max(0.1, Number(answer.vadThreshold) || 0.5));
+      thresholdRef.current = vadThreshold;
+      if (!callId || !realtimeUrl || (!relayed && !secret)) throw new Error(t("voice.error.failed"));
       setState((current) => ({
         ...current,
         price: typeof answer.pricePerMinute === "string" ? answer.pricePerMinute : null,
@@ -508,6 +618,7 @@ function useVoiceCall(bindings: VoiceCallBindings) {
       const out = ctx.createGain();
       const outAnalyser = ctx.createAnalyser();
       outAnalyser.fftSize = 256;
+      const outLevel = new Float32Array(outAnalyser.fftSize);
       out.connect(outAnalyser);
       outAnalyser.connect(ctx.destination);
       audio.current = { ctx, stream, micAnalyser, outAnalyser, out, nextTime: 0, sources: new Set() };
@@ -519,7 +630,20 @@ function useVoiceCall(bindings: VoiceCallBindings) {
         if (ws.current?.readyState !== WebSocket.OPEN) return;
         beatNow.current();
         watchNow.current();
-        const chunk = muted.current ? new Float32Array(message.data.length) : message.data;
+        let chunk = muted.current ? new Float32Array(message.data.length) : message.data;
+        // While our answer plays, its echo must not reach the provider as the person's voice.
+        const a = audio.current;
+        if (a && !muted.current) {
+          const playing = a.nextTime + 0.3 > a.ctx.currentTime;
+          let outRms = 0;
+          if (playing) {
+            a.outAnalyser.getFloatTimeDomainData(outLevel);
+            outRms = rmsOf(outLevel);
+          }
+          const verdict = gateMic({ now: Date.now(), playing, micRms: rmsOf(chunk), outRms, openUntil: gateOpenUntil.current });
+          gateOpenUntil.current = verdict.openUntil;
+          if (!verdict.pass) chunk = new Float32Array(chunk.length);
+        }
         pending.push(chunk);
         pendingLength += chunk.length;
         if (pendingLength < ctx.sampleRate * 0.04) return;
@@ -531,34 +655,32 @@ function useVoiceCall(bindings: VoiceCallBindings) {
         send({ type: "input_audio_buffer.append", audio: floatToPcm16Base64(resample(joined, ctx.sampleRate)) });
       };
 
-      const socket = new WebSocket(realtimeUrl, [`xai-client-secret.${secret}`]);
+      // A direct connection carries its secret the way the provider asks, which the deployment names.
+      const subprotocolPrefix = typeof answer.subprotocolPrefix === "string" ? answer.subprotocolPrefix : "";
+      const socket = relayed || !subprotocolPrefix ? new WebSocket(realtimeUrl) : new WebSocket(realtimeUrl, [`${subprotocolPrefix}${secret}`]);
       ws.current = socket;
       call.current = { id: callId, startedAt: Date.now(), beat: null, tick: null, delegated: [] };
       socket.onopen = () => {
         stats().connectMs = Math.round(performance.now() - startedAt);
         const b = bindingsRef.current;
-        send({
-          type: "session.update",
-          session: {
-            voice: answer.voice || "eve",
-            instructions: buildVoiceInstructions({ locale, projectName: b.projectName, recent: recentForVoice(b.recent()) }),
-            turn_detection: { type: "server_vad" },
-            reasoning: { effort: "none" },
-            audio: {
-              input: { format: { type: "audio/pcm", rate: RATE }, transcription: { model: "grok-transcribe" } },
-              output: { format: { type: "audio/pcm", rate: RATE } },
-            },
-            tools: VOICE_TOOLS,
-          },
-        });
+        send(sessionUpdate({
+          protocol,
+          voice: typeof answer.voice === "string" ? answer.voice : "",
+          instructions: buildVoiceInstructions({ locale, projectName: b.projectName, recent: recentForVoice(b.recent()) }),
+          silenceMs,
+          threshold: vadThreshold,
+          transcriptionModel: typeof answer.transcriptionModel === "string" ? answer.transcriptionModel : null,
+        }));
         // The agent speaks first, as somebody who picked up the phone does.
         send({ type: "response.create" });
         setState((current) => ({ ...current, phase: "live", floor: "thinking" }));
       };
-      socket.onmessage = (message) => {
-        if (typeof message.data !== "string") return;
+      socket.onmessage = async (message) => {
+        // A relay may hand text frames over as blobs.
+        const text = typeof message.data === "string" ? message.data : message.data instanceof Blob ? await message.data.text() : "";
+        if (!text) return;
         try {
-          void handleEvent(JSON.parse(message.data) as Record<string, unknown>);
+          void handleEvent(JSON.parse(text) as Record<string, unknown>);
         } catch {
           // Not JSON: nothing to act on.
         }
@@ -630,6 +752,8 @@ function useVoiceCall(bindings: VoiceCallBindings) {
     const before = wasRunning.current;
     wasRunning.current = bindings.running;
     if (!before || bindings.running || state.phase !== "live" || !call.current?.delegated.length) return;
+    setState((current) => (current.work ? { ...current, work: { ...current.work, done: true } } : current));
+    if (lastDelegate.current) lastDelegate.current = { ...lastDelegate.current, endedAt: Date.now() };
     const turn = bindingsRef.current.turn();
     pendingUpdate.current = `[Agent update] The agent has finished working. Its latest message in the chat: ${turn.latestText || "(no text)"}`;
     flushUpdate();
@@ -644,6 +768,17 @@ function useVoiceCall(bindings: VoiceCallBindings) {
     pendingUpdate.current = questionUpdate(question);
     flushUpdate();
   }, [bindings.question, flushUpdate, state.phase]);
+
+  /** The person's answer speed: remembered in this browser, and applied at once to a call in progress. */
+  const setPace = useCallback((next: AnswerPace) => {
+    setPaceState(next);
+    try {
+      window.localStorage.setItem(PACE_KEY, next);
+    } catch {
+      // Not remembered; still applied to this call.
+    }
+    if (call.current) send(turnDetectionUpdate(protocolRef.current, PACE_MS[next], thresholdRef.current));
+  }, [send]);
 
   const toggleMute = useCallback(() => {
     muted.current = !muted.current;
@@ -681,7 +816,7 @@ function useVoiceCall(bindings: VoiceCallBindings) {
 
   const dismissError = useCallback(() => setState((current) => ({ ...current, error: null })), []);
 
-  return { state, start, hangUp, toggleMute, dismissError, audio };
+  return { state, start, hangUp, toggleMute, dismissError, audio, pace, setPace };
 }
 
 // --- the screen ----------------------------------------------------------
@@ -729,11 +864,42 @@ function Waveform({ audio, active, className }: { audio: ReturnType<typeof useVo
   return <canvas ref={canvas} className={`text-foreground ${className}`} aria-hidden="true" />;
 }
 
+/**
+ * How long the agent waits after the person stops before it answers, in sight
+ * on the panel: a choice behind a gear went unfound by the one person who
+ * needed it.
+ */
+function PaceChoice({ pace, onChange, compact = false }: { pace: AnswerPace | null; onChange: (pace: AnswerPace) => void; compact?: boolean }) {
+  const { t } = useI18n();
+  return (
+    <div className={`flex items-center gap-2 ${compact ? "px-1.5 pb-0.5" : ""}`} role="group" aria-label={t("voice.pace.title")}>
+      <span className="shrink-0 text-xs text-muted-foreground">{t("voice.pace.label")}</span>
+      <div className="grid min-w-0 flex-1 grid-cols-3 gap-0.5 rounded-lg bg-muted p-0.5">
+        {(["fast", "normal", "calm"] as const).map((option) => {
+          const active = (pace ?? DEFAULT_PACE) === option;
+          return (
+            <button
+              key={option}
+              type="button"
+              onClick={() => onChange(option)}
+              aria-pressed={active}
+              title={t("voice.pace.hint", { seconds: String(PACE_MS[option] / 1000) })}
+              className={`min-h-8 rounded-md px-1.5 text-xs/4 transition-colors ${active ? "bg-background font-medium text-foreground shadow-sm" : "text-muted-foreground hover:text-foreground"}`}
+            >
+              {t(`voice.pace.${option}`)}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 /** The waveform button beside the microphone, and the call panel it opens. */
 export function VoiceCallControl({ bindings, disabled }: { bindings: VoiceCallBindings; disabled?: boolean }) {
   const { t } = useI18n();
   const offered = useVoiceOffered();
-  const { state, start, hangUp, toggleMute, dismissError, audio } = useVoiceCall(bindings);
+  const { state, start, hangUp, toggleMute, dismissError, audio, pace, setPace } = useVoiceCall(bindings);
   const [showTranscript, setShowTranscript] = useState(true);
   const [expanded, setExpanded] = useState(true);
   const inCallNow = state.phase !== "idle";
@@ -791,7 +957,7 @@ export function VoiceCallControl({ bindings, disabled }: { bindings: VoiceCallBi
           data-voice-call-panel
           data-expanded={expanded ? "true" : "false"}
           className={`fixed inset-x-2 top-14 z-50 flex flex-col border bg-popover text-popover-foreground shadow-lg md:inset-x-auto md:right-4 md:top-16 ${
-            expanded ? "gap-3 rounded-2xl p-3 md:w-80" : "rounded-full p-1.5 md:w-auto"
+            expanded ? "gap-3 rounded-2xl p-3 md:w-80" : "gap-1.5 rounded-3xl p-1.5 md:w-80"
           }`}
         >
           {/* The call's own row: who, the sound, how long, and the way out. Collapsed, it is all there is. */}
@@ -836,6 +1002,21 @@ export function VoiceCallControl({ bindings, disabled }: { bindings: VoiceCallBi
               </Button>
             )}
           </div>
+          {state.work ? (
+            <div data-voice-call-work className={`flex min-h-9 items-center gap-2 rounded-xl bg-muted/50 px-3 py-1.5 text-xs/4 ${expanded ? "" : "mx-0.5 mb-0.5"}`}>
+              {state.work.done ? <Check className="size-3.5 shrink-0 text-success" aria-hidden="true" /> : <Loader2 className="size-3.5 shrink-0 animate-spin text-muted-foreground" aria-hidden="true" />}
+              <span className="min-w-0 flex-1 truncate">
+                {t(state.work.done ? "voice.work.done" : "voice.work.running")}
+                {state.work.projectName ? <span className="text-muted-foreground"> · {state.work.projectName}</span> : null}
+              </span>
+              {bindings.onChatPage && state.work.href === bindings.chatHref ? (
+                <span className="shrink-0 text-muted-foreground">{t("voice.work.here")}</span>
+              ) : (
+                <Link href={state.work.href} className="shrink-0 font-medium underline underline-offset-2">{t("voice.work.open")}</Link>
+              )}
+            </div>
+          ) : null}
+          {expanded ? null : <PaceChoice pace={pace} onChange={setPace} compact />}
           {expanded ? (
             <>
               <Waveform audio={audio} active={state.phase === "live"} className="h-10 w-full" />
@@ -885,6 +1066,7 @@ export function VoiceCallControl({ bindings, disabled }: { bindings: VoiceCallBi
                   <PhoneOff className="size-5" />
                 </Button>
               </div>
+              <PaceChoice pace={pace} onChange={setPace} />
             </>
           ) : null}
         </div>
