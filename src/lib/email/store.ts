@@ -164,6 +164,12 @@ interface OriginsFile {
   requests: Record<string, string>;
   /** Replies already told, so a reply is told once. */
   noted: number[];
+  /** The person's own letters the agent was set to answer, so each is answered once (owner-letters.ts). */
+  answered: number[];
+  /** When this workspace began answering its person's letters: older ones are left alone. */
+  answeringSince?: string;
+  /** The day (UTC) the person was last told the day's answers ran out, so it is said once a day. */
+  limitToldOn?: string;
 }
 
 const ORIGINS_KEEP = 400;
@@ -183,9 +189,12 @@ async function readOrigins(): Promise<OriginsFile> {
       letters: clean(parsed.letters, ID),
       requests: clean(parsed.requests, REQUEST_ID),
       noted: Array.isArray(parsed.noted) ? parsed.noted.filter((id) => Number.isInteger(id)) : [],
+      answered: Array.isArray(parsed.answered) ? parsed.answered.filter((id) => Number.isInteger(id)) : [],
+      ...(typeof parsed.answeringSince === "string" && Number.isFinite(Date.parse(parsed.answeringSince)) ? { answeringSince: parsed.answeringSince } : {}),
+      ...(typeof parsed.limitToldOn === "string" && /^\d{4}-\d{2}-\d{2}$/.test(parsed.limitToldOn) ? { limitToldOn: parsed.limitToldOn } : {}),
     };
   } catch {
-    return { version: 1, letters: {}, requests: {}, noted: [] };
+    return { version: 1, letters: {}, requests: {}, noted: [], answered: [] };
   }
 }
 
@@ -202,6 +211,9 @@ async function writeOrigins(origins: OriginsFile): Promise<void> {
     letters: newest(origins.letters),
     requests: newest(origins.requests),
     noted: origins.noted.slice(-ORIGINS_KEEP),
+    answered: origins.answered.slice(-ORIGINS_KEEP),
+    ...(origins.answeringSince ? { answeringSince: origins.answeringSince } : {}),
+    ...(origins.limitToldOn ? { limitToldOn: origins.limitToldOn } : {}),
   };
   await writeNoFollow(temp, `${JSON.stringify(trimmed)}\n`, fsConstants.O_CREAT | fsConstants.O_EXCL);
   await fs.rename(temp, path.join(folder, "origins.json"));
@@ -250,5 +262,47 @@ export async function replyNoted(id: number): Promise<boolean> {
 export async function markReplyNoted(id: number): Promise<void> {
   await changeOrigins((origins) => {
     if (!origins.noted.includes(id)) origins.noted.push(id);
+  });
+}
+
+/**
+ * Since when the person's letters are answered, set the first time it is
+ * asked: a workspace that gains this answers what comes from then on, not the
+ * letters it already holds.
+ */
+export async function answeringOwnerSince(now = Date.now()): Promise<number> {
+  return changeOrigins((origins) => {
+    if (!origins.answeringSince) origins.answeringSince = new Date(now).toISOString();
+    return Date.parse(origins.answeringSince);
+  });
+}
+
+export async function ownerLetterAnswered(id: number): Promise<boolean> {
+  return (await readOrigins()).answered.includes(id);
+}
+
+/** The agent's letters that left from one chat, by id. */
+export async function lettersFromChat(chatId: string): Promise<number[]> {
+  const origins = await readOrigins();
+  return Object.entries(origins.letters).filter(([, chat]) => chat === chatId).map(([id]) => Number(id));
+}
+
+/** True the first time on a day (UTC): the day's limit is told once. */
+export async function takeLimitNotice(now = Date.now()): Promise<boolean> {
+  const day = new Date(now).toISOString().slice(0, 10);
+  return changeOrigins((origins) => {
+    if (origins.limitToldOn === day) return false;
+    origins.limitToldOn = day;
+    return true;
+  });
+}
+
+/** Taken before the turn starts, so a letter is answered once even if the turn fails or the process ends. */
+export async function markOwnerLetterAnswered(id: number): Promise<boolean> {
+  return changeOrigins((origins) => {
+    if (origins.answered.includes(id)) return false;
+    origins.answered.push(id);
+    if (!origins.noted.includes(id)) origins.noted.push(id);
+    return true;
   });
 }

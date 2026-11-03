@@ -106,4 +106,11 @@ export interface EmailLetterInfo {
   quote: string;
   /** This workspace's copies of its files, absolute paths. */
   files?: string[];
+  /**
+   * The person themselves wrote it, from their confirmed address with their
+   * mail provider's signature: the chat answers them, by email (owner-letters.ts).
+   */
+  fromOwner?: boolean;
+  /** The turn that answered it has ended: later turns in the chat are the person typing here. */
+  answered?: boolean;
 }
