@@ -148,23 +148,28 @@ async function evaluate(cdp, sessionId, expression) {
   return result.result.value;
 }
 
+// After a navigation the page is asked how far it got instead of waiting for
+// Page.loadEventFired alone: that event did not reach us through the gateway,
+// so every `open` sat out the whole 30 seconds, example.com included. A page
+// that is still "interactive" after a few seconds (a slow image, an endless
+// script) is good enough to read.
 async function settle(cdp, sessionId, navigation) {
-  const deadline = Date.now() + NAV_TIMEOUT_MS;
-  if (navigation) {
-    await new Promise((resolve) => {
-      const off = cdp.on((message) => {
-        if (message.sessionId === sessionId && message.method === "Page.loadEventFired") { off(); resolve(); }
-      });
-      setTimeout(() => { off(); resolve(); }, NAV_TIMEOUT_MS);
-    });
-  } else {
-    await sleep(800);
-  }
-  while (Date.now() < deadline) {
+  const started = Date.now();
+  const deadline = started + NAV_TIMEOUT_MS;
+  let loaded = false;
+  const off = navigation
+    ? cdp.on((message) => {
+        if (message.sessionId === sessionId && message.method === "Page.loadEventFired") loaded = true;
+      })
+    : () => {};
+  await sleep(navigation ? 300 : 800);
+  while (!loaded && Date.now() < deadline) {
     const ready = await evaluate(cdp, sessionId, "document.readyState").catch(() => "loading");
-    if (ready === "complete" || ready === "interactive") break;
+    if (ready === "complete") break;
+    if (ready === "interactive" && (!navigation || Date.now() - started > 5_000)) break;
     await sleep(300);
   }
+  off();
   await sleep(400);
 }
 
