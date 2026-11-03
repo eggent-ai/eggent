@@ -57,20 +57,20 @@ export function createAppsTool() {
     name: APPS_TOOL,
     label: "Apps",
     description:
-      "The person's connected services: Yandex (Disk, Metrica, Webmaster, Tracker), Bitrix24, amoCRM, MoySklad, Wildberries, Ozon, Yandex Market, YooKassa, T-Bank Business, Tochka, VK. " +
+      "The person's connected services - the CRMs, marketplaces, banks, analytics and other services this deployment offers; which ones exist comes from action list, never from memory. " +
       "action list: which apps exist and which are connected. action guide + app: how to call that app (its paths or methods, hosts, quirks) - read it before the first call. " +
-      "action call + app + path (+ method, host, query, body): one API call made by the service with the person's key; for Bitrix24 and VK, path is the API method name and body its params. " +
+      "action call + app + path (+ method, host, query, body): one API call made by the service with the person's key; for apps called by method name, path is the method and body its params - the guide says which. " +
       "A read answers at once. A call that may change data does not run: it waits for the owner's yes on their own channel and answers pending with a request id - tell the person, and check it later with action request + request_id. " +
       "When an app is not connected the answer carries connect.url: give the person that link (the chat shows a Connect button) - never ask them to paste a key into the chat.",
-    promptSnippet: "eggent_apps(action: list|guide|call|request, app?, method?, host?, path?, query?, body?, request_id?) - the person's connected services (CRM, marketplaces, banks, Yandex, VK)",
+    promptSnippet: "eggent_apps(action: list|guide|call|request, app?, method?, host?, path?, query?, body?, request_id?) - the person's connected services (CRM, marketplaces, banks, analytics and more)",
     parameters: Type.Object({
       action: Type.Union([Type.Literal("list"), Type.Literal("guide"), Type.Literal("call"), Type.Literal("request")]),
-      app: Type.Optional(Type.String({ description: "The app id from list, e.g. bitrix24, amocrm, ozon." })),
+      app: Type.Optional(Type.String({ description: "The app id from list." })),
       method: Type.Optional(Type.String({ description: "HTTP method for REST apps: GET (default), POST, PUT, PATCH, DELETE." })),
-      host: Type.Optional(Type.String({ description: "For apps with several APIs (yandex: disk|metrika|webmaster|tracker; wildberries: content|statistics|analytics|marketplace|prices|feedbacks|advert|common)." })),
-      path: Type.Optional(Type.String({ description: "Path on the service (e.g. /api/v4/leads), or the method name for Bitrix24 and VK (e.g. crm.deal.list)." })),
+      host: Type.Optional(Type.String({ description: "For apps with several APIs, which one; the app's guide names them." })),
+      path: Type.Optional(Type.String({ description: "Path on the service (e.g. /api/v4/items), or the method name for apps called by method (e.g. items.list)." })),
       query: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: "Query parameters." })),
-      body: Type.Optional(Type.Unknown({ description: "JSON body, or the method's params for Bitrix24 and VK." })),
+      body: Type.Optional(Type.Unknown({ description: "JSON body, or the method's params for apps called by method." })),
       request_id: Type.Optional(Type.String({ description: "For action request: a pending request's id; without it, the latest ones." })),
     }),
     async execute(_id, params) {

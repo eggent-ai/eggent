@@ -28,13 +28,13 @@ const server = http.createServer((req, res) => {
     const body = Buffer.concat(chunks).toString("utf8");
     seen.push({ method: req.method || "", url: req.url || "", auth: String(req.headers.authorization || ""), body });
     res.setHeader("content-type", "application/json");
-    if (req.url === "/apps") return res.end(JSON.stringify({ connectUrl: "https://ws.example.test/__eggent/apps", apps: [{ id: "bitrix24", connected: false }] }));
-    if (req.url === "/apps/bitrix24") return res.end(JSON.stringify({ id: "bitrix24", connected: false, connectUrl: "https://ws.example.test/__eggent/apps#bitrix24", guide: "crm.deal.list" }));
-    if (req.url === "/apps/amocrm/call" && body.includes("POST")) {
+    if (req.url === "/apps") return res.end(JSON.stringify({ connectUrl: "https://ws.example.test/__eggent/apps", apps: [{ id: "crm-one", connected: false }] }));
+    if (req.url === "/apps/crm-one") return res.end(JSON.stringify({ id: "crm-one", connected: false, connectUrl: "https://ws.example.test/__eggent/apps#crm-one", guide: "items.list" }));
+    if (req.url === "/apps/crm-two/call" && body.includes("POST")) {
       res.statusCode = 202;
       return res.end(JSON.stringify({ pending: true, request: { id: "0f0e0d0c-0b0a-4908-8706-050403020100", status: "pending" } }));
     }
-    if (req.url === "/apps/amocrm/call") return res.end(JSON.stringify({ status: 200, ok: true, body: "{\"leads\":[]}" }));
+    if (req.url === "/apps/crm-two/call") return res.end(JSON.stringify({ status: 200, ok: true, body: "{\"leads\":[]}" }));
     res.statusCode = 404;
     res.end("{}");
   });
@@ -67,25 +67,25 @@ await check("the list comes from the service, with the services token", async ()
   assert.deepEqual(data.connect, { url: "https://ws.example.test/__eggent/apps" });
 });
 await check("a guide of an app not connected carries connect.url for the chat's button", async () => {
-  const data = await run({ action: "guide", app: "bitrix24" });
-  assert.deepEqual(data.connect, { url: "https://ws.example.test/__eggent/apps#bitrix24" });
-  assert.equal(appsConnectUrlFromToolOutput(JSON.stringify(data)), "https://ws.example.test/__eggent/apps#bitrix24");
-  assert.equal(appsConnectUrlFromToolOutput({ content: [{ type: "text", text: JSON.stringify(data) }] }), "https://ws.example.test/__eggent/apps#bitrix24");
+  const data = await run({ action: "guide", app: "crm-one" });
+  assert.deepEqual(data.connect, { url: "https://ws.example.test/__eggent/apps#crm-one" });
+  assert.equal(appsConnectUrlFromToolOutput(JSON.stringify(data)), "https://ws.example.test/__eggent/apps#crm-one");
+  assert.equal(appsConnectUrlFromToolOutput({ content: [{ type: "text", text: JSON.stringify(data) }] }), "https://ws.example.test/__eggent/apps#crm-one");
 });
 await check("a call goes through as asked", async () => {
-  const data = await run({ action: "call", app: "amocrm", path: "/api/v4/leads", query: { limit: 5 } });
+  const data = await run({ action: "call", app: "crm-two", path: "/api/v4/leads", query: { limit: 5 } });
   assert.equal(data.ok, true);
   assert.deepEqual(JSON.parse(seen.at(-1)!.body), { path: "/api/v4/leads", query: { limit: 5 } });
 });
 await check("a write that waits says so, and is not reported as done", async () => {
-  const data = await run({ action: "call", app: "amocrm", method: "POST", path: "/api/v4/leads", body: [{ name: "x" }] });
+  const data = await run({ action: "call", app: "crm-two", method: "POST", path: "/api/v4/leads", body: [{ name: "x" }] });
   assert.equal(data.pending, true);
   assert.match(String(data.note), /Not done yet/);
 });
 await check("a bad app id or a call with no path never reaches the service", async () => {
   const before = seen.length;
   assert.match(String((await run({ action: "guide", app: "../x" })).error), /Name the app/);
-  assert.match(String((await run({ action: "call", app: "amocrm" })).error), /path/);
+  assert.match(String((await run({ action: "call", app: "crm-two" })).error), /path/);
   assert.equal(seen.length, before);
 });
 await check("a link that is not http(s) is never a button", () => {
