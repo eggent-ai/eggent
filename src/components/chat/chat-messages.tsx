@@ -90,11 +90,14 @@ function writingText(message: UIMessage | undefined): boolean {
  */
 function WorkingLine({ progress }: { progress: string }) {
   const { t } = useI18n();
-  const [since, setSince] = useState(() => Date.now());
+  // When the progress last moved is noted while rendering, not in an effect.
+  // An effect's setState after every streamed chunk left an update waiting
+  // behind each commit, and a burst of 50 chunks in one read (search results
+  // arrive that way) was taken by React for an infinite loop: error #185.
+  const [mark, setMark] = useState(() => ({ progress, since: Date.now() }));
+  if (mark.progress !== progress) setMark({ progress, since: Date.now() });
+  const since = mark.since;
   const [now, setNow] = useState(() => Date.now());
-  useEffect(() => {
-    setSince(Date.now());
-  }, [progress]);
   useEffect(() => {
     const timer = window.setInterval(() => setNow(Date.now()), 1000);
     return () => window.clearInterval(timer);
