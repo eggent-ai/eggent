@@ -47,6 +47,7 @@ import { createStageTool } from "@/lib/employees/stage-tool";
 import { createSummaryTool, summaryConfigured } from "@/lib/employees/summary-tool";
 import { googleEnabled } from "@/lib/google/config";
 import { createGoogleTool } from "@/lib/google/tool";
+import { appsEnabled, createAppsTool } from "@/lib/apps/tool";
 import { putQuestionOnCard } from "@/lib/board/runs";
 import { boardRunsHere } from "@/lib/board/place";
 import {
@@ -1357,6 +1358,10 @@ export async function createEggentPiTools(options: {
   // Google Sheets and Calendar through the deployment's connection
   // (EGGENT_GOOGLE_API_URL). Not inside a visit: the connection is the person's.
   if (googleEnabled() && !options.visit) tools.push(createGoogleTool({ cwd: options.cwd }));
+
+  // The person's connected services (EGGENT_APPS_API_URL): CRMs, marketplaces,
+  // banks. Not inside a visit, for the same reason as Google.
+  if (appsEnabled() && !options.visit) tools.push(createAppsTool());
 
   // Messages with the other people of this workspace's company, when the
   // deployment keeps them (EGGENT_MAIL_API_URL). Not inside a visit: a project
