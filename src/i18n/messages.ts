@@ -1596,7 +1596,7 @@ const enMessages = {
   "board.next.unknownError": "unknown error",
   "board.next.resume": "The previous run was cut off when the workspace restarted. Carry on with the task from where it stopped: check what is already done before doing anything again.",
   "board.next.continue": "Carry on with the task from where it stopped.",
-  "board.next.decide": "Carry on without an answer to your question: decide it yourself and say what you chose.",
+  "board.next.decide": "Carry on without an answer to your question: decide it yourself from what you already know - this chat and the project's files - and say what you chose.",
   "board.next.redo": "Do this task again, from the start.",
   "board.message.parents": "What the cards this one waited for came to:",
   "board.message.files": "Files",

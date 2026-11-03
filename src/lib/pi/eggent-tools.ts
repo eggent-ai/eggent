@@ -274,7 +274,7 @@ export async function createEggentPiTools(options: {
       name: "eggent_ask_user",
       label: "Ask The User",
       description:
-        "Ask the user one question and wait for the answer, rendered as a card with buttons and an input field instead of plain chat text. Use for setup choices, confirmations before a destructive or expensive step, and any point where a skill or workflow needs a decision. ALWAYS pass `options` - two to four of them - even when the answer is free text: they render as one-tap answers, and a question with nothing to tap is the one people abandon. Write the question so it stands on its own, and put a concrete example in `placeholder`. The card adds \"decide for me\" and \"skip\" itself, so do not spend an option on those. The person can attach files while the card is open (the chat's paperclip works under it): to get a file, ask for it on the card, and whatever they attach comes back in `files` with the answer. Ask one question at a time; do not use this to interview the user through a long questionnaire.",
+        "Ask the user one question and wait for the answer, rendered as a card with buttons and an input field instead of plain chat text. Use for setup choices, confirmations before a destructive or expensive step, and any point where a skill or workflow needs a decision. Before asking, look for the answer in this chat and the project's files (a profile, a plan, earlier results): ask only what they cannot tell you. ALWAYS pass `options` - one to four of them - even when the answer is free text: they render as one-tap answers, and a question with nothing to tap is the one people abandon. Every option must BE an answer the person can give with one tap (\"In Russian\", \"Every Monday\", a likely value): never an option that only promises an answer, like \"I'll give a link\", \"I'll describe it\" or \"I'll tell you what to change\" - the input field is always there for typing, and such a button answers nothing. Write the question so it stands on its own, and put a concrete example in `placeholder`. The card adds \"decide for me\" and \"skip\" itself, so do not spend an option on those. The person can attach files while the card is open (the chat's paperclip works under it): to get a file, ask for it on the card, and whatever they attach comes back in `files` with the answer. Ask one question at a time; do not use this to interview the user through a long questionnaire.",
       parameters: Type.Object({
         question: Type.String({ description: "The question, in the user's language. Keep it to one sentence." }),
         kind: Type.Optional(
@@ -378,7 +378,7 @@ export async function createEggentPiTools(options: {
                 {
                   success: true,
                   deferred: true,
-                  note: "The user asked you to decide. Take the sensible default, say in one line what you chose, and keep going.",
+                  note: "The user asked you to decide. Take the default that fits what you already know - this chat and the project's files first, a guess last - say in one line what you chose, and keep going.",
                 },
                 null,
                 2
