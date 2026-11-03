@@ -157,6 +157,11 @@ await check("the instructions carry the newest messages that fit, oldest first, 
   assert.match(text, /language the person speaks/);
   assert.match(text, /"ru"/);
   assert.match(text, /project "Shop"/);
+  // A call once turned "send it to me, you know my address" into "take the address from Google".
+  assert.match(text, /Do not add conditions they did not set/);
+  assert.match(text, /sends a letter to the person without being given an address/);
+  assert.doesNotMatch(text, /Google/);
+  assert.match(VOICE_TOOLS[0].description, /Add nothing they did not say/);
   const many = Array.from({ length: 40 }, (_, i) => ({ role: "user" as const, text: `${i} ${"x".repeat(300)}` }));
   const kept = recentForVoice(many);
   assert.ok(kept.length < 40 && kept.length > 5);
