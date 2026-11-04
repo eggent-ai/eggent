@@ -264,6 +264,11 @@ export interface Project {
   description: string;
   instructions: string;
   memoryMode: "global" | "isolated";
+  /**
+   * false keeps the project to itself: its chats do not see the orchestrator's
+   * instructions, skills or MCP servers beneath its own. Unset means they do.
+   */
+  inheritOrchestrator?: boolean;
   /** Set when the project is an AI employee hired from a bundled skill: the skill's employee id. */
   employee?: string;
   createdAt: string;

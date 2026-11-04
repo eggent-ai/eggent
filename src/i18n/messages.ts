@@ -620,6 +620,10 @@ const enMessages = {
 
   "context.title": "Context",
   "context.description": "Instructions the agent gets in every chat. The orchestrator and each project have their own.",
+  "context.inherit.switch": "Also knows the orchestrator",
+  "context.inherit.on": "This project's chats also get the orchestrator's instructions and skills, and know which MCP servers it has. The project's own come first.",
+  "context.inherit.off": "This project keeps to itself: its chats see only its own instructions, skills and MCP servers.",
+  "context.inherit.failed": "Could not save. Try again.",
 
   "memory.title": "Memory",
   "memory.description": "Notes the agent keeps between chats: it searches, adds to and deletes from them itself. The orchestrator and each project have their own.",

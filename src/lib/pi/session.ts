@@ -53,6 +53,7 @@ import {
   getWorkDir,
   loadProjectModelSettings,
   loadProjectSkillsMetadata,
+  getProjectContextPath,
   readProjectContext,
 } from "@/lib/storage/project-store";
 import { deploymentContext, ensureWebSearchWorkflow, fallbackRuntimeModel, getEggentAiModelLockState, getManagedProviderId, getPiModelRegistry, getPiModelRuntime, getPiSettingsManager, isManagedProviderId } from "@/lib/pi/config-store";
@@ -159,7 +160,13 @@ function formatChatFilesContext(chatFiles: ChatFile[]): string[] {
   ];
 }
 
-function formatProjectSkillsContext(options: { projectId?: string; cwd: string; skills: ProjectSkillMetadata[] }): string[] {
+function formatProjectSkillsContext(options: {
+  projectId?: string;
+  cwd: string;
+  skills: ProjectSkillMetadata[];
+  /** Skills a project sees from the orchestrator beneath it. */
+  inherited?: ReadonlySet<ProjectSkillMetadata>;
+}): string[] {
   if (options.skills.length === 0) return [];
   const scope = options.projectId ? "project" : "orchestrator";
   const rows = options.skills
@@ -171,7 +178,8 @@ function formatProjectSkillsContext(options: { projectId?: string; cwd: string; 
         : skillFile;
       // The agent's own skills are shared by every project, so one seen from a
       // project says where it comes from.
-      return `| ${skill.name} | ${cwdRelative} | ${skillFile} | ${skill.description}${skill.learned ? " [learned]" : ""} |`;
+      const mark = skill.learned ? " [learned]" : options.inherited?.has(skill) ? " [orchestrator]" : "";
+      return `| ${skill.name} | ${cwdRelative} | ${skillFile} | ${skill.description}${mark} |`;
     })
     .join("\n");
   return [
@@ -182,6 +190,53 @@ function formatProjectSkillsContext(options: { projectId?: string; cwd: string; 
     "| --- | --- | --- | --- |",
     rows,
   ];
+}
+
+export interface OrchestratorLayer {
+  instructions: string;
+  instructionsPath: string;
+  /** The orchestrator's memory.md, which the memory tools of a project do not reach. */
+  memoryPath: string;
+  /** The orchestrator's MCP servers this project does not have under the same name. */
+  mcpServerIds: string[];
+}
+
+/** How much of the orchestrator's context.md rides under a project; the rest is a read away. */
+export const ORCHESTRATOR_LAYER_MAX_CHARS = 3000;
+
+/**
+ * The orchestrator beneath a project.
+ *
+ * A project used to replace the orchestrator outright, so somebody who did not
+ * notice they had a project open lost everything they had told the
+ * orchestrator - who they are, where things live, which services are
+ * connected - and the agent answered as a stranger. Hermes layers it the same
+ * way: the project's own file on top of the global one, never instead of it.
+ * The project still wins, and the prompt says so, because it is the more
+ * specific of the two.
+ */
+export function formatOrchestratorLayer(layer: OrchestratorLayer | undefined, projectLabel?: string): string[] {
+  if (!layer) return [];
+  const lines: string[] = [];
+  const text = layer.instructions.trim();
+  if (text) {
+    const cut = text.length > ORCHESTRATOR_LAYER_MAX_CHARS;
+    lines.push(
+      "",
+      "Workspace instructions (the orchestrator's, beneath this project):",
+      `This chat is inside the project${projectLabel ? ` "${projectLabel}"` : ""}. The project's own instructions and skills come first; below is what the person told the orchestrator about themselves and the whole workspace, so it is not lost while a project is open. Where the two disagree, follow the project.`,
+      cut ? `${text.slice(0, ORCHESTRATOR_LAYER_MAX_CHARS)}\n[...cut here; the whole file is ${layer.instructionsPath}]` : text
+    );
+  }
+  lines.push(`The orchestrator's memory is ${layer.memoryPath}; the memory tools here search only this project's, so read that file when a question is about the person or the workspace and this project's memory has nothing on it.`);
+  if (layer.mcpServerIds.length > 0) {
+    lines.push(
+      "",
+      `MCP servers connected in the orchestrator but not in this project: ${layer.mcpServerIds.join(", ")}.`,
+      "They cannot be called from here. If the task needs one of them, call switch_project with project_id 'none', then tell the person in one sentence that the server is connected in the orchestrator, that the chat has moved there and that their next message will be done there. Do not copy the server into this project's .mcp.json unless the person asks for that."
+    );
+  }
+  return lines;
 }
 
 function loadConfiguredMcpServerIds(cwd: string): string[] {
@@ -226,6 +281,9 @@ function buildEggentProjectContext(options: {
   /** Notes the agent kept from earlier conversations, ready to print. */
   learnedNotes?: string[];
   mcpServerIds?: string[];
+  /** What a project sees of the orchestrator beneath it; absent when the project keeps to itself. */
+  orchestratorLayer?: OrchestratorLayer;
+  inheritedSkills?: ReadonlySet<ProjectSkillMetadata>;
   runtimeModel?: {
     provider?: string;
     id?: string;
@@ -478,8 +536,14 @@ function buildEggentProjectContext(options: {
         : "No orchestrator-specific instructions configured."),
     // After the person's own instructions and before the lists that change with
     // the chat: it is the part of this tail that changes least often.
+    ...formatOrchestratorLayer(options.orchestratorLayer, options.projectName || options.projectId),
     ...(options.learnedNotes ?? []),
-    ...formatProjectSkillsContext({ projectId: options.projectId, cwd: options.cwd, skills: options.projectSkills ?? [] }),
+    ...formatProjectSkillsContext({
+      projectId: options.projectId,
+      cwd: options.cwd,
+      skills: options.projectSkills ?? [],
+      inherited: options.inheritedSkills,
+    }),
     ...formatChatFilesContext(options.chatFiles ?? []),
     options.projectSkills?.length
       ? "- Workspace-local skills are listed above and are available as Pi skills in this scope. Prefer those exact skill paths when activating one."
@@ -747,19 +811,37 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
       ? project.instructions
       : await readProjectContext(scopeId);
   const ownSkills = bare || publicShare ? [] : await loadProjectSkillsMetadata(scopeId);
+  // A project sits on the orchestrator rather than replacing it (see
+  // formatOrchestratorLayer), unless the project was set to keep to itself.
+  // A visit is left out: the chat that asked already has this layer and hands
+  // the project a task, so the project answers from its own desk.
+  const inheritsOrchestrator = Boolean(projectId) && !bare && !publicShare && !options.visit
+    && project?.inheritOrchestrator !== false;
   // What the agent has learned is learned for the person, not for one project,
-  // so a project sees those skills too. Its own skills win a clash of names.
-  const sharedLearnedSkills = bare || publicShare || !projectId
+  // so a project sees those skills always; the rest of the orchestrator's when
+  // it inherits. Its own skills win a clash of names.
+  const orchestratorSkills = bare || publicShare || !projectId
     ? []
     : (await loadProjectSkillsMetadata(GLOBAL_PROJECT_ID)).filter(
-        (skill) => skill.learned && !ownSkills.some((own) => own.name.toLowerCase() === skill.name.toLowerCase())
+        (skill) => (skill.learned || inheritsOrchestrator)
+          && !ownSkills.some((own) => own.name.toLowerCase() === skill.name.toLowerCase())
       );
-  const projectSkills = [...ownSkills, ...sharedLearnedSkills];
+  const inheritedSkills = new Set(orchestratorSkills.filter((skill) => !skill.learned));
+  const projectSkills = [...ownSkills, ...orchestratorSkills];
   const projectSkillPaths = projectSkills.map((skill) => path.join(skill.skillDir, "SKILL.md"));
   // Read the scope's own file rather than the session cwd: an orchestrator run
   // started inside a project directory would otherwise report that project's
   // servers as its own.
   const mcpServerIds = bare || publicShare ? [] : loadConfiguredMcpServerIds(getWorkDir(scopeId));
+  const orchestratorLayer: OrchestratorLayer | undefined = inheritsOrchestrator
+    ? {
+        instructions: await readProjectContext(GLOBAL_PROJECT_ID),
+        instructionsPath: getProjectContextPath(GLOBAL_PROJECT_ID),
+        memoryPath: getProjectMemoryPath(GLOBAL_PROJECT_ID),
+        mcpServerIds: loadConfiguredMcpServerIds(getWorkDir(GLOBAL_PROJECT_ID))
+          .filter((id) => !mcpServerIds.includes(id)),
+      }
+    : undefined;
   const chatFiles = !bare && !publicShare && options.chatId ? await getChatFiles(options.chatId) : [];
   const handedChat = !bare && !publicShare && options.chatId && (mailEnabled() || emailEnabled())
     ? await getChat(options.chatId)
@@ -789,6 +871,8 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     projectSkills,
     learnedNotes: learningAvailable() ? formatLearnedForPrompt(await learnedSnapshot()) : [],
     mcpServerIds,
+    orchestratorLayer,
+    inheritedSkills,
     // On the included model the provider is reported by its label - the run is
     // on Eggent AI whether the whole workspace is or only this project chose it
     // - while the model keeps its own name, because there are several to choose
