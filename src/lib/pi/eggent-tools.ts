@@ -1361,7 +1361,13 @@ export async function createEggentPiTools(options: {
 
   // The person's connected services (EGGENT_APPS_API_URL): CRMs, marketplaces,
   // banks. Not inside a visit, for the same reason as Google.
-  if (appsEnabled() && !options.visit) tools.push(createAppsTool());
+  if (appsEnabled() && !options.visit) {
+    tools.push(createAppsTool({
+      // Where the task came from, so the deployment asks the owner where they
+      // are: the web chat's card, their messenger, or wherever they can be reached.
+      origin: () => (getTelegramRuntimeData(options.toolRuntimeData) ? "telegram" : options.interactive ? "web" : "other"),
+    }));
+  }
 
   // Messages with the other people of this workspace's company, when the
   // deployment keeps them (EGGENT_MAIL_API_URL). Not inside a visit: a project

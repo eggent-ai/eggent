@@ -33,7 +33,14 @@ const server = http.createServer((req, res) => {
     if (req.url?.startsWith("/apps/shop-one/methods")) return res.end(JSON.stringify({ app: "shop-one", total: 1, methods: [{ method: "POST", path: "/v1/stock/list", title: "Stock", kind: "read" }] }));
     if (req.url === "/apps/crm-two/call" && body.includes("POST")) {
       res.statusCode = 202;
-      return res.end(JSON.stringify({ pending: true, request: { id: "0f0e0d0c-0b0a-4908-8706-050403020100", status: "pending" } }));
+      const asked = JSON.parse(body) as { origin?: string; calls?: unknown[] };
+      return res.end(JSON.stringify({ pending: true, request: {
+        id: "0f0e0d0c-0b0a-4908-8706-050403020100", status: "pending",
+        waitsIn: asked.origin === "telegram" ? "telegram" : "browser",
+        approveUrl: "https://cloud.example.test/apps/approve/0f0e0d0c-0b0a-4908-8706-050403020100",
+        calls: (asked.calls ?? [asked]).map(() => "POST /api/v4/leads"),
+        expiresAt: "2026-11-05T10:00:00.000Z",
+      } }));
     }
     if (req.url === "/apps/crm-two/call") return res.end(JSON.stringify({ status: 200, ok: true, body: "{\"leads\":[]}" }));
     res.statusCode = 404;
@@ -45,10 +52,11 @@ const port = (server.address() as { port: number }).port;
 
 const { appsEnabled, createAppsTool } = await import("../src/lib/apps/tool.ts");
 const { appsConnectUrlFromToolOutput } = await import("../src/lib/apps/connect-link.ts");
+const { appApprovalFromToolOutput } = await import("../src/lib/apps/approval-card.ts");
 
 type ToolLike = { execute: (id: string, params: Record<string, unknown>) => Promise<{ content: Array<{ text: string }> }> };
-const run = async (params: Record<string, unknown>) => {
-  const tool = createAppsTool() as unknown as ToolLike;
+const run = async (params: Record<string, unknown>, origin?: "web" | "telegram" | "other") => {
+  const tool = createAppsTool(origin ? { origin: () => origin } : {}) as unknown as ToolLike;
   const result = await tool.execute("t1", params);
   return JSON.parse(result.content[0].text) as Record<string, unknown>;
 };
@@ -76,12 +84,44 @@ await check("a guide of an app not connected carries connect.url for the chat's 
 await check("a call goes through as asked", async () => {
   const data = await run({ action: "call", app: "crm-two", path: "/api/v4/leads", query: { limit: 5 } });
   assert.equal(data.ok, true);
-  assert.deepEqual(JSON.parse(seen.at(-1)!.body), { path: "/api/v4/leads", query: { limit: 5 } });
+  assert.deepEqual(JSON.parse(seen.at(-1)!.body), { path: "/api/v4/leads", query: { limit: 5 }, origin: "other" });
 });
 await check("a write that waits says so, and is not reported as done", async () => {
   const data = await run({ action: "call", app: "crm-two", method: "POST", path: "/api/v4/leads", body: [{ name: "x" }] });
   assert.equal(data.pending, true);
   assert.match(String(data.note), /Not done yet/);
+});
+await check("from the web chat a waiting write carries a card for the chat; from elsewhere it does not", async () => {
+  const web = await run({ action: "call", app: "crm-two", method: "POST", path: "/api/v4/leads", body: [{ name: "x" }] }, "web");
+  assert.equal(JSON.parse(seen.at(-1)!.body).origin, "web");
+  const card = appApprovalFromToolOutput(JSON.stringify(web));
+  assert.equal(card?.url, "https://cloud.example.test/apps/approve/0f0e0d0c-0b0a-4908-8706-050403020100");
+  assert.deepEqual(card?.calls, ["POST /api/v4/leads"]);
+  assert.match(String(web.note), /button/);
+  const tg = await run({ action: "call", app: "crm-two", method: "POST", path: "/api/v4/leads", body: [] }, "telegram");
+  assert.equal(tg.approval, undefined);
+  assert.match(String(tg.note), /Telegram/);
+});
+await check("a batch goes as one request with every call", async () => {
+  const data = await run({ action: "call", app: "crm-two", batch: [
+    { method: "POST", path: "/api/v4/leads", body: [{ name: "a" }] },
+    { method: "POST", path: "/api/v4/leads", body: [{ name: "b" }] },
+  ] }, "web");
+  const sent = JSON.parse(seen.at(-1)!.body);
+  assert.equal(sent.calls.length, 2);
+  assert.equal(sent.calls[1].body[0].name, "b");
+  assert.equal(appApprovalFromToolOutput(JSON.stringify(data))?.calls.length, 2);
+  const before = seen.length;
+  assert.match(String((await run({ action: "call", app: "crm-two", batch: Array.from({ length: 11 }, () => ({ path: "/x" })) })).error), /1 to 10/);
+  assert.match(String((await run({ action: "call", app: "crm-two", batch: [{ path: "" }] })).error), /path/);
+  assert.equal(seen.length, before);
+});
+await check("a card is drawn only for this deployment's approval page shape", () => {
+  const good = { approval: { url: "https://cloud.example.test/apps/approve/0f0e0d0c-0b0a-4908-8706-050403020100", calls: ["x"] } };
+  assert.ok(appApprovalFromToolOutput(good));
+  for (const url of ["javascript:alert(1)", "https://cloud.example.test/apps/approve/x", "https://cloud.example.test/apps/approve/0f0e0d0c-0b0a-4908-8706-050403020100?go=1"]) {
+    assert.equal(appApprovalFromToolOutput({ approval: { url } }), null, url);
+  }
 });
 await check("methods asks the service with the words and the section, and nothing else", async () => {
   const data = await run({ action: "methods", app: "shop-one", search: "stock warehouse", section: "Stocks & prices" });

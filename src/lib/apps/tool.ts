@@ -52,7 +52,14 @@ async function ask(method: "GET" | "POST", route: string, body?: unknown): Promi
 
 const APP_ID = /^[a-z0-9-]{2,40}$/;
 
-export function createAppsTool() {
+export interface AppsToolOptions {
+  /** Where this turn came from: the web chat, a messenger, or nobody watching. */
+  origin?: () => "web" | "telegram" | "other";
+}
+
+const MAX_BATCH = 10;
+
+export function createAppsTool(options: AppsToolOptions = {}) {
   return defineTool({
     name: APPS_TOOL,
     label: "Apps",
@@ -61,9 +68,10 @@ export function createAppsTool() {
       "action list: which apps exist and which are connected. action guide + app: how to call that app (hosts, quirks, and for big APIs the sections of its method list) - read it before the first call. " +
       "action methods + app + search (words of the task, e.g. \"stock warehouse\", \"refund\") or section: the matching methods from the service's own documentation - method, host, path, parameters (name* = required) and whether it reads or waits for the owner. For a big API look the method up here instead of calling a path from memory. " +
       "action call + app + path (+ method, host, query, body): one API call made by the service with the person's key; for apps called by method name, path is the method and body its params - the guide says which. " +
-      "A read answers at once. A call that may change data does not run: it waits for the owner's yes on their own channel and answers pending with a request id - tell the person, and check it later with action request + request_id. " +
+      "action call + app + batch (up to 10 calls, each {path, method?, host?, query?, body?}): several calls to one app at once - when a task changes several things (four payment drafts, ten prices), send them as one batch so the owner says yes once for all of them. " +
+      "A read answers at once. A call or batch that may change data does not run: it waits for the owner's yes and answers pending with a request id - in the web chat the person sees it under your answer with a button; tell them in one line, and check it later with action request + request_id. " +
       "When an app is not connected the answer carries connect.url: give the person that link (the chat shows a Connect button) - never ask them to paste a key into the chat.",
-    promptSnippet: "eggent_apps(action: list|guide|methods|call|request, app?, search?, section?, method?, host?, path?, query?, body?, request_id?) - the person's connected services (CRM, marketplaces, banks, analytics and more)",
+    promptSnippet: "eggent_apps(action: list|guide|methods|call|request, app?, search?, section?, method?, host?, path?, query?, body?, batch?, request_id?) - the person's connected services (CRM, marketplaces, banks, analytics and more)",
     parameters: Type.Object({
       action: Type.Union([Type.Literal("list"), Type.Literal("guide"), Type.Literal("methods"), Type.Literal("call"), Type.Literal("request")]),
       app: Type.Optional(Type.String({ description: "The app id from list." })),
@@ -74,6 +82,13 @@ export function createAppsTool() {
       path: Type.Optional(Type.String({ description: "Path on the service (e.g. /api/v4/items), or the method name for apps called by method (e.g. items.list)." })),
       query: Type.Optional(Type.Record(Type.String(), Type.Unknown(), { description: "Query parameters." })),
       body: Type.Optional(Type.Unknown({ description: "JSON body, or the method's params for apps called by method." })),
+      batch: Type.Optional(Type.Array(Type.Object({
+        path: Type.String(),
+        method: Type.Optional(Type.String()),
+        host: Type.Optional(Type.String()),
+        query: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+        body: Type.Optional(Type.Unknown()),
+      }), { description: "For action call: up to 10 calls to the same app, asked as one." })),
       request_id: Type.Optional(Type.String({ description: "For action request: a pending request's id; without it, the latest ones." })),
     }),
     async execute(_id, params) {
@@ -105,23 +120,55 @@ export function createAppsTool() {
         const { data } = await ask("GET", `/${app}/methods${query.size ? `?${query}` : ""}`);
         return textResult(JSON.stringify(data, null, 2));
       }
-      if (typeof params.path !== "string" || !params.path.trim()) return textResult(JSON.stringify({ error: "A call needs path." }));
-      const { status, data } = await ask("POST", `/${app}/call`, {
-        path: params.path,
-        ...(params.method ? { method: params.method } : {}),
-        ...(params.host ? { host: params.host } : {}),
-        ...(params.query ? { query: params.query } : {}),
-        ...(params.body !== undefined ? { body: params.body } : {}),
-      });
+      const origin = options.origin?.() ?? "other";
+      const batch = Array.isArray(params.batch) ? params.batch : null;
+      if (batch) {
+        if (!batch.length || batch.length > MAX_BATCH) return textResult(JSON.stringify({ error: `A batch holds 1 to ${MAX_BATCH} calls.` }));
+        if (batch.some((item) => typeof item?.path !== "string" || !item.path.trim())) return textResult(JSON.stringify({ error: "Every call of a batch needs path." }));
+      } else if (typeof params.path !== "string" || !params.path.trim()) {
+        return textResult(JSON.stringify({ error: "A call needs path (or batch)." }));
+      }
+      const payload = batch
+        ? { calls: batch.map((item) => callPayload(item)), origin }
+        : { ...callPayload({ path: params.path as string, method: params.method, host: params.host, query: params.query, body: params.body }), origin };
+      const { status, data } = await ask("POST", `/${app}/call`, payload);
       if (status === 202) {
+        const request = (data.request && typeof data.request === "object" ? data.request : {}) as Record<string, unknown>;
+        const card = origin === "web" && typeof request.approveUrl === "string";
         return textResult(JSON.stringify({
           ...data,
-          note: "Not done yet: the owner has to allow it in their Telegram or by the link in their email. Tell the person it waits for their yes; check with action request.",
+          ...(card
+            ? {
+                approval: {
+                  url: request.approveUrl,
+                  app,
+                  calls: Array.isArray(request.calls) ? request.calls : [],
+                  until: typeof request.expiresAt === "string" ? request.expiresAt : "",
+                },
+              }
+            : {}),
+          note: card
+            ? "Not done yet. The person sees exactly what will run under your answer, with a button that opens the deployment's page where only they can allow it. You cannot allow it and there is no other way: in one line ask them to look and press the button, and do not repeat the details. Check later with action request."
+            : request.waitsIn === "telegram"
+              ? "Not done yet: the owner has to allow it in their Telegram. Tell the person it waits for their yes there; check with action request."
+              : request.waitsIn === "email"
+                ? "Not done yet: the owner has to allow it by the link in their email. Tell the person; check with action request."
+                : "Not done yet: it waits for the owner's yes on the Apps page of this workspace. Tell the person; check with action request.",
         }, null, 2));
       }
       return textResult(JSON.stringify(withConnect(data), null, 2));
     },
   });
+}
+
+function callPayload(item: { path: string; method?: unknown; host?: unknown; query?: unknown; body?: unknown }): Record<string, unknown> {
+  return {
+    path: item.path,
+    ...(typeof item.method === "string" && item.method ? { method: item.method } : {}),
+    ...(typeof item.host === "string" && item.host ? { host: item.host } : {}),
+    ...(item.query && typeof item.query === "object" ? { query: item.query } : {}),
+    ...(item.body !== undefined ? { body: item.body } : {}),
+  };
 }
 
 /** A not-connected answer carries the link in `connect.url`, where the chat looks for a Connect button. */

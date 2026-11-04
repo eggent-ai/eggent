@@ -19,6 +19,8 @@ import { VoiceCallCard } from "./voice-call-card";
 import type { VoiceCallRecord } from "@/lib/types";
 import { EmailReplyNote } from "@/components/email/email-chat-notes";
 import { EmailApprovalCard } from "@/components/email/email-approval-card";
+import { AppApprovalCard } from "@/components/apps/app-approval-card";
+import { appApprovalFromToolOutput, type AppApprovalCard as AppApproval } from "@/lib/apps/approval-card";
 import { emailApprovalFromToolOutput, type EmailApprovalCard as EmailApproval } from "@/lib/email/approval-card";
 import type { EmailReplyNotice } from "@/lib/email/types";
 import { FilesProduced } from "./files-produced";
@@ -448,6 +450,7 @@ export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
   const learned = learnedNoticeOf(message.parts);
   const emailReplies = emailRepliesOf(message.parts);
   const emailApprovals = emailApprovalsOf(message.parts);
+  const appApprovals = appApprovalsOf(message.parts);
   const producedFiles = producedFilesOf(message.parts);
   const googleConnect = googleLinkOf(message.parts, connectUrlFromToolOutput);
   const googlePick = googleLinkOf(message.parts, pickUrlFromToolOutput);
@@ -468,6 +471,7 @@ export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
         {producedFiles.length > 0 ? <FilesProduced groups={producedFiles} /> : null}
         {learned ? <LearnedNote notice={learned} /> : null}
         {emailApprovals.map((card) => <EmailApprovalCard key={card.url} card={card} />)}
+        {appApprovals.map((card) => <AppApprovalCard key={card.url} card={card} />)}
         {emailReplies.length ? <EmailReplyNote replies={emailReplies} /> : null}
         {googleConnect || googlePick ? <GoogleConnectCard connectUrl={googleConnect ?? undefined} pickUrl={googlePick ?? undefined} /> : null}
         {appsConnect ? <AppsConnectCard url={appsConnect} /> : null}
@@ -582,6 +586,18 @@ function emailApprovalsOf(parts: UIMessage["parts"]): EmailApproval[] {
     const tool = toolPartInfo(part);
     if (!tool || tool.toolName !== "eggent_email" || tool.state !== "output-available") continue;
     const card = emailApprovalFromToolOutput(tool.output);
+    if (card) cards.set(card.url, card);
+  }
+  return [...cards.values()];
+}
+
+/** Changes to a connected service this answer asked for, each waiting for the person's yes. */
+function appApprovalsOf(parts: UIMessage["parts"]): AppApproval[] {
+  const cards = new Map<string, AppApproval>();
+  for (const part of parts) {
+    const tool = toolPartInfo(part);
+    if (!tool || tool.toolName !== "eggent_apps" || tool.state !== "output-available") continue;
+    const card = appApprovalFromToolOutput(tool.output);
     if (card) cards.set(card.url, card);
   }
   return [...cards.values()];
