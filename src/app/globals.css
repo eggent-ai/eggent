@@ -482,8 +482,7 @@
   .eggent-stage-in { animation: none; }
 }
 
-/* Focus on an employee's first job: the workspace around it steps aside until
-   the job is done and the person opens the workspace themselves. */
+/* Focus mode (lib/focus-mode.ts): the chat alone on screen. The composer stays. */
 html[data-eggent-focus] [data-slot="sidebar"],
 html[data-eggent-focus] [data-slot="sidebar-gap"],
 html[data-eggent-focus] [data-slot="site-header"] {

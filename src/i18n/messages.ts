@@ -2007,6 +2007,8 @@ const enMessages = {
   "employees.board.work": "How it was done",
   "employees.home.title": "Your employees",
   "employees.focus.working": "Your employee is at work - every step shows up above.",
+  "chat.focus.enter": "Focus mode",
+  "chat.focus.leave": "Leave focus mode",
   "employees.focus.open": "Open your workspace",
   "employees.focus.startFailed": "I could not start: the model service did not answer. Write \"start again\" and I will take the job up once more.",
   "employees.home.hired": "At work",

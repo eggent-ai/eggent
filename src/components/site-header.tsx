@@ -1,6 +1,6 @@
 "use client"
 
-import { SidebarIcon } from "lucide-react"
+import { Maximize2, SidebarIcon } from "lucide-react"
 import { useEffect, useState } from "react"
 import { Button } from "@/components/ui/button"
 import { Separator } from "@/components/ui/separator"
@@ -8,9 +8,12 @@ import { useSidebar } from "@/components/ui/sidebar"
 import { FilesPanelTrigger } from "@/components/files-panel"
 import { TerminalPanelTrigger } from "@/components/terminal-panel"
 import { BrowserPanelTrigger } from "@/components/browser-panel"
+import { useI18n } from "@/i18n/provider"
+import { setFocusMode } from "@/lib/focus-mode"
 
-export function SiteHeader({ title }: { title?: string }) {
+export function SiteHeader({ title, focusToggle = false }: { title?: string; focusToggle?: boolean }) {
   const { toggleSidebar } = useSidebar()
+  const { t } = useI18n()
   const [cloudMenuReady, setCloudMenuReady] = useState(false)
 
   // The injected menu must join the toolbar after React has hydrated it.
@@ -38,6 +41,19 @@ export function SiteHeader({ title }: { title?: string }) {
           <BrowserPanelTrigger />
           <TerminalPanelTrigger />
           <FilesPanelTrigger />
+          {/* Focus mode, on the chat screen only: the chat alone on screen. */}
+          {focusToggle && (
+            <Button
+              className="size-8"
+              variant="ghost"
+              size="icon"
+              onClick={() => setFocusMode(true)}
+              aria-label={t("chat.focus.enter")}
+              title={t("chat.focus.enter")}
+            >
+              <Maximize2 />
+            </Button>
+          )}
           {/* The cloud menu joins the toolbar instead of covering the composer. */}
           {cloudMenuReady && <div data-slot="cloud-menu-anchor" className="flex shrink-0 items-center empty:hidden" />}
         </div>

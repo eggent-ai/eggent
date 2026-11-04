@@ -34,7 +34,7 @@ export default async function RootLayout({
   return (
     <html lang={locale} className={settings.general.darkMode ? "dark" : undefined} suppressHydrationWarning>
       <head>
-        {/* A chat opened with ?focus=1 hides the frame before the first paint, not after it (nothing opens one that way now). */}
+        {/* A chat opened with ?focus=1 (focus mode) hides the frame before the first paint, not after it. */}
         <script dangerouslySetInnerHTML={{ __html: FOCUS_BEFORE_PAINT }} />
       </head>
       <body className="antialiased">
