@@ -1366,6 +1366,21 @@ export async function createEggentPiTools(options: {
       // Where the task came from, so the deployment asks the owner where they
       // are: the web chat's card, their messenger, or wherever they can be reached.
       origin: () => (getTelegramRuntimeData(options.toolRuntimeData) ? "telegram" : options.interactive ? "web" : "other"),
+      // A change is put to the person as a Yes/No card, the same card eggent_ask_user
+      // draws; "decide for me" and a dismissal both leave the change undone.
+      confirm: async (question) => {
+        if (options.interactive === false) return undefined;
+        const answer = await createPendingInteraction({
+          runId: options.runId ?? crypto.randomUUID(),
+          kind: "confirm",
+          title: question.title,
+          message: question.message,
+          options: [question.allow, question.decline],
+          signal: options.abortSignal,
+          onUpdate: options.onPiInteraction,
+        });
+        return typeof answer === "boolean" ? answer : undefined;
+      },
     }));
   }
 

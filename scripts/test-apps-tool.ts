@@ -36,11 +36,20 @@ const server = http.createServer((req, res) => {
       const asked = JSON.parse(body) as { origin?: string; calls?: unknown[] };
       return res.end(JSON.stringify({ pending: true, request: {
         id: "0f0e0d0c-0b0a-4908-8706-050403020100", status: "pending",
-        waitsIn: asked.origin === "telegram" ? "telegram" : "browser",
-        approveUrl: "https://cloud.example.test/apps/approve/0f0e0d0c-0b0a-4908-8706-050403020100",
+        waitsIn: asked.origin === "telegram" ? "telegram" : "chat",
+        chat: true,
+        ask: { title: "Allow this change in CRM?", message: "POST /api/v4/leads\n\nAllow it only if you asked.", allow: "Allow", decline: "Decline" },
         calls: (asked.calls ?? [asked]).map(() => "POST /api/v4/leads"),
         expiresAt: "2026-11-05T10:00:00.000Z",
       } }));
+    }
+    if (req.url === "/apps/requests/0f0e0d0c-0b0a-4908-8706-050403020100" && req.method === "POST") {
+      const decision = (JSON.parse(body) as { decision?: string }).decision;
+      return res.end(JSON.stringify({ outcome: decision === "allow" ? "done" : "declined", request: { status: decision === "allow" ? "done" : "declined", result: "HTTP 200\n{\"id\":7}" } }));
+    }
+    if (req.url === "/apps/crm-money/call") {
+      res.statusCode = 202;
+      return res.end(JSON.stringify({ pending: true, request: { id: "1f0e0d0c-0b0a-4908-8706-050403020100", status: "pending", waitsIn: "telegram", chat: false } }));
     }
     if (req.url === "/apps/crm-two/call") return res.end(JSON.stringify({ status: 200, ok: true, body: "{\"leads\":[]}" }));
     res.statusCode = 404;
@@ -51,11 +60,16 @@ await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 const port = (server.address() as { port: number }).port;
 
 const { appsEnabled, createAppsTool } = await import("../src/lib/apps/tool.ts");
-const { appApprovalFromToolOutput } = await import("../src/lib/apps/approval-card.ts");
 
 type ToolLike = { execute: (id: string, params: Record<string, unknown>) => Promise<{ content: Array<{ text: string }> }> };
-const run = async (params: Record<string, unknown>, origin?: "web" | "telegram" | "other") => {
-  const tool = createAppsTool(origin ? { origin: () => origin } : {}) as unknown as ToolLike;
+type Confirm = NonNullable<Parameters<typeof createAppsTool>[0]>["confirm"];
+const asked: Array<{ title: string; message: string; allow: string; decline: string }> = [];
+const run = async (params: Record<string, unknown>, origin?: "web" | "telegram" | "other", answer?: boolean | undefined) => {
+  const confirm: Confirm = async (question) => {
+    asked.push(question);
+    return answer;
+  };
+  const tool = createAppsTool(origin ? { origin: () => origin, confirm } : {}) as unknown as ToolLike;
   const result = await tool.execute("t1", params);
   return JSON.parse(result.content[0].text) as Record<string, unknown>;
 };
@@ -89,37 +103,53 @@ await check("a write that waits says so, and is not reported as done", async () 
   assert.equal(data.pending, true);
   assert.match(String(data.note), /Not done yet/);
 });
-await check("from the web chat a waiting write carries a card for the chat; from elsewhere it does not", async () => {
-  const web = await run({ action: "call", app: "crm-two", method: "POST", path: "/api/v4/leads", body: [{ name: "x" }] }, "web");
-  assert.equal(JSON.parse(seen.at(-1)!.body).origin, "web");
-  const card = appApprovalFromToolOutput(JSON.stringify(web));
-  assert.equal(card?.url, "https://cloud.example.test/apps/approve/0f0e0d0c-0b0a-4908-8706-050403020100");
-  assert.deepEqual(card?.calls, ["POST /api/v4/leads"]);
-  assert.match(String(web.note), /button/);
-  const tg = await run({ action: "call", app: "crm-two", method: "POST", path: "/api/v4/leads", body: [] }, "telegram");
-  assert.equal(tg.approval, undefined);
-  assert.match(String(tg.note), /Telegram/);
+await check("in the web chat a change is asked as Yes/No and the turn gets the service's answer", async () => {
+  asked.length = 0;
+  const data = await run({ action: "call", app: "crm-two", method: "POST", path: "/api/v4/leads", body: [{ name: "x" }] }, "web", true);
+  assert.equal(asked.length, 1);
+  assert.equal(asked[0].allow, "Allow");
+  assert.match(asked[0].message, /POST \/api\/v4\/leads/);
+  const decided = JSON.parse(seen.at(-1)!.body);
+  assert.equal(seen.at(-1)!.url, "/apps/requests/0f0e0d0c-0b0a-4908-8706-050403020100");
+  assert.equal(decided.decision, "allow");
+  assert.equal(data.allowed, true);
+  assert.equal(data.outcome, "done");
 });
-await check("a batch goes as one request with every call", async () => {
-  const data = await run({ action: "call", app: "crm-two", batch: [
+await check("a no, or a dismissed card, declines it and nothing runs", async () => {
+  for (const answer of [false, undefined]) {
+    const data = await run({ action: "call", app: "crm-two", method: "POST", path: "/api/v4/leads", body: [] }, "web", answer);
+    assert.equal(JSON.parse(seen.at(-1)!.body).decision, "decline");
+    assert.equal(data.declined, true);
+  }
+});
+await check("from Telegram nothing is asked in the chat", async () => {
+  asked.length = 0;
+  const data = await run({ action: "call", app: "crm-two", method: "POST", path: "/api/v4/leads", body: [] }, "telegram", true);
+  assert.equal(asked.length, 0);
+  assert.equal(data.pending, true);
+  assert.match(String(data.note), /Telegram/);
+});
+await check("money out is never asked in the chat", async () => {
+  asked.length = 0;
+  const data = await run({ action: "call", app: "crm-money", method: "POST", path: "/refunds", body: {} }, "web", true);
+  assert.equal(asked.length, 0);
+  assert.equal(data.pending, true);
+  assert.match(String(data.note), /money out/);
+});
+await check("a batch goes as one request with every call, asked once", async () => {
+  asked.length = 0;
+  await run({ action: "call", app: "crm-two", batch: [
     { method: "POST", path: "/api/v4/leads", body: [{ name: "a" }] },
     { method: "POST", path: "/api/v4/leads", body: [{ name: "b" }] },
-  ] }, "web");
-  const sent = JSON.parse(seen.at(-1)!.body);
+  ] }, "web", true);
+  const sent = JSON.parse(seen.find((item) => item.url === "/apps/crm-two/call" && item.body.includes('"calls"'))!.body);
   assert.equal(sent.calls.length, 2);
   assert.equal(sent.calls[1].body[0].name, "b");
-  assert.equal(appApprovalFromToolOutput(JSON.stringify(data))?.calls.length, 2);
+  assert.equal(asked.length, 1);
   const before = seen.length;
   assert.match(String((await run({ action: "call", app: "crm-two", batch: Array.from({ length: 11 }, () => ({ path: "/x" })) })).error), /1 to 10/);
   assert.match(String((await run({ action: "call", app: "crm-two", batch: [{ path: "" }] })).error), /path/);
   assert.equal(seen.length, before);
-});
-await check("a card is drawn only for this deployment's approval page shape", () => {
-  const good = { approval: { url: "https://cloud.example.test/apps/approve/0f0e0d0c-0b0a-4908-8706-050403020100", calls: ["x"] } };
-  assert.ok(appApprovalFromToolOutput(good));
-  for (const url of ["javascript:alert(1)", "https://cloud.example.test/apps/approve/x", "https://cloud.example.test/apps/approve/0f0e0d0c-0b0a-4908-8706-050403020100?go=1"]) {
-    assert.equal(appApprovalFromToolOutput({ approval: { url } }), null, url);
-  }
 });
 await check("methods asks the service with the words and the section, and nothing else", async () => {
   const data = await run({ action: "methods", app: "shop-one", search: "stock warehouse", section: "Stocks & prices" });

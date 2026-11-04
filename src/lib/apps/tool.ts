@@ -5,9 +5,11 @@
  *
  * The workspace holds no key of any of them: the service keeps them and makes
  * every call itself. A read comes back at once; a call that may change
- * something waits for the owner's yes, which the service asks for on its own
- * channel, and runs then. Connecting is the person's act on a page of the
- * deployment; the agent can only hand them the button.
+ * something waits for the person's yes: in the web chat a Yes/No card under the
+ * answer, and the turn carries on with the result; from Telegram or with nobody
+ * watching, the service asks on its own channel. A call that sends money out is
+ * always asked by the service in Telegram or by email, never in the chat.
+ * Connecting is the person's act on the Apps page of the deployment.
  */
 import { defineTool } from "@earendil-works/pi-coding-agent";
 import { Type } from "typebox";
@@ -55,6 +57,25 @@ const APP_ID = /^[a-z0-9-]{2,40}$/;
 export interface AppsToolOptions {
   /** Where this turn came from: the web chat, a messenger, or nobody watching. */
   origin?: () => "web" | "telegram" | "other";
+  /**
+   * Puts a Yes/No question to the person in the chat and waits: true for yes,
+   * false for no, undefined when dismissed or the turn stopped. Only for a web turn.
+   */
+  confirm?: (question: { title: string; message: string; allow: string; decline: string }) => Promise<boolean | undefined>;
+}
+
+interface ChatAsk {
+  title: string;
+  message: string;
+  allow: string;
+  decline: string;
+}
+
+function chatAskOf(request: Record<string, unknown>): ChatAsk | null {
+  const ask = request.ask as Partial<ChatAsk> | undefined;
+  if (request.chat !== true || !ask) return null;
+  if (typeof ask.title !== "string" || typeof ask.message !== "string" || typeof ask.allow !== "string" || typeof ask.decline !== "string") return null;
+  return ask as ChatAsk;
 }
 
 const MAX_BATCH = 10;
@@ -69,7 +90,7 @@ export function createAppsTool(options: AppsToolOptions = {}) {
       "action methods + app + search (words of the task, e.g. \"stock warehouse\", \"refund\") or section: the matching methods from the service's own documentation - method, host, path, parameters (name* = required) and whether it reads or waits for the owner. For a big API look the method up here instead of calling a path from memory. " +
       "action call + app + path (+ method, host, query, body): one API call made by the service with the person's key; for apps called by method name, path is the method and body its params - the guide says which. " +
       "action call + app + batch (up to 10 calls, each {path, method?, host?, query?, body?}): several calls to one app at once - when a task changes several things (four payment drafts, ten prices), send them as one batch so the owner says yes once for all of them. " +
-      "A read answers at once. A call or batch that may change data does not run: it waits for the owner's yes and answers pending with a request id - in the web chat the person sees it under your answer with a button; tell them in one line, and check it later with action request + request_id. " +
+      "A read answers at once. A call or batch that may change data does not run until the person says yes: in the web chat a Yes/No card appears and this call waits for the press, then answers with what the service said - do not ask them again in text first. Elsewhere, and for anything that sends money out (refunds, payouts, payment orders), it answers pending with a request id and the owner is asked in Telegram or by email - tell them in one line, and check later with action request + request_id. " +
       "When the app the task needs is not connected (connected: false), give the person connectUrl as a markdown link to the Apps page, in one sentence - never ask them to paste a key into the chat, and say nothing about connecting an app that is connected.",
     promptSnippet: "eggent_apps(action: list|guide|methods|call|request, app?, search?, section?, method?, host?, path?, query?, body?, batch?, request_id?) - the person's connected services (CRM, marketplaces, banks, analytics and more)",
     parameters: Type.Object({
@@ -131,26 +152,32 @@ export function createAppsTool(options: AppsToolOptions = {}) {
       const { status, data } = await ask("POST", `/${app}/call`, payload);
       if (status === 202) {
         const request = (data.request && typeof data.request === "object" ? data.request : {}) as Record<string, unknown>;
-        const card = origin === "web" && typeof request.approveUrl === "string";
+        const id = typeof request.id === "string" && /^[0-9a-f-]{36}$/i.test(request.id) ? request.id : null;
+        const question = chatAskOf(request);
+        if (origin === "web" && question && id && options.confirm) {
+          // Asked right here, the way a question card is: the turn waits for
+          // the press and carries on with what the service answered.
+          const yes = await options.confirm(question).catch(() => undefined);
+          const decided = await ask("POST", `/requests/${id}`, { decision: yes === true ? "allow" : "decline" });
+          if (yes !== true) {
+            return textResult(JSON.stringify({
+              declined: true,
+              note: yes === false
+                ? "The person said no. Nothing was changed. Do not try it another way; ask what they want instead."
+                : "The question was dismissed, so nothing was changed. Do not run it again unless the person asks.",
+            }, null, 2));
+          }
+          return textResult(JSON.stringify({ allowed: true, ...decided.data }, null, 2));
+        }
         return textResult(JSON.stringify({
           ...data,
-          ...(card
-            ? {
-                approval: {
-                  url: request.approveUrl,
-                  app,
-                  calls: Array.isArray(request.calls) ? request.calls : [],
-                  until: typeof request.expiresAt === "string" ? request.expiresAt : "",
-                },
-              }
-            : {}),
-          note: card
-            ? "Not done yet. The person sees exactly what will run under your answer, with a button that opens the deployment's page where only they can allow it. You cannot allow it and there is no other way: in one line ask them to look and press the button, and do not repeat the details. Check later with action request."
-            : request.waitsIn === "telegram"
-              ? "Not done yet: the owner has to allow it in their Telegram. Tell the person it waits for their yes there; check with action request."
-              : request.waitsIn === "email"
-                ? "Not done yet: the owner has to allow it by the link in their email. Tell the person; check with action request."
-                : "Not done yet: it waits for the owner's yes on the Apps page of this workspace. Tell the person; check with action request.",
+          note: request.waitsIn === "telegram"
+            ? (request.chat === false
+              ? "Not done yet: this sends money out, so the owner confirms it in their Telegram, not in the chat. Tell the person it waits for their yes there; check with action request."
+              : "Not done yet: the owner has to allow it in their Telegram. Tell the person it waits for their yes there; check with action request.")
+            : request.waitsIn === "email"
+              ? "Not done yet: this sends money out, so the owner confirms it by the link in their email, not in the chat. Tell the person; check with action request."
+              : "Not done yet: it waits for the person's yes in the web chat of this workspace. Tell them; check with action request.",
         }, null, 2));
       }
       return textResult(JSON.stringify(data, null, 2));
