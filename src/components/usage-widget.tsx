@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ExternalLink } from "lucide-react";
+import { ChevronDown, ExternalLink } from "lucide-react";
 import { useI18n } from "@/i18n/provider";
 
 interface UsageMeter {
@@ -78,6 +78,9 @@ export function UsageWidget() {
   const { t } = useI18n();
   const [snapshot, setSnapshot] = useState<UsageSnapshot | null>(null);
   const [unavailable, setUnavailable] = useState(false);
+  // A notice is one line - its title - until opened: the full text took the
+  // whole sidebar on a small screen. A critical one is open from the start.
+  const [noticeOpen, setNoticeOpen] = useState(false);
 
   useEffect(() => {
     let cancelled = false;
@@ -211,7 +214,7 @@ export function UsageWidget() {
 
       {snapshot.notice ? (
         <div
-          className={`mx-3 mb-3 space-y-1 rounded-md border p-2 ${
+          className={`mx-3 mb-3 rounded-md border px-2 py-1.5 ${
             snapshot.notice.level === "critical"
               ? "border-destructive/50 text-destructive"
               : snapshot.notice.level === "warning"
@@ -219,11 +222,32 @@ export function UsageWidget() {
                 : "border-border"
           }`}
         >
-          <div className="font-medium">{snapshot.notice.title}</div>
-          <p className="text-muted-foreground">{snapshot.notice.body}</p>
+          {snapshot.notice.level === "critical" ? (
+            <div className="flex items-center gap-1.5 font-medium">
+              <span aria-hidden className="size-1.5 shrink-0 rounded-full bg-destructive" />
+              <span className="min-w-0 flex-1">{snapshot.notice.title}</span>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setNoticeOpen((open) => !open)}
+              aria-expanded={noticeOpen}
+              className="flex w-full items-center gap-1.5 rounded-sm text-left font-medium focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
+              <span
+                aria-hidden
+                className={`size-1.5 shrink-0 rounded-full ${snapshot.notice.level === "warning" ? "bg-warning" : "bg-primary"}`}
+              />
+              <span className="min-w-0 flex-1 truncate">{snapshot.notice.title}</span>
+              <ChevronDown aria-hidden className={`size-3.5 shrink-0 text-muted-foreground transition-transform ${noticeOpen ? "rotate-180" : ""}`} />
+            </button>
+          )}
+          {snapshot.notice.level === "critical" || noticeOpen ? (
+            <p className="mt-1 text-muted-foreground">{snapshot.notice.body}</p>
+          ) : null}
           {snapshot.notice.actionUrl ? (
             <a
-              className="inline-flex items-center gap-1 underline underline-offset-2"
+              className="mt-1 inline-flex items-center gap-1 pl-3 underline underline-offset-2"
               href={snapshot.notice.actionUrl}
               target="_blank"
               rel="noreferrer noopener"
