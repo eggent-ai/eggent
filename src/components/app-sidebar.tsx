@@ -600,6 +600,18 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             right of every other row. */}
         <SidebarGroup className="p-0">
           <SidebarMenu>
+            {appsUrl ? (
+              <SidebarMenuItem>
+                <SidebarMenuButton asChild>
+                  {/* The deployment's own page, in a tab of its own like billing: connecting
+                      a service is a side trip, and the chat stays where it was. */}
+                  <a href={appsUrl} target="_blank" rel="noopener">
+                    <AppsIcon className="size-4" />
+                    <span>{t("nav.apps")}</span>
+                  </a>
+                </SidebarMenuButton>
+              </SidebarMenuItem>
+            ) : null}
             <SidebarMenuItem>
               <SidebarMenuButton
                 asChild
@@ -621,17 +633,6 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 </Link>
               </SidebarMenuButton>
             </SidebarMenuItem>
-            {appsUrl ? (
-              <SidebarMenuItem>
-                <SidebarMenuButton asChild>
-                  {/* The deployment's own page, on this address: a full load, not the app's router. */}
-                  <a href={appsUrl}>
-                    <AppsIcon className="size-4" />
-                    <span>{t("nav.apps")}</span>
-                  </a>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            ) : null}
             <SidebarMenuItem>
               <SidebarMenuButton asChild>
                 <a
