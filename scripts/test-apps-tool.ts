@@ -51,7 +51,6 @@ await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
 const port = (server.address() as { port: number }).port;
 
 const { appsEnabled, createAppsTool } = await import("../src/lib/apps/tool.ts");
-const { appsConnectUrlFromToolOutput } = await import("../src/lib/apps/connect-link.ts");
 const { appApprovalFromToolOutput } = await import("../src/lib/apps/approval-card.ts");
 
 type ToolLike = { execute: (id: string, params: Record<string, unknown>) => Promise<{ content: Array<{ text: string }> }> };
@@ -73,13 +72,12 @@ await check("the list comes from the service, with the services token", async ()
   const data = await run({ action: "list" });
   assert.equal((data.apps as unknown[]).length, 1);
   assert.equal(seen.at(-1)?.auth, "Bearer eggs_test_token");
-  assert.deepEqual(data.connect, { url: "https://ws.example.test/__eggent/apps" });
+  assert.equal(data.connect, undefined, "a list draws no Connect button");
 });
-await check("a guide of an app not connected carries connect.url for the chat's button", async () => {
+await check("a guide of an app not connected gives the agent the page's link to pass on", async () => {
   const data = await run({ action: "guide", app: "crm-one" });
-  assert.deepEqual(data.connect, { url: "https://ws.example.test/__eggent/apps#crm-one" });
-  assert.equal(appsConnectUrlFromToolOutput(JSON.stringify(data)), "https://ws.example.test/__eggent/apps#crm-one");
-  assert.equal(appsConnectUrlFromToolOutput({ content: [{ type: "text", text: JSON.stringify(data) }] }), "https://ws.example.test/__eggent/apps#crm-one");
+  assert.equal(data.connectUrl, "https://ws.example.test/__eggent/apps#crm-one");
+  assert.equal(data.connected, false);
 });
 await check("a call goes through as asked", async () => {
   const data = await run({ action: "call", app: "crm-two", path: "/api/v4/leads", query: { limit: 5 } });
@@ -140,9 +138,6 @@ await check("a bad app id or a call with no path never reaches the service", asy
   assert.match(String((await run({ action: "methods", app: "a/b", search: "x" })).error), /Name the app/);
   assert.match(String((await run({ action: "call", app: "crm-two" })).error), /path/);
   assert.equal(seen.length, before);
-});
-await check("a link that is not http(s) is never a button", () => {
-  assert.equal(appsConnectUrlFromToolOutput(JSON.stringify({ connect: { url: "javascript:alert(1)" } })), null);
 });
 
 server.close();

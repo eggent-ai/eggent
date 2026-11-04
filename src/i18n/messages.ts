@@ -53,8 +53,6 @@ const enMessages = {
   "nav.settings": "Settings",
   "nav.documentation": "Documentation",
   "nav.apps": "Apps",
-  "apps.card.text": "Connect the app on its page: the key is kept encrypted on our side, the agent never sees it.",
-  "apps.card.button": "Connect",
   "nav.documentationUrl": "https://eggent.ai/docs/",
   "nav.logout": "Logout",
   "settings.saved": "Saved",

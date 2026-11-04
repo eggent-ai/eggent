@@ -25,8 +25,6 @@ import { emailApprovalFromToolOutput, type EmailApprovalCard as EmailApproval } 
 import type { EmailReplyNotice } from "@/lib/email/types";
 import { FilesProduced } from "./files-produced";
 import { GoogleConnectCard } from "@/components/google-connect-card";
-import { AppsConnectCard } from "@/components/apps/apps-connect-card";
-import { appsConnectUrlFromToolOutput } from "@/lib/apps/connect-link";
 import { connectUrlFromToolOutput, pickUrlFromToolOutput } from "@/lib/google/connect-link";
 import { SendToContact, useMailReply } from "@/components/mail/mail-reply";
 import { cleanProducedGroups, type ProducedGroup } from "@/lib/files/produced-shape";
@@ -454,7 +452,6 @@ export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
   const producedFiles = producedFilesOf(message.parts);
   const googleConnect = googleLinkOf(message.parts, connectUrlFromToolOutput);
   const googlePick = googleLinkOf(message.parts, pickUrlFromToolOutput);
-  const appsConnect = appsLinkOf(message.parts);
 
   return (
     <div className="flex items-start gap-3 py-2" data-message-role="assistant">
@@ -474,7 +471,6 @@ export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
         {appApprovals.map((card) => <AppApprovalCard key={card.url} card={card} />)}
         {emailReplies.length ? <EmailReplyNote replies={emailReplies} /> : null}
         {googleConnect || googlePick ? <GoogleConnectCard connectUrl={googleConnect ?? undefined} pickUrl={googlePick ?? undefined} /> : null}
-        {appsConnect ? <AppsConnectCard url={appsConnect} /> : null}
         {/* A program that could not finish: carry on with a model instead. Only under a complete answer. */}
         {shellScope && [...helperProgress.values()].some((snapshot) => snapshot.kind === "engine" && snapshot.engineError) ? (
           <EngineFallbackButton messageId={message.id} />
@@ -542,17 +538,6 @@ function googleLinkOf(parts: UIMessage["parts"], read: (output: unknown) => stri
     const tool = toolPartInfo(part);
     if (!tool || tool.toolName !== "eggent_google" || tool.state !== "output-available") continue;
     found = read(tool.output) ?? found;
-  }
-  return found;
-}
-
-/** The connect link of the last `eggent_apps` answer that asked for one. */
-function appsLinkOf(parts: UIMessage["parts"]): string | null {
-  let found: string | null = null;
-  for (const part of parts) {
-    const tool = toolPartInfo(part);
-    if (!tool || tool.toolName !== "eggent_apps" || tool.state !== "output-available") continue;
-    found = appsConnectUrlFromToolOutput(tool.output) ?? found;
   }
   return found;
 }

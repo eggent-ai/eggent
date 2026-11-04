@@ -70,7 +70,7 @@ export function createAppsTool(options: AppsToolOptions = {}) {
       "action call + app + path (+ method, host, query, body): one API call made by the service with the person's key; for apps called by method name, path is the method and body its params - the guide says which. " +
       "action call + app + batch (up to 10 calls, each {path, method?, host?, query?, body?}): several calls to one app at once - when a task changes several things (four payment drafts, ten prices), send them as one batch so the owner says yes once for all of them. " +
       "A read answers at once. A call or batch that may change data does not run: it waits for the owner's yes and answers pending with a request id - in the web chat the person sees it under your answer with a button; tell them in one line, and check it later with action request + request_id. " +
-      "When an app is not connected the answer carries connect.url: give the person that link (the chat shows a Connect button) - never ask them to paste a key into the chat.",
+      "When the app the task needs is not connected (connected: false), give the person connectUrl as a markdown link to the Apps page, in one sentence - never ask them to paste a key into the chat, and say nothing about connecting an app that is connected.",
     promptSnippet: "eggent_apps(action: list|guide|methods|call|request, app?, search?, section?, method?, host?, path?, query?, body?, batch?, request_id?) - the person's connected services (CRM, marketplaces, banks, analytics and more)",
     parameters: Type.Object({
       action: Type.Union([Type.Literal("list"), Type.Literal("guide"), Type.Literal("methods"), Type.Literal("call"), Type.Literal("request")]),
@@ -96,10 +96,7 @@ export function createAppsTool(options: AppsToolOptions = {}) {
       const app = typeof params.app === "string" ? params.app.trim().toLowerCase() : "";
       if (action === "list") {
         const { data } = await ask("GET", "");
-        // Something on the list is not connected: the chat offers the page under the answer.
-        const apps = Array.isArray(data.apps) ? (data.apps as Array<{ connected?: unknown }>) : [];
-        const offer = typeof data.connectUrl === "string" && apps.some((app) => app.connected !== true);
-        return textResult(JSON.stringify(offer ? { ...data, connect: { url: data.connectUrl } } : data, null, 2));
+        return textResult(JSON.stringify(data, null, 2));
       }
       if (action === "request") {
         const id = typeof params.request_id === "string" && /^[0-9a-f-]{36}$/i.test(params.request_id) ? `/${params.request_id}` : "";
@@ -109,7 +106,7 @@ export function createAppsTool(options: AppsToolOptions = {}) {
       if (!APP_ID.test(app)) return textResult(JSON.stringify({ error: "Name the app (its id from action list)." }));
       if (action === "guide") {
         const { data } = await ask("GET", `/${app}`);
-        return textResult(JSON.stringify(withConnect(data), null, 2));
+        return textResult(JSON.stringify(data, null, 2));
       }
       if (action === "methods") {
         const search = typeof params.search === "string" ? params.search.trim().slice(0, 200) : "";
@@ -156,7 +153,7 @@ export function createAppsTool(options: AppsToolOptions = {}) {
                 : "Not done yet: it waits for the owner's yes on the Apps page of this workspace. Tell the person; check with action request.",
         }, null, 2));
       }
-      return textResult(JSON.stringify(withConnect(data), null, 2));
+      return textResult(JSON.stringify(data, null, 2));
     },
   });
 }
@@ -171,9 +168,3 @@ function callPayload(item: { path: string; method?: unknown; host?: unknown; que
   };
 }
 
-/** A not-connected answer carries the link in `connect.url`, where the chat looks for a Connect button. */
-function withConnect(data: Record<string, unknown>): Record<string, unknown> {
-  const url = typeof data.connectUrl === "string" ? data.connectUrl : null;
-  if (!url || data.connected === true) return data;
-  return { ...data, connect: { url } };
-}
