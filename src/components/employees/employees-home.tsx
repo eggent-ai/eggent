@@ -74,7 +74,9 @@ function HireCard({ employee, index, hired, expanded, onToggle }: { employee: Av
     const response = await fetch("/api/employees/hire", { method: "POST", body: form }).catch(() => null);
     const payload = response ? ((await response.json().catch(() => null)) as { chatId?: string; error?: string; first?: boolean } | null) : null;
     if (response?.ok && payload?.chatId) {
-      window.location.assign(`/dashboard/${encodeURIComponent(payload.chatId)}${payload.first ? "?focus=1" : ""}`);
+      // An ordinary chat with the whole workspace around it: the focus view
+      // (no sidebar, header or composer) left nothing to press, Stop included.
+      window.location.assign(`/dashboard/${encodeURIComponent(payload.chatId)}`);
       return;
     }
     setBusy(false);

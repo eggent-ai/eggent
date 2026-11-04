@@ -1327,7 +1327,7 @@ export function ChatPanel({ initialQuickSkills = [], onboardingPending = false, 
           const payload = await response.json().catch(() => null) as { chatId?: string } | null;
           // The first job is already running on the server: open its chat with
           // a fresh page, which attaches to the turn in flight.
-          if (response.ok && payload?.chatId) window.location.assign(`/dashboard/${encodeURIComponent(payload.chatId)}?focus=1`);
+          if (response.ok && payload?.chatId) window.location.assign(`/dashboard/${encodeURIComponent(payload.chatId)}`);
           else setLaunchingSkill(null);
         } catch {
           setLaunchingSkill(null);
@@ -1490,9 +1490,10 @@ export function ChatPanel({ initialQuickSkills = [], onboardingPending = false, 
 
   const showQuickSkills = !activeProjectId && activeChatId === null && messages.length === 0 ? quickSkills : [];
 
-  // An employee's first job is watched with nothing else on screen
-  // (`?focus=1`, set when the signup opens it): no sidebar, header or
-  // composer, until the job is done and the person opens the workspace.
+  // A chat opened with `?focus=1` hides the sidebar, header and composer until
+  // its turn is done. Nothing opens a chat that way now - the signup and the
+  // employees' home open an ordinary chat, where Stop and the composer stay in
+  // reach - so this and the offer under it wait unused.
   const [focus, setFocus] = useState(false);
   useEffect(() => {
     if (new URLSearchParams(window.location.search).get("focus") === "1") setFocus(true);
