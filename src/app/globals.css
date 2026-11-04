@@ -482,6 +482,43 @@
   .eggent-stage-in { animation: none; }
 }
 
+/* The Apps mark in the sidebar (components/apps-icon.tsx): four blocks whose
+   colours drift through a soft palette, each a quarter-cycle apart, so the
+   mark is always a little different and never flashes. The loose block sits
+   tilted and settles into the grid under the pointer. Slow on purpose: it
+   should read as "something here is new", not pull the eye while working. */
+/* Hue steps of about 45 degrees: a colour animation blends in oklab, and a
+   longer step (amber straight to violet) passes through grey. */
+@keyframes eggent-apps-hue {
+  0%, 100% { fill: oklch(0.7 0.13 285); }
+  12.5% { fill: oklch(0.71 0.12 245); }
+  25% { fill: oklch(0.72 0.12 210); }
+  37.5% { fill: oklch(0.74 0.12 170); }
+  50% { fill: oklch(0.77 0.13 125); }
+  62.5% { fill: oklch(0.79 0.13 80); }
+  75% { fill: oklch(0.74 0.13 40); }
+  87.5% { fill: oklch(0.71 0.13 350); }
+}
+.eggent-apps-cube {
+  fill: oklch(0.7 0.13 285);
+  animation: eggent-apps-hue 10s linear infinite;
+}
+.eggent-apps-cube-loose {
+  transform-box: fill-box;
+  transform-origin: center;
+  transform: translate(0.5px, -0.5px) rotate(12deg);
+  transition: transform 260ms var(--ease-out);
+}
+@media (hover: hover) {
+  [data-slot="sidebar-menu-button"]:hover .eggent-apps-cube-loose { transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .eggent-apps-cube { animation: none; }
+  .eggent-apps-icon .eggent-apps-cube:nth-child(2) { fill: oklch(0.72 0.12 210); }
+  .eggent-apps-icon .eggent-apps-cube:nth-child(3) { fill: oklch(0.77 0.13 125); }
+  .eggent-apps-icon .eggent-apps-cube:nth-child(4) { fill: oklch(0.74 0.13 40); }
+}
+
 /* Focus mode (lib/focus-mode.ts): the chat alone on screen. The composer stays. */
 html[data-eggent-focus] [data-slot="sidebar"],
 html[data-eggent-focus] [data-slot="sidebar-gap"],

@@ -1,6 +1,7 @@
 "use client";
 
 import * as React from "react";
+import { AppsIcon } from "@/components/apps-icon";
 import { useEffect } from "react";
 import Link from "next/link";
 import { useRouter, usePathname } from "next/navigation";
@@ -14,7 +15,6 @@ import {
   Laptop,
   Mail,
   LifeBuoy,
-  Blocks,
   Link2,
   LogOut,
   MessageSquarePlus,
@@ -626,7 +626,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
                 <SidebarMenuButton asChild>
                   {/* The deployment's own page, on this address: a full load, not the app's router. */}
                   <a href={appsUrl}>
-                    <Blocks className="size-4" />
+                    <AppsIcon className="size-4" />
                     <span>{t("nav.apps")}</span>
                   </a>
                 </SidebarMenuButton>

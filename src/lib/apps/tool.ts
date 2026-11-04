@@ -58,14 +58,17 @@ export function createAppsTool() {
     label: "Apps",
     description:
       "The person's connected services - the CRMs, marketplaces, banks, analytics and other services this deployment offers; which ones exist comes from action list, never from memory. " +
-      "action list: which apps exist and which are connected. action guide + app: how to call that app (its paths or methods, hosts, quirks) - read it before the first call. " +
+      "action list: which apps exist and which are connected. action guide + app: how to call that app (hosts, quirks, and for big APIs the sections of its method list) - read it before the first call. " +
+      "action methods + app + search (words of the task, e.g. \"stock warehouse\", \"refund\") or section: the matching methods from the service's own documentation - method, host, path, parameters (name* = required) and whether it reads or waits for the owner. For a big API look the method up here instead of calling a path from memory. " +
       "action call + app + path (+ method, host, query, body): one API call made by the service with the person's key; for apps called by method name, path is the method and body its params - the guide says which. " +
       "A read answers at once. A call that may change data does not run: it waits for the owner's yes on their own channel and answers pending with a request id - tell the person, and check it later with action request + request_id. " +
       "When an app is not connected the answer carries connect.url: give the person that link (the chat shows a Connect button) - never ask them to paste a key into the chat.",
-    promptSnippet: "eggent_apps(action: list|guide|call|request, app?, method?, host?, path?, query?, body?, request_id?) - the person's connected services (CRM, marketplaces, banks, analytics and more)",
+    promptSnippet: "eggent_apps(action: list|guide|methods|call|request, app?, search?, section?, method?, host?, path?, query?, body?, request_id?) - the person's connected services (CRM, marketplaces, banks, analytics and more)",
     parameters: Type.Object({
-      action: Type.Union([Type.Literal("list"), Type.Literal("guide"), Type.Literal("call"), Type.Literal("request")]),
+      action: Type.Union([Type.Literal("list"), Type.Literal("guide"), Type.Literal("methods"), Type.Literal("call"), Type.Literal("request")]),
       app: Type.Optional(Type.String({ description: "The app id from list." })),
+      search: Type.Optional(Type.String({ description: "For action methods: words of what to do, in Russian or English." })),
+      section: Type.Optional(Type.String({ description: "For action methods: a section name from the guide, to list its methods." })),
       method: Type.Optional(Type.String({ description: "HTTP method for REST apps: GET (default), POST, PUT, PATCH, DELETE." })),
       host: Type.Optional(Type.String({ description: "For apps with several APIs, which one; the app's guide names them." })),
       path: Type.Optional(Type.String({ description: "Path on the service (e.g. /api/v4/items), or the method name for apps called by method (e.g. items.list)." })),
@@ -92,6 +95,15 @@ export function createAppsTool() {
       if (action === "guide") {
         const { data } = await ask("GET", `/${app}`);
         return textResult(JSON.stringify(withConnect(data), null, 2));
+      }
+      if (action === "methods") {
+        const search = typeof params.search === "string" ? params.search.trim().slice(0, 200) : "";
+        const section = typeof params.section === "string" ? params.section.trim().slice(0, 120) : "";
+        const query = new URLSearchParams();
+        if (search) query.set("search", search);
+        if (section) query.set("section", section);
+        const { data } = await ask("GET", `/${app}/methods${query.size ? `?${query}` : ""}`);
+        return textResult(JSON.stringify(data, null, 2));
       }
       if (typeof params.path !== "string" || !params.path.trim()) return textResult(JSON.stringify({ error: "A call needs path." }));
       const { status, data } = await ask("POST", `/${app}/call`, {

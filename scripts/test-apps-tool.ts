@@ -30,6 +30,7 @@ const server = http.createServer((req, res) => {
     res.setHeader("content-type", "application/json");
     if (req.url === "/apps") return res.end(JSON.stringify({ connectUrl: "https://ws.example.test/__eggent/apps", apps: [{ id: "crm-one", connected: false }] }));
     if (req.url === "/apps/crm-one") return res.end(JSON.stringify({ id: "crm-one", connected: false, connectUrl: "https://ws.example.test/__eggent/apps#crm-one", guide: "items.list" }));
+    if (req.url?.startsWith("/apps/shop-one/methods")) return res.end(JSON.stringify({ app: "shop-one", total: 1, methods: [{ method: "POST", path: "/v1/stock/list", title: "Stock", kind: "read" }] }));
     if (req.url === "/apps/crm-two/call" && body.includes("POST")) {
       res.statusCode = 202;
       return res.end(JSON.stringify({ pending: true, request: { id: "0f0e0d0c-0b0a-4908-8706-050403020100", status: "pending" } }));
@@ -82,9 +83,21 @@ await check("a write that waits says so, and is not reported as done", async () 
   assert.equal(data.pending, true);
   assert.match(String(data.note), /Not done yet/);
 });
+await check("methods asks the service with the words and the section, and nothing else", async () => {
+  const data = await run({ action: "methods", app: "shop-one", search: "stock warehouse", section: "Stocks & prices" });
+  assert.equal(data.total, 1);
+  const asked = new URL(seen.at(-1)!.url, "http://x");
+  assert.equal(asked.pathname, "/apps/shop-one/methods");
+  assert.equal(asked.searchParams.get("search"), "stock warehouse");
+  assert.equal(asked.searchParams.get("section"), "Stocks & prices");
+  assert.equal(seen.at(-1)!.method, "GET");
+  await run({ action: "methods", app: "shop-one" });
+  assert.equal(seen.at(-1)!.url, "/apps/shop-one/methods");
+});
 await check("a bad app id or a call with no path never reaches the service", async () => {
   const before = seen.length;
   assert.match(String((await run({ action: "guide", app: "../x" })).error), /Name the app/);
+  assert.match(String((await run({ action: "methods", app: "a/b", search: "x" })).error), /Name the app/);
   assert.match(String((await run({ action: "call", app: "crm-two" })).error), /path/);
   assert.equal(seen.length, before);
 });
