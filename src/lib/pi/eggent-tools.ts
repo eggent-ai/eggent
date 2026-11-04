@@ -1375,6 +1375,8 @@ export async function createEggentPiTools(options: {
           kind: "confirm",
           title: question.title,
           message: question.message,
+          details: question.details,
+          decisionOnly: true,
           options: [question.allow, question.decline],
           signal: options.abortSignal,
           onUpdate: options.onPiInteraction,

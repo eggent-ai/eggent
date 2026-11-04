@@ -38,7 +38,7 @@ const server = http.createServer((req, res) => {
         id: "0f0e0d0c-0b0a-4908-8706-050403020100", status: "pending",
         waitsIn: asked.origin === "telegram" ? "telegram" : "chat",
         chat: true,
-        ask: { title: "Allow this change in CRM?", message: "POST /api/v4/leads\n\nAllow it only if you asked.", allow: "Allow", decline: "Decline" },
+        ask: { title: "Allow this change in CRM?", warning: "Allow it only if you asked.", details: "POST /api/v4/leads", allow: "Allow", decline: "Decline" },
         calls: (asked.calls ?? [asked]).map(() => "POST /api/v4/leads"),
         expiresAt: "2026-11-05T10:00:00.000Z",
       } }));
@@ -63,7 +63,7 @@ const { appsEnabled, createAppsTool } = await import("../src/lib/apps/tool.ts");
 
 type ToolLike = { execute: (id: string, params: Record<string, unknown>) => Promise<{ content: Array<{ text: string }> }> };
 type Confirm = NonNullable<Parameters<typeof createAppsTool>[0]>["confirm"];
-const asked: Array<{ title: string; message: string; allow: string; decline: string }> = [];
+const asked: Array<{ title: string; message: string; details: string; allow: string; decline: string }> = [];
 const run = async (params: Record<string, unknown>, origin?: "web" | "telegram" | "other", answer?: boolean | undefined) => {
   const confirm: Confirm = async (question) => {
     asked.push(question);
@@ -105,10 +105,11 @@ await check("a write that waits says so, and is not reported as done", async () 
 });
 await check("in the web chat a change is asked as Yes/No and the turn gets the service's answer", async () => {
   asked.length = 0;
-  const data = await run({ action: "call", app: "crm-two", method: "POST", path: "/api/v4/leads", body: [{ name: "x" }] }, "web", true);
+  const data = await run({ action: "call", app: "crm-two", method: "POST", path: "/api/v4/leads", body: [{ name: "x" }], summary: "Create a lead  for Ivan" }, "web", true);
   assert.equal(asked.length, 1);
   assert.equal(asked[0].allow, "Allow");
-  assert.match(asked[0].message, /POST \/api\/v4\/leads/);
+  assert.equal(asked[0].message, "Create a lead for Ivan\n\nAllow it only if you asked.");
+  assert.equal(asked[0].details, "POST /api/v4/leads");
   const decided = JSON.parse(seen.at(-1)!.body);
   assert.equal(seen.at(-1)!.url, "/apps/requests/0f0e0d0c-0b0a-4908-8706-050403020100");
   assert.equal(decided.decision, "allow");

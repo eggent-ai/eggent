@@ -489,6 +489,7 @@ const enMessages = {
   "chat.interaction.orTypeYourOwn": "Or type your own answer",
   "chat.interaction.send": "Answer",
   "chat.interaction.decideForMe": "Decide for me",
+  "chat.interaction.details": "Details",
   "chat.interaction.skip": "Skip",
   "chat.thinking": "Thinking...",
   "chat.thinkingSeconds": "{seconds} s",

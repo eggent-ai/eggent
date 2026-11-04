@@ -52,6 +52,8 @@ export function createPendingInteraction(options: CreatePendingInteractionOption
     message: options.message,
     placeholder: options.placeholder,
     options: options.options,
+    ...(options.details ? { details: options.details } : {}),
+    ...(options.decisionOnly ? { decisionOnly: true } : {}),
     timeoutMs: options.timeoutMs,
     createdAt: now,
     updatedAt: now,

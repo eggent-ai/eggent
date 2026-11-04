@@ -61,12 +61,22 @@ export interface AppsToolOptions {
    * Puts a Yes/No question to the person in the chat and waits: true for yes,
    * false for no, undefined when dismissed or the turn stopped. Only for a web turn.
    */
-  confirm?: (question: { title: string; message: string; allow: string; decline: string }) => Promise<boolean | undefined>;
+  confirm?: (question: ChatQuestion) => Promise<boolean | undefined>;
+}
+
+/** What the card shows: a plain sentence, the warning, and the calls folded away. */
+export interface ChatQuestion {
+  title: string;
+  message: string;
+  details: string;
+  allow: string;
+  decline: string;
 }
 
 interface ChatAsk {
   title: string;
-  message: string;
+  warning: string;
+  details: string;
   allow: string;
   decline: string;
 }
@@ -74,9 +84,11 @@ interface ChatAsk {
 function chatAskOf(request: Record<string, unknown>): ChatAsk | null {
   const ask = request.ask as Partial<ChatAsk> | undefined;
   if (request.chat !== true || !ask) return null;
-  if (typeof ask.title !== "string" || typeof ask.message !== "string" || typeof ask.allow !== "string" || typeof ask.decline !== "string") return null;
+  if ([ask.title, ask.warning, ask.details, ask.allow, ask.decline].some((value) => typeof value !== "string")) return null;
   return ask as ChatAsk;
 }
+
+const SUMMARY_CHARS = 300;
 
 const MAX_BATCH = 10;
 
@@ -90,9 +102,9 @@ export function createAppsTool(options: AppsToolOptions = {}) {
       "action methods + app + search (words of the task, e.g. \"stock warehouse\", \"refund\") or section: the matching methods from the service's own documentation - method, host, path, parameters (name* = required) and whether it reads or waits for the owner. For a big API look the method up here instead of calling a path from memory. " +
       "action call + app + path (+ method, host, query, body): one API call made by the service with the person's key; for apps called by method name, path is the method and body its params - the guide says which. " +
       "action call + app + batch (up to 10 calls, each {path, method?, host?, query?, body?}): several calls to one app at once - when a task changes several things (four payment drafts, ten prices), send them as one batch so the owner says yes once for all of them. " +
-      "A read answers at once. A call or batch that may change data does not run until the person says yes: in the web chat a Yes/No card appears and this call waits for the press, then answers with what the service said - do not ask them again in text first. Elsewhere, and for anything that sends money out (refunds, payouts, payment orders), it answers pending with a request id and the owner is asked in Telegram or by email - tell them in one line, and check later with action request + request_id. " +
+      "A read answers at once. A call or batch that may change data does not run until the person says yes: in the web chat a Yes/No card appears and this call waits for the press, then answers with what the service said - pass `summary` (what changes, in plain words) and do not ask them again in text first. Elsewhere, and for anything that sends money out (refunds, payouts, payment orders), it answers pending with a request id and the owner is asked in Telegram or by email - tell them in one line, and check later with action request + request_id. " +
       "When the app the task needs is not connected (connected: false), give the person connectUrl as a markdown link to the Apps page, in one sentence - never ask them to paste a key into the chat, and say nothing about connecting an app that is connected.",
-    promptSnippet: "eggent_apps(action: list|guide|methods|call|request, app?, search?, section?, method?, host?, path?, query?, body?, batch?, request_id?) - the person's connected services (CRM, marketplaces, banks, analytics and more)",
+    promptSnippet: "eggent_apps(action: list|guide|methods|call|request, app?, search?, section?, method?, host?, path?, query?, body?, batch?, summary?, request_id?) - the person's connected services (CRM, marketplaces, banks, analytics and more)",
     parameters: Type.Object({
       action: Type.Union([Type.Literal("list"), Type.Literal("guide"), Type.Literal("methods"), Type.Literal("call"), Type.Literal("request")]),
       app: Type.Optional(Type.String({ description: "The app id from list." })),
@@ -110,6 +122,7 @@ export function createAppsTool(options: AppsToolOptions = {}) {
         query: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
         body: Type.Optional(Type.Unknown()),
       }), { description: "For action call: up to 10 calls to the same app, asked as one." })),
+      summary: Type.Optional(Type.String({ description: "For a call or batch that changes data: what it does in one plain sentence in the person's language, with the amounts, names and counts that matter (e.g. \"Создать ссылку на оплату 990 ₽ за консультацию\"). The person reads this on the Yes/No card; no paths or field names." })),
       request_id: Type.Optional(Type.String({ description: "For action request: a pending request's id; without it, the latest ones." })),
     }),
     async execute(_id, params) {
@@ -157,7 +170,16 @@ export function createAppsTool(options: AppsToolOptions = {}) {
         if (origin === "web" && question && id && options.confirm) {
           // Asked right here, the way a question card is: the turn waits for
           // the press and carries on with what the service answered.
-          const yes = await options.confirm(question).catch(() => undefined);
+          // The agent's own sentence says what changes in plain words; the calls
+          // themselves stay folded under it, so what will really run is one tap away.
+          const summary = typeof params.summary === "string" ? params.summary.replace(/\s+/g, " ").trim().slice(0, SUMMARY_CHARS) : "";
+          const yes = await options.confirm({
+            title: question.title,
+            message: summary ? `${summary}\n\n${question.warning}` : question.warning,
+            details: question.details,
+            allow: question.allow,
+            decline: question.decline,
+          }).catch(() => undefined);
           const decided = await ask("POST", `/requests/${id}`, { decision: yes === true ? "allow" : "decline" });
           if (yes !== true) {
             return textResult(JSON.stringify({

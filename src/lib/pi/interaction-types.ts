@@ -18,6 +18,10 @@ export interface PiPendingInteraction {
   message?: string;
   placeholder?: string;
   options?: string[];
+  /** Folded under the question: the technical detail behind it, for whoever wants to check. */
+  details?: string;
+  /** A decision only the person makes (an approval): no "decide for me" and no "skip". */
+  decisionOnly?: boolean;
   timeoutMs?: number;
   createdAt: string;
   updatedAt: string;

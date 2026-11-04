@@ -245,13 +245,25 @@ function InteractionCard({
         )}
       </p>
 
+      {interaction.details?.trim() ? (
+        <details className="group text-sm text-muted-foreground">
+          <summary className="cursor-pointer select-none list-none text-xs underline-offset-4 hover:underline [&::-webkit-details-marker]:hidden">
+            {t("chat.interaction.details")}
+          </summary>
+          <pre className="mt-2 max-h-64 overflow-auto whitespace-pre-wrap break-words rounded-lg border bg-muted/40 p-3 font-mono text-xs leading-5">
+            {interaction.details.trim()}
+          </pre>
+        </details>
+      ) : null}
+
       {interaction.options?.length ? (
         <div className={longOptions ? "flex flex-col items-stretch gap-2" : "flex flex-wrap gap-2"}>
-          {interaction.options.map((option) => (
+          {interaction.options.map((option, index) => (
             <Button
               key={option}
               type="button"
-              variant="outline"
+              // A confirm card's own buttons are its yes and no: the first is the yes.
+              variant={interaction.kind === "confirm" && index === 0 ? "default" : "outline"}
               size="sm"
               onClick={() => onRespond(option)}
               className={cn(
@@ -265,7 +277,8 @@ function InteractionCard({
         </div>
       ) : null}
 
-      {interaction.kind === "confirm" ? (
+      {/* A confirm card that names its own answers needs no second pair of yes and no. */}
+      {interaction.kind === "confirm" && !interaction.options?.length ? (
         <div className="flex flex-wrap gap-2">
           <Button type="button" size="sm" onClick={() => onRespond(true)}>
             {t("chat.yes")}
@@ -323,6 +336,7 @@ function InteractionCard({
         </form>
       ) : null}
 
+      {interaction.decisionOnly ? null : (
       <div className="flex flex-wrap items-center gap-2">
         <Button
           type="button"
@@ -343,6 +357,7 @@ function InteractionCard({
           {t("chat.interaction.skip")}
         </Button>
       </div>
+      )}
     </div>
   );
 }
