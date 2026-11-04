@@ -125,9 +125,9 @@ function mcp(dir: string, ids: string[]): void {
   );
 }
 
-const ORCH = "The person is Anna, she runs a bakery. Invoices live in the shop project.";
+const ORCH = "The person is Anna, she runs a bakery. Recipes live in the shop project.";
 fs.writeFileSync(path.join(projectsDir, "context.md"), ORCH);
-skill(projectsDir, "invoice-pdf", "Makes an invoice PDF from the orders sheet.");
+skill(projectsDir, "recipe-card", "Makes a recipe card from the recipes sheet.");
 skill(projectsDir, "shop-catalog", "The orchestrator's idea of a catalog.");
 mcp(projectsDir, ["bybit", "notion"]);
 
@@ -160,7 +160,7 @@ await check("a project's chat gets the orchestrator's instructions after its own
 
 await check("the orchestrator's skills are listed and marked, and the project's own wins a name", async () => {
   const system = await promptSeenBy({ projectId: "shop" });
-  assert.match(system, /\| invoice-pdf \|[^\n]*\[orchestrator\]/);
+  assert.match(system, /\| recipe-card \|[^\n]*\[orchestrator\]/);
   const rows = system.split("\n").filter((line) => line.startsWith("| shop-catalog |"));
   assert.equal(rows.length, 1);
   assert.match(rows[0], /How the shop lists its products/);
@@ -187,14 +187,14 @@ await check("the orchestrator itself carries its instructions once", async () =>
 await check("a visit answers from the project's own desk", async () => {
   const system = await promptSeenBy({ projectId: "shop", visit: { parentChatId: "parent", parentTitle: "Parent" } });
   assert.ok(!system.includes(ORCH));
-  assert.doesNotMatch(system, /invoice-pdf/);
+  assert.doesNotMatch(system, /recipe-card/);
   assert.doesNotMatch(system, /bybit/);
 });
 
 await check("a public chat sees none of it", async () => {
   const system = await promptSeenBy({ projectId: "shop", publicShare: true });
   assert.ok(!system.includes(ORCH));
-  assert.doesNotMatch(system, /invoice-pdf/);
+  assert.doesNotMatch(system, /recipe-card/);
 });
 
 await check("a long orchestrator file is cut and points at the whole file", async () => {
@@ -215,7 +215,7 @@ await check("a project set to keep to itself sees nothing of the orchestrator", 
   try {
     const system = await promptSeenBy({ projectId: "shop" });
     assert.ok(!system.includes(ORCH));
-    assert.doesNotMatch(system, /invoice-pdf/);
+    assert.doesNotMatch(system, /recipe-card/);
     assert.doesNotMatch(system, /bybit/);
     assert.match(system, /\| shop-catalog \|/);
   } finally {
