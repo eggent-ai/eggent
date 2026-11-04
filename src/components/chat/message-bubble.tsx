@@ -469,7 +469,7 @@ export function MessageBubble({ message, shellScope }: MessageBubbleProps) {
         {learned ? <LearnedNote notice={learned} /> : null}
         {emailApprovals.map((card) => <EmailApprovalCard key={card.url} card={card} />)}
         {emailReplies.length ? <EmailReplyNote replies={emailReplies} /> : null}
-        {googleConnect || googlePick ? <GoogleConnectCard variant="chat" connectUrl={googleConnect ?? undefined} pickUrl={googlePick ?? undefined} /> : null}
+        {googleConnect || googlePick ? <GoogleConnectCard connectUrl={googleConnect ?? undefined} pickUrl={googlePick ?? undefined} /> : null}
         {appsConnect ? <AppsConnectCard url={appsConnect} /> : null}
         {/* A program that could not finish: carry on with a model instead. Only under a complete answer. */}
         {shellScope && [...helperProgress.values()].some((snapshot) => snapshot.kind === "engine" && snapshot.engineError) ? (
