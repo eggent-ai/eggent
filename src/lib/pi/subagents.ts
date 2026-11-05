@@ -36,11 +36,22 @@ function scheduleOf(input: Record<string, unknown>): string {
 }
 
 /**
+ * Fewest turns a helper is given. Models routinely ask for 6-8, and a helper
+ * sent to go through a list (find the email of a dozen places) runs out at
+ * the limit within a minute and brings back almost nothing.
+ */
+export const MIN_HELPER_TURNS = 20;
+
+/**
  * Makes an Agent call wait for its helper. Returns whether the call was
  * changed; a scheduled call is left alone.
  */
 export function keepSubagentInTurn(input: Record<string, unknown>): boolean {
   if (scheduleOf(input)) return false;
+  const turns = input.max_turns;
+  if (typeof turns === "number" && Number.isFinite(turns) && turns > 0 && turns < MIN_HELPER_TURNS) {
+    input.max_turns = MIN_HELPER_TURNS;
+  }
   if (input.run_in_background === false) return false;
   input.run_in_background = false;
   return true;
