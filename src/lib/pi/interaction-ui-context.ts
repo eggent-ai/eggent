@@ -1,5 +1,6 @@
 import type { ExtensionUIContext, ExtensionUIDialogOptions, TerminalInputHandler } from "@earendil-works/pi-coding-agent";
 import type { PiPendingInteraction } from "@/lib/pi/interaction-types";
+import { isProjectMcpApprovalQuestion, mcpWorkspaceTrusted } from "@/lib/pi/mcp-trust";
 import { createPendingInteraction } from "@/lib/pi/pending-interactions";
 
 export interface EggentPiInteractionContextOptions {
@@ -73,6 +74,7 @@ export function createEggentPiExtensionUIContext(
       );
     },
     confirm(title, message, dialogOptions) {
+      if (mcpWorkspaceTrusted() && isProjectMcpApprovalQuestion(title)) return Promise.resolve(true);
       return request({ kind: "confirm", title, message }, dialogOptions).then((value) => value === true);
     },
     input(title, placeholder, dialogOptions) {

@@ -250,7 +250,8 @@ export async function createEggentPiTools(options: {
   cwd?: string;
   memorySubdir?: string;
   toolRuntimeData?: Record<string, unknown>;
-  onMcpConfigChanged?: (details: { projectId: string; serverId: string; action?: string; filePath?: string }) => void;
+  /** True when the change is already in effect in this turn. */
+  onMcpConfigChanged?: (details: { projectId: string; serverId: string; action?: string; filePath?: string }) => boolean | void;
   /** The session is assigned after tools are constructed and is available by execution time. */
   getAgentSession?: () => AgentSession | null;
   /** Whether this run can actually deliver a question to a human and get an answer back. */
@@ -938,22 +939,24 @@ export async function createEggentPiTools(options: {
               cwd: params.cwd,
             };
         const result = await upsertProjectMcpServer(projectId, server as McpServerConfig);
-        options.onMcpConfigChanged?.({
+        const liveNow = options.onMcpConfigChanged?.({
           projectId,
           serverId: params.id,
           action: result.success ? result.action : undefined,
           filePath: result.success ? result.filePath : undefined,
-        });
+        }) === true;
         return textResult(
           JSON.stringify(
             {
               ...result,
-              note: "MCP config updated. Eggent is reloading the Pi MCP runtime so the mcp proxy can see the new server in this run.",
+              note: liveNow
+                ? `MCP config updated. The server is connected for this turn too: call mcp({ connect: "${params.id}" }), then its tools.`
+                : "MCP config updated. The mcp proxy sees this from the person's next message, not in this turn, so do not call it for this server now. Finish the turn and say so.",
             },
             null,
             2
           ),
-          { projectId, mcpRuntimeReloadQueued: true }
+          { projectId, mcpLiveNow: liveNow }
         );
       },
     }),
@@ -982,13 +985,13 @@ export async function createEggentPiTools(options: {
             result.success
               ? {
                   ...result,
-                  note: "MCP config updated. Eggent is reloading the Pi MCP runtime so the mcp proxy stops using the deleted server in this run.",
+                  note: "MCP config updated. The mcp proxy stops using the deleted server from the person's next message.",
                 }
               : result,
             null,
             2
           ),
-          { projectId, mcpRuntimeReloadQueued: result.success }
+          { projectId }
         );
       },
     }),

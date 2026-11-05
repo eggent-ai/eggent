@@ -1,4 +1,5 @@
 import "@/lib/pi/env";
+import { ensureMcpTrustPolicy, mcpWorkspaceTrusted, registerMcpServerNow } from "@/lib/pi/mcp-trust";
 import fs from "fs";
 import path from "path";
 import {
@@ -418,6 +419,11 @@ function buildEggentProjectContext(options: {
     // Eggent runs headless, so a child process that wants to open a browser can
     // never succeed here. Agents used to spend dozens of turns rediscovering
     // that; state the rule and the two working alternatives up front.
+    // Asked once per server, and only where a card can be shown. Agents sent people hunting
+    // through the settings for a button that does not exist.
+    ...(mcpWorkspaceTrusted()
+      ? []
+      : ["- If the mcp tool says a project server is blocked or needs approval, no setting approves it. Tell the person to open this project in the web chat and send any message: a question appears there, and once allowed the server works everywhere, Telegram and schedules included."]),
     "- Choosing an MCP transport: interactive OAuth works only over the `http` transport, where Eggent runs the flow itself. If a server documents both an npm/stdio client and an HTTP endpoint, configure the HTTP one whenever the server needs a user login.",
     "- `stdio` MCP servers cannot log a user in: there is no browser in this environment, and the server's own device/federation login will fail. Authenticate them by passing an existing token or service-account key through the `env` field of upsert_mcp_server instead.",
     "- If an MCP server fails with `browser can not be opened`, `federation id authentication`, `Connection closed` immediately after start, or an equivalent, stop retrying at once. Do not install vendor CLIs, inspect binaries, or hunt for client ids. Tell the user the server needs a login that cannot happen in this environment and offer the three real options: the same server over HTTP transport, a token supplied through `env`, or running Eggent self-hosted where a browser is available.",
@@ -703,6 +709,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
   if (publicShare && !projectId) throw new Error("A public share answers for one project, and none was named.");
   const cwd = publicShare ? getWorkDir(projectId as string) : resolveCwd({ ...options, projectId });
   const agentDir = options.agentDir || getAgentDir();
+  ensureMcpTrustPolicy(agentDir);
   await ensureWebSearchWorkflow();
   const modelRuntime = await getPiModelRuntime();
   // A project set to run on a program of this computer talks to a stand-in for a
@@ -929,10 +936,15 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
     onPiInteraction: options.onPiInteraction,
     toolRuntimeData: options.toolRuntimeData,
   };
+  let mcpEvents: { emit(channel: string, data: unknown): void } | null = null;
   const resourceLoader = new DefaultResourceLoader({
     cwd,
     agentDir,
     extensionFactories: [
+      // Runs again on a reload, so this always holds the live bus.
+      (pi) => {
+        mcpEvents = pi.events;
+      },
       createSchedulePolicyExtension(isScheduledRunSessionId, SCHEDULED_RUN_REFUSAL, checkNewScheduleLimits),
       createSubagentPolicyExtension({
         monitor: subagentMonitor,
@@ -1003,27 +1015,44 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
 
   let sessionDisposed = false;
   let sessionRef: Awaited<ReturnType<typeof createAgentSession>>["session"] | null = null;
+  // A reload swaps the extensions out from under the session. Done while a turn is running it
+  // left every extension tool in that turn answering "ctx is stale", the mcp proxy and web
+  // search alike, and the agent spent the rest of the turn on it. So it waits for the turn to
+  // end. Most sessions are disposed then and the next turn builds a fresh one; this is for a
+  // session kept for its schedules.
   let mcpReloadQueued = false;
+  const onMcpConfigChanged = (details: { projectId: string; serverId: string; action?: string; filePath?: string }): boolean => {
+    queueMcpRuntimeReload(details);
+    // Only a new server of this very scope: a changed one needs the adapter to start over.
+    if (details.action !== "created" || details.projectId !== scopeId || !details.filePath) return false;
+    try {
+      const file = JSON.parse(fs.readFileSync(details.filePath, "utf-8")) as { mcpServers?: Record<string, unknown> };
+      return registerMcpServerNow(mcpEvents, details.serverId, file.mcpServers?.[details.serverId]);
+    } catch {
+      return false;
+    }
+  };
   const queueMcpRuntimeReload = (details: { projectId: string; serverId: string; action?: string; filePath?: string }) => {
     if (mcpReloadQueued) return;
     mcpReloadQueued = true;
-    setTimeout(() => {
-      void (async () => {
-        const sessionToReload = sessionRef;
-        if (sessionDisposed || !sessionToReload) {
+    const attempt = () => {
+      const sessionToReload = sessionRef;
+      if (sessionDisposed || !sessionToReload) {
+        mcpReloadQueued = false;
+        return;
+      }
+      if (sessionToReload.isStreaming) {
+        setTimeout(attempt, 500).unref?.();
+        return;
+      }
+      void sessionToReload.reload()
+        .then(() => console.info("Reloaded Pi runtime after MCP config change", details))
+        .catch((error) => console.error("Failed to reload Pi runtime after MCP config change", { details, error }))
+        .finally(() => {
           mcpReloadQueued = false;
-          return;
-        }
-        try {
-          await sessionToReload.reload();
-          console.info("Reloaded Pi runtime after MCP config change", details);
-        } catch (error) {
-          console.error("Failed to reload Pi runtime after MCP config change", { details, error });
-        } finally {
-          mcpReloadQueued = false;
-        }
-      })();
-    }, 0);
+        });
+    };
+    setTimeout(attempt, 500).unref?.();
   };
 
   // "plain" answers and nothing else, so the Eggent tools are not even built:
@@ -1038,7 +1067,7 @@ export async function createEggentPiSession(options: PiSessionOptions = {}) {
         scopeId,
         cwd,
         memorySubdir,
-        onMcpConfigChanged: queueMcpRuntimeReload,
+        onMcpConfigChanged,
         getAgentSession: () => sessionRef,
         get toolRuntimeData() { return turn.toolRuntimeData; },
         get runId() { return turn.runId; },
