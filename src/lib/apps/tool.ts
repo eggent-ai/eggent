@@ -122,7 +122,7 @@ export function createAppsTool(options: AppsToolOptions = {}) {
         query: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
         body: Type.Optional(Type.Unknown()),
       }), { description: "For action call: up to 10 calls to the same app, asked as one." })),
-      summary: Type.Optional(Type.String({ description: "For a call or batch that changes data: what it does in one plain sentence in the person's language, with the amounts, names and counts that matter (e.g. \"Создать ссылку на оплату 990 ₽ за консультацию\"). The person reads this on the Yes/No card; no paths or field names." })),
+      summary: Type.Optional(Type.String({ description: "For a call or batch that changes data: what it does in one plain sentence in the person's language, with the amounts, names and counts that matter (e.g. \"Send the offer to three new clients\"). The person reads this on the Yes/No card; no paths or field names." })),
       request_id: Type.Optional(Type.String({ description: "For action request: a pending request's id; without it, the latest ones." })),
     }),
     async execute(_id, params) {

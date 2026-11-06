@@ -603,7 +603,7 @@ export function AppSidebar({ ...props }: React.ComponentProps<typeof Sidebar>) {
             {appsUrl ? (
               <SidebarMenuItem>
                 <SidebarMenuButton asChild>
-                  {/* The deployment's own page, in a tab of its own like billing: connecting
+                  {/* The deployment's own page, in a tab of its own: connecting
                       a service is a side trip, and the chat stays where it was. */}
                   <a href={appsUrl} target="_blank" rel="noopener">
                     <AppsIcon className="size-4" />
