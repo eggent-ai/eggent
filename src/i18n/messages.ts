@@ -78,7 +78,7 @@ const enMessages = {
   // skill its own project. It is read on every message in the workspace, so it
   // stays a routing table: where the work lives, never what is in it.
   "skills.projectRouting.heading": "Projects in this workspace",
-  "skills.projectRouting.intro": "Each row is a separate project with its own files and memory. When a message belongs to one of them, switch to that project and work there; otherwise stay here.",
+  "skills.projectRouting.intro": "Each row is a separate project with its own files and memory. When a message belongs to one of them, ask that project with eggent_ask_project and bring back its answer; otherwise stay here.",
   "skills.projectRouting.columnProject": "Project",
   "skills.projectRouting.columnId": "Id",
   "skills.projectRouting.columnWhat": "What it is for",

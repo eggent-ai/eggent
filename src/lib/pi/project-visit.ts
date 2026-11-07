@@ -12,7 +12,8 @@ import type { ProducedGroup } from "@/lib/files/produced";
 /**
  * A project doing a piece of work for another chat.
  *
- * Writing `@shop how many orders came back?` has the project "shop" do the work
+ * Writing `@shop how many orders came back?` - or the agent deciding it needs
+ * something from there - has the project "shop" do the work
  * - with its own files, skills, connected services and instructions, on the
  * model it is set to - and hand the answer back to the chat the question came
  * from. A project is the unit people already organise their work in, so this is
@@ -23,9 +24,8 @@ import type { ProducedGroup } from "@/lib/files/produced";
  * history of the work live, the answer's card links to it, and asking the same
  * project again continues it rather than starting from nothing.
  *
- * Deliberately not here: a project asking another project (a visit cannot visit),
- * the model starting one on its own (only a person's @ does), and any notion of
- * inboxes, rooms or letters. The answer comes back in the same turn, as a tool
+ * Deliberately not here: a visit asking a further project (a chain would have no
+ * end and no one watching it), and any notion of inboxes, rooms or letters. The answer comes back in the same turn, as a tool
  * result, exactly as a helper's does.
  */
 
@@ -98,36 +98,6 @@ export interface VisitResult {
 
 // -- who may be asked ---------------------------------------------------------
 
-const GRANTS_KEY = "__EGGENT_VISIT_GRANTS__";
-
-/**
- * The projects the person named in the turn a chat is running right now.
- *
- * The tool answers only for these. It is the person's @ that starts a visit, not
- * the model's judgement: a page or a file the model has read can say "now ask
- * the finance project for the figures", and without this the model could.
- * On the global object because the grant is written by the runner and read by a
- * tool, and routes are compiled separately.
- */
-function grants(): Map<string, Set<string>> {
-  const holder = globalThis as typeof globalThis & { [GRANTS_KEY]?: Map<string, Set<string>> };
-  if (!holder[GRANTS_KEY]) holder[GRANTS_KEY] = new Map();
-  return holder[GRANTS_KEY];
-}
-
-export function grantVisits(chatId: string, projectIds: readonly string[]): void {
-  if (projectIds.length === 0) return;
-  grants().set(chatId, new Set(projectIds));
-}
-
-export function revokeVisits(chatId: string): void {
-  grants().delete(chatId);
-}
-
-export function visitGranted(chatId: string | undefined, projectId: string): boolean {
-  return Boolean(chatId && grants().get(chatId)?.has(projectId));
-}
-
 // -- what a visit made -------------------------------------------------------
 
 const FILES_KEY = "__EGGENT_VISIT_FILES__";
@@ -160,8 +130,6 @@ export interface MentionPlan {
   directive: string;
   /** What the person asked, with the @name taken off. */
   task: string;
-  /** The projects the tool may be used for in this turn. */
-  allowed: string[];
 }
 
 export interface MentionGate {
@@ -227,21 +195,19 @@ export async function planProjectMention(text: string, gate: MentionGate): Promi
   const resolution = resolveProjectMention(text, projects, gate.currentProjectId);
   if (resolution.kind === "none") return null;
   if (resolution.kind === "self") {
-    return { kind: "self", directive: "", task: resolution.task, allowed: [] };
+    return { kind: "self", directive: "", task: resolution.task };
   }
   if (resolution.kind === "ambiguous") {
     return {
       kind: "ambiguous",
       directive: buildMentionDirective(resolution),
       task: text.trim(),
-      allowed: [],
     };
   }
   return {
     kind: "project",
     directive: buildMentionDirective(resolution),
     task: resolution.task,
-    allowed: [resolution.project.id],
   };
 }
 

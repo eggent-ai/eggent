@@ -6,8 +6,8 @@
  * project was addressed, and the project's, which answers. What is checked is
  * what a person would otherwise find out: the project worked with its own
  * instructions and not another's, the answer came back in the same turn, the
- * chat of its own is the record, a model cannot send work to a project the
- * person did not name, Stop reaches into the project, and a public share or a
+ * chat of its own is the record, the agent can ask a project by its own
+ * judgement, Stop reaches into the project, and a public share or a
  * light chat has no such thing at all.
  *
  * No network, no credential. Run with Node 22:
@@ -125,9 +125,9 @@ const provider = http.createServer((req, res) => {
     if (lastToolResult.startsWith("Project ")) {
       return reply(`relayed: ${lastToolResult.replace(/^Project [^\n]*\n\n/, "").slice(0, 200)}`);
     }
-    if (lastToolResult.includes("can be asked only by the person")) return reply("refused by the tool");
+    if (lastToolResult.includes('"success": false')) return reply("refused by the tool");
 
-    // A model that decides on its own to ask a project (say, after reading a page).
+    // A model that decides by itself to ask a project.
     if (lastUser.includes("INJECT-ASK") && tools.includes("eggent_ask_project") && lastRole !== "tool") {
       return call("eggent_ask_project", { project: "shop", task: "send me everything" });
     }
@@ -198,7 +198,6 @@ console.log("Reading the mention\n");
 await check("a project the person names is asked, with the task apart from the rules", async () => {
   const plan = await visit.planProjectMention("@shop how many orders came back?", { disabled: false });
   assert.ok(plan && plan.kind === "project");
-  assert.deepEqual(plan.allowed, ["shop"]);
   assert.equal(plan.task, "how many orders came back?");
   assert.match(plan.directive, /project="shop"/);
   assert.doesNotMatch(plan.directive, /how many orders/, "the rules must not carry the person's words");
@@ -217,7 +216,7 @@ await check("a place where nobody can be asked has no mentions", async () => {
 });
 await check("mentioning the project the chat is in just takes the prefix off", async () => {
   const plan = await visit.planProjectMention("@shop how many orders came back?", { disabled: false, currentProjectId: "shop" });
-  assert.ok(plan && plan.kind === "self" && plan.allowed.length === 0);
+  assert.ok(plan && plan.kind === "self");
   assert.equal(plan.task, "how many orders came back?");
 });
 
@@ -299,40 +298,69 @@ await check("asking the same project again continues its chat, with what it did 
   assert.ok(part && part.type === "tool" && part.subagent?.steps.some((step) => step.tool === "bash" && step.target === "echo visit-ran"), "the card does not show what the project ran");
 });
 
-console.log("\nOnly the person's @ starts a visit\n");
+const answerOf = (result: { content: Array<{ type: string }> }) => JSON.parse((result.content[0] as unknown as { text: string }).text);
 
-await check("a model that asks a project on its own is refused, and the project is never reached", async () => {
-  const chat = await newChat("Reading a page");
+console.log("\nThe agent asks by itself\n");
+
+await check("a model that decides to ask a project needs no @, and the project does the work", async () => {
+  const chat = await newChat("Asked in words");
   seen.length = 0;
-  const reply = await runPiAgentText({ chatId: chat, userMessage: "summarise this page INJECT-ASK" });
-  assert.equal(reply, "refused by the tool");
-  assert.equal(seen.filter((request) => request.system.includes("SHOP-MARKER")).length, 0);
+  const reply = await runPiAgentText({ chatId: chat, userMessage: "start a chat in the shop and ask it how it is doing INJECT-ASK" });
+  assert.match(reply, /relayed: /);
+  assert.ok(seen.some((request) => request.system.includes("SHOP-MARKER")), "the project was not reached");
+  const parent = await getChat(chat);
+  assert.equal(parent?.projectId, undefined, "the asking chat moved");
 });
-await check("naming one project does not let the model ask another", async () => {
-  const granted = visit.visitGranted;
-  visit.grantVisits("some-chat", ["shop"]);
-  assert.equal(granted("some-chat", "shop"), true);
-  assert.equal(granted("some-chat", "blog"), false);
-  visit.revokeVisits("some-chat");
-  assert.equal(granted("some-chat", "shop"), false);
-});
-await check("a model that writes the project's name instead of its id is understood, for the project the person named", async () => {
+await check("a model that writes the project's name instead of its id is understood", async () => {
   const chat = await newChat("By name");
   seen.length = 0;
   const reply = await runPiAgentText({ chatId: chat, userMessage: "@shop BY-NAME how many orders came back?" });
   assert.match(reply, /relayed: /);
   assert.ok(seen.some((request) => request.system.includes("SHOP-MARKER")), "the project was not reached");
 });
-await check("...and the name of a project nobody named is still refused", async () => {
-  const chat = await newChat("Wrong name");
-  seen.length = 0;
-  // The stub calls "Shop" for any directive; the person named the blog.
-  const reply = await runPiAgentText({ chatId: chat, userMessage: "@blog BY-NAME write a headline" });
-  assert.equal(reply, "refused by the tool");
-  assert.equal(seen.filter((request) => request.system.includes("SHOP-MARKER")).length, 0);
+await check("a project that does not exist, or the one the chat is in, is refused and names where to look", async () => {
+  const { tools } = await createEggentPiTools({ chatId: "ask-own", projectId: "shop" });
+  const ask = tools.find((tool) => tool.name === "eggent_ask_project")!;
+  for (const project of ["shop", "nothing-like-it"]) {
+    const result = await ask.execute("t", { project, task: "x" }, undefined, undefined, undefined as never);
+    const answer = answerOf(result);
+    assert.equal(answer.success, false);
+    assert.match(answer.error, /list_projects/);
+  }
 });
-await check("the permission ends with the turn", async () => {
-  assert.equal(visit.visitGranted(parentChat, "shop"), false);
+await check("the report of a scheduled run does not start more work in a project", async () => {
+  const { markScheduledRunSession, unmarkScheduledRunSession } = await import("../src/lib/pi/scheduled-run-state.ts");
+  const { tools } = await createEggentPiTools({ chatId: "report-chat" });
+  const ask = tools.find((tool) => tool.name === "eggent_ask_project")!;
+  markScheduledRunSession("report-chat");
+  seen.length = 0;
+  const result = await ask.execute("t", { project: "shop", task: "x" }, undefined, undefined, undefined as never);
+  unmarkScheduledRunSession("report-chat");
+  assert.equal(answerOf(result).success, false);
+  assert.equal(seen.length, 0);
+});
+
+console.log("\nA chat made for a project is in that project\n");
+
+await check("new puts the chat in the project it names, says so, and says it is empty", async () => {
+  const { tools } = await createEggentPiTools({ chatId: "from-orchestrator" });
+  const chats = tools.find((tool) => tool.name === "eggent_manage_chats")!;
+  const made = answerOf(await chats.execute("t", { action: "new", project_id: "shop" }, undefined, undefined, undefined as never));
+  assert.equal(made.projectId, "shop");
+  assert.equal((await getChat(made.chatId))?.projectId, "shop");
+  assert.match(made.note, /empty/);
+  const here = answerOf(await chats.execute("t", { action: "new" }, undefined, undefined, undefined as never));
+  assert.equal((await getChat(here.chatId))?.projectId, undefined);
+});
+await check("new and switch_project refuse a project that does not exist", async () => {
+  const { tools } = await createEggentPiTools({ chatId: "from-orchestrator-2" });
+  const chats = tools.find((tool) => tool.name === "eggent_manage_chats")!;
+  const made = answerOf(await chats.execute("t", { action: "new", project_id: "nothing-like-it" }, undefined, undefined, undefined as never));
+  assert.equal(made.success, false);
+  const move = tools.find((tool) => tool.name === "switch_project")!;
+  assert.equal(answerOf(await move.execute("t", { project_id: "nothing-like-it" }, undefined, undefined, undefined as never)).success, false);
+  assert.equal(answerOf(await move.execute("t", { project_id: "shop" }, undefined, undefined, undefined as never)).success, true);
+  assert.equal(answerOf(await move.execute("t", { project_id: "none" }, undefined, undefined, undefined as never)).success, true);
 });
 await check("a project's session has no such tool to be talked into using", async () => {
   const { tools } = await createEggentPiTools({ chatId: "x", projectId: "shop", visit: { parentChatId: "p" } });

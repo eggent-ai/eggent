@@ -20,7 +20,7 @@ import { isGatewayRefusal } from "@/lib/pi/gateway-refusal";
 import { trackCardTurn, type CardTurn } from "@/lib/board/runs";
 import type { CardQuestion } from "@/lib/board/types";
 import { isHelperToolName } from "@/lib/pi/subagent-format";
-import { chatAllowsVisits, grantVisits, mentionRuntimeText, planProjectMention, revokeVisits, takeVisitFiles, type MentionPlan } from "@/lib/pi/project-visit";
+import { chatAllowsVisits, mentionRuntimeText, planProjectMention, takeVisitFiles, type MentionPlan } from "@/lib/pi/project-visit";
 import { resolveEngineRun } from "@/lib/engines/resolve";
 import { isEngineProviderId } from "@/lib/engines/types";
 import { collectProducedFiles, mergeProducedGroups, type ProducedGroup } from "@/lib/files/produced";
@@ -1411,8 +1411,6 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
     // at the top, which hands a steer to the session once the agent runs and reports the turn
     // as going until it has finished. Registering the session itself here lost the turn for
     // as long as the session took to start asking the model.
-    // The person named a project: only now may the tool be used for it.
-    if (mention) grantVisits(options.chatId, mention.allowed);
     try {
       await promptTurn(session, steers, promptFor.runtime);
     } catch (error) {
@@ -1540,7 +1538,6 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
     live?.push({ type: "error", errorText: streamErrorText(error) });
     throw error;
   } finally {
-    if (mention) revokeVisits(options.chatId);
     takeVisitFiles(options.chatId);
     watchdog?.stop();
     // Said to the turn and never read: see the web runner.
@@ -2231,8 +2228,6 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
         // See runPiAgentText: the stand-in registered at the top keeps this run reachable from
         // the other surfaces for the whole time it is working, so the session is not registered
         // again here.
-        // The person named a project: only now may the tool be used for it.
-        if (mention) grantVisits(options.chatId, mention.allowed);
         await promptTurn(session, steers, promptFor.runtime);
 
         if (aborted) {
@@ -2357,7 +2352,6 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
                   ? { outcome: "refused", ...(refusal ? { detail: refusal } : {}) }
                   : { outcome: "done", finalText: lastMessageText || assistantText, files: turnFiles }
         );
-        if (mention) revokeVisits(options.chatId);
         takeVisitFiles(options.chatId);
         watchdog?.stop();
         // Said to the turn and never read: written down as such before anyone
