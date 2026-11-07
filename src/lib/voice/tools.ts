@@ -93,6 +93,7 @@ export function buildVoiceInstructions(input: VoiceInstructionsInput): string {
     "Only answer by yourself what is a plain question or conversation that needs no tool.",
     "The agent's work appears in the chat on the person's screen - a connection card, a file, a table. When asked how it is going, or when the person seems to wait, call `status` and say what it shows in one or two sentences.",
     "Messages that start with \"[Agent update]\" come from the agent, not the person: tell the person briefly what changed and what they may need to do on screen (for example press the connect button).",
+    "If an update only repeats what you have just said or asked, do not say it again: one or two words are enough.",
     "If something is unclear, ask one short question.",
   ];
   if (input.projectName) lines.push(`The chat belongs to the project "${clip(input.projectName, 80)}".`);
@@ -252,6 +253,63 @@ export function rmsOf(samples: Float32Array): number {
   let sum = 0;
   for (let i = 0; i < samples.length; i += 1) sum += samples[i] * samples[i];
   return Math.sqrt(sum / samples.length);
+}
+
+// --- who has the floor -----------------------------------------------------
+
+/**
+ * A voice model delivers an answer far faster than it is played (measured on
+ * Yandex: 6.5 s of speech in 0.1 s), so "the response is done" says nothing
+ * about the agent having finished speaking. Asking for another answer in that
+ * gap made one sentence from the person start three replies, each cutting off
+ * the one before it. Nothing we start ourselves - the reply to a tool, an
+ * update from the agent - starts until the voice has finished and the person
+ * is not talking; an update also leaves a moment for the person to answer what
+ * they just heard. The provider's own answer to the person is not held back.
+ */
+/** After the voice stops: the person's moment to answer before an update is said. */
+export const AFTER_VOICE_QUIET_MS = 2000;
+/** After the person stops: the provider's own answer is on its way. */
+export const PERSON_STOPPED_HOLD_MS = 1500;
+/** A person "still talking" for longer than this is a lost end-of-speech event. */
+export const PERSON_SPEAKING_MAX_MS = 60_000;
+
+export interface FloorInput {
+  now: number;
+  /** An answer is being generated, or our audio is still playing. */
+  voiceBusy: boolean;
+  /** When the voice was last busy. */
+  voiceBusyAt: number;
+  personSpeakingSince: number | null;
+  personStoppedAt: number | null;
+  /** How long the voice must have been quiet. */
+  quietMs: number;
+}
+
+export function mayTakeFloor(input: FloorInput): boolean {
+  if (input.voiceBusy) return false;
+  if (input.personSpeakingSince !== null && input.now - input.personSpeakingSince < PERSON_SPEAKING_MAX_MS) return false;
+  if (input.personStoppedAt !== null && input.now - input.personStoppedAt < PERSON_STOPPED_HOLD_MS) return false;
+  return input.now - input.voiceBusyAt >= input.quietMs;
+}
+
+/**
+ * Whether a finished tool call needs an answer of its own. A task handed over
+ * in a response that already spoke has been acknowledged: asking again only
+ * says "on it" a second time. A failed call and `status` have news to tell.
+ */
+export function answerAfterTool(input: { name: string; ok: boolean; spoke: boolean }): boolean {
+  return !(input.name === "delegate" && input.ok && input.spoke);
+}
+
+/**
+ * Whether the agent's finished turn is put in the conversation without being
+ * said. The voice has just asked the person something and the agent only wrote
+ * words (no tool ran, no question card): that is usually the same question, and
+ * saying it talks over the answer. The voice knows it for its next reply.
+ */
+export function tellQuietly(input: { voiceAsked: boolean; agentUsedTools: boolean; questionOnScreen: boolean }): boolean {
+  return input.voiceAsked && !input.agentUsedTools && !input.questionOnScreen;
 }
 
 // --- the agent's turn, as the voice model is told it -----------------------

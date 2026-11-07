@@ -24,6 +24,10 @@ import {
   recentForVoice,
   runVoiceTool,
   questionUpdate,
+  mayTakeFloor,
+  answerAfterTool,
+  tellQuietly,
+  AFTER_VOICE_QUIET_MS,
   isAmendment,
   type LastDelegate,
   endingNote,
@@ -231,6 +235,15 @@ function useVoiceCall(bindings: VoiceCallBindings) {
   const speechStoppedAt = useRef<number | null>(null);
   const responding = useRef(false);
   const pendingUpdate = useRef<string | null>(null);
+  /** Tool calls whose results the voice has not yet answered; they wait for it to finish speaking. */
+  const pendingToolAnswers = useRef<Array<{ name: string; ok: boolean; responseId: string | null }>>([]);
+  /** Responses that said something aloud: a task handed over in one needs no second acknowledgement. */
+  const spokeIn = useRef(new Set<string>());
+  /** A response.create of ours the provider has not started yet; an error before it starts frees the floor. */
+  const awaitingCreated = useRef(false);
+  const personSpeakingSince = useRef<number | null>(null);
+  const personStoppedAt = useRef<number | null>(null);
+  const voiceBusyAt = useRef(0);
   /** The summary at the end: only the response asked for it counts, never one cancelled before it. */
   const summary = useRef<{ text: string; responseId: string | null; done: () => void } | null>(null);
   const lineIds = useRef(new Map<string, string>());
@@ -323,9 +336,30 @@ function useVoiceCall(bindings: VoiceCallBindings) {
   }, []);
 
   const flushUpdate = useCallback(() => {
+    const now = Date.now();
+    const a = audio.current;
+    const voiceBusy = responding.current || (a ? a.nextTime > a.ctx.currentTime : false);
+    // Looked at on every microphone frame, so "last busy" is known when something comes up to say.
+    if (voiceBusy) voiceBusyAt.current = now;
+    if (ending.current || summary.current) return;
+    const floor = { now, voiceBusy, voiceBusyAt: voiceBusyAt.current, personSpeakingSince: personSpeakingSince.current, personStoppedAt: personStoppedAt.current };
+    const answers = pendingToolAnswers.current;
+    if (answers.length && mayTakeFloor({ ...floor, quietMs: 0 })) {
+      pendingToolAnswers.current = [];
+      const needed = answers.some((answer) => answerAfterTool({ name: answer.name, ok: answer.ok, spoke: answer.responseId !== null && spokeIn.current.has(answer.responseId) }));
+      if (needed) {
+        // Marked here, not when the provider says so: the next frame is milliseconds away.
+        responding.current = true;
+        awaitingCreated.current = true;
+        send({ type: "response.create" });
+        return;
+      }
+    }
     const text = pendingUpdate.current;
-    if (!text || responding.current) return;
+    if (!text || !mayTakeFloor({ ...floor, quietMs: AFTER_VOICE_QUIET_MS })) return;
     pendingUpdate.current = null;
+    responding.current = true;
+    awaitingCreated.current = true;
     send({ type: "conversation.item.create", item: { type: "message", role: "user", content: [{ type: "input_text", text }] } });
     send({ type: "response.create" });
   }, [send]);
@@ -338,6 +372,14 @@ function useVoiceCall(bindings: VoiceCallBindings) {
       case "input_audio_buffer.speech_started":
         lastPersonAt.current = Date.now();
         warnedAt.current = null;
+        personSpeakingSince.current = Date.now();
+        personStoppedAt.current = null;
+        // Their turn now: the answer to it covers any tool result, and knows what the agent said if it is told before.
+        pendingToolAnswers.current = [];
+        if (pendingUpdate.current) {
+          send({ type: "conversation.item.create", item: { type: "message", role: "user", content: [{ type: "input_text", text: pendingUpdate.current }] } });
+          pendingUpdate.current = null;
+        }
         // The person talks over the answer: it stops here at once, and the
         // provider is told to drop it rather than finish it unheard.
         stopPlayback();
@@ -350,14 +392,18 @@ function useVoiceCall(bindings: VoiceCallBindings) {
         break;
       case "input_audio_buffer.speech_stopped":
         lastPersonAt.current = Date.now();
+        personSpeakingSince.current = null;
+        personStoppedAt.current = Date.now();
         speechStoppedAt.current = performance.now();
         setState((current) => ({ ...current, floor: "thinking" }));
         break;
       case "response.created": {
         responding.current = true;
+        awaitingCreated.current = false;
+        personStoppedAt.current = null;
         const id = (event.response as { id?: string } | undefined)?.id ?? null;
-        // One answer at a time: a new one stops whatever of the last is still playing.
-        if (id && currentResponse.current && id !== currentResponse.current) stopPlayback();
+        // Nothing of the last answer is cut here: the person talking stops it (above), and
+        // nothing we start ourselves starts while it plays. Audio queues after what is playing.
         currentResponse.current = id;
         droppingAudio.current = false;
         if (summary.current && summary.current.responseId === null && id) summary.current.responseId = id;
@@ -374,6 +420,8 @@ function useVoiceCall(bindings: VoiceCallBindings) {
           speechStoppedAt.current = null;
         }
         lastAgentAt.current = Date.now();
+        const spoke = from ?? currentResponse.current;
+        if (spoke) spokeIn.current.add(spoke);
         if (typeof event.delta === "string") play(event.delta);
         if (!ignoreAudio.current) setState((current) => (current.floor === "speaking" ? current : { ...current, floor: "speaking" }));
         break;
@@ -417,6 +465,7 @@ function useVoiceCall(bindings: VoiceCallBindings) {
         if (!fn || handledCalls.current.has(fn.callId)) break;
         handledCalls.current.add(fn.callId);
         const { name, callId } = fn;
+        const fromResponse = typeof event.response_id === "string" ? event.response_id : currentResponse.current;
         const output = await runVoiceTool(name, fn.arguments, {
           delegate: (task, amends) => {
             call.current?.delegated.push(task);
@@ -436,7 +485,9 @@ function useVoiceCall(bindings: VoiceCallBindings) {
           turn: () => bindingsRef.current.turn(),
         });
         send({ type: "conversation.item.create", item: { type: "function_call_output", call_id: callId, output: JSON.stringify(output) } });
-        send({ type: "response.create" });
+        // Answered once the voice has finished what it is saying, or not at all if it already said it.
+        pendingToolAnswers.current.push({ name, ok: output.ok === true, responseId: fromResponse });
+        flushUpdate();
         break;
       }
       case "response.done": {
@@ -451,6 +502,11 @@ function useVoiceCall(bindings: VoiceCallBindings) {
         const detail = event.error as { message?: string } | undefined;
         console.warn("[voice] error from the voice model:", detail?.message || event);
         if (summary.current?.responseId) summary.current.done();
+        // A request refused before it started will never report done.
+        if (awaitingCreated.current) {
+          awaitingCreated.current = false;
+          responding.current = false;
+        }
         break;
       }
     }
@@ -471,6 +527,8 @@ function useVoiceCall(bindings: VoiceCallBindings) {
     summary.current = null;
     responding.current = false;
     pendingUpdate.current = null;
+    pendingToolAnswers.current = [];
+    awaitingCreated.current = false;
   }, []);
 
   const finish = useCallback(async (linesAtEnd: CallState["lines"], summaryText: string) => {
@@ -543,6 +601,8 @@ function useVoiceCall(bindings: VoiceCallBindings) {
       await hangUp(reason);
       return;
     }
+    pendingUpdate.current = null;
+    pendingToolAnswers.current = [];
     if (responding.current) send({ type: "response.cancel" });
     stopPlayback();
     await new Promise<void>((resolve) => {
@@ -574,6 +634,12 @@ function useVoiceCall(bindings: VoiceCallBindings) {
     currentResponse.current = null;
     droppingAudio.current = false;
     gateOpenUntil.current = 0;
+    spokeIn.current.clear();
+    pendingToolAnswers.current = [];
+    awaitingCreated.current = false;
+    personSpeakingSince.current = null;
+    personStoppedAt.current = null;
+    voiceBusyAt.current = 0;
     setState({ ...INITIAL, phase: "connecting" });
     const startedAt = performance.now();
     let stream: MediaStream | null = null;
@@ -630,6 +696,7 @@ function useVoiceCall(bindings: VoiceCallBindings) {
         if (ws.current?.readyState !== WebSocket.OPEN) return;
         beatNow.current();
         watchNow.current();
+        flushUpdate();
         let chunk = muted.current ? new Float32Array(message.data.length) : message.data;
         // While our answer plays, its echo must not reach the provider as the person's voice.
         const a = audio.current;
@@ -735,6 +802,7 @@ function useVoiceCall(bindings: VoiceCallBindings) {
         const c = call.current;
         if (c) setState((current) => ({ ...current, seconds: Math.floor((Date.now() - c.startedAt) / 1000) }));
         watchNow.current();
+        flushUpdate();
       }, 500);
     } catch (error) {
       if (stream && !audio.current) for (const track of stream.getTracks()) track.stop();
@@ -755,9 +823,16 @@ function useVoiceCall(bindings: VoiceCallBindings) {
     setState((current) => (current.work ? { ...current, work: { ...current.work, done: true } } : current));
     if (lastDelegate.current) lastDelegate.current = { ...lastDelegate.current, endedAt: Date.now() };
     const turn = bindingsRef.current.turn();
-    pendingUpdate.current = `[Agent update] The agent has finished working. Its latest message in the chat: ${turn.latestText || "(no text)"}`;
+    const update = `[Agent update] The agent has finished working. Its latest message in the chat: ${turn.latestText || "(no text)"}`;
+    const lastLine = linesRef.current[linesRef.current.length - 1];
+    const voiceAsked = lastLine?.role === "agent" && lastLine.text.trim().endsWith("?");
+    if (tellQuietly({ voiceAsked, agentUsedTools: turn.done.length > 0, questionOnScreen: Boolean(turn.question) })) {
+      send({ type: "conversation.item.create", item: { type: "message", role: "user", content: [{ type: "input_text", text: update }] } });
+      return;
+    }
+    pendingUpdate.current = update;
     flushUpdate();
-  }, [bindings.running, flushUpdate, state.phase]);
+  }, [bindings.running, flushUpdate, send, state.phase]);
 
   // The agent asked the person something on screen: the voice model asks it aloud.
   const toldQuestion = useRef<string | null>(null);

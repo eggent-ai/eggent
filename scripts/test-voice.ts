@@ -35,6 +35,12 @@ import {
   MUTED_END_MS,
   recentForVoice,
   runVoiceTool,
+  mayTakeFloor,
+  answerAfterTool,
+  tellQuietly,
+  AFTER_VOICE_QUIET_MS,
+  PERSON_STOPPED_HOLD_MS,
+  PERSON_SPEAKING_MAX_MS,
   voiceContextOf,
   VOICE_TOOLS,
   type TurnMessage,
@@ -100,6 +106,34 @@ await check("a delegate that fails is reported, not claimed done", async () => {
     turn: () => describeTurn([], false),
   });
   assert.deepEqual(out, { ok: false, error: "offline" });
+});
+const FLOOR = { now: 100_000, voiceBusy: false, voiceBusyAt: 0, personSpeakingSince: null, personStoppedAt: null, quietMs: 0 };
+await check("nothing we start ourselves talks over the voice or the person", () => {
+  assert.equal(mayTakeFloor(FLOOR), true);
+  // A response reported done with its audio still playing counts as busy: that gap was the cut.
+  assert.equal(mayTakeFloor({ ...FLOOR, voiceBusy: true }), false);
+  assert.equal(mayTakeFloor({ ...FLOOR, personSpeakingSince: FLOOR.now - 500 }), false);
+  assert.equal(mayTakeFloor({ ...FLOOR, personStoppedAt: FLOOR.now - PERSON_STOPPED_HOLD_MS + 1 }), false);
+  assert.equal(mayTakeFloor({ ...FLOOR, personStoppedAt: FLOOR.now - PERSON_STOPPED_HOLD_MS }), true);
+  // An end of speech that never came does not keep the voice silent for good.
+  assert.equal(mayTakeFloor({ ...FLOOR, personSpeakingSince: FLOOR.now - PERSON_SPEAKING_MAX_MS }), true);
+});
+await check("an update leaves the person a moment to answer what they just heard", () => {
+  const quiet = { ...FLOOR, quietMs: AFTER_VOICE_QUIET_MS };
+  assert.equal(mayTakeFloor({ ...quiet, voiceBusyAt: FLOOR.now - AFTER_VOICE_QUIET_MS + 1 }), false);
+  assert.equal(mayTakeFloor({ ...quiet, voiceBusyAt: FLOOR.now - AFTER_VOICE_QUIET_MS }), true);
+});
+await check("a task handed over in a reply that already spoke is not acknowledged twice", () => {
+  assert.equal(answerAfterTool({ name: "delegate", ok: true, spoke: true }), false);
+  assert.equal(answerAfterTool({ name: "delegate", ok: true, spoke: false }), true);
+  assert.equal(answerAfterTool({ name: "delegate", ok: false, spoke: true }), true, "a failure has to be said");
+  assert.equal(answerAfterTool({ name: "status", ok: true, spoke: true }), true, "status has news");
+});
+await check("an agent that only repeats the voice's question is not said aloud; real work and a card are", () => {
+  assert.equal(tellQuietly({ voiceAsked: true, agentUsedTools: false, questionOnScreen: false }), true);
+  assert.equal(tellQuietly({ voiceAsked: false, agentUsedTools: false, questionOnScreen: false }), false);
+  assert.equal(tellQuietly({ voiceAsked: true, agentUsedTools: true, questionOnScreen: false }), false);
+  assert.equal(tellQuietly({ voiceAsked: true, agentUsedTools: false, questionOnScreen: true }), false);
 });
 await check("an unknown tool is refused by name", async () => {
   const out = await runVoiceTool("delete_everything", "{}", fakeChat(false).deps);
