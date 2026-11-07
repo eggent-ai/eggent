@@ -1,4 +1,6 @@
 import type { InlineExtension } from "@earendil-works/pi-coding-agent";
+import { STAGE_TOOL } from "@/lib/employees/stage";
+import { createStageTool } from "@/lib/employees/stage-tool";
 
 /**
  * A call to the mcp proxy that was meant for one of the session's own tools.
@@ -89,15 +91,67 @@ export function ownToolRedirect(name: string): string {
   return `mcp has no such action. The tool you mean is ${name}, a tool of your own: call ${name} directly (not mcp), with these same arguments.`;
 }
 
+/**
+ * Stages are the one call that is run rather than turned back. Told the right
+ * name, a real model sometimes carried on without it (1 first job in 18), and
+ * the person watched a whole job with no board. Nothing here can go wrong by
+ * running it: a stage changes nothing but what the screen shows.
+ */
+export const STAGE_ANSWERED =
+  "Done: this was meant for eggent_stage, a tool of your own, and the stage is on the person's screen. Do not repeat it; next time call eggent_stage directly (not mcp).";
+
+function resultText(result: unknown): string {
+  const content = (result as { content?: unknown } | null)?.content;
+  if (!Array.isArray(content)) return "";
+  return content.map((part) => (part as { text?: unknown })?.text).filter((text) => typeof text === "string").join("");
+}
+
+/**
+ * What the runners see of a stage that came through the proxy: a stage. The
+ * screen and the stored chat read tool names, so without this the board stays
+ * empty however well the call was answered. What the model sent and was told
+ * stays as it was in its own record.
+ */
+export function createProxiedStageReader(getTools: () => readonly OwnToolInfo[]) {
+  const proxied = new Set<string>();
+  return <T extends Record<string, unknown>>(record: T): T => {
+    if (record.toolName !== "mcp" || typeof record.toolCallId !== "string") return record;
+    if (record.type === "tool_execution_start") {
+      if (meantForOwnTool("mcp", record.args, getTools()) !== STAGE_TOOL) return record;
+      proxied.add(record.toolCallId);
+      return { ...record, toolName: STAGE_TOOL };
+    }
+    if (record.type !== "tool_execution_end" || !proxied.delete(record.toolCallId)) return record;
+    const text = resultText(record.result);
+    if (!text.startsWith(STAGE_ANSWERED)) return { ...record, toolName: STAGE_TOOL };
+    return {
+      ...record,
+      toolName: STAGE_TOOL,
+      isError: false,
+      result: { content: [{ type: "text", text: text.slice(STAGE_ANSWERED.length).trim() }] },
+    };
+  };
+}
+
 export function createOwnToolGuardExtension(): InlineExtension {
   return {
     name: "eggent-own-tool-guard",
     hidden: true,
     factory: (pi) => {
-      pi.on("tool_call", async (event) => {
+      pi.on("tool_call", async (event, ctx) => {
         if (event.toolName !== "mcp") return undefined;
         const name = meantForOwnTool(event.toolName, event.input, pi.getAllTools());
-        return name ? { block: true, reason: ownToolRedirect(name) } : undefined;
+        if (!name) return undefined;
+        if (name === STAGE_TOOL) {
+          try {
+            const tool = createStageTool({ cwd: ctx.cwd });
+            const result = await tool.execute(event.toolCallId, event.input as never, undefined, undefined, ctx as never);
+            return { block: true, reason: `${STAGE_ANSWERED}\n${resultText(result)}` };
+          } catch {
+            // Fall through to the name: the model can still call it itself.
+          }
+        }
+        return { block: true, reason: ownToolRedirect(name) };
       });
     },
   };

@@ -44,6 +44,7 @@ import { isScheduledRunSessionId } from "@/lib/pi/scheduled-run-state";
 import { createBoardTool } from "@/lib/board/tool";
 import { createCalendarFileTool } from "@/lib/calendar/tool";
 import { createStageTool } from "@/lib/employees/stage-tool";
+import { isFirstShiftChat } from "@/lib/employees/first-shift-chat";
 import { createSummaryTool, summaryConfigured } from "@/lib/employees/summary-tool";
 import { googleEnabled } from "@/lib/google/config";
 import { createGoogleTool } from "@/lib/google/tool";
@@ -1389,9 +1390,12 @@ export async function createEggentPiTools(options: {
   // Stages of the work for the person's screen. Only in an employee's project:
   // a schema is billed on every turn, and only employees' skills use it.
   const employeeProject = options.projectId && !options.visit ? await getProject(options.projectId).catch(() => null) : null;
-  if (employeeProject?.employee) {
+  // The first job typed in the person's own words runs in the orchestrator, and
+  // draws the same board; other chats there do not pay for the schema.
+  const firstJob = !options.projectId && !options.visit && options.chatId ? await isFirstShiftChat(options.chatId) : false;
+  if (employeeProject?.employee || firstJob) {
     tools.push(createStageTool({ cwd: options.cwd }));
-    if (summaryConfigured()) tools.push(createSummaryTool({ cwd: options.cwd, fromName: employeeProject.name }));
+    if (summaryConfigured()) tools.push(createSummaryTool({ cwd: options.cwd, fromName: employeeProject?.name ?? "Eggent" }));
   }
 
   // Google Sheets and Calendar through the deployment's connection

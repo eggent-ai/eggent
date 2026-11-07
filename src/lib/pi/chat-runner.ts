@@ -1,4 +1,5 @@
 import { STAGE_TOOL, stageFromToolOutput } from "@/lib/employees/stage";
+import { createProxiedStageReader } from "@/lib/pi/own-tool-guard";
 import { DEFAULT_CHAT_TITLES } from "@/i18n/vocabulary";
 import { createUIMessageStream } from "ai";
 import type { UIMessage, UIMessageStreamWriter } from "ai";
@@ -1258,9 +1259,11 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
   let questionOnCard = false;
   let cardQuestion: Omit<CardQuestion, "askedAt"> | null = null;
   teardown.push(() => subagents.dispose());
+  const readStageCall = createProxiedStageReader(() => session.getAllTools());
   const unsubscribe = session.subscribe((event: unknown) => {
-    const record = asRecord(event);
-    if (!record) return;
+    const raw = asRecord(event);
+    if (!raw) return;
+    const record = readStageCall(raw);
     if (options.onSessionEvent) {
       try {
         options.onSessionEvent(record);
@@ -2011,9 +2014,11 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
       // build to race it against: without this the stop is acknowledged and never acted on.
       if (runAbort.signal.aborted) handleAbort();
 
+      const readStageCall = createProxiedStageReader(() => session.getAllTools());
       const unsubscribe = session.subscribe((event: unknown) => {
-        const record = asRecord(event);
-        if (!record) return;
+        const raw = asRecord(event);
+        if (!raw) return;
+        const record = readStageCall(raw);
         subagents.handle(record);
         if (watchdog) noteSessionEvent(watchdog, record);
         if (record.type === "agent_start") {
