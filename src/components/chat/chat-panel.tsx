@@ -1,6 +1,7 @@
 "use client";
 
 import { useBrowserPanel } from "@/components/browser-panel";
+import { agentOpenedBrowser } from "@/lib/browser/opened-by-agent";
 import { useChat } from "@ai-sdk/react";
 import { Button } from "@/components/ui/button";
 import { Minimize2 } from "lucide-react";
@@ -1383,7 +1384,7 @@ export function ChatPanel({ initialQuickSkills = [], onboardingPending = false, 
   useEffect(() => {
     if (!readLocal(SHOW_BROWSER_KEY)) return;
     const last = messages[messages.length - 1];
-    if (last?.role !== "assistant" || !JSON.stringify(last.parts ?? []).includes("eggent-browser")) return;
+    if (last?.role !== "assistant" || !agentOpenedBrowser(last.parts)) return;
     writeLocal(SHOW_BROWSER_KEY, null);
     if (window.matchMedia("(min-width: 1024px)").matches) useBrowserPanel.setState({ open: true });
   }, [messages]);

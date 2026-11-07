@@ -67,5 +67,18 @@ await check("a step goes to the deployment with the services token, and a failur
   assert.equal(seen.length, 1, "no address, no call");
 });
 
+await check("the panel opens for a browser the agent opened, not for a skill that names one", async () => {
+  const { agentOpenedBrowser } = await import("../src/lib/browser/opened-by-agent.ts");
+  const bash = (command: string) => ({ type: "tool-bash", input: { command } });
+  assert.equal(agentOpenedBrowser([bash("eggent-browser open https://example.test")]), true);
+  assert.equal(agentOpenedBrowser([bash("cd /tmp && eggent-browser open https://example.test")]), true);
+  assert.equal(agentOpenedBrowser([{ type: "dynamic-tool", toolName: "bash", input: { command: "eggent-browser open x" } }]), true);
+  // The chat of 2026-11-07: the agent read first-shift, whose text says to use it.
+  assert.equal(agentOpenedBrowser([{ type: "tool-read", input: { path: "SKILL.md" }, output: "open it with `eggent-browser`" }]), false);
+  assert.equal(agentOpenedBrowser([{ type: "text", text: "eggent-browser open x" }]), false);
+  assert.equal(agentOpenedBrowser([bash("grep eggent-browser notes.md")]), false);
+  assert.equal(agentOpenedBrowser(undefined), false);
+});
+
 if (failed) { console.log(`\n${failed} failed`); process.exit(1); }
 console.log("\nall ok");
