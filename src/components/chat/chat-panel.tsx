@@ -1,5 +1,6 @@
 "use client";
 
+import { useBrowserPanel } from "@/components/browser-panel";
 import { useChat } from "@ai-sdk/react";
 import { Button } from "@/components/ui/button";
 import { Minimize2 } from "lucide-react";
@@ -365,9 +366,41 @@ interface ChatPanelProps {
   onboardingPending?: boolean;
   /** Employee ids already hired here, known when the page is rendered. */
   hiredEmployees?: string[];
+  /** The workspace has nothing in it yet: its first question stands on the new-chat screen. */
+  welcome?: boolean;
+  appsOffered?: boolean;
 }
 
-export function ChatPanel({ initialQuickSkills = [], onboardingPending = false, hiredEmployees = [] }: ChatPanelProps) {
+const WELCOME_SKIPPED_KEY = "eggent.welcomeSkipped";
+/** Set when the first question was answered: the first time the agent opens its browser, the panel opens with it. */
+const SHOW_BROWSER_KEY = "eggent.showBrowserOnce";
+
+function readLocal(key: string): string | null {
+  try {
+    return window.localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeLocal(key: string, value: string | null): void {
+  try {
+    if (value === null) window.localStorage.removeItem(key);
+    else window.localStorage.setItem(key, value);
+  } catch {
+    // The browser keeps nothing here: the question comes back on the next visit, nothing worse.
+  }
+}
+
+function reportWelcomeStep(event: string, chatId?: string): void {
+  void fetch("/api/employees/welcome", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ event, ...(chatId ? { chatId } : {}) }),
+  }).catch(() => {});
+}
+
+export function ChatPanel({ initialQuickSkills = [], onboardingPending = false, hiredEmployees = [], welcome = false, appsOffered = false }: ChatPanelProps) {
   const { t } = useI18n();
   const router = useRouter();
   const pathname = usePathname();
@@ -1016,7 +1049,10 @@ export function ChatPanel({ initialQuickSkills = [], onboardingPending = false, 
       setActiveChatId(internalChatId);
       addChat({
         id: internalChatId,
-        title: messageText.slice(0, 60) + (messageText.length > 60 ? "..." : ""),
+        title: (() => {
+          const said = messageText.replace(/^\/skill:first-shift\s*/, "") || messageText;
+          return said.slice(0, 60) + (said.length > 60 ? "..." : "");
+        })(),
         projectId: projectId || undefined,
         createdAt: new Date().toISOString(),
         updatedAt: new Date().toISOString(),
@@ -1132,6 +1168,9 @@ export function ChatPanel({ initialQuickSkills = [], onboardingPending = false, 
     }
   }, [messages, steerDrafts]);
 
+  // Defined further down, with what they need: onSubmit only ever calls them later.
+  const startFirstShiftRef = useRef<(text: string) => void>(() => {});
+  const launchBundledSkillRef = useRef<(skillName: string, brief?: string) => Promise<void>>(async () => {});
   const onSubmit = useCallback((messageOverride?: string, extras: { files?: string[] } = {}) => {
     const typed = messageOverride ?? input;
     if (pendingInteraction) {
@@ -1163,6 +1202,13 @@ export function ChatPanel({ initialQuickSkills = [], onboardingPending = false, 
     const messageText = shellInput?.kind === "literal" ? shellInput.text : typed;
 
     if (!messageText.trim()) return;
+    if (welcomeOpenRef.current && !isLoading && !activeChatId && !activeProjectId) {
+      // The answer to the first question, in the person's own words: the agent
+      // reads it, whatever it is, and leads the first job from there.
+      startFirstShiftRef.current(messageText);
+      setInput("");
+      return;
+    }
     if (isLoading) {
       // The agent is working: the message is added to what it is doing.
       void steerMessage(messageText, { files: extras.files });
@@ -1277,6 +1323,26 @@ export function ChatPanel({ initialQuickSkills = [], onboardingPending = false, 
     sendMessage({ text: messageText, metadata: { createdAt: new Date().toISOString() } });
   }, [refreshProjects, registerOutgoingChat, sendMessage, setActiveProjectId, setCurrentPath]);
 
+  const [welcomeOpen, setWelcomeOpen] = useState(welcome);
+  const welcomeOpenRef = useRef(welcomeOpen);
+  welcomeOpenRef.current = welcomeOpen;
+  useEffect(() => {
+    if (readLocal(WELCOME_SKIPPED_KEY)) setWelcomeOpen(false);
+  }, []);
+  const skipWelcome = useCallback(() => {
+    writeLocal(WELCOME_SKIPPED_KEY, "1");
+    setWelcomeOpen(false);
+    reportWelcomeStep("skipped");
+  }, []);
+  const startFirstShift = useCallback((text: string) => {
+    setWelcomeOpen(false);
+    writeLocal(SHOW_BROWSER_KEY, "1");
+    // The chat these words start is this workspace's first job.
+    reportWelcomeStep("typed", internalChatId);
+    void launchBundledSkillRef.current("first-shift", text);
+  }, [internalChatId]);
+  startFirstShiftRef.current = startFirstShift;
+
   // No target is sent on purpose: the server gives the skill its home, and the
   // response says which one so the chat can follow it there.
   const launchBundledSkill = useCallback(async (skillName: string, brief?: string) => {
@@ -1309,6 +1375,18 @@ export function ChatPanel({ initialQuickSkills = [], onboardingPending = false, 
       setLaunchingSkill(null);
     }
   }, [isLoading, launchingSkill, startPreparedChat]);
+  launchBundledSkillRef.current = launchBundledSkill;
+
+  // Watching it work is the point of a first job, so the first time the agent
+  // opens its browser the panel opens with it - once, on a screen with room for
+  // both, and without being remembered as the person's own choice.
+  useEffect(() => {
+    if (!readLocal(SHOW_BROWSER_KEY)) return;
+    const last = messages[messages.length - 1];
+    if (last?.role !== "assistant" || !JSON.stringify(last.parts ?? []).includes("eggent-browser")) return;
+    writeLocal(SHOW_BROWSER_KEY, null);
+    if (window.matchMedia("(min-width: 1024px)").matches) useBrowserPanel.setState({ open: true });
+  }, [messages]);
 
   // A first task chosen at signup (lib/first-task.ts) starts once, the way its
   // quick-start card would, with what the person wrote as the first thing said
@@ -1519,6 +1597,15 @@ export function ChatPanel({ initialQuickSkills = [], onboardingPending = false, 
         onRespondToInteraction={(value, cancel) => pendingInteraction ? respondToInteraction(pendingInteraction, value, cancel) : undefined}
         quickSkills={showQuickSkills}
         hiredEmployees={hiredEmployees}
+        welcome={welcomeOpen && !activeProjectId && activeChatId === null ? {
+          appsOffered,
+          onAsk: startFirstShift,
+          onSkip: skipWelcome,
+          onStep: (event) => {
+            if (event.startsWith("button:")) writeLocal(SHOW_BROWSER_KEY, "1");
+            reportWelcomeStep(event);
+          },
+        } : undefined}
         onLaunchSkill={requestSkillLaunch}
         launchingSkill={launchingSkill}
         awaitingHistory={awaitingHistory}

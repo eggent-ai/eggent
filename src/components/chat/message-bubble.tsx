@@ -67,6 +67,8 @@ function UserText({ text }: { text: string }) {
   }, [guest, text, projects, activeProjectId]);
   // Hiring an employee sends `/skill:employee-<id> <what it was given>`; the
   // person sees who they hired and what they gave it, not the command.
+  const firstShift = /^\/skill:first-shift\s*([\s\S]*)$/.exec(text);
+  if (firstShift) return <>{firstShift[1]}</>;
   const hire = /^\/skill:employee-[a-z0-9-]+\s*([\s\S]*)$/.exec(text);
   if (hire) {
     const role = projects.find((project) => project.id === activeProjectId)?.name;

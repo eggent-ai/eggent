@@ -7,11 +7,12 @@ import { employeeEggSvg } from "@/lib/employees/egg";
 
 export interface EmployeeCard {
   id: string;
-  input: "url" | "channel" | "file" | "topic" | "role";
+  input: "url" | "channel" | "file" | "topic" | "role" | "any";
   role: string;
   pitch: string;
   ask: string;
   placeholder?: string;
+  start?: string;
 }
 
 type AvailableEmployee = EmployeeCard & { skill: string };
@@ -47,17 +48,13 @@ export function EmployeesHome({ available, hiredIds }: { available: AvailableEmp
   );
 }
 
-function HireCard({ employee, index, hired, expanded, onToggle }: { employee: AvailableEmployee; index: number; hired: boolean; expanded: boolean; onToggle: () => void }) {
+/** What every way of hiring shares: the answer to its one question, and starting the job. */
+function useHire(employee: AvailableEmployee) {
   const { t } = useI18n();
   const [value, setValue] = useState("");
   const [file, setFile] = useState<File | null>(null);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const inputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    if (expanded) inputRef.current?.focus();
-  }, [expanded]);
 
   const hire = async () => {
     if (busy) return;
@@ -82,6 +79,17 @@ function HireCard({ employee, index, hired, expanded, onToggle }: { employee: Av
     setBusy(false);
     setError(payload?.error || t("employees.home.failed"));
   };
+  return { value, setValue, file, setFile, busy, error, hire };
+}
+
+function HireCard({ employee, index, hired, expanded, onToggle }: { employee: AvailableEmployee; index: number; hired: boolean; expanded: boolean; onToggle: () => void }) {
+  const { t } = useI18n();
+  const { value, setValue, file, setFile, busy, error, hire } = useHire(employee);
+  const inputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    if (expanded) inputRef.current?.focus();
+  }, [expanded]);
 
   return (
     // The same lift, border and shadow as the skill cards, so it reads as something to press.
@@ -148,5 +156,131 @@ function HireCard({ employee, index, hired, expanded, onToggle }: { employee: Av
         </form>
       ) : null}
     </div>
+  );
+}
+
+/**
+ * The first thing a new workspace says, as a message in the chat: drawn without
+ * the model, so it is on the screen with the page. Each button names a job and
+ * asks that job's one question; nothing here guesses from what the person gives
+ * it - anything else goes through the composer, and the agent reads it.
+ */
+export function WelcomeMessage({
+  employees,
+  appsOffered,
+  onAsk,
+  onSkip,
+  onStep,
+}: {
+  employees: AvailableEmployee[];
+  appsOffered: boolean;
+  onAsk: (text: string) => void;
+  onSkip: () => void;
+  onStep: (event: string) => void;
+}) {
+  const { t } = useI18n();
+  const [open, setOpen] = useState<string | null>(null);
+  const reported = useRef(false);
+  useEffect(() => {
+    if (reported.current) return;
+    reported.current = true;
+    onStep("shown");
+  }, [onStep]);
+  const jobs = employees.filter((employee) => employee.input !== "role" && employee.input !== "any");
+  const chosen = jobs.find((employee) => employee.id === open);
+  const pill = "inline-flex min-h-9 items-center rounded-full border px-3.5 py-1.5 text-left text-sm font-medium transition hover:border-primary/50 hover:bg-primary/5 aria-expanded:border-primary/50 aria-expanded:bg-primary/5";
+  return (
+    <div className="flex-1 overflow-y-auto px-4 md:px-6" data-slot="welcome">
+      <div className="mx-auto flex max-w-3xl gap-3 py-6">
+        <span
+          className="eggent-egg-idle size-10 shrink-0"
+          aria-hidden
+          // Our own drawing from a fixed table: nothing from outside reaches it.
+          dangerouslySetInnerHTML={{ __html: employeeEggSvg("first") }}
+        />
+        <div className="flex min-w-0 flex-1 flex-col gap-3">
+          <p className="text-base leading-7">{t("welcome.text")}</p>
+          <div className="flex flex-wrap gap-2">
+            {jobs.map((employee) => (
+              <button
+                key={employee.id}
+                type="button"
+                className={pill}
+                aria-expanded={open === employee.id}
+                onClick={() => {
+                  if (open !== employee.id) onStep(`button:${employee.id}`);
+                  setOpen(open === employee.id ? null : employee.id);
+                }}
+              >
+                {employee.start || employee.role}
+              </button>
+            ))}
+            {appsOffered ? (
+              <button
+                type="button"
+                className={pill}
+                onClick={() => {
+                  onStep("apps");
+                  onAsk(t("welcome.appsPrompt"));
+                }}
+              >
+                {t("welcome.apps")}
+              </button>
+            ) : null}
+          </div>
+          {chosen ? <WelcomeAnswer key={chosen.id} employee={chosen} /> : null}
+          <p className="text-sm leading-6 text-muted-foreground">{t("welcome.own")}</p>
+          <div>
+            <button type="button" className="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline" onClick={onSkip}>
+              {t("welcome.skip")}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function WelcomeAnswer({ employee }: { employee: AvailableEmployee }) {
+  const { t } = useI18n();
+  const { value, setValue, file, setFile, busy, error, hire } = useHire(employee);
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+  return (
+    <form
+      className="flex max-w-xl flex-col gap-2"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void hire();
+      }}
+    >
+      <label className="text-sm font-medium" htmlFor={`welcome-${employee.id}`}>{employee.ask}</label>
+      <div className="flex flex-col gap-2 sm:flex-row">
+        {employee.input === "file" ? (
+          <label className="flex min-w-0 flex-1 cursor-pointer items-center gap-2 rounded-xl border border-dashed px-3 py-2 text-sm text-muted-foreground hover:border-primary/50">
+            <Upload className="size-4 shrink-0" aria-hidden />
+            <span className="truncate">{file ? file.name : employee.placeholder || t("employees.home.chooseFile")}</span>
+            <input ref={inputRef} id={`welcome-${employee.id}`} type="file" className="sr-only" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
+          </label>
+        ) : (
+          <input
+            ref={inputRef}
+            id={`welcome-${employee.id}`}
+            className="h-10 min-w-0 flex-1 rounded-xl border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            placeholder={employee.placeholder}
+            value={value}
+            onChange={(event) => setValue(event.target.value)}
+            autoComplete="off"
+          />
+        )}
+        <button type="submit" disabled={busy} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-60">
+          {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+          {t("welcome.start")}
+        </button>
+      </div>
+      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+    </form>
   );
 }

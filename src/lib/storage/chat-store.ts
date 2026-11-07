@@ -13,6 +13,12 @@ async function ensureDir(dir: string) {
   await fs.mkdir(dir, { recursive: true });
 }
 
+/** Whether any conversation exists here, without reading them: some chats weigh megabytes. */
+export async function hasAnyChat(): Promise<boolean> {
+  await ensureDir(CHATS_DIR);
+  return (await fs.readdir(CHATS_DIR)).some((file) => file.endsWith(".json"));
+}
+
 export async function getAllChats(): Promise<ChatListItem[]> {
   await ensureDir(CHATS_DIR);
   const files = await fs.readdir(CHATS_DIR);

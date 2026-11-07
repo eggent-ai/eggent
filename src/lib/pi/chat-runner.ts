@@ -624,7 +624,9 @@ function isDefaultChatTitle(title: string): boolean {
 }
 
 function titleFromFirstMessage(message: string): string {
-  return message.slice(0, 60) + (message.length > 60 ? "..." : "");
+  // The first question's own words are the chat's name, not the command that carries them.
+  const said = message.replace(/^\/skill:first-shift\s*/, "") || message;
+  return said.slice(0, 60) + (said.length > 60 ? "..." : "");
 }
 
 function isSlashCommand(text: string): boolean {

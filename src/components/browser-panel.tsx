@@ -71,7 +71,7 @@ function remember(open: boolean): void {
   }
 }
 
-const useBrowserPanel = create<PanelState>((set) => ({
+export const useBrowserPanel = create<PanelState>((set) => ({
   open: false,
   status: null,
   loaded: false,

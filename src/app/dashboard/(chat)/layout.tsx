@@ -6,10 +6,12 @@ import {
   SidebarInset,
   SidebarProvider,
 } from "@/components/ui/sidebar"
-import { getServerMessage } from "@/i18n/server"
+import { getServerLocale, getServerMessage } from "@/i18n/server"
 import { listBundledSkills } from "@/lib/storage/bundled-skills-store"
 import { onboardingPending } from "@/lib/employees/onboarding"
 import { getAllProjects } from "@/lib/storage/project-store"
+import { welcomeDue } from "@/lib/employees/welcome"
+import { appsEnabled } from "@/lib/apps/tool"
 export const dynamic = "force-dynamic"
 
 /**
@@ -31,12 +33,14 @@ export default async function ChatLayout({
 }: {
   children: React.ReactNode
 }) {
-  const quickSkills = await listBundledSkills()
+  // In the workspace's own language from the first paint: the list the page fetches later says the same.
+  const quickSkills = await listBundledSkills(await getServerLocale())
   const pendingEmployee = await onboardingPending()
   // Who is already hired, so the home screen draws its employees on the first
   // paint instead of the plain cards and then the employees a moment later.
   const hiredEmployees = (await getAllProjects().catch(() => []))
     .flatMap((project) => (project.employee ? [project.employee] : []))
+  const welcome = await welcomeDue(quickSkills, hiredEmployees.length, pendingEmployee)
   const title = await getServerMessage("dashboard.chatTitle")
 
   return (
@@ -47,7 +51,7 @@ export default async function ChatLayout({
           <AppSidebar />
           <SidebarInset className="min-h-0">
             <div className="flex min-h-0 flex-1 flex-col">
-              <ChatPanel initialQuickSkills={quickSkills} onboardingPending={pendingEmployee} hiredEmployees={hiredEmployees} />
+              <ChatPanel initialQuickSkills={quickSkills} onboardingPending={pendingEmployee} hiredEmployees={hiredEmployees} welcome={welcome} appsOffered={appsEnabled()} />
             </div>
           </SidebarInset>
           <SidePanels />

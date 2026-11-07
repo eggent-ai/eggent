@@ -207,7 +207,7 @@ export interface BundledSkill {
   employee?: BundledEmployee;
 }
 
-export type EmployeeInputKind = "url" | "channel" | "file" | "topic" | "role";
+export type EmployeeInputKind = "url" | "channel" | "file" | "topic" | "role" | "any";
 
 /**
  * An AI employee: a skill that asks for one personal thing - a site, a
@@ -229,9 +229,11 @@ export interface BundledEmployee {
   /** The one question it asks. */
   ask: string;
   placeholder?: string;
+  /** Its button in the first question a new workspace asks: the job, in a few words. */
+  start?: string;
 }
 
-const EMPLOYEE_INPUTS = new Set<EmployeeInputKind>(["url", "channel", "file", "topic", "role"]);
+const EMPLOYEE_INPUTS = new Set<EmployeeInputKind>(["url", "channel", "file", "topic", "role", "any"]);
 
 function readEmployee(frontmatter: Record<string, string>, locale: string, title: string, summary: string): BundledEmployee | undefined {
   const id = frontmatter.employee?.trim().toLowerCase();
@@ -239,6 +241,7 @@ function readEmployee(frontmatter: Record<string, string>, locale: string, title
   const input = frontmatter.employee_input?.trim().toLowerCase() as EmployeeInputKind;
   if (!EMPLOYEE_INPUTS.has(input)) return undefined;
   const placeholder = resolveCardText(frontmatter, "placeholder", locale, "");
+  const start = resolveCardText(frontmatter, "start", locale, "");
   return {
     id,
     input,
@@ -247,6 +250,7 @@ function readEmployee(frontmatter: Record<string, string>, locale: string, title
     pitch: resolveCardText(frontmatter, "pitch", locale, summary),
     ask: resolveCardText(frontmatter, "ask", locale, title),
     ...(placeholder ? { placeholder } : {}),
+    ...(start ? { start } : {}),
   };
 }
 
@@ -264,7 +268,7 @@ function readEmployee(frontmatter: Record<string, string>, locale: string, title
  */
 function resolveCardText(
   frontmatter: Record<string, string>,
-  field: "title" | "summary" | "role" | "task" | "pitch" | "ask" | "placeholder",
+  field: "title" | "summary" | "role" | "task" | "pitch" | "ask" | "placeholder" | "start",
   locale: string,
   fallback: string
 ): string {

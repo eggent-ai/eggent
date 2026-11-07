@@ -12,7 +12,7 @@ import type { UIMessage } from "ai";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { SkeletonList } from "@/components/ui/skeleton-list";
-import { EmployeesHome, type EmployeeCard } from "@/components/employees/employees-home";
+import { EmployeesHome, WelcomeMessage, type EmployeeCard } from "@/components/employees/employees-home";
 import { useI18n } from "@/i18n/provider";
 import type { MessageKey } from "@/i18n/messages";
 import { cn } from "@/lib/utils";
@@ -138,6 +138,8 @@ interface ChatMessagesProps {
   onRespondToInteraction?: (value: string | boolean | null, cancel?: boolean) => void;
   quickSkills?: QuickSkillAction[];
   hiredEmployees?: string[];
+  /** A new workspace's first question, while it stands. */
+  welcome?: { appsOffered: boolean; onAsk: (text: string) => void; onSkip: () => void; onStep: (event: string) => void };
   onLaunchSkill?: (skillName: string) => void;
   launchingSkill?: string | null;
   /** A conversation is open but its stored messages have not arrived yet. */
@@ -387,7 +389,7 @@ function ShellCardRow({ card }: { card: ShellCard }) {
   );
 }
 
-export function ChatMessages({ messages, isLoading, errorMessage, errorActions, compactionStatus, actionNotice, pendingInteraction, onRespondToInteraction, quickSkills = [], hiredEmployees = NO_HIRED, onLaunchSkill, launchingSkill, awaitingHistory = false, steerQueue = NO_STEERS, onResendSteer, empty }: ChatMessagesProps) {
+export function ChatMessages({ messages, isLoading, errorMessage, errorActions, compactionStatus, actionNotice, pendingInteraction, onRespondToInteraction, quickSkills = [], hiredEmployees = NO_HIRED, welcome, onLaunchSkill, launchingSkill, awaitingHistory = false, steerQueue = NO_STEERS, onResendSteer, empty }: ChatMessagesProps) {
   const { t } = useI18n();
   // The employees this workspace offers, straight from the skills the page was
   // rendered with: their home replaces the plain heading from the first paint.
@@ -395,6 +397,8 @@ export function ChatMessages({ messages, isLoading, errorMessage, errorActions, 
     () =>
       quickSkills
         .flatMap((skill) => (skill.employee ? [{ ...skill.employee, skill: skill.name, order: skill.order ?? 0 }] : []))
+        // The one that reads whatever it is given has no card: it is the composer.
+        .filter((employee) => employee.input !== "any")
         .sort((a, b) => a.order - b.order),
     [quickSkills]
   );
@@ -492,10 +496,14 @@ export function ChatMessages({ messages, isLoading, errorMessage, errorActions, 
     );
   }
 
+  if (showingEmpty && welcome && !empty && employeesPresent) {
+    return <WelcomeMessage employees={employees} {...welcome} />;
+  }
+
   if (showingEmpty) {
     // Employees are skills too; on a workspace that has them they lead, and the
     // rest of the cards fold under "what else it can do".
-    const otherSkills = employeesPresent ? quickSkills.filter((skill) => !skill.name.startsWith("employee-")) : quickSkills;
+    const otherSkills = employeesPresent ? quickSkills.filter((skill) => !skill.employee) : quickSkills;
     return (
       // Scrolls instead of clipping: the quick-start row is taller than a short
       // viewport, and `m-auto` still centres the block when there is room.

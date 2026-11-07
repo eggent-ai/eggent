@@ -194,7 +194,7 @@ async function sayWhenNothingCame(chatId: string): Promise<void> {
 const STATE_FILE = path.join(DATA_DIR, "employees-state.json");
 
 /** The very first job any employee did in this workspace: the one a deployment may offer a plan under. */
-async function rememberFirstJob(chatId: string, role: string): Promise<void> {
+export async function rememberFirstJob(chatId: string, role: string): Promise<void> {
   try {
     await fs.access(STATE_FILE);
     return;

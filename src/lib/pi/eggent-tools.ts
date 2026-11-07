@@ -91,6 +91,21 @@ function getTelegramRuntimeData(toolRuntimeData?: Record<string, unknown>): Tele
   return { botToken: botToken || undefined, chatId };
 }
 
+/**
+ * What the shared bot sends when the person presses a link: the text, and the
+ * files by their path under the data folder, which is all the bot can read.
+ * A path that leaves the folder is dropped, and so is one that is not a file's.
+ */
+export function linkDelivery(options: { cwd?: string }, text?: string, files?: string[]): { deliver?: { text: string; files: string[] } } {
+  const dataRoot = path.join(process.cwd(), "data");
+  const relative = (files ?? []).slice(0, 5).flatMap((file) => {
+    const inside = path.relative(dataRoot, resolveLocalFilePath(options, file));
+    return !inside || inside.startsWith("..") || path.isAbsolute(inside) ? [] : [inside];
+  });
+  const clean = text?.trim().slice(0, 3500) ?? "";
+  return clean || relative.length > 0 ? { deliver: { text: clean, files: relative } } : {};
+}
+
 function resolveLocalFilePath(options: { cwd?: string }, rawPath: string): string {
   const value = rawPath.trim();
   if (!value) throw new Error("file path is required");
@@ -562,6 +577,17 @@ export async function createEggentPiTools(options: {
             description: "Delivery mode. Leave it out: the deployment's own way is used (polling where there is no public address).",
           })
         ),
+        result_text: Type.Optional(
+          Type.String({
+            description:
+              "For action=link_shared: what the bot sends the moment the person presses the link - the result you just made, in a few lines of plain text.",
+          })
+        ),
+        result_files: Type.Optional(
+          Type.Array(Type.String(), {
+            description: "For action=link_shared: up to 5 files of the result, by path in the working folder, sent with result_text.",
+          })
+        ),
         user_id: Type.Optional(
           Type.String({
             description:
@@ -685,7 +711,7 @@ export async function createEggentPiTools(options: {
                 "Content-Type": "application/json",
                 ...(relay.token ? { Authorization: `Bearer ${relay.token}` } : {}),
               },
-              body: "{}",
+              body: JSON.stringify(linkDelivery(options, params.result_text, params.result_files)),
               signal: AbortSignal.timeout(15_000),
             });
             const payload = (await response.json().catch(() => null)) as {
@@ -710,7 +736,7 @@ export async function createEggentPiTools(options: {
                   {
                     success: true,
                     linked: true,
-                    note: "The user's Telegram is linked. telegram_send_message without chat now reaches them, from this run and from scheduled runs.",
+                    note: "The user's Telegram is linked. telegram_send_message without chat now reaches them, from this run and from scheduled runs. Nothing was sent by this call: if you have a result for them, send it now.",
                   },
                   null,
                   2

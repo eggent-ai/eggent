@@ -9,7 +9,7 @@ export async function GET(req: NextRequest) {
   const failure = await checkTerminalRequest(req, { write: false });
   if (failure) return jsonError("Not available.", guardStatus(failure));
   const locale = await getServerLocale(req.headers.get("accept-language"));
-  const skills = (await listBundledSkills(locale)).filter((skill) => skill.employee);
+  const skills = (await listBundledSkills(locale)).filter((skill) => skill.employee && skill.employee.input !== "any");
   const projects = (await getAllProjects()).filter((project) => project.employee);
   return Response.json(
     {
