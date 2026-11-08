@@ -259,7 +259,7 @@ export function rmsOf(samples: Float32Array): number {
 
 /**
  * A voice model delivers an answer far faster than it is played (measured on
- * Yandex: 6.5 s of speech in 0.1 s), so "the response is done" says nothing
+ * one provider: 6.5 s of speech in 0.1 s), so "the response is done" says nothing
  * about the agent having finished speaking. Asking for another answer in that
  * gap made one sentence from the person start three replies, each cutting off
  * the one before it. Nothing we start ourselves - the reply to a tool, an
