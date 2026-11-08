@@ -138,7 +138,7 @@ await check("a session kept for its schedules serves no one, and nothing it hold
   assert.match(await run("echo scheduled"), /scheduled/, "a scheduled run's command inherited the stopped turn's signal");
   const before = second.length;
   const asked = text(await tool("eggent_ask_user").execute("q4", { question: "Anyone?", options: ["a", "b"] }));
-  assert.match(asked, /No interactive UI/i);
+  assert.match(asked, /askInReply/);
   assert.equal(second.length, before, "a card was raised for a turn that is over");
 });
 

@@ -12,7 +12,7 @@ import { StageBoard } from "@/components/employees/stage-board";
 import { foldStages, STAGE_TOOL } from "@/lib/employees/stage";
 import { isAgentToolName, isEngineToolName, isProjectToolName } from "@/lib/pi/subagent-format";
 import type { SubagentSnapshot } from "@/lib/pi/types";
-import { FileMention } from "./file-mention";
+import { FileLink, FileMention } from "./file-mention";
 import { StickyCopyButton, UserMessageFooter } from "./user-message-footer";
 import { LearnedNote } from "./learned-note";
 import { VoiceCallCard } from "./voice-call-card";
@@ -27,7 +27,7 @@ import { connectUrlFromToolOutput, pickUrlFromToolOutput } from "@/lib/google/co
 import { SendToContact, useMailReply } from "@/components/mail/mail-reply";
 import { cleanProducedGroups, type ProducedGroup } from "@/lib/files/produced-shape";
 import type { LearnedNotice } from "@/lib/learning/types";
-import { embeddedAudioPath, embeddedImageUrl, fileMentionPath } from "@/lib/files/openable";
+import { embeddedAudioPath, embeddedImageUrl, fileMentionPath, linkedFile } from "@/lib/files/openable";
 import { hashText, runnableCommand } from "@/lib/terminal/format";
 import { resolveProjectMention } from "@/lib/pi/project-mention";
 import { useAppStore } from "@/store/app-store";
@@ -683,6 +683,16 @@ function MarkdownContent({ content, scope }: { content: string; scope?: string }
         );
       }
       const external = /^https?:\/\//i.test(href || "");
+      // `[download it](work/start_samp.ps1)`: a file in the project, handed over. Left to the
+      // browser it resolved against /dashboard/<chatId> and answered 404.
+      const file = typeof href === "string" && !external ? linkedFile(href, projectId) : null;
+      if (file) {
+        return (
+          <FileLink projectId={file.projectId} path={file.path}>
+            {children}
+          </FileLink>
+        );
+      }
       return (
         <a
           {...props}

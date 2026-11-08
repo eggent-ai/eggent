@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { ExternalLink } from "lucide-react";
+import { Download, ExternalLink } from "lucide-react";
 import { useI18n } from "@/i18n/provider";
 import { fileDownloadUrl, filesPageUrl, isAudioFile, isModifiedClick, isOpenableFile } from "@/lib/files/openable";
 import { useAppStore } from "@/store/app-store";
@@ -126,4 +126,44 @@ export function FileMention({ projectId, path, children, fallback }: {
     );
   }
   return link;
+}
+
+/**
+ * A markdown link in an answer that points at a file in the workspace: the agent handing the
+ * file over. It downloads (a page, a PDF or a picture opens in a tab of its own), checked
+ * first like any mention - a link to a file that is not there stays plain text, never a 404.
+ */
+export function FileLink({ projectId, path, children }: { projectId: string; path: string; children: React.ReactNode }) {
+  const { t } = useI18n();
+  const { guest } = useChatSurface();
+  const [exists, setExists] = useState<Existence>("unknown");
+
+  useEffect(() => {
+    if (guest) return;
+    let cancelled = false;
+    const slash = path.lastIndexOf("/");
+    const dir = slash === -1 ? "" : path.slice(0, slash);
+    const name = slash === -1 ? path : path.slice(slash + 1);
+    void directoryEntries(projectId, dir).then((names) => {
+      if (!cancelled) setExists(names.has(name) ? "present" : "absent");
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [guest, projectId, path]);
+
+  if (exists !== "present") return <span>{children}</span>;
+  const openable = isOpenableFile(path);
+  const name = path.split("/").pop() || path;
+  return (
+    <a
+      href={fileDownloadUrl(projectId, path, openable ? { inline: true } : {})}
+      {...(openable ? { target: "_blank", rel: "noopener noreferrer" } : { download: name })}
+      title={openable ? t("files.open") : t("files.download")}
+      className="inline-flex items-center gap-1 break-words font-medium text-foreground underline decoration-foreground/40 underline-offset-2 transition-colors hover:decoration-foreground"
+    >
+      {children}
+      {openable ? <ExternalLink className="size-3 shrink-0" aria-hidden /> : <Download className="size-3 shrink-0" aria-hidden />}
+    </a>
+  );
 }

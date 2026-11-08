@@ -187,8 +187,23 @@ export function WelcomeMessage({
     onStep("shown");
   }, [onStep]);
   const jobs = employees.filter((employee) => employee.input !== "role" && employee.input !== "any");
+  // The briefing goes first: the shortest road to work that repeats by itself. Then the
+  // three things people get a result from fastest without a hire - their own file, voice in
+  // Telegram, a picture - then the other employees.
+  const first = jobs.filter((employee) => employee.id === "analyst");
+  const rest = jobs.filter((employee) => employee.id !== "analyst");
   const chosen = jobs.find((employee) => employee.id === open);
   const pill = "inline-flex min-h-9 items-center rounded-full border px-3.5 py-1.5 text-left text-sm font-medium transition hover:border-primary/50 hover:bg-primary/5 aria-expanded:border-primary/50 aria-expanded:bg-primary/5";
+  const toggle = (id: string) => {
+    if (open !== id) onStep(`button:${id}`);
+    setOpen(open === id ? null : id);
+  };
+  const jobButton = (employee: AvailableEmployee) => (
+    <button key={employee.id} type="button" className={pill} aria-expanded={open === employee.id} onClick={() => toggle(employee.id)}>
+      {employee.start || employee.role}
+    </button>
+  );
+  void appsOffered;
   return (
     <div className="flex-1 overflow-y-auto px-4 md:px-6" data-slot="welcome">
       <div className="mx-auto flex max-w-3xl gap-3 py-6">
@@ -201,34 +216,28 @@ export function WelcomeMessage({
         <div className="flex min-w-0 flex-1 flex-col gap-3">
           <p className="text-base leading-7">{t("welcome.text")}</p>
           <div className="flex flex-wrap gap-2">
-            {jobs.map((employee) => (
-              <button
-                key={employee.id}
-                type="button"
-                className={pill}
-                aria-expanded={open === employee.id}
-                onClick={() => {
-                  if (open !== employee.id) onStep(`button:${employee.id}`);
-                  setOpen(open === employee.id ? null : employee.id);
-                }}
-              >
-                {employee.start || employee.role}
-              </button>
-            ))}
-            {appsOffered ? (
-              <button
-                type="button"
-                className={pill}
-                onClick={() => {
-                  onStep("apps");
-                  onAsk(t("welcome.appsPrompt"));
-                }}
-              >
-                {t("welcome.apps")}
-              </button>
-            ) : null}
+            {first.map(jobButton)}
+            <button type="button" className={pill} aria-expanded={open === "file"} onClick={() => toggle("file")}>
+              {t("welcome.file")}
+            </button>
+            <button
+              type="button"
+              className={pill}
+              onClick={() => {
+                onStep("button:telegram");
+                onAsk(t("welcome.telegramPrompt"));
+              }}
+            >
+              {t("welcome.telegram")}
+            </button>
+            <button type="button" className={pill} aria-expanded={open === "image"} onClick={() => toggle("image")}>
+              {t("welcome.image")}
+            </button>
+            {rest.map(jobButton)}
           </div>
           {chosen ? <WelcomeAnswer key={chosen.id} employee={chosen} /> : null}
+          {open === "file" ? <WelcomeFile onAsk={onAsk} /> : null}
+          {open === "image" ? <WelcomeImage onAsk={onAsk} /> : null}
           <p className="text-sm leading-6 text-muted-foreground">{t("welcome.own")}</p>
           <div>
             <button type="button" className="text-sm text-muted-foreground underline-offset-4 hover:text-foreground hover:underline" onClick={onSkip}>
@@ -238,6 +247,109 @@ export function WelcomeMessage({
         </div>
       </div>
     </div>
+  );
+}
+
+/** "Send a file": it lands in the workspace's inbox/ folder and the agent is asked to make something of it. */
+function WelcomeFile({ onAsk }: { onAsk: (text: string) => void }) {
+  const { t } = useI18n();
+  const [file, setFile] = useState<File | null>(null);
+  const [wish, setWish] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const send = async () => {
+    if (!file || busy) {
+      if (!file) setError(t("employees.home.needInput"));
+      return;
+    }
+    setBusy(true);
+    setError(null);
+    const form = new FormData();
+    form.set("project", "none");
+    form.set("path", "inbox");
+    form.set("conflict", "rename");
+    form.append("files", file);
+    const response = await fetch("/api/files/upload", { method: "POST", body: form }).catch(() => null);
+    const payload = response ? ((await response.json().catch(() => null)) as { uploaded?: Array<{ path?: string; name?: string }>; errors?: Array<{ error?: string }>; error?: string } | null) : null;
+    const saved = payload?.uploaded?.[0];
+    if (!response?.ok || !saved) {
+      setBusy(false);
+      setError(payload?.error || payload?.errors?.[0]?.error || t("employees.home.failed"));
+      return;
+    }
+    const where = saved?.path || `inbox/${saved?.name || file.name}`;
+    onAsk(t("welcome.filePrompt", { path: where, wish: wish.trim() || t("welcome.fileWishDefault") }));
+  };
+  return (
+    <form
+      className="flex max-w-xl flex-col gap-2"
+      onSubmit={(event) => {
+        event.preventDefault();
+        void send();
+      }}
+    >
+      <label className="text-sm font-medium" htmlFor="welcome-file">{t("welcome.fileAsk")}</label>
+      <label className="flex min-w-0 cursor-pointer items-center gap-2 rounded-xl border border-dashed px-3 py-2 text-sm text-muted-foreground hover:border-primary/50">
+        <Upload className="size-4 shrink-0" aria-hidden />
+        <span className="truncate">{file ? file.name : t("welcome.filePlaceholder")}</span>
+        <input id="welcome-file" type="file" className="sr-only" onChange={(event) => setFile(event.target.files?.[0] ?? null)} />
+      </label>
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <input
+          className="h-10 min-w-0 flex-1 rounded-xl border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          placeholder={t("welcome.fileWishPlaceholder")}
+          value={wish}
+          onChange={(event) => setWish(event.target.value)}
+          autoComplete="off"
+        />
+        <button type="submit" disabled={busy} className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-medium text-primary-foreground disabled:opacity-60">
+          {busy ? <Loader2 className="size-4 animate-spin" aria-hidden /> : null}
+          {t("welcome.start")}
+        </button>
+      </div>
+      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+    </form>
+  );
+}
+
+/** "Draw a picture": one line of what to draw, and the agent draws it. */
+function WelcomeImage({ onAsk }: { onAsk: (text: string) => void }) {
+  const { t } = useI18n();
+  const [what, setWhat] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const inputRef = useRef<HTMLInputElement>(null);
+  useEffect(() => {
+    inputRef.current?.focus();
+  }, []);
+  return (
+    <form
+      className="flex max-w-xl flex-col gap-2"
+      onSubmit={(event) => {
+        event.preventDefault();
+        if (what.trim().length < 3) {
+          setError(t("employees.home.needInput"));
+          return;
+        }
+        onAsk(t("welcome.imagePrompt", { what: what.trim() }));
+      }}
+    >
+      <label className="text-sm font-medium" htmlFor="welcome-image">{t("welcome.imageAsk")}</label>
+      <div className="flex flex-col gap-2 sm:flex-row">
+        <input
+          ref={inputRef}
+          id="welcome-image"
+          className="h-10 min-w-0 flex-1 rounded-xl border bg-background px-3 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          placeholder={t("welcome.imagePlaceholder")}
+          value={what}
+          onChange={(event) => setWhat(event.target.value)}
+          autoComplete="off"
+        />
+        <button type="submit" className="inline-flex h-10 items-center justify-center gap-2 rounded-xl bg-primary px-4 text-sm font-medium text-primary-foreground">
+          {t("welcome.start")}
+        </button>
+      </div>
+      {error ? <p className="text-sm text-destructive">{error}</p> : null}
+    </form>
   );
 }
 

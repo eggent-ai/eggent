@@ -566,7 +566,7 @@ try {
     const answer = await tell(cloud, "tg-a", "ASK-ME about the colour");
     assert.equal(answer.status, 200, JSON.stringify(answer.body));
     assert.match(String(answer.body.reply), /device got the answer/);
-    assert.match(String(answer.body.reply), /No interactive UI/, String(answer.body.reply));
+    assert.match(String(answer.body.reply), /askInReply/, String(answer.body.reply));
     assert.ok(Date.now() - started < 25_000, "the turn waited for an answer nobody could give");
   });
 

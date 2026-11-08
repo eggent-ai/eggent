@@ -165,6 +165,31 @@ function embeddedPath(src: string): string | null {
   return projectRelativePath(value);
 }
 
+/**
+ * The file a markdown link in an answer points at, or null when it points elsewhere.
+ *
+ * `[download start_samp.ps1](work/start_samp.ps1)` is the agent handing over a file, and the
+ * browser resolved it against /dashboard/<chatId>: the person got a 404 and was told six times
+ * that the file "is in the Files panel". A relative path in the project, or an absolute one in
+ * the projects folder, is a file link; a URL, an anchor or a way out of the folder is not.
+ */
+export function linkedFile(href: string, projectId: string): { projectId: string; path: string } | null {
+  const value = href.trim();
+  if (!value || value.startsWith("#") || value.startsWith("?")) return null;
+  const absolute = projectsFolderPath(value);
+  if (absolute) {
+    const ownPrefix = projectId && projectId !== "none" ? `${projectId}/` : "";
+    if (ownPrefix && absolute.startsWith(ownPrefix)) return { projectId, path: absolute.slice(ownPrefix.length) };
+    return { projectId: "none", path: absolute };
+  }
+  if (value.startsWith("/")) return null;
+  const relative = embeddedPath(value);
+  if (!relative || /[?#]/.test(relative) || relative.endsWith("/")) return null;
+  // A file has an extension; a bare word is more likely an in-app route the agent invented.
+  if (!/\.[A-Za-z0-9]{1,8}$/.test(relative)) return null;
+  return { projectId, path: relative };
+}
+
 export function fileDownloadUrl(
   projectId: string,
   path: string,

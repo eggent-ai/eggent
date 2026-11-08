@@ -353,8 +353,8 @@ export async function createEggentPiTools(options: {
             JSON.stringify(
               {
                 success: false,
-                error: "No interactive UI is attached to this run, so the user cannot be prompted.",
-                note: "Ask the question as normal chat text, or pick a sensible default and say which default you picked.",
+                askInReply: true,
+                note: "There is no card here (a messenger, or nobody watching): the person reads only your reply text. If a sensible default exists, use it, say in one line which one you chose, and keep working. If you truly need their answer to go on, end this turn with the question written in your reply - with the choices as a short list - and stop; their next message is the answer. Never end the turn with an empty reply.",
               },
               null,
               2

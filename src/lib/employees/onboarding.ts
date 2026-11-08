@@ -223,7 +223,7 @@ async function startFirstJob(projectId: string | null, message: string, title: s
   const chatId = crypto.randomUUID();
   await createChat(chatId, title, projectId ?? undefined);
   await rememberFirstJob(chatId, role).catch(() => {});
-  void runPiAgentText({ chatId, userMessage: message, projectId: projectId ?? undefined })
+  void runPiAgentText({ chatId, userMessage: message, projectId: projectId ?? undefined, watchedInWeb: true })
     .catch((error) => {
       console.error(`[employees] the first job in ${chatId.slice(0, 8)} failed:`, error);
       return "";

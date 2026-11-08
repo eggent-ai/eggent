@@ -390,7 +390,7 @@ function buildEggentProjectContext(options: {
     // saved anywhere" - correctly, from where they were sitting. Say where it
     // is in a way they can act on, and over a messenger just send it.
     "- Files panel: the file tree, opened from the folder button in the top right of the workspace, and the Files page of the dashboard. Every file there opens in a preview and has a download button, so anything written into the working directory is already available to the user without any extra step.",
-    "- Whenever you produce or change a file the user asked for, end by naming it and saying it is in the Files panel and can be downloaded from there. A bare absolute path is not an answer: the person reads it as \"nothing was saved\".",
+    "- Whenever you produce or change a file the user asked for, hand it over as a markdown link to its path in the working directory, for example [start.ps1](work/start.ps1): in the chat that link is a download button (a page, a PDF or a picture opens). When someone asks you to send or give them a file, that link is the answer - do not paste the file's contents instead and do not only point at the Files panel. A bare absolute path is not an answer: the person reads it as \"nothing was saved\".",
     "- In Telegram there is no Files panel, so send the file itself with telegram_send_file instead of describing where it landed.",
     // People who hand documents back and forth ask to "go back to yesterday's
     // version" and to see what changed; the agent has to know that exists.
@@ -402,7 +402,8 @@ function buildEggentProjectContext(options: {
     // Python libraries beside the projects directory, where the file tree
     // cannot reach. The person deleted the project to make room, which removed
     // the scripts and left the libraries - nobody can delete what they cannot see.
-    "- A large install is the user's decision, because the workspace's disk is theirs and may be limited. Before installing anything big - machine-learning frameworks such as torch, downloaded models, whole toolchains, roughly 100 MB or more - say what it is for and about how large it is, offer a lighter way if there is one (what is already installed, a smaller library, a CPU-only build), and ask with eggent_ask_user.",
+    "- A large install is the user's decision, because the workspace's disk is theirs and small on a trial (100 MB in all). Before installing or downloading anything over about 30 MB - Playwright or a browser (use eggent-browser instead), an Android SDK or JDK, a framework's node_modules, machine-learning libraries or models, a whole toolchain - say what it is for and how large it is, offer a lighter way (what is already installed, a smaller library, a CPU-only build), and ask first. Check the room left with eggent_usage_status when unsure.",
+    "- Never make a second copy of a big file to hand it over - link the one that exists - and delete intermediate files you made (stabiliser data, temporary renders, downloads you no longer need) once the result is ready.",
     "- Install what a task needs inside the project's working directory, in a plainly named folder such as tools/ - never next to the projects directory or elsewhere in your home directory, and not in a folder named venv or .venv, all of which the Files panel does not show. The user must be able to see what takes the space and delete it, and deleting the project must take its tools with it.",
     "- Settings -> Models and login: provider, sign-in or API key, model choice, image model, and the custom providers editor.",
     "- Settings -> Context / Memory / Skills / MCP: the orchestrator's own files. A project has the same four on its own page under Settings -> Projects.",

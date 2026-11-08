@@ -9,6 +9,7 @@ import { recallHandOver, runHandedOverTurn } from "@/lib/remote/proxy-turn";
 import { cleanHead, parseHome, REMOTE_HEADERS, type ChatHome } from "@/lib/remote/types";
 import { getServerTranslator } from "@/i18n/server";
 import { describeOpenFile, parseOpenFile } from "@/lib/files/open-file-context";
+import { describeFreshAttachments } from "@/lib/files/fresh-attachments";
 import type { MessageKey } from "@/i18n/messages";
 import { filesSentWith, steerModelText } from "@/lib/pi/steer";
 import { isStoredMessageId } from "@/lib/pi/steer-shape";
@@ -162,7 +163,11 @@ export async function POST(req: NextRequest) {
     // The file open beside the chat, for a turn typed here: a turn the other side
     // handed over was typed beside a screen this side cannot see.
     const openFile = relayedFrom || contextMode === "plain" ? null : parseOpenFile(body.openFile);
-    const openFileNote = openFile ? await describeOpenFile(openFile).catch(() => null) : null;
+    const openFileOnly = openFile ? await describeOpenFile(openFile).catch(() => null) : null;
+    // What was attached to this message, named for the agent: its session may have been built
+    // before the file arrived. Not for a light chat, which reads nothing.
+    const attachedNote = contextMode === "plain" ? null : await describeFreshAttachments(resolvedChatId, existing).catch(() => null);
+    const openFileNote = [openFileOnly, attachedNote].filter(Boolean).join("\n\n") || null;
 
     if (process.env.EGGENT_AGENT_BACKEND !== "legacy") {
       // Deliberately not `req.signal`: a turn belongs to the chat, not to the

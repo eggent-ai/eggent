@@ -584,8 +584,27 @@ async function failureAfterWork(last: LastCall, failure: ProviderFailure | null)
  * work, or an empty bubble. Reasoning models do this - they think the answer
  * through and stop without writing it.
  */
+/**
+ * The question this turn put on its board card, when it did. The run stops there on purpose:
+ * nudging it for a reply woke the model to ask again, and the card's chat filled with empty
+ * answers and fresh questions.
+ */
+export function questionPutOnCard(tools: Iterable<PiToolRecord>): string | null {
+  let found: string | null = null;
+  for (const tool of tools) {
+    if (tool.toolName !== "eggent_ask_user" || tool.status !== "completed") continue;
+    if (!/"onCard"\s*:\s*true/.test(typeof tool.output === "string" ? tool.output : JSON.stringify(tool.output ?? ""))) continue;
+    const input = tool.input && typeof tool.input === "object" ? tool.input as Record<string, unknown> : {};
+    const question = typeof input.question === "string" ? input.question.trim() : "";
+    const options = Array.isArray(input.options) ? input.options.filter((o): o is string => typeof o === "string" && o.trim() !== "") : [];
+    if (question) found = options.length ? `${question}\n\n${options.map((o) => `- ${o.trim()}`).join("\n")}` : question;
+  }
+  return found;
+}
+
 function endedWithoutAnswer(last: LastCall | null, tools: Iterable<PiToolRecord>, usage?: PiRuntimeStats["lastTurn"]): boolean {
   if (!last || last.stopReason !== "stop" || last.text.trim()) return false;
+  if (questionPutOnCard(tools) !== null) return false;
   for (const tool of tools) {
     // The answer already went to the person's chat as a message of its own.
     if (/^telegram_send_/.test(tool.toolName) && tool.status === "completed") return false;
@@ -879,6 +898,12 @@ function stalledCardEnd(stalled: StalledTurn, question: PiPendingInteraction | n
   return onCard ? { outcome: "question", question: onCard } : { outcome: "stalled" };
 }
 
+/** The text so far, ending in a paragraph break when it holds anything and does not already end in one. */
+export function paragraphBreak(text: string): string {
+  if (!text || /\n\s*$/.test(text)) return text;
+  return `${text.replace(/[ \t]+$/, "")}\n\n`;
+}
+
 export type PiAgentTextOptions = PiChatRunOptions & {
   /**
    * The chat may live on the other side of a paired workspace and computer; when
@@ -893,6 +918,14 @@ export type PiAgentTextOptions = PiChatRunOptions & {
    * there from a messenger - is followed by the card on its own.
    */
   boardRun?: boolean;
+  /**
+   * Somebody follows this turn from the web while it runs: an employee's first
+   * job is started here on the server and the screen opens its chat at once.
+   * A question the agent asks then goes on the live run as a card, the way it
+   * does in a web turn; without this the question tool answered "no
+   * interactive UI" to a person looking right at the chat.
+   */
+  watchedInWeb?: boolean;
   runtimeData?: Record<string, unknown>;
   toolRuntimeData?: Record<string, unknown>;
   /** Told about each piece of the answer as it arrives; see AgentProgressEvent. */
@@ -1064,6 +1097,12 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
   const emitSteerQueue = () => {
     live?.push({ type: STEER_QUEUE_PART, id: STEER_QUEUE_ID, data: { items: steers.queue() } });
   };
+  // A question goes where the person watching reads the turn: the live run the web follows.
+  const watchedInteraction = options.watchedInWeb && !options.publicShare && !options.visit
+    ? (interaction: PiPendingInteraction) => {
+        live?.push({ type: "data-piInteraction", id: `pi-interaction-${interaction.id}`, data: interaction });
+      }
+    : undefined;
   registerActiveRun(options.chatId, {
     session: starting.run,
     runId,
@@ -1150,7 +1189,7 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
     // A session kept for its schedules is built for the turn that made them: it serves this one now.
     // Never for a public share, whose session is built narrower than any the workspace keeps.
     const lent = options.publicShare ? null : takeRetainedPiScheduleSession(options.chatId);
-    if (lent) rebindSessionTurn(lent, { runId, abortSignal: runAbort.signal, toolRuntimeData: options.toolRuntimeData });
+    if (lent) rebindSessionTurn(lent, { runId, abortSignal: runAbort.signal, toolRuntimeData: options.toolRuntimeData, onPiInteraction: watchedInteraction });
     session = lent ?? await raceAbort(
       createEggentPiSession({
         cwd: options.cwd,
@@ -1168,6 +1207,7 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
         visit: options.visit,
         runId,
         abortSignal: runAbort.signal,
+        onPiInteraction: watchedInteraction,
       }),
       runAbort.signal,
       // A session that was finally built for a turn nobody is waiting on.
@@ -1306,6 +1346,9 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
     if (record.type === "message_update") {
       const assistantEvent = asRecord(record.assistantMessageEvent);
       if (assistantEvent?.type === "text_delta" && typeof assistantEvent.delta === "string") {
+        // A new message after a tool call or a question starts on its own paragraph: joined
+        // straight on, the two read as one sentence ("...the goal.Understood: ...").
+        if (!messageText) assistantText = paragraphBreak(assistantText);
         assistantText += assistantEvent.delta;
         messageText += assistantEvent.delta;
         appendTimelineText(timelineParts, assistantEvent.delta);
@@ -1466,6 +1509,9 @@ async function runPiAgentTextTurn(options: PiAgentTextOptions, scope: TurnSetupS
         failedAfterWork = await failureAfterWork(lastCall ?? { text: "" }, providerFailure);
         if (failedAfterWork) appendLine(failedAfterWork);
       }
+      // The question waits on the card; the chat says what was asked instead of an empty bubble.
+      const cardQuestion = !((lastCall as LastCall | null)?.text ?? "").trim() ? questionPutOnCard(tools.values()) : null;
+      if (cardQuestion) appendLine(cardQuestion);
     }
     const producedFiles = await producedForTurn({
       chatId: options.chatId,
@@ -2056,6 +2102,7 @@ export function createPiChatUIMessageStream(options: PiChatRunOptions) {
           const assistantEvent = asRecord(record.assistantMessageEvent);
           if (assistantEvent?.type === "text_delta" && typeof assistantEvent.delta === "string") {
             const textId = ensureTextStarted();
+            if (!messageText) assistantText = paragraphBreak(assistantText);
             messageText += assistantEvent.delta;
             assistantText += assistantEvent.delta;
             appendTimelineText(timelineParts, assistantEvent.delta);
